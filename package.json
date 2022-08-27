@@ -1,6 +1,6 @@
 {
   "name": "neonctl",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "CLI tool for NeonDB Cloud management",
   "main": "index.js",
   "author": "NeonDB",
