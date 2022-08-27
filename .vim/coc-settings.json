@@ -1,6 +1,0 @@
-{
-  "coc.preferences.formatOnSaveFiletypes": ["javascript", "json", "typescript"],
-  "eslint.format.enable": true,
-  "prettier.enable": true,
-  "prettier.formatterPriority": 1
-}
