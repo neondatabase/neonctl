@@ -7,7 +7,7 @@
   "license": "MIT",
   "private": false,
   "bin": {
-    "neonctl": "src/index.js"
+    "neonctl": "src/cli.js"
   },
   "devDependencies": {
     "@types/node": "^18.7.13",
