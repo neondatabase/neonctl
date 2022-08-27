@@ -5,13 +5,12 @@ import { join } from 'node:path';
 import open from 'open';
 
 import { log } from './log';
+import { AddressInfo } from 'node:net';
 
-// what port to listen on for incoming requests
-const CONFIG_LISTEN_PORT = 5555;
 // oauth server timeouts
 const SERVER_TIMEOUT = 10_000;
 // where to wait for incoming redirect request from oauth server to arrive
-const REDIRECT_URI = 'http://127.0.0.1:5555/callback';
+const REDIRECT_URI = (port: number) => `http://127.0.0.1:${port}/callback`;
 // These scopes cannot be cancelled, they are always needed.
 const DEFAULT_SCOPES = ['openid', 'offline'];
 
@@ -27,10 +26,19 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   log.info('Discovering oauth server');
   const issuer = await Issuer.discover(oauthHost);
 
+  //
+  // Start HTTP server and wait till /callback is hit
+  //
+  const server = createServer();
+  server.listen(0, function (this: typeof server) {
+    log.info(`Listening on port ${(this.address() as AddressInfo).port}`);
+  });
+  const listen_port = (server.address() as AddressInfo).port;
+
   const neonOAuthClient = new issuer.Client({
     token_endpoint_auth_method: 'none',
     client_id: clientId,
-    redirect_uris: [REDIRECT_URI],
+    redirect_uris: [REDIRECT_URI(listen_port)],
     response_types: ['code'],
   });
 
@@ -43,10 +51,7 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   const codeChallenge = generators.codeChallenge(codeVerifier);
 
   return new Promise<TokenSet>((resolve) => {
-    //
-    // Start HTTP server and wait till /callback is hit
-    //
-    const server = createServer(async (request, response) => {
+    server.on('request', async (request, response) => {
       //
       // Wait for callback and follow oauth flow.
       //
@@ -57,7 +62,7 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       }
       log.info(`Callback received: ${request.url}`);
       const params = neonOAuthClient.callbackParams(request);
-      const tokenSet = await neonOAuthClient.callback(REDIRECT_URI, params, {
+      const tokenSet = await neonOAuthClient.callback(REDIRECT_URI(listen_port), params, {
         code_verifier: codeVerifier,
         state,
       });
@@ -66,11 +71,7 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       createReadStream(join(__dirname, './callback.html')).pipe(response);
       resolve(tokenSet);
       server.close();
-    });
-
-    server.listen(CONFIG_LISTEN_PORT, () => {
-      log.info(`Listening on port ${CONFIG_LISTEN_PORT}`);
-    });
+    })
 
     //
     // Open browser to let user authenticate
