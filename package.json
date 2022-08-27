@@ -27,6 +27,6 @@
     "build": "tsc",
     "clean": "rm -rf dist",
     "start": "node index.js",
-    "publish": "yarn build && cd dist && yarn publish"
+    "publish": "yarn build && cd dist && npm publish"
   }
 }
