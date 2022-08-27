@@ -42,13 +42,14 @@ const builder = yargs
     type: 'string',
     default: '',
   })
+  .middleware(ensureAuth)
   .command(
     'projects [sub]',
     'Manage projects',
     async (yargs) =>
-      yargs.middleware(ensureAuth).positional('sub', {
+      yargs.positional('sub', {
         describe: 'Subcommand',
-        choices: ['list'] as const,
+        choices: ['list', 'create'] as const,
       }),
     async (args) => {
       (await import('./commands/projects')).default(args);

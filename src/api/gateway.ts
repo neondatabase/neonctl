@@ -7,20 +7,23 @@ export type BaseApiCallProps = {
 export type ApiCallProps = BaseApiCallProps & {
   path: string;
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  body?: object;
 };
 export const apiCall = ({
   apiHost,
   token,
   path,
+  body,
   method = 'GET',
 }: ApiCallProps) =>
   new Promise<string>((resolve, reject) => {
-    request(
+    const req = request(
       `${apiHost}/api/v1/${path}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
+          'Content-Type': 'application/json',
         },
         method,
       },
@@ -37,7 +40,10 @@ export const apiCall = ({
           resolve(result);
         });
       }
-    )
-      .on('error', reject)
-      .end();
+    );
+    req.on('error', reject);
+    if (body) {
+      req.write(JSON.stringify(body));
+    }
+    req.end();
   });

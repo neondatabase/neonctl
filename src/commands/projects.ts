@@ -1,10 +1,22 @@
-import { listProjects } from '../api/projects';
+import { createProject, listProjects } from '../api/projects';
 
 export type ProjectsProps = {
   token: string;
   apiHost: string;
+  sub?: 'list' | 'create';
 };
 
 export default async (props: ProjectsProps) => {
-  process.stdout.write(await listProjects(props));
+  if (props.sub === 'list' || props.sub === undefined) {
+    process.stdout.write(await listProjects(props));
+  } else if (props.sub === 'create') {
+    process.stdout.write(
+      await createProject({
+        ...props,
+        instanceHandle: 'scalable',
+        platformId: 'serverless',
+        regionId: 'us-west-2',
+      })
+    );
+  }
 };

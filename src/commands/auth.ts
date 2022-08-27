@@ -3,6 +3,7 @@ import { writeFileSync, existsSync } from 'node:fs';
 
 import { auth } from '../auth';
 import { listProjects } from '../api/projects';
+import { log } from '../log';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
@@ -28,6 +29,8 @@ export const authFlow = async ({
 
   const credentialsPath = join(configDir, CREDENTIALS_FILE);
   writeFileSync(credentialsPath, JSON.stringify(tokenSet));
+  log.info(`Saved credentials to ${credentialsPath}`);
+  log.info('Auth complete');
   return tokenSet.access_token || '';
 };
 
