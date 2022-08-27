@@ -6,6 +6,9 @@
   "author": "NeonDB",
   "license": "MIT",
   "private": false,
+  "bin": {
+    "neonctl": "src/index.js"
+  },
   "devDependencies": {
     "@types/node": "^18.7.13",
     "@types/yargs": "^17.0.11",
