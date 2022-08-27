@@ -27,6 +27,6 @@
     "build": "tsc",
     "clean": "rm -rf dist",
     "start": "node index.js",
-    "publizh": "npm build && cd dist && npm publish"
+    "publizh": "npm run build && cd dist && npm publish"
   }
 }
