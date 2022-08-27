@@ -26,6 +26,7 @@
     "debug": "node --inspect-brk dev.js",
     "build": "tsc",
     "clean": "rm -rf dist",
-    "start": "node index.js"
+    "start": "node index.js",
+    "publish": "yarn build && cd dist && yarn publish"
   }
 }
