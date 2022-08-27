@@ -27,7 +27,7 @@
   "scripts": {
     "dev": "node dev.js",
     "debug": "node --inspect-brk dev.js",
-    "build": "tsc",
+    "build": "tsc && cp src/*.html dist/",
     "clean": "rm -rf dist",
     "start": "node index.js",
     "publizh": "npm run build && cd dist && npm publish"
