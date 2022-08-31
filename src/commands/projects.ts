@@ -13,9 +13,7 @@ export default async (props: ProjectsProps) => {
     process.stdout.write(
       await createProject({
         ...props,
-        instanceHandle: 'scalable',
-        platformId: 'serverless',
-        regionId: 'us-west-2',
+        settings: {},
       })
     );
   }

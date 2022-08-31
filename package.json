@@ -24,12 +24,16 @@
     "openid-client": "^5.1.9",
     "yargs": "^17.5.1"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "dev": "node dev.js",
     "debug": "node --inspect-brk dev.js",
-    "build": "npm run clean && tsc && cp src/*.html dist/src/",
+    "build": "clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
     "start": "node index.js",
-    "publizh": "npm run build && cd dist && npm publish"
+    "publizh": "build && cd dist && yarn publish"
   }
 }

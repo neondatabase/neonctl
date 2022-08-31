@@ -1,8 +1,10 @@
 import * as yargs from 'yargs';
 
 import pkg from '../package.json';
+import { ApiError } from './api/gateway';
 import { ensureAuth } from './commands/auth';
 import { defaultDir, ensureConfigDir } from './config';
+import { log } from './log';
 
 const builder = yargs
   .scriptName(pkg.name)
@@ -52,9 +54,18 @@ const builder = yargs
         choices: ['list', 'create'] as const,
       }),
     async (args) => {
-      (await import('./commands/projects')).default(args);
+      await (await import('./commands/projects')).default(args);
     }
-  );
+  )
+  .fail(async (msg, err) => {
+    log.error('Command failed');
+    if (err instanceof ApiError) {
+      log.error(await err.getApiError());
+    } else {
+      log.error(msg || err);
+    }
+    process.exit(1);
+  });
 
 (async () => {
   if ((await builder.argv)._.length === 0) {

@@ -1,5 +1,10 @@
+import { format } from 'node:util';
+
 export const log = {
-  info: (message: string) => {
-    process.stderr.write(`${message}\n`);
+  info: (...args: unknown[]) => {
+    process.stderr.write(`INFO: ${format(...args)}\n`);
+  },
+  error: (...args: unknown[]) => {
+    process.stderr.write(`ERROR: ${format(...args)}\n`);
   },
 };

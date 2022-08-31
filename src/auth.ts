@@ -12,7 +12,7 @@ const SERVER_TIMEOUT = 10_000;
 // where to wait for incoming redirect request from oauth server to arrive
 const REDIRECT_URI = (port: number) => `http://127.0.0.1:${port}/callback`;
 // These scopes cannot be cancelled, they are always needed.
-const DEFAULT_SCOPES = ['openid', 'offline'];
+const DEFAULT_SCOPES = ['openid', 'offline', 'urn:neoncloud:projects:create'];
 
 export type AuthProps = {
   oauthHost: string;
@@ -62,16 +62,20 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       }
       log.info(`Callback received: ${request.url}`);
       const params = neonOAuthClient.callbackParams(request);
-      const tokenSet = await neonOAuthClient.callback(REDIRECT_URI(listen_port), params, {
-        code_verifier: codeVerifier,
-        state,
-      });
+      const tokenSet = await neonOAuthClient.callback(
+        REDIRECT_URI(listen_port),
+        params,
+        {
+          code_verifier: codeVerifier,
+          state,
+        }
+      );
 
       response.writeHead(200, { 'Content-Type': 'text/html' });
       createReadStream(join(__dirname, './callback.html')).pipe(response);
       resolve(tokenSet);
       server.close();
-    })
+    });
 
     //
     // Open browser to let user authenticate

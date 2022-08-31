@@ -1,4 +1,35 @@
-import { request } from 'https';
+import { request } from 'node:https';
+import { IncomingMessage } from 'node:http';
+
+export class ApiError extends Error {
+  constructor(public response: IncomingMessage) {
+    super(response.statusMessage);
+  }
+
+  async getApiError() {
+    return new Promise((resolve, reject) => {
+      const data: string[] = [];
+      this.response
+        .on('data', (chunk) => {
+          data.push(chunk);
+        })
+        .on('end', () => {
+          try {
+            const json = JSON.parse(data.join(''));
+            resolve(
+              json?.message ||
+                `${this.response.statusCode}:${this.message}:${data.join('')}`
+            );
+          } catch (e) {
+            reject(e);
+          }
+        })
+        .on('error', (e) => {
+          reject(e);
+        });
+    });
+  }
+}
 
 export type BaseApiCallProps = {
   token: string;
@@ -28,8 +59,8 @@ export const apiCall = ({
         method,
       },
       (res) => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`${res.statusCode}: ${res.statusMessage}`));
+        if (!res.statusCode || res.statusCode >= 400) {
+          reject(new ApiError(res));
           return;
         }
         let result = '';
