@@ -31,9 +31,9 @@
   "scripts": {
     "dev": "node dev.js",
     "debug": "node --inspect-brk dev.js",
-    "build": "clean && tsc && cp src/*.html dist/src/",
+    "build": "npm run clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
     "start": "node index.js",
-    "publizh": "build && cd dist && yarn publish"
+    "publizh": "npm run build && cd dist && npm run publish"
   }
 }
