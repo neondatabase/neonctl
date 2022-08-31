@@ -1,6 +1,6 @@
 import { apiCall, BaseApiCallProps } from './gateway';
 
-export const listProjects = async (props: BaseApiCallProps) =>
+export const listProjects = (props: BaseApiCallProps) =>
   apiCall({ ...props, path: 'projects', method: 'GET' });
 
 type CreateProjectProps = {

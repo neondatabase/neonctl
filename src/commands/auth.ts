@@ -2,12 +2,12 @@ import { join } from 'node:path';
 import { writeFileSync, existsSync } from 'node:fs';
 
 import { auth } from '../auth';
-import { listProjects } from '../api/projects';
 import { log } from '../log';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
 type AuthProps = {
+  _: (string | number)[];
   configDir: string;
   oauthHost: string;
   apiHost: string;
@@ -34,36 +34,19 @@ export const authFlow = async ({
   return tokenSet.access_token || '';
 };
 
-export const validateAuth = async (props: {
-  token: string;
-  apiHost: string;
-}) => {
-  try {
-    await listProjects(props);
-  } catch (e) {
-    if ((e as Error).message.startsWith('401:')) {
-      return false;
-    }
-    throw e;
-  }
-  return true;
-};
-
 export const ensureAuth = async (props: AuthProps & { token: string }) => {
+  if (props._[0] === 'auth') {
+    return;
+  }
   const credentialsPath = join(props.configDir, CREDENTIALS_FILE);
   if (existsSync(credentialsPath)) {
-    const token = (await import(credentialsPath)).access_token;
-    if (
-      await validateAuth({
-        ...props,
-        token,
-      })
-    ) {
+    try {
+      const token = (await import(credentialsPath)).access_token;
       props.token = token;
-    } else {
-      props.token = await authFlow(props);
+    } catch (e) {
+      throw new Error('Invalid credentials, please re-authenticate');
     }
   } else {
-    props.token = await authFlow(props);
+    throw new Error('No credentials found, please authenticate');
   }
 };

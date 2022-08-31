@@ -1,20 +1,15 @@
 import { createProject, listProjects } from '../api/projects';
+import { CommonProps } from '../types';
 
-export type ProjectsProps = {
-  token: string;
-  apiHost: string;
-  sub?: 'list' | 'create';
+export const list = async (props: CommonProps) => {
+  process.stdout.write(await listProjects(props));
 };
 
-export default async (props: ProjectsProps) => {
-  if (props.sub === 'list' || props.sub === undefined) {
-    process.stdout.write(await listProjects(props));
-  } else if (props.sub === 'create') {
-    process.stdout.write(
-      await createProject({
-        ...props,
-        settings: {},
-      })
-    );
-  }
+export const create = async (props: CommonProps) => {
+  process.stdout.write(
+    await createProject({
+      ...props,
+      settings: {},
+    })
+  );
 };

@@ -6,21 +6,21 @@ import { ensureAuth } from './commands/auth';
 import { defaultDir, ensureConfigDir } from './config';
 import { log } from './log';
 
+const wrapWithHelp = async (yargs: yargs.Argv) => {
+  const { _ } = await yargs.argv;
+  if (_.length === 1) {
+    yargs.showHelp();
+  }
+  return yargs;
+};
+
 const builder = yargs
   .scriptName(pkg.name)
-  .usage('$0 <cmd> [args]')
+  .usage('usage: $0 <cmd> [args]')
   .help()
   .option('apiHost', {
     describe: 'The API host',
     default: 'https://console.neon.tech',
-  })
-  .option('oauthHost', {
-    description: 'URL to Neon OAUTH host',
-    default: 'https://oauth2.neon.tech',
-  })
-  .option('clientId', {
-    description: 'OAuth client id',
-    type: 'string',
   })
   // Setup config directory
   .option('configDir', {
@@ -33,7 +33,17 @@ const builder = yargs
   .command(
     'auth',
     'Authenticate user',
-    (yargs) => yargs,
+    (yargs) =>
+      yargs
+        .option('oauthHost', {
+          description: 'URL to Neon OAUTH host',
+          default: 'https://oauth2.neon.tech',
+        })
+        .option('clientId', {
+          description: 'OAuth client id',
+          type: 'string',
+          demandOption: true,
+        }),
     async (args) => {
       (await import('./commands/auth')).authFlow(args);
     }
@@ -46,23 +56,40 @@ const builder = yargs
   })
   .middleware(ensureAuth)
   .command(
-    'projects [sub]',
-    'Manage projects',
-    async (yargs) =>
-      yargs.positional('sub', {
-        describe: 'Subcommand',
-        choices: ['list', 'create'] as const,
-      }),
+    'me',
+    'Get user info',
+    (yargs) => yargs,
     async (args) => {
-      await (await import('./commands/projects')).default(args);
+      await (await import('./commands/users')).me(args);
     }
   )
+  .command('projects', 'Manage projects', (yargs) =>
+    wrapWithHelp(
+      yargs
+        .usage('usage: $0 projects <cmd> [args]')
+        .command(
+          'list',
+          'List projects',
+          (yargs) => yargs,
+          async (args) => {
+            await (await import('./commands/projects')).list(args);
+          }
+        )
+        .command(
+          'create',
+          'Create a project',
+          (yargs) => yargs,
+          async (args) => {
+            await (await import('./commands/projects')).create(args);
+          }
+        )
+    )
+  )
   .fail(async (msg, err) => {
-    log.error('Command failed');
     if (err instanceof ApiError) {
       log.error(await err.getApiError());
     } else {
-      log.error(msg || err);
+      log.error(msg || err.message);
     }
     process.exit(1);
   });
