@@ -45,9 +45,9 @@ export const ensureAuth = async (props: AuthProps & { token: string }) => {
       props.token = token;
       return;
     } catch (e) {
-      await authFlow(props);
+      props.token = await authFlow(props);
     }
   } else {
-    await authFlow(props);
+    props.token = await authFlow(props);
   }
 };
