@@ -34,6 +34,6 @@
     "build": "npm run clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
     "start": "node index.js",
-    "publizh": "npm run build && cd dist && npm publish"
+    "publizh": "npm run build && cd dist && npm publish && git push"
   }
 }
