@@ -35,7 +35,7 @@ export const authFlow = async ({
 };
 
 export const ensureAuth = async (props: AuthProps & { token: string }) => {
-  if (props._[0] === 'auth') {
+  if (props.token || props._[0] === 'auth') {
     return;
   }
   const credentialsPath = join(props['config-dir'], CREDENTIALS_FILE);
