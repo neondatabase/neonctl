@@ -9,6 +9,7 @@ import { log } from './log';
 const showHelpMiddleware = (argv: yargs.Arguments) => {
   if (argv._.length === 1) {
     yargs.showHelp();
+    process.exit(0);
   }
 };
 
@@ -55,11 +56,10 @@ const builder = yargs
     type: 'string',
     default: '',
   })
-  .middleware(ensureAuth)
   .command(
     'me',
     'Get user info',
-    (yargs) => yargs,
+    (yargs) => yargs.middleware(ensureAuth),
     async (args) => {
       await (await import('./commands/users')).me(args);
     }
@@ -83,8 +83,10 @@ const builder = yargs
           await (await import('./commands/projects')).create(args);
         }
       )
-      .middleware(showHelpMiddleware);
+      .middleware(showHelpMiddleware)
+      .middleware(ensureAuth);
   })
+
   .strict()
   .fail(async (msg, err) => {
     if (err instanceof ApiError) {
@@ -99,5 +101,6 @@ const builder = yargs
   const args = await builder.argv;
   if (args._.length === 0) {
     yargs.showHelp();
+    process.exit(0);
   }
 })();
