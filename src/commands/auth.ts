@@ -8,16 +8,16 @@ const CREDENTIALS_FILE = 'credentials.json';
 
 type AuthProps = {
   _: (string | number)[];
-  configDir: string;
-  oauthHost: string;
-  apiHost: string;
-  clientId?: string;
+  'config-dir': string;
+  'oauth-host': string;
+  'api-host': string;
+  'client-id': string;
 };
 
 export const authFlow = async ({
-  configDir,
-  oauthHost,
-  clientId,
+  'config-dir': configDir,
+  'oauth-host': oauthHost,
+  'client-id': clientId,
 }: AuthProps) => {
   if (!clientId) {
     throw new Error('Missing client id');
@@ -38,15 +38,16 @@ export const ensureAuth = async (props: AuthProps & { token: string }) => {
   if (props._[0] === 'auth') {
     return;
   }
-  const credentialsPath = join(props.configDir, CREDENTIALS_FILE);
+  const credentialsPath = join(props['config-dir'], CREDENTIALS_FILE);
   if (existsSync(credentialsPath)) {
     try {
       const token = (await import(credentialsPath)).access_token;
       props.token = token;
+      return;
     } catch (e) {
-      throw new Error('Invalid credentials, please re-authenticate');
+      await authFlow(props);
     }
   } else {
-    throw new Error('No credentials found, please authenticate');
+    await authFlow(props);
   }
 };

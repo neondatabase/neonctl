@@ -7,8 +7,8 @@ const DIR_NAME = '.neonctl';
 export const defaultDir = join(process.cwd(), DIR_NAME);
 
 export const ensureConfigDir = async ({
-  configDir,
-}: Arguments<{ configDir: string }>) => {
+  'config-dir': configDir,
+}: Arguments<{ 'config-dir': string }>) => {
   if (!existsSync(configDir)) {
     mkdirSync(configDir);
   }
