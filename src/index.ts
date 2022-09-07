@@ -78,7 +78,11 @@ const builder = yargs
       .command(
         'create',
         'Create a project',
-        (yargs) => yargs,
+        (yargs) =>
+          yargs.option('name', {
+            describe: 'Project name',
+            type: 'string',
+          }),
         async (args) => {
           await (await import('./commands/projects')).create(args);
         }

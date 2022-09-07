@@ -3,6 +3,9 @@ import { writeFileSync, existsSync } from 'node:fs';
 
 import { auth } from '../auth';
 import { log } from '../log';
+import { CommonProps } from '../types';
+import { apiMe } from '../api/users';
+import { ApiError } from '../api/gateway';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
@@ -34,6 +37,18 @@ export const authFlow = async ({
   return tokenSet.access_token || '';
 };
 
+const validateToken = async (props: CommonProps) => {
+  try {
+    await apiMe(props);
+  } catch (e) {
+    if (e instanceof ApiError) {
+      if (e.response.statusCode === 401) {
+        throw new Error('Invalid token');
+      }
+    }
+  }
+};
+
 export const ensureAuth = async (props: AuthProps & { token: string }) => {
   if (props.token || props._[0] === 'auth') {
     return;
@@ -42,6 +57,7 @@ export const ensureAuth = async (props: AuthProps & { token: string }) => {
   if (existsSync(credentialsPath)) {
     try {
       const token = (await import(credentialsPath)).access_token;
+      await validateToken({ apiHost: props['api-host'], token });
       props.token = token;
       return;
     } catch (e) {

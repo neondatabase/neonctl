@@ -5,6 +5,7 @@ export const listProjects = (props: BaseApiCallProps) =>
 
 type CreateProjectProps = {
   settings: unknown;
+  name?: string;
 };
 export const createProject = (props: BaseApiCallProps & CreateProjectProps) =>
   apiCall({
@@ -12,6 +13,7 @@ export const createProject = (props: BaseApiCallProps & CreateProjectProps) =>
     body: {
       project: {
         settings: props.settings,
+        name: props.name,
       },
     },
     path: 'projects',
