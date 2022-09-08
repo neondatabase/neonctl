@@ -12,17 +12,38 @@ const SERVER_TIMEOUT = 10_000;
 // where to wait for incoming redirect request from oauth server to arrive
 const REDIRECT_URI = (port: number) => `http://127.0.0.1:${port}/callback`;
 // These scopes cannot be cancelled, they are always needed.
-const DEFAULT_SCOPES = ['openid', 'offline', 'urn:neoncloud:projects:create'];
+const DEFAULT_SCOPES = [
+  'openid',
+  'offline',
+  'offline_access',
+  'urn:neoncloud:projects:create',
+  'urn:neoncloud:projects:read',
+  'urn:neoncloud:projects:modify',
+  'urn:neoncloud:projects:delete',
+];
 
 export type AuthProps = {
   oauthHost: string;
   clientId: string;
 };
 
-export const auth = async ({ oauthHost, clientId }: AuthProps) => {
-  custom.setHttpOptionsDefaults({
-    timeout: SERVER_TIMEOUT,
+custom.setHttpOptionsDefaults({
+  timeout: SERVER_TIMEOUT,
+});
+
+export const refreshToken = async ({ oauthHost, clientId }: AuthProps, tokenSet: TokenSet) => {
+  log.info('Discovering oauth server');
+  const issuer = await Issuer.discover(oauthHost);
+
+  const neonOAuthClient = new issuer.Client({
+    token_endpoint_auth_method: 'none',
+    client_id: clientId,
+    response_types: ['code'],
   });
+  return await neonOAuthClient.refresh(tokenSet)
+}
+
+export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   log.info('Discovering oauth server');
   const issuer = await Issuer.discover(oauthHost);
 
