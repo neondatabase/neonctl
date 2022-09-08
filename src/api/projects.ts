@@ -7,6 +7,12 @@ type CreateProjectProps = {
   settings: unknown;
   name?: string;
 };
+type CreateProjectResponse = {
+  id: string;
+  name: string;
+  region_name: string;
+  created_at: string;
+};
 export const createProject = (props: BaseApiCallProps & CreateProjectProps) =>
   apiCall({
     ...props,
@@ -18,4 +24,4 @@ export const createProject = (props: BaseApiCallProps & CreateProjectProps) =>
     },
     path: 'projects',
     method: 'POST',
-  });
+  }) as Promise<CreateProjectResponse>;

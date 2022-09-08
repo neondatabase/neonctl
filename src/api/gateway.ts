@@ -47,7 +47,7 @@ export const apiCall = ({
   body,
   method = 'GET',
 }: ApiCallProps) =>
-  new Promise<string>((resolve, reject) => {
+  new Promise<unknown>((resolve, reject) => {
     const req = request(
       `${apiHost}/api/v1/${path}`,
       {
@@ -68,7 +68,7 @@ export const apiCall = ({
           result += data;
         });
         res.on('end', () => {
-          resolve(result);
+          resolve(JSON.parse(result));
         });
       }
     );

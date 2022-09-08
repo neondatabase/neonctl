@@ -1,6 +1,9 @@
 import { CommonProps } from '../types';
 import { apiMe } from '../api/users';
+import { writeOut } from '../writer';
 
 export const me = async (props: CommonProps) => {
-  process.stdout.write(await apiMe(props));
+  writeOut(props)(await apiMe(props), {
+    fields: ['login', 'email', 'name', 'projects_limit'],
+  });
 };
