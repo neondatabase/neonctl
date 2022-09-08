@@ -31,7 +31,10 @@ custom.setHttpOptionsDefaults({
   timeout: SERVER_TIMEOUT,
 });
 
-export const refreshToken = async ({ oauthHost, clientId }: AuthProps, tokenSet: TokenSet) => {
+export const refreshToken = async (
+  { oauthHost, clientId }: AuthProps,
+  tokenSet: TokenSet
+) => {
   log.info('Discovering oauth server');
   const issuer = await Issuer.discover(oauthHost);
 
@@ -40,8 +43,8 @@ export const refreshToken = async ({ oauthHost, clientId }: AuthProps, tokenSet:
     client_id: clientId,
     response_types: ['code'],
   });
-  return await neonOAuthClient.refresh(tokenSet)
-}
+  return await neonOAuthClient.refresh(tokenSet);
+};
 
 export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   log.info('Discovering oauth server');

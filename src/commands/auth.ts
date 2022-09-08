@@ -32,7 +32,7 @@ export const authFlow = async ({
   });
 
   const credentialsPath = join(configDir, CREDENTIALS_FILE);
-  updateCredentialsFile(credentialsPath, JSON.stringify(tokenSet))
+  updateCredentialsFile(credentialsPath, JSON.stringify(tokenSet));
   log.info(`Saved credentials to ${credentialsPath}`);
   log.info('Auth complete');
   return tokenSet.access_token || '';
@@ -64,26 +64,33 @@ export const ensureAuth = async (props: AuthProps & { token: string }) => {
   const credentialsPath = join(props['config-dir'], CREDENTIALS_FILE);
   if (existsSync(credentialsPath)) {
     try {
-      const tokenSetContents = (await import(credentialsPath));
-      const tokenSet = new TokenSet(tokenSetContents)
+      const tokenSetContents = await import(credentialsPath);
+      const tokenSet = new TokenSet(tokenSetContents);
       if (tokenSet.expired()) {
         log.info('using refresh token to update access token');
-        const refreshedTokenSet = await refreshToken({
-          oauthHost: props['oauth-host'],
-          clientId: props['client-id'],
-        }, tokenSet)
-        props.token = refreshedTokenSet.access_token || 'UNKNOWN'
-        updateCredentialsFile(credentialsPath, JSON.stringify(refreshedTokenSet))
-        return
+        const refreshedTokenSet = await refreshToken(
+          {
+            oauthHost: props['oauth-host'],
+            clientId: props['client-id'],
+          },
+          tokenSet
+        );
+        props.token = refreshedTokenSet.access_token || 'UNKNOWN';
+        updateCredentialsFile(
+          credentialsPath,
+          JSON.stringify(refreshedTokenSet)
+        );
+        return;
       }
       const token = tokenSet.access_token || 'UNKNOWN';
 
       await validateToken({ apiHost: props['api-host'], token });
       props.token = token;
       return;
-    } catch (e: any) {
-      if (e.code !== 'ENOENT') { // not a "file does not exist" error
-        throw e
+    } catch (e) {
+      if ((e as { code: string }).code !== 'ENOENT') {
+        // not a "file does not exist" error
+        throw e;
       }
       props.token = await authFlow(props);
     }
