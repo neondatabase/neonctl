@@ -1,6 +1,6 @@
 {
   "name": "neonctl",
-  "version": "0.4.0",
+  "version": "0.5.3",
   "description": "CLI tool for NeonDB Cloud management",
   "main": "index.js",
   "author": "NeonDB",
@@ -39,8 +39,8 @@
     "build": "npm run clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
     "start": "node index.js",
-    "publizh": "npm run build && cd dist && npm publish && git push",
-    "prepare": "husky install"
+    "publizh": "npm run build && npm publish ./dist && git push",
+    "postinstall": "husky install"
   },
   "lint-staged": {
     "*.ts": [
