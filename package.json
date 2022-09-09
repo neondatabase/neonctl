@@ -39,8 +39,7 @@
     "build": "npm run clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
     "start": "node index.js",
-    "publizh": "npm run build && npm publish ./dist && git push",
-    "postinstall": "husky install"
+    "publizh": "npm run build && npm publish ./dist && git push"
   },
   "lint-staged": {
     "*.ts": [
