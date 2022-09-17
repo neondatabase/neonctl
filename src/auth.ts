@@ -18,7 +18,7 @@ const DEFAULT_SCOPES = [
   'offline_access',
   'urn:neoncloud:projects:create',
   'urn:neoncloud:projects:read',
-  'urn:neoncloud:projects:modify',
+  'urn:neoncloud:projects:update',
   'urn:neoncloud:projects:delete',
 ];
 
