@@ -84,7 +84,11 @@ export const ensureAuth = async (props: AuthProps & { token: string }) => {
       }
       const token = tokenSet.access_token || 'UNKNOWN';
 
-      await validateToken({ apiHost: props['api-host'], token });
+      await validateToken({
+        apiHost: props['api-host'],
+        token,
+        format: 'json',
+      });
       props.token = token;
       return;
     } catch (e) {
