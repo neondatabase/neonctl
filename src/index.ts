@@ -64,17 +64,48 @@ const builder = yargs
       await (await import('./commands/users')).me(args);
     }
   )
+  .command('roles', 'Manage roles', async (yargs) => {
+    yargs
+      .usage('usage: $0 roles <cmd> [args]')
+      .command(
+        'resetpassword',
+        'Reset password for a role',
+        (yargs) =>
+          yargs
+            .option('project-id', {
+              describe: 'Project ID',
+              type: 'string',
+              demandOption: true,
+            })
+            .option('role-name', {
+              describe: 'Role name',
+              type: 'string',
+              demandOption: true,
+            }),
+        async (args) => {
+          await (
+            await import('./commands/roles')
+          ).resetPwd({
+            ...args,
+            role_name: args['role-name'],
+            project_id: args['project-id'],
+          });
+        }
+      )
+      .middleware(showHelpMiddleware)
+      .middleware(ensureAuth);
+  })
   .command('projects', 'Manage projects', async (yargs) => {
     yargs
       .usage('usage: $0 projects <cmd> [args]')
-      // .command(
-      //   'list',
-      //   'List projects',
-      //   (yargs) => yargs,
-      //   async (args) => {
-      //     await (await import('./commands/projects')).list(args);
-      //   }
-      // )
+      .command(
+        'list',
+        'List projects',
+        (yargs) => yargs,
+        async (args) => {
+          await (await import('./commands/projects')).list(args);
+        }
+      )
       .command(
         'create',
         'Create a project',
