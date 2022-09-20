@@ -1,15 +1,6 @@
-import { createProject, listProjects, resetPassword } from '../api/projects';
+import { createProject, listProjects } from '../api/projects';
 import { CommonProps } from '../types';
 import { writeOut } from '../writer';
-
-export type RoleApiCallProps = {
-  role_name: string;
-  project_id: string;
-};
-
-export const resetPwd = async (props: CommonProps & RoleApiCallProps) => {
-  writeOut(props)(await resetPassword(props), { fields: [] });
-};
 
 export const list = async (props: CommonProps) => {
   writeOut(props)(await listProjects(props), { fields: [] });

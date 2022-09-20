@@ -22,7 +22,7 @@ const builder = yargs
     describe: 'Set output format',
     type: 'string',
     choices: ['json', 'table', 'yaml'],
-    default: 'table',
+    default: 'json',
   })
   .option('api-host', {
     describe: 'The API host',
@@ -101,31 +101,6 @@ const builder = yargs
   .command('projects', 'Manage projects', async (yargs) => {
     yargs
       .usage('usage: $0 projects <cmd> [args]')
-      .command(
-        'resetpassword',
-        'Reset password for a role',
-        (yargs) =>
-          yargs
-            .option('project-id', {
-              describe: 'Project ID',
-              type: 'string',
-              default: '',
-            })
-            .option('role-name', {
-              describe: 'Role name',
-              type: 'string',
-              default: '',
-            }),
-        async (args) => {
-          await (
-            await import('./commands/projects')
-          ).resetPwd({
-            ...args,
-            role_name: args['role-name'],
-            project_id: args['project-id'],
-          });
-        }
-      )
       .command(
         'list',
         'List projects',
