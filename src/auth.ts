@@ -12,14 +12,15 @@ const SERVER_TIMEOUT = 10_000;
 // where to wait for incoming redirect request from oauth server to arrive
 const REDIRECT_URI = (port: number) => `http://127.0.0.1:${port}/callback`;
 // These scopes cannot be cancelled, they are always needed.
-const ALWAYS_PRESENT_SCOPES = ['openid', 'offline', 'offline_access'];
+const ALWAYS_PRESENT_SCOPES = ['openid', 'offline', 'offline_access'] as const;
 
-const NEONCTL_SCOPES = ALWAYS_PRESENT_SCOPES.concat([
+const NEONCTL_SCOPES = [
+  ...ALWAYS_PRESENT_SCOPES,
   'urn:neoncloud:projects:create',
   'urn:neoncloud:projects:read',
   'urn:neoncloud:projects:update',
   'urn:neoncloud:projects:delete',
-]);
+] as const;
 
 export const defaultClientID = 'neonctl';
 
@@ -105,10 +106,9 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
     //
     // Open browser to let user authenticate
     //
-    let scopes = NEONCTL_SCOPES;
-    if (clientId != defaultClientID) {
-      scopes = ALWAYS_PRESENT_SCOPES;
-    }
+    const scopes =
+      clientId == defaultClientID ? NEONCTL_SCOPES : ALWAYS_PRESENT_SCOPES;
+
     const authUrl = neonOAuthClient.authorizationUrl({
       scope: scopes.join(' '),
       state,
