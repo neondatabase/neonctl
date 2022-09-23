@@ -19,11 +19,11 @@ type WriteOutConfig<T> = {
 export const writeOut =
   (props: CommonProps) =>
   <T>(data: T, config: WriteOutConfig<T>) => {
-    if (props.format == 'yaml') {
+    if (props.output == 'yaml') {
       process.stdout.write(YAML.stringify(data, null, 2));
       return;
     }
-    if (props.format == 'json') {
+    if (props.output == 'json') {
       process.stdout.write(JSON.stringify(data, null, 2));
       return;
     }

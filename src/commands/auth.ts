@@ -87,7 +87,7 @@ export const ensureAuth = async (props: AuthProps & { token: string }) => {
       await validateToken({
         apiHost: props['api-host'],
         token,
-        format: 'json',
+        output: 'json',
       });
       props.token = token;
       return;

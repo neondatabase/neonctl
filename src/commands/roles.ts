@@ -8,5 +8,5 @@ export type RoleApiCallProps = {
 };
 
 export const resetPwd = async (props: CommonProps & RoleApiCallProps) => {
-  writeOut(props)(await resetPassword(props), { fields: [] });
+  writeOut(props)(await resetPassword(props), { fields: ['dsn'] });
 };

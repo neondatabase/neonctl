@@ -1,3 +1,4 @@
+import { log } from '../log';
 import { apiCall, BaseApiCallProps } from './gateway';
 
 export type OperationApiCallProps = {
@@ -17,12 +18,13 @@ function sleep(ms: number) {
 export const waitOperationFinalState = async (
   props: BaseApiCallProps & OperationApiCallProps
 ) => {
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 20; i++) {
     const operation: Operation = <Operation>await getOperation({ ...props });
     if (operation.status == 'finished') {
       return;
     }
-    await sleep(200);
+    log.info(`Waiting for operation "${props.operation_id}" to finish`);
+    await sleep(1000);
   }
   throw Error(`timeout while waiting for operation ${props.operation_id}`);
 };
