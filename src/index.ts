@@ -5,6 +5,7 @@ import { ApiError } from './api/gateway';
 import { ensureAuth } from './commands/auth';
 import { defaultDir, ensureConfigDir } from './config';
 import { log } from './log';
+import { defaultClientID } from './auth';
 
 const showHelpMiddleware = (argv: yargs.Arguments) => {
   if (argv._.length === 1) {
@@ -40,7 +41,7 @@ const builder = yargs
   .option('client-id', {
     description: 'OAuth client id',
     type: 'string',
-    default: 'neonctl',
+    default: defaultClientID,
   })
   .command(
     'auth',
