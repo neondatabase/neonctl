@@ -1,7 +1,11 @@
 import { apiCall, BaseApiCallProps } from './gateway';
 
 export const listProjects = (props: BaseApiCallProps) =>
-  apiCall({ ...props, path: 'projects', method: 'GET' });
+  apiCall({
+    ...props,
+    path: 'projects',
+    method: 'GET',
+  }) as Promise<CreateProjectResponse>;
 
 type CreateProjectProps = {
   settings: unknown;

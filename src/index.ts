@@ -18,9 +18,11 @@ const builder = yargs
   .scriptName(pkg.name)
   .usage('usage: $0 <cmd> [args]')
   .help()
-  .option('json', {
-    describe: 'Set output format to JSON',
-    type: 'boolean',
+  .option('output', {
+    describe: 'Set output format',
+    type: 'string',
+    choices: ['json', 'yaml', 'table'],
+    default: 'table',
   })
   .option('api-host', {
     describe: 'The API host',
