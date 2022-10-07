@@ -11,7 +11,8 @@ jobs:
       - uses: actions/setup-node@v3
       - run: npm ci
       - run: npm run build
-      - run: npm publish --ignore-scripts ./dist
+      - run: npx semantic-release
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
