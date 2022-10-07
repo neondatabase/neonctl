@@ -6,6 +6,9 @@
   "author": "NeonDB",
   "license": "MIT",
   "private": false,
+  "engines": {
+    "node": ">=16"
+  },
   "bin": {
     "neonctl": "src/cli.js"
   },
@@ -35,7 +38,7 @@
   },
   "scripts": {
     "dev": "node dev.js",
-    "lint": "eslint src --ext .ts",
+    "lint": "tsc --noEmit && eslint src --ext .ts",
     "debug": "node --inspect-brk dev.js",
     "build": "npm run clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
