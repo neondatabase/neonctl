@@ -42,8 +42,7 @@
     "debug": "node --inspect-brk dev.js",
     "build": "npm run clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
-    "start": "node index.js",
-    "publizh": "npm run build && npm publish --ignore-scripts ./dist"
+    "start": "node index.js"
   },
   "lint-staged": {
     "*.ts": [
