@@ -17,3 +17,10 @@ To run dev version:
 ```
 ./dev.js auth
 ```
+
+Release
+=======
+
+We use [semantic-release](https://semantic-release.gitbook.io/semantic-release/).
+So commits should be formatted with [commit convention](https://semantic-release.gitbook.io/semantic-release/#commit-message-format)
+
