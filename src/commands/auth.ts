@@ -2,26 +2,27 @@ import { join } from 'node:path';
 import { writeFileSync, existsSync } from 'node:fs';
 import { TokenSet } from 'openid-client';
 
+import { Api } from '@neondatabase/api-client';
+
 import { auth, refreshToken } from '../auth';
 import { log } from '../log';
 import { CommonProps } from '../types';
-import { apiMe } from '../api/users';
-import { ApiError } from '../api/gateway';
+import { getApiClient, isApiError } from '../api';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
 type AuthProps = {
   _: (string | number)[];
-  'config-dir': string;
-  'oauth-host': string;
-  'api-host': string;
-  'client-id': string;
+  configDir: string;
+  oauthHost: string;
+  apiHost: string;
+  clientId: string;
 };
 
 export const authFlow = async ({
-  'config-dir': configDir,
-  'oauth-host': oauthHost,
-  'client-id': clientId,
+  configDir,
+  oauthHost,
+  clientId,
 }: AuthProps) => {
   if (!clientId) {
     throw new Error('Missing client id');
@@ -40,10 +41,11 @@ export const authFlow = async ({
 
 const validateToken = async (props: CommonProps) => {
   try {
-    await apiMe(props);
-  } catch (e) {
-    if (e instanceof ApiError) {
-      if (e.response.statusCode === 401) {
+    const client = getApiClient(props);
+    await client.getCurrentUserInfo();
+  } catch (err) {
+    if (isApiError(err)) {
+      if (err.response.status === 401) {
         throw new Error('Invalid token');
       }
     }
@@ -57,11 +59,20 @@ function updateCredentialsFile(path: string, contents: string) {
   });
 }
 
-export const ensureAuth = async (props: AuthProps & { token: string }) => {
-  if (props.token || props._[0] === 'auth') {
+export const ensureAuth = async (
+  props: AuthProps & { apiKey: string; apiClient: Api<unknown> }
+) => {
+  if (props._.length === 0) {
     return;
   }
-  const credentialsPath = join(props['config-dir'], CREDENTIALS_FILE);
+  if (props.apiKey || props._[0] === 'auth') {
+    props.apiClient = getApiClient({
+      apiKey: props.apiKey,
+      apiHost: props.apiHost,
+    });
+    return;
+  }
+  const credentialsPath = join(props.configDir, CREDENTIALS_FILE);
   if (existsSync(credentialsPath)) {
     try {
       const tokenSetContents = await import(credentialsPath);
@@ -70,12 +81,16 @@ export const ensureAuth = async (props: AuthProps & { token: string }) => {
         log.info('using refresh token to update access token');
         const refreshedTokenSet = await refreshToken(
           {
-            oauthHost: props['oauth-host'],
-            clientId: props['client-id'],
+            oauthHost: props.oauthHost,
+            clientId: props.clientId,
           },
           tokenSet
         );
-        props.token = refreshedTokenSet.access_token || 'UNKNOWN';
+        props.apiKey = refreshedTokenSet.access_token || 'UNKNOWN';
+        props.apiClient = getApiClient({
+          apiKey: props.apiKey,
+          apiHost: props.apiHost,
+        });
         updateCredentialsFile(
           credentialsPath,
           JSON.stringify(refreshedTokenSet)
@@ -84,21 +99,24 @@ export const ensureAuth = async (props: AuthProps & { token: string }) => {
       }
       const token = tokenSet.access_token || 'UNKNOWN';
 
-      await validateToken({
-        apiHost: props['api-host'],
-        token,
-        output: 'json',
+      props.apiKey = token;
+      props.apiClient = getApiClient({
+        apiKey: props.apiKey,
+        apiHost: props.apiHost,
       });
-      props.token = token;
       return;
     } catch (e) {
       if ((e as { code: string }).code !== 'ENOENT') {
         // not a "file does not exist" error
         throw e;
       }
-      props.token = await authFlow(props);
+      props.apiKey = await authFlow(props);
     }
   } else {
-    props.token = await authFlow(props);
+    props.apiKey = await authFlow(props);
   }
+  props.apiClient = getApiClient({
+    apiKey: props.apiKey,
+    apiHost: props.apiHost,
+  });
 };

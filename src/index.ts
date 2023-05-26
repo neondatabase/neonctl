@@ -1,11 +1,12 @@
 import * as yargs from 'yargs';
 
 import pkg from '../package.json';
-import { ApiError } from './api/gateway';
 import { ensureAuth } from './commands/auth';
 import { defaultDir, ensureConfigDir } from './config';
 import { log } from './log';
 import { defaultClientID } from './auth';
+import { isApiError } from './api';
+import { Api } from '@neondatabase/api-client';
 
 const showHelpMiddleware = (argv: yargs.Arguments) => {
   if (argv._.length === 1) {
@@ -26,7 +27,7 @@ const builder = yargs
   })
   .option('api-host', {
     describe: 'The API host',
-    default: 'https://console.neon.tech',
+    default: 'https://console.neon.tech/api/v2',
   })
   // Setup config directory
   .option('config-dir', {
@@ -53,51 +54,25 @@ const builder = yargs
       (await import('./commands/auth')).authFlow(args);
     }
   )
-  // Ensure auth token
-  .option('token', {
-    describe: 'Auth token',
+  .option('api-key', {
+    describe: 'API key',
     type: 'string',
     default: '',
   })
+  .option('apiClient', {
+    hidden: true,
+    coerce: (v) => v as Api<unknown>,
+    default: true,
+  })
+  .middleware(ensureAuth)
   .command(
     'me',
     'Get user info',
-    (yargs) => yargs.middleware(ensureAuth),
+    (yargs) => yargs,
     async (args) => {
       await (await import('./commands/users')).me(args);
     }
   )
-  .command('roles', 'Manage roles', async (yargs) => {
-    yargs
-      .usage('usage: $0 roles <cmd> [args]')
-      .command(
-        'resetpassword',
-        'Reset password for a role',
-        (yargs) =>
-          yargs
-            .option('project-id', {
-              describe: 'Project ID',
-              type: 'string',
-              demandOption: true,
-            })
-            .option('role-name', {
-              describe: 'Role name',
-              type: 'string',
-              demandOption: true,
-            }),
-        async (args) => {
-          await (
-            await import('./commands/roles')
-          ).resetPwd({
-            ...args,
-            role_name: args['role-name'],
-            project_id: args['project-id'],
-          });
-        }
-      )
-      .middleware(showHelpMiddleware)
-      .middleware(ensureAuth);
-  })
   .command('projects', 'Manage projects', async (yargs) => {
     yargs
       .usage('usage: $0 projects <cmd> [args]')
@@ -121,14 +96,22 @@ const builder = yargs
           await (await import('./commands/projects')).create(args);
         }
       )
-      .middleware(showHelpMiddleware)
-      .middleware(ensureAuth);
+      .middleware(showHelpMiddleware);
   })
 
   .strict()
   .fail(async (msg, err) => {
-    if (err instanceof ApiError) {
-      log.error(await err.getApiError());
+    if (isApiError(err)) {
+      if (err.response.status === 401) {
+        log.error('Authentication failed, please run `neonctl auth`');
+      } else {
+        log.error(
+          '%d:%s\n%s',
+          err.response.status,
+          err.response.statusText,
+          err.response.data?.message
+        );
+      }
     } else {
       log.error(msg || err.message);
     }
