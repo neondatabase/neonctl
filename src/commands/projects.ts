@@ -1,10 +1,9 @@
-import { createProject, listProjects } from '../api/projects';
 import { CommonProps } from '../types';
 import { writeOut } from '../writer';
 
 export const list = async (props: CommonProps) => {
-  writeOut(props)(await listProjects(props), {
-    fields: ['id', 'name', 'region_name', 'created_at'],
+  writeOut(props)((await props.apiClient.listProjects({})).data.projects, {
+    fields: ['id', 'name', 'region_id', 'created_at'],
   });
 };
 
@@ -13,11 +12,13 @@ export type ProjectCreateProps = {
 };
 export const create = async (props: CommonProps & ProjectCreateProps) => {
   writeOut(props)(
-    await createProject({
-      ...props,
-      settings: {},
-      name: props.name,
-    }),
-    { fields: ['id', 'name', 'region_name', 'created_at'] }
+    (
+      await props.apiClient.createProject({
+        project: {
+          name: props.name,
+        },
+      })
+    ).data.project,
+    { fields: ['id', 'name', 'region_id', 'created_at'] }
   );
 };

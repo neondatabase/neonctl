@@ -3,16 +3,11 @@ import { homedir } from 'node:os';
 import { existsSync, mkdirSync } from 'node:fs';
 import { Arguments } from 'yargs';
 
-const DIR_NAME = '.neonctl';
-
-const cwdDir = join(process.cwd(), DIR_NAME);
-const homeConfigDir = join(
+export const defaultDir = join(
   homedir(),
   process.env.XDG_CONFIG_HOME || '.config',
-  DIR_NAME
+  'neonctl'
 );
-
-export const defaultDir = existsSync(cwdDir) ? cwdDir : homeConfigDir;
 
 export const ensureConfigDir = async ({
   'config-dir': configDir,

@@ -1,5 +1,8 @@
+import { Api } from '@neondatabase/api-client';
+
 export type CommonProps = {
-  token: string;
+  apiClient: Api<unknown>;
+  apiKey: string;
   apiHost: string;
   output: string;
 };
