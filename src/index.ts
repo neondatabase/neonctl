@@ -1,4 +1,5 @@
 import * as yargs from 'yargs';
+import { Api } from '@neondatabase/api-client';
 
 import pkg from '../package.json';
 import { ensureAuth } from './commands/auth';
@@ -6,7 +7,8 @@ import { defaultDir, ensureConfigDir } from './config';
 import { log } from './log';
 import { defaultClientID } from './auth';
 import { isApiError } from './api';
-import { Api } from '@neondatabase/api-client';
+import { ProjectCreateRequest } from './parameters.gen';
+import { fillInArgs } from './utils';
 
 const showHelpMiddleware = (argv: yargs.Arguments) => {
   if (argv._.length === 1) {
@@ -64,6 +66,7 @@ const builder = yargs
     coerce: (v) => v as Api<unknown>,
     default: true,
   })
+  .middleware((args) => fillInArgs(args), true)
   .middleware(ensureAuth)
   .command(
     'me',
@@ -87,26 +90,52 @@ const builder = yargs
       .command(
         'create',
         'Create a project',
+        (yargs) => yargs.options(ProjectCreateRequest),
+        async (args) => {
+          await (await import('./commands/projects')).create(args as any);
+        }
+      )
+      .command(
+        'update',
+        'Update a project',
         (yargs) =>
-          yargs.option('name', {
-            describe: 'Project name',
-            type: 'string',
+          yargs
+            .option('project.id', {
+              describe: 'Project ID',
+              type: 'string',
+              demandOption: true,
+            })
+            .options(ProjectCreateRequest),
+        async (args) => {
+          await (await import('./commands/projects')).update(args as any);
+        }
+      )
+      .command(
+        'delete',
+        'Delete a project',
+        (yargs) =>
+          yargs.options({
+            'project.id': {
+              describe: 'Project ID',
+              type: 'string',
+              demandOption: true,
+            },
           }),
         async (args) => {
-          await (await import('./commands/projects')).create(args);
+          await (
+            await import('./commands/projects')
+          ).deleteProject(args as any);
         }
       )
       .middleware(showHelpMiddleware);
   })
-
-  .strict()
   .fail(async (msg, err) => {
     if (isApiError(err)) {
       if (err.response.status === 401) {
         log.error('Authentication failed, please run `neonctl auth`');
       } else {
         log.error(
-          '%d:%s\n%s',
+          '%d: %s\n%s',
           err.response.status,
           err.response.statusText,
           err.response.data?.message
