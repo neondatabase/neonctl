@@ -49,10 +49,10 @@
     "watch": "tsc --watch",
     "lint": "tsc --noEmit && eslint src --ext .ts",
     "debug": "node --inspect-brk dist/src",
-    "build": "npm run clean && tsc && cp src/*.html dist/src/",
+    "build": "npm run generateParams && npm run clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
-    "start": "node src/index.js",
-    "postinstall": "ts-node ./generateParams.ts"
+    "generateParams": "ts-node generateParams.ts",
+    "start": "node src/index.js"
   },
   "lint-staged": {
     "*.ts": [
