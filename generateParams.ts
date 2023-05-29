@@ -76,7 +76,7 @@ outFile.write('// FILE IS GENERATED, DO NOT EDIT\n\n');
 
 EXTRACT_PROPERTIES.flatMap((p) => {
   console.log(`Extracting ${p}`);
-  outFile.write(`export const ${p} = {\n`);
+  outFile.write(`export const ${p[0].toLowerCase()}${p.slice(1)} = {\n`);
   convertProperties(apiSource.getInterface(p)?.getProperties() ?? []).forEach(
     ({ name, type, choices, description }) => {
       outFile.write(`  '${name}': {\n`);

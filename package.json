@@ -46,12 +46,12 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "dev": "node dev.js",
+    "watch": "tsc --watch",
     "lint": "tsc --noEmit && eslint src --ext .ts",
-    "debug": "node --inspect-brk dev.js",
+    "debug": "node --inspect-brk dist/src",
     "build": "npm run clean && tsc && cp src/*.html dist/src/",
     "clean": "rm -rf dist",
-    "start": "node index.js",
+    "start": "node src/index.js",
     "postinstall": "ts-node ./generateParams.ts"
   },
   "lint-staged": {

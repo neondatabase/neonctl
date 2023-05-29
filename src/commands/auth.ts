@@ -6,8 +6,8 @@ import { Api } from '@neondatabase/api-client';
 
 import { auth, refreshToken } from '../auth';
 import { log } from '../log';
-import { CommonProps } from '../types';
-import { getApiClient, isApiError } from '../api';
+import { getApiClient } from '../api';
+import yargs from 'yargs';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
@@ -17,6 +17,13 @@ type AuthProps = {
   oauthHost: string;
   apiHost: string;
   clientId: string;
+};
+
+export const command = 'auth';
+export const describe = 'Authenticate';
+export const builder = (yargs: yargs.Argv) => yargs;
+export const handler = async (args: AuthProps) => {
+  await authFlow(args);
 };
 
 export const authFlow = async ({
@@ -37,19 +44,6 @@ export const authFlow = async ({
   log.info(`Saved credentials to ${credentialsPath}`);
   log.info('Auth complete');
   return tokenSet.access_token || '';
-};
-
-const validateToken = async (props: CommonProps) => {
-  try {
-    const client = getApiClient(props);
-    await client.getCurrentUserInfo();
-  } catch (err) {
-    if (isApiError(err)) {
-      if (err.response.status === 401) {
-        throw new Error('Invalid token');
-      }
-    }
-  }
 };
 
 // updateCredentialsFile correctly sets needed permissions for the credentials file

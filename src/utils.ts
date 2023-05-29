@@ -1,6 +1,10 @@
-// This middleware is needed to fill in the args for nested objects,
-// so that required arguments would work
-// otherwise yargs just throws an error
+import yargs from 'yargs';
+
+/**
+ * This middleware is needed to fill in the args for nested objects,
+ * so that required arguments would work
+ * otherwise yargs just throws an error
+ */
 export const fillInArgs = (
   args: Record<string, unknown>,
   currentArgs: Record<string, unknown> = args,
@@ -18,4 +22,11 @@ export const fillInArgs = (
       args[acc.join('.') + '.' + k] = v;
     }
   });
+};
+
+export const showHelpMiddleware = (argv: yargs.Arguments) => {
+  if (argv._.length === 1) {
+    yargs.showHelp();
+    process.exit(0);
+  }
 };

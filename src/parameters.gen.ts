@@ -1,6 +1,6 @@
 // FILE IS GENERATED, DO NOT EDIT
 
-export const ProjectCreateRequest = {
+export const projectCreateRequest = {
   'project.settings.quota.active_time_seconds': {
     type: 'number',
     description:
