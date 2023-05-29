@@ -1,4 +1,5 @@
 import * as yargs from 'yargs';
+import { join } from 'node:path';
 import { Api } from '@neondatabase/api-client';
 
 import pkg from '../package.json';
@@ -7,15 +8,7 @@ import { defaultDir, ensureConfigDir } from './config';
 import { log } from './log';
 import { defaultClientID } from './auth';
 import { isApiError } from './api';
-import { ProjectCreateRequest } from './parameters.gen';
 import { fillInArgs } from './utils';
-
-const showHelpMiddleware = (argv: yargs.Arguments) => {
-  if (argv._.length === 1) {
-    yargs.showHelp();
-    process.exit(0);
-  }
-};
 
 const builder = yargs
   .scriptName(pkg.name)
@@ -48,14 +41,6 @@ const builder = yargs
     type: 'string',
     default: defaultClientID,
   })
-  .command(
-    'auth',
-    'Authenticate user',
-    (yargs) => yargs,
-    async (args) => {
-      (await import('./commands/auth')).authFlow(args);
-    }
-  )
   .option('api-key', {
     describe: 'API key',
     type: 'string',
@@ -68,67 +53,7 @@ const builder = yargs
   })
   .middleware((args) => fillInArgs(args), true)
   .middleware(ensureAuth)
-  .command(
-    'me',
-    'Get user info',
-    (yargs) => yargs,
-    async (args) => {
-      await (await import('./commands/users')).me(args);
-    }
-  )
-  .command('projects', 'Manage projects', async (yargs) => {
-    yargs
-      .usage('usage: $0 projects <cmd> [args]')
-      .command(
-        'list',
-        'List projects',
-        (yargs) => yargs,
-        async (args) => {
-          await (await import('./commands/projects')).list(args);
-        }
-      )
-      .command(
-        'create',
-        'Create a project',
-        (yargs) => yargs.options(ProjectCreateRequest),
-        async (args) => {
-          await (await import('./commands/projects')).create(args as any);
-        }
-      )
-      .command(
-        'update',
-        'Update a project',
-        (yargs) =>
-          yargs
-            .option('project.id', {
-              describe: 'Project ID',
-              type: 'string',
-              demandOption: true,
-            })
-            .options(ProjectCreateRequest),
-        async (args) => {
-          await (await import('./commands/projects')).update(args as any);
-        }
-      )
-      .command(
-        'delete',
-        'Delete a project',
-        (yargs) =>
-          yargs.options({
-            'project.id': {
-              describe: 'Project ID',
-              type: 'string',
-              demandOption: true,
-            },
-          }),
-        async (args) => {
-          await (
-            await import('./commands/projects')
-          ).deleteProject(args as any);
-        }
-      )
-      .middleware(showHelpMiddleware);
-  })
+  .commandDir(join(__dirname, './commands'))
   .fail(async (msg, err) => {
     if (isApiError(err)) {
       if (err.response.status === 401) {
