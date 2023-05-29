@@ -14,7 +14,7 @@ process.stdout.on('error', function (err) {
 
 type WriteOutConfig<T> = {
   // Fields to output in human readable format
-  fields: OnlyStrings<keyof ExtractFromArray<T>>[];
+  fields: Readonly<OnlyStrings<keyof ExtractFromArray<T>>[]>;
 };
 export const writeOut =
   (props: CommonProps) =>

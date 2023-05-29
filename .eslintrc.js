@@ -9,5 +9,6 @@ module.exports = {
   ignorePatterns: ['**/*.js'],
   rules: {
     'no-console': 'error',
+    '@typescript-eslint/no-explicit-any': 'off',
   },
 };
