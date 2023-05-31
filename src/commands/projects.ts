@@ -1,16 +1,21 @@
 import { ProjectCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
-import { projectCreateRequest } from '../parameters.gen';
-import { CommonProps } from '../types';
-import { showHelpMiddleware } from '../utils';
-import { writeOut } from '../writer';
+
+import { projectCreateRequest } from '../parameters.gen.js';
+import { CommonProps } from '../types.js';
+import { writeOut } from '../writer.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
-export const command = 'projects <command>';
+export const command = 'projects [command]';
 export const describe = 'Manage projects';
-export const builder = (yargs: yargs.Argv) =>
-  yargs
+export const builder = (yargs: yargs.Argv) => {
+  return yargs
+    .demandCommand(1, '')
+    .fail((msg, err, yargs) => {
+      yargs.showHelp();
+      process.exit(1);
+    })
     .usage('usage: $0 projects <cmd> [args]')
     .command(
       'list',
@@ -57,8 +62,11 @@ export const builder = (yargs: yargs.Argv) =>
       async (args) => {
         await deleteProject(args as any);
       }
-    )
-    .middleware(showHelpMiddleware);
+    );
+};
+export const handler = (args: yargs.Argv) => {
+  return args;
+};
 
 const list = async (props: CommonProps) => {
   writeOut(props)((await props.apiClient.listProjects({})).data.projects, {
@@ -67,6 +75,13 @@ const list = async (props: CommonProps) => {
 };
 
 const create = async (props: CommonProps & ProjectCreateRequest) => {
+  if (props.project == null) {
+    const inquirer = await import('inquirer');
+    const answers = await inquirer.default.prompt([
+      { name: 'name', message: 'Project name', type: 'input' },
+    ] as const);
+    props.project = answers;
+  }
   writeOut(props)(
     (
       await props.apiClient.createProject({

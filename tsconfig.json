@@ -1,10 +1,12 @@
 {
   "compilerOptions": {
-    "target": "ES2015",
-    "module": "CommonJS",
+    "target": "ES2020",
+    "module": "ES2020",
     "strict": true,
     "outDir": "./dist",
+    "allowJs": true,
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "noImplicitAny": true,

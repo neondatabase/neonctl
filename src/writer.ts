@@ -1,4 +1,4 @@
-import { CommonProps } from './types';
+import { CommonProps } from './types.js';
 import YAML from 'yaml';
 import Table from 'cli-table';
 

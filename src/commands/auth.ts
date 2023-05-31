@@ -1,13 +1,13 @@
 import { join } from 'node:path';
-import { writeFileSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { TokenSet } from 'openid-client';
+import yargs from 'yargs';
 
 import { Api } from '@neondatabase/api-client';
 
-import { auth, refreshToken } from '../auth';
-import { log } from '../log';
-import { getApiClient } from '../api';
-import yargs from 'yargs';
+import { auth, refreshToken } from '../auth.js';
+import { log } from '../log.js';
+import { getApiClient } from '../api.js';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
@@ -69,7 +69,9 @@ export const ensureAuth = async (
   const credentialsPath = join(props.configDir, CREDENTIALS_FILE);
   if (existsSync(credentialsPath)) {
     try {
-      const tokenSetContents = await import(credentialsPath);
+      const tokenSetContents = await JSON.parse(
+        readFileSync(credentialsPath, 'utf8')
+      );
       const tokenSet = new TokenSet(tokenSetContents);
       if (tokenSet.expired()) {
         log.info('using refresh token to update access token');
