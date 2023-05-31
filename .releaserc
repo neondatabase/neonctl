@@ -9,6 +9,12 @@
         "pkgRoot": "dist"
       }
     ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepare": "cp dist/package.json ./"
+      }
+    ],
     "@semantic-release/git"
   ]
 }
