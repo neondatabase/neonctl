@@ -12,9 +12,14 @@
     [
       "@semantic-release/exec",
       {
-        "prepare": "cp dist/package.json ./"
+        "prepareCmd": "cp dist/package.json ./"
       }
     ],
-    "@semantic-release/git"
+    [
+      "@semantic-release/git",
+      {
+        "assets": "package.json"
+      }
+    ]
   ]
 }
