@@ -1,16 +1,25 @@
-import * as yargs from 'yargs';
-import { join } from 'node:path';
+import yargs from 'yargs';
+import { hideBin } from 'yargs/helpers';
+import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { Api } from '@neondatabase/api-client';
 
-import pkg from '../package.json';
-import { ensureAuth } from './commands/auth';
-import { defaultDir, ensureConfigDir } from './config';
-import { log } from './log';
-import { defaultClientID } from './auth';
-import { isApiError } from './api';
-import { fillInArgs } from './utils';
+import { ensureAuth } from './commands/auth.js';
+import { defaultDir, ensureConfigDir } from './config.js';
+import { log } from './log.js';
+import { defaultClientID } from './auth.js';
+import { isApiError } from './api.js';
+import { fillInArgs } from './utils.js';
+import commands from './commands/index.js';
 
-const builder = yargs
+const pkg = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL('./package.json', import.meta.url)),
+    'utf-8'
+  )
+);
+
+const builder = yargs(hideBin(process.argv))
   .scriptName(pkg.name)
   .usage('usage: $0 <cmd> [args]')
   .help()
@@ -53,7 +62,8 @@ const builder = yargs
   })
   .middleware((args) => fillInArgs(args), true)
   .middleware(ensureAuth)
-  .commandDir(join(__dirname, './commands'))
+  .command(commands as any)
+  .strictCommands()
   .fail(async (msg, err) => {
     if (isApiError(err)) {
       if (err.response.status === 401) {
@@ -67,7 +77,7 @@ const builder = yargs
         );
       }
     } else {
-      log.error(msg || err.message);
+      log.error(msg || err?.message);
     }
     process.exit(1);
   });
@@ -75,7 +85,7 @@ const builder = yargs
 (async () => {
   const args = await builder.argv;
   if (args._.length === 0) {
-    yargs.showHelp();
+    builder.showHelp();
     process.exit(0);
   }
 })();

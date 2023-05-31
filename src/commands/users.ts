@@ -1,7 +1,7 @@
 import yargs from 'yargs';
 
-import { CommonProps } from '../types';
-import { writeOut } from '../writer';
+import { CommonProps } from '../types.js';
+import { writeOut } from '../writer.js';
 
 export const command = 'me';
 export const describe = 'Show current user';

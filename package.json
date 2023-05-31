@@ -4,6 +4,7 @@
     "type": "git",
     "url": "git@github.com:neondatabase/neonctl.git"
   },
+  "type": "module",
   "version": "0.7.0",
   "description": "CLI tool for NeonDB Cloud management",
   "main": "index.js",
@@ -14,11 +15,12 @@
     "node": ">=18"
   },
   "bin": {
-    "neonctl": "src/cli.js"
+    "neonctl": "cli.js"
   },
   "devDependencies": {
     "@semantic-release/git": "^10.0.1",
     "@types/cli-table": "^0.3.0",
+    "@types/inquirer": "^9.0.3",
     "@types/node": "^18.7.13",
     "@types/yargs": "^17.0.24",
     "@typescript-eslint/eslint-plugin": "^5.34.0",
@@ -36,6 +38,7 @@
     "@neondatabase/api-client": "^0.1.0",
     "axios": "^1.4.0",
     "cli-table": "^0.3.11",
+    "inquirer": "^9.2.6",
     "open": "^8.4.0",
     "openid-client": "^5.1.9",
     "yaml": "^2.1.1",
@@ -48,10 +51,9 @@
   "scripts": {
     "watch": "tsc --watch",
     "lint": "tsc --noEmit && eslint src --ext .ts",
-    "debug": "node --inspect-brk dist/src",
-    "build": "npm run generateParams && npm run clean && tsc && cp src/*.html dist/src/",
+    "build": "npm run generateParams && npm run clean && tsc && cp src/*.html dist/ && cp package.json ./dist",
     "clean": "rm -rf dist",
-    "generateParams": "ts-node generateParams.ts",
+    "generateParams": "ts-node --esm generateParams.ts",
     "start": "node src/index.js"
   },
   "lint-staged": {

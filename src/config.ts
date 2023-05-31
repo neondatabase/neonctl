@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, mkdirSync } from 'node:fs';
-import { Arguments } from 'yargs';
+import yargs from 'yargs';
 
 export const defaultDir = join(
   homedir(),
@@ -11,7 +11,7 @@ export const defaultDir = join(
 
 export const ensureConfigDir = async ({
   'config-dir': configDir,
-}: Arguments<{ 'config-dir': string }>) => {
+}: yargs.Arguments<{ 'config-dir': string }>) => {
   if (!existsSync(configDir)) {
     mkdirSync(configDir);
   }
