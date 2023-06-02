@@ -1,5 +1,6 @@
 import { ProjectCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
+import { hideBin } from 'yargs/helpers';
 
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps } from '../types.js';
@@ -9,12 +10,15 @@ const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
 export const command = 'projects [command]';
 export const describe = 'Manage projects';
-export const builder = (yargs: yargs.Argv) => {
-  return yargs
+export const builder = (argv: yargs.Argv) => {
+  return argv
     .demandCommand(1, '')
-    .fail((msg, err, yargs) => {
-      yargs.showHelp();
-      process.exit(1);
+    .fail((_msg, _err, yyargs) => {
+      const y = yargs(hideBin(process.argv));
+      if ((y.argv as yargs.Arguments)._.length === 1) {
+        yyargs.showHelp();
+        process.exit(1);
+      }
     })
     .usage('usage: $0 projects <cmd> [args]')
     .command(
@@ -76,11 +80,14 @@ const list = async (props: CommonProps) => {
 
 const create = async (props: CommonProps & ProjectCreateRequest) => {
   if (props.project == null) {
+    props.project = {};
     const inquirer = await import('inquirer');
     const answers = await inquirer.default.prompt([
-      { name: 'name', message: 'Project name', type: 'input' },
+      { name: 'name', message: 'Project name (optional)', type: 'input' },
     ] as const);
-    props.project = answers;
+    if (answers.name) {
+      props.project = answers;
+    }
   }
   writeOut(props)(
     (

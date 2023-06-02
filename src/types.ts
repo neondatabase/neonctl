@@ -6,3 +6,15 @@ export type CommonProps = {
   apiHost: string;
   output: string;
 };
+
+export type ProjectScopeProps = CommonProps & {
+  project: {
+    id: string;
+  };
+};
+
+export type BranchScopeProps = ProjectScopeProps & {
+  branch: {
+    id: string;
+  };
+};

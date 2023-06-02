@@ -1,0 +1,58 @@
+/* eslint-disable @typescript-eslint/no-non-null-asserted-optional-chain */
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
+import SwaggerParser from '@apidevtools/swagger-parser';
+import { createWriteStream } from 'node:fs';
+import { OpenAPIV3 } from 'openapi-types';
+
+const EXTRACT_PROPERTIES = [
+  'ProjectCreateRequest',
+  'BranchCreateRequest',
+  'BranchCreateRequestEndpointOptions',
+  'BranchUpdateRequest',
+];
+
+const typesMapping = {
+  integer: 'number',
+  string: 'string',
+  boolean: 'boolean',
+} as const;
+
+(async () => {
+  const spec: OpenAPIV3.Document = (await SwaggerParser.dereference(
+    './node_modules/@neondatabase/api-client/public-v2.yaml'
+  )) as any;
+  const outFile = createWriteStream('./src/parameters.gen.ts', 'utf8');
+  outFile.write('// FILE IS GENERATED, DO NOT EDIT\n\n');
+  EXTRACT_PROPERTIES.forEach((name) => {
+    const schema = spec.components?.schemas?.[name] as OpenAPIV3.SchemaObject;
+    schema.properties;
+    const parseProperties = (
+      properties: Record<string, OpenAPIV3.SchemaObject>,
+      context: string[] = []
+    ) => {
+      Object.entries(properties).forEach(([key, value]) => {
+        if (value.type === 'object' && value.properties) {
+          parseProperties(value.properties as any, [...context, key]);
+        } else if (value.type! in typesMapping) {
+          outFile.write(
+            `  '${[...context, key].join('.')}': {
+              type: ${JSON.stringify(
+                typesMapping[value.type as keyof typeof typesMapping]
+              )},
+              description: ${JSON.stringify(value.description)},\n`
+          );
+          if (value.enum) {
+            outFile.write(` choices: ${JSON.stringify(value.enum)},\n`);
+          }
+          outFile.write('  },\n');
+        }
+      });
+    };
+    outFile.write(
+      `export const ${name[0].toLowerCase()}${name.slice(1)} = {\n`
+    );
+    parseProperties(schema.properties as any);
+    outFile.write(`} as const;\n\n`);
+  });
+  outFile.end();
+})();

@@ -81,7 +81,11 @@ export const ensureAuth = async (
             clientId: props.clientId,
           },
           tokenSet
-        );
+        ).catch((e) => {
+          log.error('failed to refresh token\n%s', e?.message);
+          process.exit(1);
+        });
+
         props.apiKey = refreshedTokenSet.access_token || 'UNKNOWN';
         props.apiClient = getApiClient({
           apiKey: props.apiKey,

@@ -2,6 +2,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
+import 'axios-debug-log';
 import { Api } from '@neondatabase/api-client';
 
 import { ensureAuth } from './commands/auth.js';
@@ -24,6 +25,7 @@ const builder = yargs(hideBin(process.argv))
   .usage('usage: $0 <cmd> [args]')
   .help()
   .option('output', {
+    alias: 'o',
     describe: 'Set output format',
     type: 'string',
     choices: ['json', 'yaml', 'table'],

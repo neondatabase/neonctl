@@ -7,7 +7,7 @@ export type ApiCallProps = {
 };
 
 export const getApiClient = ({ apiKey, apiHost }: ApiCallProps) =>
-  createApiClient({ apiKey, baseURL: apiHost });
+  createApiClient({ apiKey, baseURL: apiHost, timeout: 10000 });
 
 export type ApiError = {
   response: AxiosResponse;

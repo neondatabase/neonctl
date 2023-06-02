@@ -3,3 +3,4 @@ dist/
 .vim
 .neonctl
 .eslintcache
+.vscode
