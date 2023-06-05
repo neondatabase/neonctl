@@ -7,7 +7,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 
 import { BranchScopeProps, ProjectScopeProps } from '../types.js';
-import { writeOut } from '../writer.js';
+import { writer } from '../writer.js';
 import {
   branchCreateRequest,
   branchCreateRequestEndpointOptions,
@@ -83,7 +83,7 @@ export const handler = (args: yargs.Argv) => {
 
 const list = async (props: ProjectScopeProps) => {
   const { data } = await props.apiClient.listProjectBranches(props.project.id);
-  writeOut(props)(data.branches, {
+  writer(props).end(data.branches, {
     fields: ['id', 'name', 'created_at'],
   });
 };
@@ -98,30 +98,25 @@ const create = async (
     branch: props.branch,
     endpoints: props.endpoint ? [props.endpoint] : undefined,
   });
-  writeOut(props)({
-    branch: {
-      data: data.branch,
-      config: { fields: ['id', 'name', 'created_at'] },
-    },
-    ...(data.endpoints?.length > 0
-      ? {
-          endpoints: {
-            data: data.endpoints,
-            config: { fields: ['id', 'created_at'] },
-          },
-        }
-      : {}),
-    ...(data.connection_uris
-      ? {
-          connection_uri: {
-            data: data.connection_uris[0],
-            config: {
-              fields: ['connection_uri'],
-            },
-          },
-        }
-      : {}),
-  } as any);
+  const out = writer(props);
+  out.write(data.branch, {
+    fields: ['id', 'name', 'created_at'],
+    title: 'branch',
+  });
+
+  if (data.endpoints?.length > 0) {
+    out.write(data.endpoints, {
+      fields: ['id', 'created_at'],
+      title: 'endpoints',
+    });
+  }
+  if (data.connection_uris && data.connection_uris?.length > 0) {
+    out.write(data.connection_uris, {
+      fields: ['connection_uri'],
+      title: 'connection_uris',
+    });
+  }
+  out.end();
 };
 
 const update = async (props: BranchScopeProps & BranchUpdateRequest) => {
@@ -132,7 +127,7 @@ const update = async (props: BranchScopeProps & BranchUpdateRequest) => {
       branch: props.branch,
     }
   );
-  writeOut(props)(data.branch, {
+  writer(props).end(data.branch, {
     fields: ['id', 'name', 'created_at'],
   });
 };
@@ -142,7 +137,7 @@ const deleteBranch = async (props: BranchScopeProps) => {
     props.project.id,
     props.branch.id
   );
-  writeOut(props)(data.branch, {
+  writer(props).end(data.branch, {
     fields: ['id', 'name', 'created_at'],
   });
 };
