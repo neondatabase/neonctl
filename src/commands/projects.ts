@@ -4,7 +4,7 @@ import { hideBin } from 'yargs/helpers';
 
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps } from '../types.js';
-import { writeOut } from '../writer.js';
+import { writer } from '../writer.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
@@ -73,9 +73,8 @@ export const handler = (args: yargs.Argv) => {
 };
 
 const list = async (props: CommonProps) => {
-  writeOut(props)((await props.apiClient.listProjects({})).data.projects, {
-    fields: PROJECT_FIELDS,
-  });
+  const { data } = await props.apiClient.listProjects({});
+  writer(props).end(data.projects, { fields: PROJECT_FIELDS });
 };
 
 const create = async (props: CommonProps & ProjectCreateRequest) => {
@@ -89,36 +88,26 @@ const create = async (props: CommonProps & ProjectCreateRequest) => {
       props.project = answers;
     }
   }
-  writeOut(props)(
-    (
-      await props.apiClient.createProject({
-        project: props.project,
-      })
-    ).data.project,
-    { fields: PROJECT_FIELDS }
-  );
+  const { data } = await props.apiClient.createProject({
+    project: props.project,
+  });
+  writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };
 
 const deleteProject = async (
   props: CommonProps & { project: { id: string } }
 ) => {
-  writeOut(props)(
-    (await props.apiClient.deleteProject(props.project.id)).data.project,
-    {
-      fields: PROJECT_FIELDS,
-    }
-  );
+  const { data } = await props.apiClient.deleteProject(props.project.id);
+  writer(props).end(data.project, {
+    fields: PROJECT_FIELDS,
+  });
 };
 
 const update = async (
   props: CommonProps & { project: { id: string } } & ProjectCreateRequest
 ) => {
-  writeOut(props)(
-    (
-      await props.apiClient.updateProject(props.project.id, {
-        project: props.project,
-      })
-    ).data.project,
-    { fields: PROJECT_FIELDS }
-  );
+  const { data } = await props.apiClient.updateProject(props.project.id, {
+    project: props.project,
+  });
+  writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };

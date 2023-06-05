@@ -4,3 +4,4 @@ dist/
 .neonctl
 .eslintcache
 .vscode
+coverage

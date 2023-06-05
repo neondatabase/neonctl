@@ -1,0 +1,60 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`writer outputs json outputs multiple data 1`] = `
+"{
+  "T1": {
+    "foo": "bar"
+  },
+  "T2": {
+    "baz": "xyz"
+  }
+}"
+`;
+
+exports[`writer outputs json outputs single data 1`] = `
+"{
+  "foo": "bar"
+}"
+`;
+
+exports[`writer outputs json outputs single data with title 1`] = `
+"{
+  "foo": "bar"
+}"
+`;
+
+exports[`writer outputs table outputs multiple data 1`] = `
+"T1
+"
+`;
+
+exports[`writer outputs table outputs single data 1`] = `
+"┌─────┐
+│ Foo │
+├─────┤
+│ bar │
+└─────┘"
+`;
+
+exports[`writer outputs table outputs single data with title 1`] = `
+"baz
+"
+`;
+
+exports[`writer outputs yaml outputs multiple data 1`] = `
+"T1:
+  foo: bar
+T2:
+  baz: xyz
+"
+`;
+
+exports[`writer outputs yaml outputs single data 1`] = `
+"foo: bar
+"
+`;
+
+exports[`writer outputs yaml outputs single data with title 1`] = `
+"foo: bar
+"
+`;
