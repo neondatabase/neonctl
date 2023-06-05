@@ -100,7 +100,9 @@ export const writer = (
         });
 
         if (config.title) {
-          out.write(chalk.bold(config.title) + '\n');
+          out.write(
+            (process.env.CI ? config.title : chalk.bold(config.title)) + '\n'
+          );
         }
         out.write(table.toString());
         out.write('\n');
