@@ -61,13 +61,13 @@ export const testCliCommand = ({
       if (error) {
         console.log(error);
       }
-      if (expected) {
+      expect(code).toBe(0);
+      if (code === 0 && expected) {
         if ('snapshot' in expected) {
           expect(output).toMatchSnapshot();
         } else if ('output' in expected) {
           expect(output).toEqual(expected.output);
         }
-        expect(code).toBe(0);
       }
     });
   });

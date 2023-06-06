@@ -8,6 +8,7 @@ import { Api } from '@neondatabase/api-client';
 import { auth, refreshToken } from '../auth.js';
 import { log } from '../log.js';
 import { getApiClient } from '../api.js';
+import { isCi } from '../env.js';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
@@ -31,7 +32,7 @@ export const authFlow = async ({
   oauthHost,
   clientId,
 }: AuthProps) => {
-  if (process.env.CI !== 'false') {
+  if (isCi()) {
     throw new Error('Cannot run interactive auth in CI');
   }
   if (!clientId) {
