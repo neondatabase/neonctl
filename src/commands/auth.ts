@@ -31,6 +31,9 @@ export const authFlow = async ({
   oauthHost,
   clientId,
 }: AuthProps) => {
+  if (process.env.CI !== 'false') {
+    throw new Error('Cannot run interactive auth in CI');
+  }
   if (!clientId) {
     throw new Error('Missing client id');
   }

@@ -38,7 +38,7 @@ export const testCliCommand = ({
 
     const cp = fork(
       join(process.cwd(), './dist/index.js'),
-      ['--api-host', 'http://localhost:3000', ...args],
+      ['--api-host', 'http://localhost:3000', '--api-key', 'test-key', ...args],
       {
         stdio: 'pipe',
       }
