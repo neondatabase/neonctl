@@ -2,7 +2,18 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
-import 'axios-debug-log';
+import axiosDebug from 'axios-debug-log';
+axiosDebug({
+  request(debug, config) {
+    debug(`${config.method?.toUpperCase()} ${config.url}`);
+  },
+  response(debug, response) {
+    debug(`${response.status} ${response.statusText}`);
+  },
+  error(debug, error) {
+    debug(error);
+  },
+});
 import { Api } from '@neondatabase/api-client';
 
 import { ensureAuth } from './commands/auth.js';

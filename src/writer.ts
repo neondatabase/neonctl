@@ -3,6 +3,7 @@ import Table from 'cli-table';
 import chalk from 'chalk';
 
 import { CommonProps } from './types.js';
+import { isCi } from './env.js';
 
 type ExtractFromArray<T> = T extends (infer R)[] ? R : T;
 type OnlyStrings<T> = T extends string ? T : never;
@@ -100,7 +101,7 @@ export const writer = (
         });
 
         if (config.title) {
-          out.write(chalk.bold(config.title) + '\n');
+          out.write((isCi() ? config.title : chalk.bold(config.title)) + '\n');
         }
         out.write(table.toString());
         out.write('\n');
