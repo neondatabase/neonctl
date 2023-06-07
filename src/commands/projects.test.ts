@@ -1,11 +1,10 @@
 import { describe } from '@jest/globals';
-
 import { testCliCommand } from '../test_utils.js';
 
-describe('branches', () => {
+describe('projects', () => {
   testCliCommand({
     name: 'list',
-    args: ['branches', 'list', '--project.id', 'test'],
+    args: ['projects', 'list'],
     expected: {
       snapshot: true,
     },
@@ -13,14 +12,7 @@ describe('branches', () => {
 
   testCliCommand({
     name: 'create',
-    args: [
-      'branches',
-      'create',
-      '--project.id',
-      'test',
-      '--branch.name',
-      'test_branch',
-    ],
+    args: ['projects', 'create', '--project.name', 'test_project'],
     expected: {
       snapshot: true,
     },
@@ -28,14 +20,7 @@ describe('branches', () => {
 
   testCliCommand({
     name: 'delete',
-    args: [
-      'branches',
-      'delete',
-      '--project.id',
-      'test',
-      '--branch.id',
-      'test_branch_id',
-    ],
+    args: ['projects', 'delete', '--project.id', 'test'],
     expected: {
       snapshot: true,
     },
@@ -44,14 +29,12 @@ describe('branches', () => {
   testCliCommand({
     name: 'update',
     args: [
-      'branches',
+      'projects',
       'update',
       '--project.id',
       'test',
-      '--branch.id',
-      'test_branch_id',
-      '--branch.name',
-      'new_test_branch',
+      '--project.name',
+      'test_project',
     ],
     expected: {
       snapshot: true,
@@ -60,14 +43,7 @@ describe('branches', () => {
 
   testCliCommand({
     name: 'get',
-    args: [
-      'branches',
-      'get',
-      '--project.id',
-      'test',
-      '--branch.id',
-      'test_branch_id',
-    ],
+    args: ['projects', 'get', '--project.id', 'test'],
     expected: {
       snapshot: true,
     },
