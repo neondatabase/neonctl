@@ -14,6 +14,8 @@ import {
   branchUpdateRequest,
 } from '../parameters.gen.js';
 
+const BRANCH_FIELDS = ['id', 'name', 'created_at'] as const;
+
 export const command = 'branches';
 export const describe = 'Manage branches';
 export const builder = (argv: yargs.Argv) =>
@@ -75,6 +77,17 @@ export const builder = (argv: yargs.Argv) =>
           demandOption: true,
         }),
       async (args) => await deleteBranch(args as any)
+    )
+    .command(
+      'get',
+      'Get a branch',
+      (yargs) =>
+        yargs.option('branch.id', {
+          describe: 'Branch ID',
+          type: 'string',
+          demandOption: true,
+        }),
+      async (args) => await get(args as any)
     );
 
 export const handler = (args: yargs.Argv) => {
@@ -84,7 +97,7 @@ export const handler = (args: yargs.Argv) => {
 const list = async (props: ProjectScopeProps) => {
   const { data } = await props.apiClient.listProjectBranches(props.project.id);
   writer(props).end(data.branches, {
-    fields: ['id', 'name', 'created_at'],
+    fields: BRANCH_FIELDS,
   });
 };
 
@@ -100,7 +113,7 @@ const create = async (
   });
   const out = writer(props);
   out.write(data.branch, {
-    fields: ['id', 'name', 'created_at'],
+    fields: BRANCH_FIELDS,
     title: 'branch',
   });
 
@@ -128,7 +141,7 @@ const update = async (props: BranchScopeProps & BranchUpdateRequest) => {
     }
   );
   writer(props).end(data.branch, {
-    fields: ['id', 'name', 'created_at'],
+    fields: BRANCH_FIELDS,
   });
 };
 
@@ -138,6 +151,16 @@ const deleteBranch = async (props: BranchScopeProps) => {
     props.branch.id
   );
   writer(props).end(data.branch, {
-    fields: ['id', 'name', 'created_at'],
+    fields: BRANCH_FIELDS,
+  });
+};
+
+const get = async (props: BranchScopeProps) => {
+  const { data } = await props.apiClient.getProjectBranch(
+    props.project.id,
+    props.branch.id
+  );
+  writer(props).end(data.branch, {
+    fields: BRANCH_FIELDS,
   });
 };

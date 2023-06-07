@@ -1,6 +1,6 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`branches create 1`] = `
+exports[`branches create test 1`] = `
 "branch
 ┌────┬─────────────┬──────────────────────────┐
 │ Id │ Name        │ Created At               │
@@ -10,7 +10,7 @@ exports[`branches create 1`] = `
 "
 `;
 
-exports[`branches delete 1`] = `
+exports[`branches delete test 1`] = `
 "┌────┬─────────────┬──────────────────────────┐
 │ Id │ Name        │ Created At               │
 ├────┼─────────────┼──────────────────────────┤
@@ -19,7 +19,16 @@ exports[`branches delete 1`] = `
 "
 `;
 
-exports[`branches list 1`] = `
+exports[`branches get test 1`] = `
+"┌────────────────┬──────────────────┬──────────────────────┐
+│ Id             │ Name             │ Created At           │
+├────────────────┼──────────────────┼──────────────────────┤
+│ test_branch_id │ test_branch_name │ 2019-01-01T00:00:00Z │
+└────────────────┴──────────────────┴──────────────────────┘
+"
+`;
+
+exports[`branches list test 1`] = `
 "┌────┬──────┬──────────────────────────┐
 │ Id │ Name │ Created At               │
 ├────┼──────┼──────────────────────────┤
@@ -28,7 +37,7 @@ exports[`branches list 1`] = `
 "
 `;
 
-exports[`branches update 1`] = `
+exports[`branches update test 1`] = `
 "┌────────────────┬─────────────────┬──────────────────────────┐
 │ Id             │ Name            │ Created At               │
 ├────────────────┼─────────────────┼──────────────────────────┤

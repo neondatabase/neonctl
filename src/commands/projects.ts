@@ -66,6 +66,21 @@ export const builder = (argv: yargs.Argv) => {
       async (args) => {
         await deleteProject(args as any);
       }
+    )
+    .command(
+      'get',
+      'Get a project',
+      (yargs) =>
+        yargs.options({
+          'project.id': {
+            describe: 'Project ID',
+            type: 'string',
+            demandOption: true,
+          },
+        }),
+      async (args) => {
+        await get(args as any);
+      }
     );
 };
 export const handler = (args: yargs.Argv) => {
@@ -109,5 +124,10 @@ const update = async (
   const { data } = await props.apiClient.updateProject(props.project.id, {
     project: props.project,
   });
+  writer(props).end(data.project, { fields: PROJECT_FIELDS });
+};
+
+const get = async (props: CommonProps & { project: { id: string } }) => {
+  const { data } = await props.apiClient.getProject(props.project.id);
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };
