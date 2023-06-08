@@ -11,6 +11,7 @@ const EXTRACT_PROPERTIES = [
   'BranchUpdateRequest',
   'EndpointCreateRequest',
   'EndpointUpdateRequest',
+  'DatabaseCreateRequest',
 ];
 
 const typesMapping = {
