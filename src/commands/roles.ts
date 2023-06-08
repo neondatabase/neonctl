@@ -1,15 +1,15 @@
-import { DatabaseCreateRequest } from '@neondatabase/api-client';
+import { RoleCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
-import { databaseCreateRequest } from '../parameters.gen.js';
+import { roleCreateRequest } from '../parameters.gen.js';
 
 import { BranchScopeProps } from '../types.js';
 import { commandFailHandler } from '../utils.js';
 import { writer } from '../writer.js';
 
-const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
+const ROLES_FIELDS = ['name', 'created_at'] as const;
 
-export const command = 'databases';
-export const describe = 'Manage databases';
+export const command = 'roles';
+export const describe = 'Manage roles';
 export const builder = (argv: yargs.Argv) =>
   argv
     .demandCommand(1, '')
@@ -29,28 +29,28 @@ export const builder = (argv: yargs.Argv) =>
     })
     .command(
       'list',
-      'List databases',
+      'List roles',
       (yargs) => yargs,
       async (args) => await list(args as any)
     )
     .command(
       'create',
-      'Create a database',
-      (yargs) => yargs.options(databaseCreateRequest),
+      'Create a role',
+      (yargs) => yargs.options(roleCreateRequest),
       async (args) => await create(args as any)
     )
     .command(
       'delete',
-      'Delete a database',
+      'Delete a role',
       (yargs) =>
         yargs.options({
-          'database.name': {
-            describe: 'Database name',
+          'role.name': {
+            describe: 'Role name',
             type: 'string',
             demandOption: true,
           },
         }),
-      async (args) => await deleteDb(args as any)
+      async (args) => await deleteRole(args as any)
     );
 
 export const handler = (args: yargs.Argv) => {
@@ -58,39 +58,37 @@ export const handler = (args: yargs.Argv) => {
 };
 
 export const list = async (props: BranchScopeProps) => {
-  const { data } = await props.apiClient.listProjectBranchDatabases(
+  const { data } = await props.apiClient.listProjectBranchRoles(
     props.project.id,
     props.branch.id
   );
-  writer(props).end(data.databases, {
-    fields: DATABASE_FIELDS,
+  writer(props).end(data.roles, {
+    fields: ROLES_FIELDS,
   });
 };
 
-export const create = async (
-  props: BranchScopeProps & DatabaseCreateRequest
-) => {
-  const { data } = await props.apiClient.createProjectBranchDatabase(
+export const create = async (props: BranchScopeProps & RoleCreateRequest) => {
+  const { data } = await props.apiClient.createProjectBranchRole(
     props.project.id,
     props.branch.id,
     {
-      database: props.database,
+      role: props.role,
     }
   );
-  writer(props).end(data.database, {
-    fields: DATABASE_FIELDS,
+  writer(props).end(data.role, {
+    fields: ROLES_FIELDS,
   });
 };
 
-export const deleteDb = async (
-  props: BranchScopeProps & { database: { name: string } }
+export const deleteRole = async (
+  props: BranchScopeProps & { role: { name: string } }
 ) => {
-  const { data } = await props.apiClient.deleteProjectBranchDatabase(
+  const { data } = await props.apiClient.deleteProjectBranchRole(
     props.project.id,
     props.branch.id,
-    props.database.name
+    props.role.name
   );
-  writer(props).end(data.database, {
-    fields: DATABASE_FIELDS,
+  writer(props).end(data.role, {
+    fields: ROLES_FIELDS,
   });
 };

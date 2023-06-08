@@ -6,7 +6,7 @@ module.exports = {
   env: {
     node: true,
   },
-  ignorePatterns: ['**/*.js'],
+  ignorePatterns: ['**/*.js', '**/*.gen.ts'],
   rules: {
     'no-console': 'error',
     '@typescript-eslint/no-explicit-any': 'off',
