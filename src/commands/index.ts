@@ -4,5 +4,6 @@ import * as users from './users.js';
 import * as branches from './branches.js';
 import * as endpoints from './endpoints.js';
 import * as databases from './databases.js';
+import * as roles from './roles.js';
 
-export default [auth, projects, users, branches, endpoints, databases];
+export default [auth, projects, users, branches, endpoints, databases, roles];

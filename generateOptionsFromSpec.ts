@@ -12,6 +12,7 @@ const EXTRACT_PROPERTIES = [
   'EndpointCreateRequest',
   'EndpointUpdateRequest',
   'DatabaseCreateRequest',
+  'RoleCreateRequest',
 ];
 
 const typesMapping = {
