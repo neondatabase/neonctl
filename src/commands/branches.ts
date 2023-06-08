@@ -4,7 +4,6 @@ import {
   BranchUpdateRequest,
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
-import { hideBin } from 'yargs/helpers';
 
 import { BranchScopeProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
@@ -13,6 +12,7 @@ import {
   branchCreateRequestEndpointOptions,
   branchUpdateRequest,
 } from '../parameters.gen.js';
+import { commandFailHandler } from '../utils.js';
 
 const BRANCH_FIELDS = ['id', 'name', 'created_at'] as const;
 
@@ -21,13 +21,7 @@ export const describe = 'Manage branches';
 export const builder = (argv: yargs.Argv) =>
   argv
     .demandCommand(1, '')
-    .fail(async (_msg, _err, argv) => {
-      const y = yargs(hideBin(process.argv));
-      if ((y.argv as yargs.Arguments)._.length === 1) {
-        argv.showHelp();
-        process.exit(1);
-      }
-    })
+    .fail(commandFailHandler)
     .usage('usage: $0 branches <cmd> [args]')
     .options({
       'project.id': {
@@ -50,7 +44,8 @@ export const builder = (argv: yargs.Argv) =>
           ...branchCreateRequest,
           ...Object.fromEntries(
             Object.entries(branchCreateRequestEndpointOptions).map(
-              ([key, value]) => [`endpoint.${key}`, value] as const
+              ([key, value]) =>
+                [`endpoint.${key}`, { ...value, demandOption: false }] as const
             )
           ),
         }),

@@ -1,6 +1,16 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`branches create test 1`] = `
+exports[`branches create with endpoint test 1`] = `
+"branch
+┌────┬─────────────┬──────────────────────────┐
+│ Id │ Name        │ Created At               │
+├────┼─────────────┼──────────────────────────┤
+│ 1  │ test_branch │ 2021-01-01T00:00:00.000Z │
+└────┴─────────────┴──────────────────────────┘
+"
+`;
+
+exports[`branches create without endpoint test 1`] = `
 "branch
 ┌────┬─────────────┬──────────────────────────┐
 │ Id │ Name        │ Created At               │

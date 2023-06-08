@@ -18,3 +18,9 @@ export type BranchScopeProps = ProjectScopeProps & {
     id: string;
   };
 };
+
+export type EndpointScopeProps = ProjectScopeProps & {
+  endpoint: {
+    id: string;
+  };
+};

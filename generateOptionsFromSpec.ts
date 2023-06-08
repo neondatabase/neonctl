@@ -9,6 +9,8 @@ const EXTRACT_PROPERTIES = [
   'BranchCreateRequest',
   'BranchCreateRequestEndpointOptions',
   'BranchUpdateRequest',
+  'EndpointCreateRequest',
+  'EndpointUpdateRequest',
 ];
 
 const typesMapping = {
@@ -25,21 +27,25 @@ const typesMapping = {
   outFile.write('// FILE IS GENERATED, DO NOT EDIT\n\n');
   EXTRACT_PROPERTIES.forEach((name) => {
     const schema = spec.components?.schemas?.[name] as OpenAPIV3.SchemaObject;
-    schema.properties;
     const parseProperties = (
-      properties: Record<string, OpenAPIV3.SchemaObject>,
+      schema: OpenAPIV3.SchemaObject,
       context: string[] = []
     ) => {
-      Object.entries(properties).forEach(([key, value]) => {
+      Object.entries(
+        schema.properties as Record<string, OpenAPIV3.SchemaObject>
+      ).forEach(([key, value]) => {
         if (value.type === 'object' && value.properties) {
-          parseProperties(value.properties as any, [...context, key]);
+          parseProperties(value, [...context, key]);
         } else if (value.type! in typesMapping) {
           outFile.write(
             `  '${[...context, key].join('.')}': {
               type: ${JSON.stringify(
                 typesMapping[value.type as keyof typeof typesMapping]
               )},
-              description: ${JSON.stringify(value.description)},\n`
+              description: ${JSON.stringify(value.description)},\n
+              demandOption: ${
+                schema.required?.includes(key) ? 'true' : 'false'
+              },\n`
           );
           if (value.enum) {
             outFile.write(` choices: ${JSON.stringify(value.enum)},\n`);
@@ -51,7 +57,7 @@ const typesMapping = {
     outFile.write(
       `export const ${name[0].toLowerCase()}${name.slice(1)} = {\n`
     );
-    parseProperties(schema.properties as any);
+    parseProperties(schema);
     outFile.write(`} as const;\n\n`);
   });
   outFile.end();

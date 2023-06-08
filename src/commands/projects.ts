@@ -4,6 +4,7 @@ import { hideBin } from 'yargs/helpers';
 
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps } from '../types.js';
+import { commandFailHandler } from '../utils.js';
 import { writer } from '../writer.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
@@ -13,13 +14,7 @@ export const describe = 'Manage projects';
 export const builder = (argv: yargs.Argv) => {
   return argv
     .demandCommand(1, '')
-    .fail((_msg, _err, yyargs) => {
-      const y = yargs(hideBin(process.argv));
-      if ((y.argv as yargs.Arguments)._.length === 1) {
-        yyargs.showHelp();
-        process.exit(1);
-      }
-    })
+    .fail(commandFailHandler)
     .usage('usage: $0 projects <cmd> [args]')
     .command(
       'list',

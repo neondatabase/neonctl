@@ -2,24 +2,39 @@ import { describe } from '@jest/globals';
 
 import { testCliCommand } from '../test_utils.js';
 
-describe('branches', () => {
+describe('endpoints', () => {
   testCliCommand({
     name: 'list',
-    args: ['branches', 'list', '--project.id', 'test'],
+    args: ['endpoints', 'list', '--project.id', 'test'],
     expected: {
       snapshot: true,
     },
   });
 
   testCliCommand({
-    name: 'create with endpoint',
+    name: 'list with branch filter',
     args: [
-      'branches',
+      'endpoints',
+      'list',
+      '--project.id',
+      'test',
+      '--branch.id',
+      'test_branch_id',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create',
+    args: [
+      'endpoints',
       'create',
       '--project.id',
       'test',
-      '--branch.name',
-      'test_branch',
+      '--endpoint.branch_id',
+      'test_branch_id',
       '--endpoint.type',
       'read_only',
     ],
@@ -29,29 +44,14 @@ describe('branches', () => {
   });
 
   testCliCommand({
-    name: 'create without endpoint',
-    args: [
-      'branches',
-      'create',
-      '--project.id',
-      'test',
-      '--branch.name',
-      'test_branch',
-    ],
-    expected: {
-      snapshot: true,
-    },
-  });
-
-  testCliCommand({
     name: 'delete',
     args: [
-      'branches',
+      'endpoints',
       'delete',
       '--project.id',
       'test',
-      '--branch.id',
-      'test_branch_id',
+      '--endpoint.id',
+      'test_endpoint_id',
     ],
     expected: {
       snapshot: true,
@@ -61,14 +61,14 @@ describe('branches', () => {
   testCliCommand({
     name: 'update',
     args: [
-      'branches',
+      'endpoints',
       'update',
       '--project.id',
       'test',
-      '--branch.id',
+      '--endpoint.id',
+      'test_endpoint_id',
+      '--endpoint.branch_id',
       'test_branch_id',
-      '--branch.name',
-      'new_test_branch',
     ],
     expected: {
       snapshot: true,
@@ -78,12 +78,12 @@ describe('branches', () => {
   testCliCommand({
     name: 'get',
     args: [
-      'branches',
+      'endpoints',
       'get',
       '--project.id',
       'test',
-      '--branch.id',
-      'test_branch_id',
+      '--endpoint.id',
+      'test_endpoint_id',
     ],
     expected: {
       snapshot: true,
