@@ -1,0 +1,14 @@
+{
+  "endpoints": [
+    {
+      "id": "ep-test-1",
+      "type": "read_only",
+      "created_at": "2019-01-01T00:00:00Z"
+    },
+    {
+      "id": "ep-test-2",
+      "type": "read_write",
+      "created_at": "2019-01-01T00:00:00Z"
+    }
+  ]
+}
