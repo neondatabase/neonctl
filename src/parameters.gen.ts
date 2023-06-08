@@ -279,3 +279,18 @@ export const endpointUpdateRequest = {
     demandOption: false,
   },
 } as const;
+
+export const databaseCreateRequest = {
+  'database.name': {
+    type: 'string',
+    description: 'The name of the datbase\n',
+
+    demandOption: true,
+  },
+  'database.owner_name': {
+    type: 'string',
+    description: 'The name of the role that owns the database\n',
+
+    demandOption: true,
+  },
+} as const;

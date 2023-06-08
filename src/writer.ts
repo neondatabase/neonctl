@@ -40,7 +40,7 @@ export const writer = (
       chunks.push({ data, config });
       return this;
     },
-    end: (...args: [any, WriteOutConfig<any>] | []) => {
+    end: <T>(...args: [T, WriteOutConfig<T>] | []) => {
       if (args.length === 2) {
         chunks.push({ data: args[0], config: args[1] });
       }

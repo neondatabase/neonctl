@@ -1,0 +1,30 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`databases create test 1`] = `
+"┌───────────────┬────────────┐
+│ Name          │ Owner Name │
+├───────────────┼────────────┤
+│ test_database │            │
+└───────────────┴────────────┘
+"
+`;
+
+exports[`databases delete test 1`] = `
+"┌─────────┬────────────┐
+│ Name    │ Owner Name │
+├─────────┼────────────┤
+│ test_db │ test_owner │
+└─────────┴────────────┘
+"
+`;
+
+exports[`databases list test 1`] = `
+"┌──────┬────────────┐
+│ Name │ Owner Name │
+├──────┼────────────┤
+│ db1  │ user1      │
+├──────┼────────────┤
+│ db2  │ user2      │
+└──────┴────────────┘
+"
+`;
