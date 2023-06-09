@@ -1,6 +1,5 @@
 import { ProjectCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
-import { hideBin } from 'yargs/helpers';
 
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps } from '../types.js';
@@ -9,7 +8,7 @@ import { writer } from '../writer.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
-export const command = 'projects [command]';
+export const command = 'projects';
 export const describe = 'Manage projects';
 export const builder = (argv: yargs.Argv) => {
   return argv
