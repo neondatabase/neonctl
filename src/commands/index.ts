@@ -6,6 +6,7 @@ import * as endpoints from './endpoints.js';
 import * as databases from './databases.js';
 import * as roles from './roles.js';
 import * as operations from './operations.js';
+import * as cs from './connection_string.js';
 
 export default [
   auth,
@@ -16,4 +17,5 @@ export default [
   databases,
   roles,
   operations,
+  cs,
 ];

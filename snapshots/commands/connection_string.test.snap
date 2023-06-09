@@ -1,0 +1,3 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`connection_string connection_string test 1`] = `"postgres://test_role:test_pwd@test_host.neon.tech/test_db"`;
