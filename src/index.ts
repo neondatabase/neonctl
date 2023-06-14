@@ -22,14 +22,9 @@ import { log } from './log.js';
 import { defaultClientID } from './auth.js';
 import { isApiError } from './api.js';
 import { fillInArgs } from './utils.js';
+import pkg from './pkg.js';
 import commands from './commands/index.js';
-
-const pkg = JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL('./package.json', import.meta.url)),
-    'utf-8'
-  )
-);
+import { analyticsMiddleware } from './analytics.js';
 
 const builder = yargs(hideBin(process.argv))
   .scriptName(pkg.name)
@@ -77,6 +72,12 @@ const builder = yargs(hideBin(process.argv))
   .middleware(ensureAuth)
   .command(commands as any)
   .strictCommands()
+  .option('analytics', {
+    describe: 'Enable analytics',
+    type: 'boolean',
+    default: true,
+  })
+  .middleware(analyticsMiddleware)
   .fail(async (msg, err) => {
     if (isApiError(err)) {
       if (err.response.status === 401) {
