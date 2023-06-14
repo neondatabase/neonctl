@@ -25,13 +25,11 @@ const runMockServer = async () =>
 export type TestCliCommandOptions = {
   name: string;
   args: string[];
-  expected?:
-    | {
-        snapshot: true;
-      }
-    | {
-        output: string;
-      };
+  expected?: {
+    snapshot?: true;
+    stdout?: string | ReturnType<typeof expect.stringMatching>;
+    stderr?: string | ReturnType<typeof expect.stringMatching>;
+  };
 };
 
 export const testCliCommand = ({
@@ -85,16 +83,17 @@ export const testCliCommand = ({
         });
 
         cp.on('close', (code) => {
-          if (error) {
-            console.log(error);
-          }
           try {
             expect(code).toBe(0);
             if (code === 0 && expected) {
-              if ('snapshot' in expected) {
+              if (expected.snapshot) {
                 expect(output).toMatchSnapshot();
-              } else if ('output' in expected) {
-                expect(output).toEqual(expected.output);
+              }
+              if (expected.stdout !== undefined) {
+                expect(output).toEqual(expected.stdout);
+              }
+              if (expected.stderr !== undefined) {
+                expect(error).toEqual(expected.stderr);
               }
             }
             resolve();
