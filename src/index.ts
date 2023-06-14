@@ -1,7 +1,5 @@
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
 import axiosDebug from 'axios-debug-log';
 axiosDebug({
   request(debug, config) {
@@ -66,7 +64,7 @@ const builder = yargs(hideBin(process.argv))
   .option('apiClient', {
     hidden: true,
     coerce: (v) => v as Api<unknown>,
-    default: true,
+    default: null as unknown as Api<unknown>,
   })
   .middleware((args) => fillInArgs(args), true)
   .middleware(ensureAuth)
