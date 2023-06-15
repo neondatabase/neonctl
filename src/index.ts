@@ -48,7 +48,7 @@ const builder = yargs(hideBin(process.argv))
   .middleware(ensureConfigDir)
   // Auth flow
   .option('oauth-host', {
-    description: 'URL to Neon OAUTH host',
+    description: 'URL to Neon OAuth host',
     default: 'https://oauth2.neon.tech',
   })
   .option('client-id', {
