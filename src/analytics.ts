@@ -32,7 +32,7 @@ export const analyticsMiddleware = (args: {
         event: 'CLI Started',
         properties: {
           version: pkg.version,
-          command: args._,
+          command: args._.join(' '),
           flags: {
             output: args.output,
           },
