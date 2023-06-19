@@ -26,7 +26,7 @@ import { analyticsMiddleware } from './analytics.js';
 
 const builder = yargs(hideBin(process.argv))
   .scriptName(pkg.name)
-  .usage('usage: $0 <cmd> [args]')
+  .usage('usage: $0 <command> [options]')
   .help()
   .option('output', {
     alias: 'o',
