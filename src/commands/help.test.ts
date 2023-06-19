@@ -7,7 +7,7 @@ describe('help', () => {
     name: 'without args',
     args: [],
     expected: {
-      stderr: expect.stringContaining('usage: neonctl <cmd> [args]'),
+      stderr: expect.stringContaining('usage: neonctl <command> [options]'),
     },
   });
 });
