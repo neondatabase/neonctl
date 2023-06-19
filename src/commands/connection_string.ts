@@ -5,7 +5,7 @@ export const command = 'connection-string';
 export const aliases = ['cs'];
 export const describe = 'Get connection string';
 export const builder = (argv: yargs.Argv) => {
-  return argv.usage('usage: $0 connection-string [args]').options({
+  return argv.usage('usage: $0 connection-string [options]').options({
     'project.id': {
       type: 'string',
       describe: 'Project ID',
