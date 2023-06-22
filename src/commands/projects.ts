@@ -14,7 +14,7 @@ export const builder = (argv: yargs.Argv) => {
   return argv
     .demandCommand(1, '')
     .fail(commandFailHandler)
-    .usage('usage: $0 projects <command> [options]')
+    .usage('usage: $0 projects <sub-command> [options]')
     .command(
       'list',
       'List projects',

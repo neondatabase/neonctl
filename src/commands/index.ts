@@ -10,8 +10,8 @@ import * as cs from './connection_string.js';
 
 export default [
   auth,
-  projects,
   users,
+  projects,
   branches,
   endpoints,
   databases,
