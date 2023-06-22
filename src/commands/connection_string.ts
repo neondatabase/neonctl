@@ -26,12 +26,18 @@ export const builder = (argv: yargs.Argv) => {
       describe: 'Database name',
       demandOption: true,
     },
+    pooled: {
+      type: 'boolean',
+      describe: 'Use pooled connection',
+      default: false,
+    },
   });
 };
 export const handler = async (
   props: EndpointScopeProps & {
     role: { name: string };
     database: { name: string };
+    pooled: boolean;
   }
 ) => {
   const {
@@ -47,7 +53,10 @@ export const handler = async (
     props.role.name
   );
 
-  const connectionString = new URL(`postgres://${endpoint.host}`);
+  const host = props.pooled
+    ? endpoint.host.replace(endpoint.id, `${endpoint.id}-pooler`)
+    : endpoint.host;
+  const connectionString = new URL(`postgres://${host}`);
   connectionString.pathname = props.database.name;
   connectionString.username = props.role.name;
   connectionString.password = password.password;
