@@ -24,7 +24,8 @@ import pkg from './pkg.js';
 import commands from './commands/index.js';
 import { analyticsMiddleware } from './analytics.js';
 
-const builder = yargs(hideBin(process.argv))
+let builder = yargs(hideBin(process.argv));
+builder = builder
   .scriptName(pkg.name)
   .usage('usage: $0 <command> [options]')
   .help()

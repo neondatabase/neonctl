@@ -12,7 +12,7 @@ export const builder = (argv: yargs.Argv) =>
   argv
     .demandCommand(1, '')
     .fail(commandFailHandler)
-    .usage('usage: $0 operations <command> [options]')
+    .usage('usage: $0 operations <sub-command> [options]')
     .options({
       'project.id': {
         describe: 'Project ID',
