@@ -23,6 +23,7 @@ import { fillInArgs } from './utils.js';
 import pkg from './pkg.js';
 import commands from './commands/index.js';
 import { analyticsMiddleware } from './analytics.js';
+import { isCi } from './env.js';
 
 let builder = yargs(hideBin(process.argv));
 builder = builder
@@ -72,9 +73,9 @@ builder = builder
   .command(commands as any)
   .strictCommands()
   .option('analytics', {
-    describe: 'Enable analytics',
+    describe: 'Manage analytics. Example: --no-analytics, --analytics false',
     type: 'boolean',
-    default: true,
+    default: !isCi(),
   })
   .middleware(analyticsMiddleware)
   .fail(async (msg, err) => {
