@@ -10,6 +10,7 @@ const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
 export const command = 'projects';
 export const describe = 'Manage projects';
+export const aliases = ['project'];
 export const builder = (argv: yargs.Argv) => {
   return argv
     .demandCommand(1, '')
