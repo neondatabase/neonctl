@@ -18,6 +18,7 @@ const BRANCH_FIELDS = ['id', 'name', 'created_at'] as const;
 
 export const command = 'branches';
 export const describe = 'Manage branches';
+export const aliases = ['branch'];
 export const builder = (argv: yargs.Argv) =>
   argv
     .demandCommand(1, '')

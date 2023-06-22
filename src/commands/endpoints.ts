@@ -21,6 +21,7 @@ const ENDPOINT_FIELDS = [
 
 export const command = 'endpoints';
 export const describe = 'Manage endpoints';
+export const aliases = ['endpoint'];
 export const builder = (argv: yargs.Argv) =>
   argv
     .demandCommand(1, '')

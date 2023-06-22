@@ -10,6 +10,7 @@ const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
 
 export const command = 'databases';
 export const describe = 'Manage databases';
+export const aliases = ['database'];
 export const builder = (argv: yargs.Argv) =>
   argv
     .demandCommand(1, '')

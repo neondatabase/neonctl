@@ -10,6 +10,7 @@ const ROLES_FIELDS = ['name', 'created_at'] as const;
 
 export const command = 'roles';
 export const describe = 'Manage roles';
+export const aliases = ['role'];
 export const builder = (argv: yargs.Argv) =>
   argv
     .demandCommand(1, '')

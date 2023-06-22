@@ -8,6 +8,7 @@ const OPERATIONS_FIELDS = ['id', 'action', 'status', 'created_at'] as const;
 
 export const command = 'operations';
 export const describe = 'Manage operations';
+export const aliases = ['operation'];
 export const builder = (argv: yargs.Argv) =>
   argv
     .demandCommand(1, '')
