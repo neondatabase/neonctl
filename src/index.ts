@@ -39,6 +39,7 @@ builder = builder
   })
   .option('api-host', {
     describe: 'The API host',
+    hidden: true,
     default: 'https://console.neon.tech/api/v2',
   })
   // Setup config directory
@@ -51,10 +52,12 @@ builder = builder
   // Auth flow
   .option('oauth-host', {
     description: 'URL to Neon OAuth host',
+    hidden: true,
     default: 'https://oauth2.neon.tech',
   })
   .option('client-id', {
     description: 'OAuth client id',
+    hidden: true,
     type: 'string',
     default: defaultClientID,
   })
