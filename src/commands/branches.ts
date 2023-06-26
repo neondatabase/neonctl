@@ -13,6 +13,7 @@ import {
   branchUpdateRequest,
 } from '../parameters.gen.js';
 import { commandFailHandler } from '../utils.js';
+import { retryOnLock } from '../api.js';
 
 const BRANCH_FIELDS = ['id', 'name', 'created_at'] as const;
 
@@ -103,10 +104,12 @@ const create = async (
       endpoint: BranchCreateRequestEndpointOptions;
     }
 ) => {
-  const { data } = await props.apiClient.createProjectBranch(props.project.id, {
-    branch: props.branch,
-    endpoints: props.endpoint ? [props.endpoint] : undefined,
-  });
+  const { data } = await retryOnLock(() =>
+    props.apiClient.createProjectBranch(props.project.id, {
+      branch: props.branch,
+      endpoints: props.endpoint ? [props.endpoint] : undefined,
+    })
+  );
   const out = writer(props);
   out.write(data.branch, {
     fields: BRANCH_FIELDS,
@@ -129,12 +132,10 @@ const create = async (
 };
 
 const update = async (props: BranchScopeProps & BranchUpdateRequest) => {
-  const { data } = await props.apiClient.updateProjectBranch(
-    props.project.id,
-    props.branch.id,
-    {
+  const { data } = await retryOnLock(() =>
+    props.apiClient.updateProjectBranch(props.project.id, props.branch.id, {
       branch: props.branch,
-    }
+    })
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
@@ -142,9 +143,8 @@ const update = async (props: BranchScopeProps & BranchUpdateRequest) => {
 };
 
 const deleteBranch = async (props: BranchScopeProps) => {
-  const { data } = await props.apiClient.deleteProjectBranch(
-    props.project.id,
-    props.branch.id
+  const { data } = await retryOnLock(() =>
+    props.apiClient.deleteProjectBranch(props.project.id, props.branch.id)
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,

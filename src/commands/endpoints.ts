@@ -3,6 +3,7 @@ import {
   EndpointUpdateRequest,
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
+import { retryOnLock } from '../api.js';
 import {
   endpointCreateRequest,
   endpointUpdateRequest,
@@ -109,9 +110,10 @@ const list = async (props: BranchScopeProps) => {
 };
 
 const create = async (props: BranchScopeProps & EndpointCreateRequest) => {
-  const { data } = await props.apiClient.createProjectEndpoint(
-    props.project.id,
-    { endpoint: props.endpoint }
+  const { data } = await retryOnLock(() =>
+    props.apiClient.createProjectEndpoint(props.project.id, {
+      endpoint: props.endpoint,
+    })
   );
 
   writer(props).end(data.endpoint, {
@@ -120,10 +122,10 @@ const create = async (props: BranchScopeProps & EndpointCreateRequest) => {
 };
 
 const update = async (props: EndpointScopeProps & EndpointUpdateRequest) => {
-  const { data } = await props.apiClient.updateProjectEndpoint(
-    props.project.id,
-    props.endpoint.id,
-    { endpoint: props.endpoint }
+  const { data } = await retryOnLock(() =>
+    props.apiClient.updateProjectEndpoint(props.project.id, props.endpoint.id, {
+      endpoint: props.endpoint,
+    })
   );
 
   writer(props).end(data.endpoint, {
@@ -132,9 +134,8 @@ const update = async (props: EndpointScopeProps & EndpointUpdateRequest) => {
 };
 
 const deleteEndpoint = async (props: EndpointScopeProps) => {
-  const { data } = await props.apiClient.deleteProjectEndpoint(
-    props.project.id,
-    props.endpoint.id
+  const { data } = await retryOnLock(() =>
+    props.apiClient.deleteProjectEndpoint(props.project.id, props.endpoint.id)
   );
   writer(props).end(data.endpoint, {
     fields: ENDPOINT_FIELDS,

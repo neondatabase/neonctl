@@ -9,6 +9,15 @@ exports[`endpoints create test 1`] = `
 "
 `;
 
+exports[`endpoints create with retry test 1`] = `
+"┌──────────────────┬──────────────────────┬────────────────────────┬───────────┬───────────────┐
+│ Id               │ Created At           │ Branch Id              │ Type      │ Current State │
+├──────────────────┼──────────────────────┼────────────────────────┼───────────┼───────────────┤
+│ test_endpoint_id │ 2019-01-01T00:00:00Z │ test_branch_with_retry │ read_only │               │
+└──────────────────┴──────────────────────┴────────────────────────┴───────────┴───────────────┘
+"
+`;
+
 exports[`endpoints delete test 1`] = `
 "┌──────────────────┬──────────────────────┬───────────┬───────────┬───────────────┐
 │ Id               │ Created At           │ Branch Id │ Type      │ Current State │

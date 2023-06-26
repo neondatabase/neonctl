@@ -1,5 +1,6 @@
 import { RoleCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
+import { retryOnLock } from '../api.js';
 import { roleCreateRequest } from '../parameters.gen.js';
 
 import { BranchScopeProps } from '../types.js';
@@ -69,12 +70,10 @@ export const list = async (props: BranchScopeProps) => {
 };
 
 export const create = async (props: BranchScopeProps & RoleCreateRequest) => {
-  const { data } = await props.apiClient.createProjectBranchRole(
-    props.project.id,
-    props.branch.id,
-    {
+  const { data } = await retryOnLock(() =>
+    props.apiClient.createProjectBranchRole(props.project.id, props.branch.id, {
       role: props.role,
-    }
+    })
   );
   writer(props).end(data.role, {
     fields: ROLES_FIELDS,
@@ -84,10 +83,12 @@ export const create = async (props: BranchScopeProps & RoleCreateRequest) => {
 export const deleteRole = async (
   props: BranchScopeProps & { role: { name: string } }
 ) => {
-  const { data } = await props.apiClient.deleteProjectBranchRole(
-    props.project.id,
-    props.branch.id,
-    props.role.name
+  const { data } = await retryOnLock(() =>
+    props.apiClient.deleteProjectBranchRole(
+      props.project.id,
+      props.branch.id,
+      props.role.name
+    )
   );
   writer(props).end(data.role, {
     fields: ROLES_FIELDS,

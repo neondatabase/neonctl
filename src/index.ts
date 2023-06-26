@@ -18,12 +18,12 @@ import { ensureAuth } from './commands/auth.js';
 import { defaultDir, ensureConfigDir } from './config.js';
 import { log } from './log.js';
 import { defaultClientID } from './auth.js';
-import { isApiError } from './api.js';
 import { fillInArgs } from './utils.js';
 import pkg from './pkg.js';
 import commands from './commands/index.js';
 import { analyticsMiddleware } from './analytics.js';
 import { isCi } from './env.js';
+import { isAxiosError } from 'axios';
 
 let builder = yargs(hideBin(process.argv));
 builder = builder
@@ -82,15 +82,15 @@ builder = builder
   })
   .middleware(analyticsMiddleware)
   .fail(async (msg, err) => {
-    if (isApiError(err)) {
-      if (err.response.status === 401) {
+    if (isAxiosError(err)) {
+      if (err.response?.status === 401) {
         log.error('Authentication failed, please run `neonctl auth`');
       } else {
         log.error(
           '%d: %s\n%s',
-          err.response.status,
-          err.response.statusText,
-          err.response.data?.message
+          err.response?.status,
+          err.response?.statusText,
+          err.response?.data?.message
         );
       }
     } else {
