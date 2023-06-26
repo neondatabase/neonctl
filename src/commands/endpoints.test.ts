@@ -1,4 +1,4 @@
-import { describe } from '@jest/globals';
+import { describe, expect } from '@jest/globals';
 
 import { testCliCommand } from '../test_utils.js';
 
@@ -39,6 +39,24 @@ describe('endpoints', () => {
       'read_only',
     ],
     expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create with retry',
+    args: [
+      'endpoints',
+      'create',
+      '--project.id',
+      'test',
+      '--endpoint.branch_id',
+      'test_branch_with_retry',
+      '--endpoint.type',
+      'read_only',
+    ],
+    expected: {
+      stderr: expect.stringContaining('Resource is locked'),
       snapshot: true,
     },
   });

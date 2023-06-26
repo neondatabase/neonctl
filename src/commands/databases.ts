@@ -1,5 +1,6 @@
 import { DatabaseCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
+import { retryOnLock } from '../api.js';
 import { databaseCreateRequest } from '../parameters.gen.js';
 
 import { BranchScopeProps } from '../types.js';
@@ -71,13 +72,16 @@ export const list = async (props: BranchScopeProps) => {
 export const create = async (
   props: BranchScopeProps & DatabaseCreateRequest
 ) => {
-  const { data } = await props.apiClient.createProjectBranchDatabase(
-    props.project.id,
-    props.branch.id,
-    {
-      database: props.database,
-    }
+  const { data } = await retryOnLock(() =>
+    props.apiClient.createProjectBranchDatabase(
+      props.project.id,
+      props.branch.id,
+      {
+        database: props.database,
+      }
+    )
   );
+
   writer(props).end(data.database, {
     fields: DATABASE_FIELDS,
   });
@@ -86,11 +90,14 @@ export const create = async (
 export const deleteDb = async (
   props: BranchScopeProps & { database: { name: string } }
 ) => {
-  const { data } = await props.apiClient.deleteProjectBranchDatabase(
-    props.project.id,
-    props.branch.id,
-    props.database.name
+  const { data } = await retryOnLock(() =>
+    props.apiClient.deleteProjectBranchDatabase(
+      props.project.id,
+      props.branch.id,
+      props.database.name
+    )
   );
+
   writer(props).end(data.database, {
     fields: DATABASE_FIELDS,
   });
