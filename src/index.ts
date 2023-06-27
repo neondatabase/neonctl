@@ -64,7 +64,7 @@ builder = builder
   .option('api-key', {
     describe: 'API key',
     type: 'string',
-    default: '',
+    default: process.env.NEON_API_KEY ?? '',
   })
   .option('apiClient', {
     hidden: true,
