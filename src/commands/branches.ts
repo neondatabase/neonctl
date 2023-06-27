@@ -15,7 +15,7 @@ import {
 import { commandFailHandler } from '../utils.js';
 import { retryOnLock } from '../api.js';
 
-const BRANCH_FIELDS = ['id', 'name', 'created_at'] as const;
+const BRANCH_FIELDS = ['id', 'name', 'created_at', 'updated_at'] as const;
 
 export const command = 'branches';
 export const describe = 'Manage branches';
