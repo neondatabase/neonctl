@@ -5,7 +5,7 @@ import {
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
-import { BranchScopeProps, ProjectScopeProps } from '../types.js';
+import { IdOrNameProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import {
   branchCreateRequest,
@@ -54,36 +54,28 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await create(args as any)
     )
     .command(
-      'update',
+      'update <id>',
       'Update a branch',
       (yargs) =>
-        yargs.options(branchUpdateRequest).option('branch.id', {
-          describe: 'Branch ID',
-          type: 'string',
-          demandOption: true,
+        yargs.options({
+          'branch.name': {
+            describe: 'Branch name',
+            type: 'string',
+            demandOption: true,
+          },
         }),
       async (args) => await update(args as any)
     )
     .command(
-      'delete',
+      'delete <id>',
       'Delete a branch',
-      (yargs) =>
-        yargs.option('branch.id', {
-          describe: 'Branch ID',
-          type: 'string',
-          demandOption: true,
-        }),
+      (yargs) => yargs,
       async (args) => await deleteBranch(args as any)
     )
     .command(
-      'get',
+      'get <id>',
       'Get a branch',
-      (yargs) =>
-        yargs.option('branch.id', {
-          describe: 'Branch ID',
-          type: 'string',
-          demandOption: true,
-        }),
+      (yargs) => yargs,
       async (args) => await get(args as any)
     );
 
@@ -131,9 +123,11 @@ const create = async (
   out.end();
 };
 
-const update = async (props: BranchScopeProps & BranchUpdateRequest) => {
+const update = async (
+  props: ProjectScopeProps & IdOrNameProps & BranchUpdateRequest
+) => {
   const { data } = await retryOnLock(() =>
-    props.apiClient.updateProjectBranch(props.project.id, props.branch.id, {
+    props.apiClient.updateProjectBranch(props.project.id, props.id, {
       branch: props.branch,
     })
   );
@@ -142,19 +136,19 @@ const update = async (props: BranchScopeProps & BranchUpdateRequest) => {
   });
 };
 
-const deleteBranch = async (props: BranchScopeProps) => {
+const deleteBranch = async (props: ProjectScopeProps & IdOrNameProps) => {
   const { data } = await retryOnLock(() =>
-    props.apiClient.deleteProjectBranch(props.project.id, props.branch.id)
+    props.apiClient.deleteProjectBranch(props.project.id, props.id)
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
   });
 };
 
-const get = async (props: BranchScopeProps) => {
+const get = async (props: ProjectScopeProps & IdOrNameProps) => {
   const { data } = await props.apiClient.getProjectBranch(
     props.project.id,
-    props.branch.id
+    props.id
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,

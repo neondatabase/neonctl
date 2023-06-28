@@ -13,6 +13,10 @@ export type ProjectScopeProps = CommonProps & {
   };
 };
 
+export type IdOrNameProps = {
+  id: string;
+};
+
 export type BranchScopeProps = ProjectScopeProps & {
   branch: {
     id: string;

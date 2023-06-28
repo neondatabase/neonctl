@@ -20,7 +20,7 @@ describe('projects', () => {
 
   testCliCommand({
     name: 'delete',
-    args: ['projects', 'delete', '--project.id', 'test'],
+    args: ['projects', 'delete', 'test'],
     expected: {
       snapshot: true,
     },
@@ -28,14 +28,7 @@ describe('projects', () => {
 
   testCliCommand({
     name: 'update',
-    args: [
-      'projects',
-      'update',
-      '--project.id',
-      'test',
-      '--project.name',
-      'test_project',
-    ],
+    args: ['projects', 'update', 'test', '--project.name', 'test_project'],
     expected: {
       snapshot: true,
     },
@@ -43,7 +36,7 @@ describe('projects', () => {
 
   testCliCommand({
     name: 'get',
-    args: ['projects', 'get', '--project.id', 'test'],
+    args: ['projects', 'get', 'test'],
     expected: {
       snapshot: true,
     },
