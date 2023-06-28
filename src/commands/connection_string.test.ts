@@ -37,4 +37,43 @@ describe('connection_string', () => {
       snapshot: true,
     },
   });
+
+  testCliCommand({
+    name: 'connection_string prisma',
+    args: [
+      'connection-string',
+      '--project.id',
+      'test',
+      '--endpoint.id',
+      'test_endpoint_id',
+      '--database.name',
+      'test_db',
+      '--role.name',
+      'test_role',
+      '--prisma',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'connection_string prisma pooled',
+    args: [
+      'connection-string',
+      '--project.id',
+      'test',
+      '--endpoint.id',
+      'test_endpoint_id',
+      '--database.name',
+      'test_db',
+      '--role.name',
+      'test_role',
+      '--prisma',
+      '--pooled',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
 });

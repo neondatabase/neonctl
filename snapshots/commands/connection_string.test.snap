@@ -2,4 +2,8 @@
 
 exports[`connection_string connection_string pooled test 1`] = `"postgres://test_role:test_pwd@test_host.neon.tech/test_db"`;
 
+exports[`connection_string connection_string prisma pooled test 1`] = `"postgres://test_role:test_pwd@test_host.neon.tech/test_db?connect_timeout=30&pool_timeout=30&pgbouncer=true"`;
+
+exports[`connection_string connection_string prisma test 1`] = `"postgres://test_role:test_pwd@test_host.neon.tech/test_db?connect_timeout=30"`;
+
 exports[`connection_string connection_string test 1`] = `"postgres://test_role:test_pwd@test_host.neon.tech/test_db"`;

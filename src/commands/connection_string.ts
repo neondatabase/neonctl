@@ -31,6 +31,11 @@ export const builder = (argv: yargs.Argv) => {
       describe: 'Use pooled connection',
       default: false,
     },
+    prisma: {
+      type: 'boolean',
+      describe: 'Use connection string for Prisma setup',
+      default: false,
+    },
   });
 };
 export const handler = async (
@@ -38,6 +43,7 @@ export const handler = async (
     role: { name: string };
     database: { name: string };
     pooled: boolean;
+    prisma: boolean;
   }
 ) => {
   const {
@@ -60,6 +66,14 @@ export const handler = async (
   connectionString.pathname = props.database.name;
   connectionString.username = props.role.name;
   connectionString.password = password.password;
+
+  if (props.prisma) {
+    connectionString.searchParams.set('connect_timeout', '30');
+    if (props.pooled) {
+      connectionString.searchParams.set('pool_timeout', '30');
+      connectionString.searchParams.set('pgbouncer', 'true');
+    }
+  }
 
   process.stdout.write(connectionString.toString());
 };
