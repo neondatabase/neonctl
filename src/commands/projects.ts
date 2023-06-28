@@ -2,7 +2,7 @@ import { ProjectCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
 import { projectCreateRequest } from '../parameters.gen.js';
-import { CommonProps } from '../types.js';
+import { CommonProps, IdOrNameProps } from '../types.js';
 import { commandFailHandler } from '../utils.js';
 import { writer } from '../writer.js';
 
@@ -33,46 +33,25 @@ export const builder = (argv: yargs.Argv) => {
       }
     )
     .command(
-      'update',
+      'update <id>',
       'Update a project',
-      (yargs) =>
-        yargs
-          .option('project.id', {
-            describe: 'Project ID',
-            type: 'string',
-            demandOption: true,
-          })
-          .options(projectCreateRequest),
+      (yargs) => yargs.options(projectCreateRequest),
       async (args) => {
         await update(args as any);
       }
     )
     .command(
-      'delete',
+      'delete <id>',
       'Delete a project',
-      (yargs) =>
-        yargs.options({
-          'project.id': {
-            describe: 'Project ID',
-            type: 'string',
-            demandOption: true,
-          },
-        }),
+      (yargs) => yargs,
       async (args) => {
         await deleteProject(args as any);
       }
     )
     .command(
-      'get',
+      'get <id>',
       'Get a project',
-      (yargs) =>
-        yargs.options({
-          'project.id': {
-            describe: 'Project ID',
-            type: 'string',
-            demandOption: true,
-          },
-        }),
+      (yargs) => yargs,
       async (args) => {
         await get(args as any);
       }
@@ -104,25 +83,23 @@ const create = async (props: CommonProps & ProjectCreateRequest) => {
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };
 
-const deleteProject = async (
-  props: CommonProps & { project: { id: string } }
-) => {
-  const { data } = await props.apiClient.deleteProject(props.project.id);
+const deleteProject = async (props: CommonProps & IdOrNameProps) => {
+  const { data } = await props.apiClient.deleteProject(props.id);
   writer(props).end(data.project, {
     fields: PROJECT_FIELDS,
   });
 };
 
 const update = async (
-  props: CommonProps & { project: { id: string } } & ProjectCreateRequest
+  props: CommonProps & IdOrNameProps & ProjectCreateRequest
 ) => {
-  const { data } = await props.apiClient.updateProject(props.project.id, {
+  const { data } = await props.apiClient.updateProject(props.id, {
     project: props.project,
   });
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };
 
-const get = async (props: CommonProps & { project: { id: string } }) => {
-  const { data } = await props.apiClient.getProject(props.project.id);
+const get = async (props: CommonProps & IdOrNameProps) => {
+  const { data } = await props.apiClient.getProject(props.id);
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };

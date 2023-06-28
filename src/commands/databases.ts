@@ -42,16 +42,9 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await create(args as any)
     )
     .command(
-      'delete',
+      'delete <database>',
       'Delete a database',
-      (yargs) =>
-        yargs.options({
-          'database.name': {
-            describe: 'Database name',
-            type: 'string',
-            demandOption: true,
-          },
-        }),
+      (yargs) => yargs,
       async (args) => await deleteDb(args as any)
     );
 
@@ -88,13 +81,13 @@ export const create = async (
 };
 
 export const deleteDb = async (
-  props: BranchScopeProps & { database: { name: string } }
+  props: BranchScopeProps & { database: string }
 ) => {
   const { data } = await retryOnLock(() =>
     props.apiClient.deleteProjectBranchDatabase(
       props.project.id,
       props.branch.id,
-      props.database.name
+      props.database
     )
   );
 

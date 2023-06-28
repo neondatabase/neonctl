@@ -42,12 +42,11 @@ describe('databases', () => {
     args: [
       'databases',
       'delete',
+      'test_db',
       '--project.id',
       'test',
       '--branch.id',
       'test_branch_id',
-      '--database.name',
-      'test_db',
     ],
     expected: {
       snapshot: true,

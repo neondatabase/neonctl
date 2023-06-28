@@ -1,14 +1,17 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`operations list test 1`] = `
-"┌────┬─────────┬──────────┬──────────────────────┐
-│ Id │ Action  │ Status   │ Created At           │
-├────┼─────────┼──────────┼──────────────────────┤
-│ 1  │ suspend │ finished │ 2016-01-01T00:00:00Z │
-├────┼─────────┼──────────┼──────────────────────┤
-│ 2  │ suspend │ finished │ 2016-01-01T00:00:00Z │
-├────┼─────────┼──────────┼──────────────────────┤
-│ 3  │ start   │ finished │ 2016-01-01T00:00:00Z │
-└────┴─────────┴──────────┴──────────────────────┘
+"- id: "1"
+  action: suspend
+  status: finished
+  created_at: 2016-01-01T00:00:00Z
+- id: "2"
+  action: suspend
+  status: finished
+  created_at: 2016-01-01T00:00:00Z
+- id: "3"
+  action: start
+  status: finished
+  created_at: 2016-01-01T00:00:00Z
 "
 `;

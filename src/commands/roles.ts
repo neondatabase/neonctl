@@ -42,16 +42,9 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await create(args as any)
     )
     .command(
-      'delete',
+      'delete <role>',
       'Delete a role',
-      (yargs) =>
-        yargs.options({
-          'role.name': {
-            describe: 'Role name',
-            type: 'string',
-            demandOption: true,
-          },
-        }),
+      (yargs) => yargs,
       async (args) => await deleteRole(args as any)
     );
 
@@ -81,13 +74,13 @@ export const create = async (props: BranchScopeProps & RoleCreateRequest) => {
 };
 
 export const deleteRole = async (
-  props: BranchScopeProps & { role: { name: string } }
+  props: BranchScopeProps & { role: string }
 ) => {
   const { data } = await retryOnLock(() =>
     props.apiClient.deleteProjectBranchRole(
       props.project.id,
       props.branch.id,
-      props.role.name
+      props.role
     )
   );
   writer(props).end(data.role, {

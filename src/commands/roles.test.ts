@@ -44,7 +44,6 @@ describe('roles', () => {
       'test',
       '--branch.id',
       'test_branch_id',
-      '--role.name',
       'test_role',
     ],
     expected: {

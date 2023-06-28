@@ -62,6 +62,8 @@ export const testCliCommand = ({
           `http://localhost:${(server.address() as AddressInfo).port}`,
           '--api-key',
           'test-key',
+          '--output',
+          'yaml',
           ...args,
         ],
         {
