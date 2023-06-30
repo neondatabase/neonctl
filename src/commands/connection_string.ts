@@ -1,19 +1,16 @@
+import { EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
-import { EndpointScopeProps } from '../types';
+import { branchIdFromProps } from '../enrichers.js';
+import { BranchScopeProps } from '../types.js';
 
-export const command = 'connection-string';
+export const command = 'connection-string <branch>';
 export const aliases = ['cs'];
 export const describe = 'Get connection string';
 export const builder = (argv: yargs.Argv) => {
-  return argv.usage('usage: $0 connection-string [options]').options({
+  return argv.usage('usage: $0 connection-string <branch> [options]').options({
     'project.id': {
       type: 'string',
       describe: 'Project ID',
-      demandOption: true,
-    },
-    'endpoint.id': {
-      type: 'string',
-      describe: 'Endpoint ID',
       demandOption: true,
     },
     'role.name': {
@@ -38,20 +35,26 @@ export const builder = (argv: yargs.Argv) => {
     },
   });
 };
+
 export const handler = async (
-  props: EndpointScopeProps & {
+  props: BranchScopeProps & {
     role: { name: string };
     database: { name: string };
     pooled: boolean;
     prisma: boolean;
   }
 ) => {
+  const branchId = await branchIdFromProps(props);
   const {
-    data: { endpoint },
-  } = await props.apiClient.getProjectEndpoint(
+    data: { endpoints },
+  } = await props.apiClient.listProjectBranchEndpoints(
     props.project.id,
-    props.endpoint.id
+    branchId
   );
+  const endpoint = endpoints.find((e) => e.type === EndpointType.ReadWrite);
+  if (!endpoint) {
+    throw new Error(`No endpoint found for the branch: ${branchId}`);
+  }
 
   const { data: password } = await props.apiClient.getProjectBranchRolePassword(
     props.project.id,

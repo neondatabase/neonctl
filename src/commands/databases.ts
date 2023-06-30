@@ -1,6 +1,7 @@
 import { DatabaseCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
 import { retryOnLock } from '../api.js';
+import { branchIdFromProps } from '../enrichers.js';
 import { databaseCreateRequest } from '../parameters.gen.js';
 
 import { BranchScopeProps } from '../types.js';
@@ -23,8 +24,8 @@ export const builder = (argv: yargs.Argv) =>
         type: 'string',
         demandOption: true,
       },
-      'branch.id': {
-        describe: 'Branch ID',
+      branch: {
+        describe: 'Branch ID or name',
         type: 'string',
         demandOption: true,
       },
@@ -53,9 +54,10 @@ export const handler = (args: yargs.Argv) => {
 };
 
 export const list = async (props: BranchScopeProps) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.listProjectBranchDatabases(
     props.project.id,
-    props.branch.id
+    branchId
   );
   writer(props).end(data.databases, {
     fields: DATABASE_FIELDS,
@@ -65,14 +67,11 @@ export const list = async (props: BranchScopeProps) => {
 export const create = async (
   props: BranchScopeProps & DatabaseCreateRequest
 ) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.createProjectBranchDatabase(
-      props.project.id,
-      props.branch.id,
-      {
-        database: props.database,
-      }
-    )
+    props.apiClient.createProjectBranchDatabase(props.project.id, branchId, {
+      database: props.database,
+    })
   );
 
   writer(props).end(data.database, {
@@ -83,10 +82,11 @@ export const create = async (
 export const deleteDb = async (
   props: BranchScopeProps & { database: string }
 ) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
     props.apiClient.deleteProjectBranchDatabase(
       props.project.id,
-      props.branch.id,
+      branchId,
       props.database
     )
   );

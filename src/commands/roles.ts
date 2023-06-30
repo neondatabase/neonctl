@@ -1,6 +1,7 @@
 import { RoleCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
 import { retryOnLock } from '../api.js';
+import { branchIdFromProps } from '../enrichers.js';
 import { roleCreateRequest } from '../parameters.gen.js';
 
 import { BranchScopeProps } from '../types.js';
@@ -23,8 +24,8 @@ export const builder = (argv: yargs.Argv) =>
         type: 'string',
         demandOption: true,
       },
-      'branch.id': {
-        describe: 'Branch ID',
+      branch: {
+        describe: 'Branch ID or name',
         type: 'string',
         demandOption: true,
       },
@@ -53,9 +54,10 @@ export const handler = (args: yargs.Argv) => {
 };
 
 export const list = async (props: BranchScopeProps) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.listProjectBranchRoles(
     props.project.id,
-    props.branch.id
+    branchId
   );
   writer(props).end(data.roles, {
     fields: ROLES_FIELDS,
@@ -63,8 +65,9 @@ export const list = async (props: BranchScopeProps) => {
 };
 
 export const create = async (props: BranchScopeProps & RoleCreateRequest) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.createProjectBranchRole(props.project.id, props.branch.id, {
+    props.apiClient.createProjectBranchRole(props.project.id, branchId, {
       role: props.role,
     })
   );
@@ -76,10 +79,11 @@ export const create = async (props: BranchScopeProps & RoleCreateRequest) => {
 export const deleteRole = async (
   props: BranchScopeProps & { role: string }
 ) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
     props.apiClient.deleteProjectBranchRole(
       props.project.id,
-      props.branch.id,
+      branchId,
       props.role
     )
   );

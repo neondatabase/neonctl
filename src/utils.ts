@@ -1,5 +1,7 @@
+import { isAxiosError } from 'axios';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { CommonProps, IdOrNameProps, ProjectScopeProps } from './types';
 
 /**
  * This middleware is needed to fill in the args for nested objects,

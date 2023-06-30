@@ -10,10 +10,10 @@ import { writer } from '../writer.js';
 import {
   branchCreateRequest,
   branchCreateRequestEndpointOptions,
-  branchUpdateRequest,
 } from '../parameters.gen.js';
 import { commandFailHandler } from '../utils.js';
 import { retryOnLock } from '../api.js';
+import { branchIdFromProps } from '../enrichers.js';
 
 const BRANCH_FIELDS = ['id', 'name', 'created_at', 'updated_at'] as const;
 
@@ -54,7 +54,7 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await create(args as any)
     )
     .command(
-      'update <id>',
+      'update <id|name>',
       'Update a branch',
       (yargs) =>
         yargs.options({
@@ -67,13 +67,13 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await update(args as any)
     )
     .command(
-      'delete <id>',
+      'delete <id|name>',
       'Delete a branch',
       (yargs) => yargs,
       async (args) => await deleteBranch(args as any)
     )
     .command(
-      'get <id>',
+      'get <id|name>',
       'Get a branch',
       (yargs) => yargs,
       async (args) => await get(args as any)
@@ -126,8 +126,9 @@ const create = async (
 const update = async (
   props: ProjectScopeProps & IdOrNameProps & BranchUpdateRequest
 ) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.updateProjectBranch(props.project.id, props.id, {
+    props.apiClient.updateProjectBranch(props.project.id, branchId, {
       branch: props.branch,
     })
   );
@@ -137,8 +138,9 @@ const update = async (
 };
 
 const deleteBranch = async (props: ProjectScopeProps & IdOrNameProps) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.deleteProjectBranch(props.project.id, props.id)
+    props.apiClient.deleteProjectBranch(props.project.id, branchId)
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
@@ -146,9 +148,10 @@ const deleteBranch = async (props: ProjectScopeProps & IdOrNameProps) => {
 };
 
 const get = async (props: ProjectScopeProps & IdOrNameProps) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.getProjectBranch(
     props.project.id,
-    props.id
+    branchId
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
