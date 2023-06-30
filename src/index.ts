@@ -81,6 +81,7 @@ builder = builder
     default: !isCi(),
   })
   .middleware(analyticsMiddleware)
+  .completion()
   .fail(async (msg, err) => {
     if (isAxiosError(err)) {
       if (err.response?.status === 401) {
