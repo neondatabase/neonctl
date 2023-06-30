@@ -17,14 +17,10 @@ export type IdOrNameProps = {
   id: string;
 };
 
-export type BranchScopeProps = ProjectScopeProps & {
-  branch: {
-    id: string;
-  };
-};
-
-export type EndpointScopeProps = ProjectScopeProps & {
-  endpoint: {
-    id: string;
-  };
-};
+export type BranchScopeProps = ProjectScopeProps &
+  (
+    | {
+        branch: string;
+      }
+    | IdOrNameProps
+  );

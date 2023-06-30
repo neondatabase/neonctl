@@ -14,24 +14,38 @@ created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches delete test 1`] = `
-"id: 1
-name: test_branch
+exports[`branches delete by id test 1`] = `
+"id: br-sunny-branch-123456
+name: sunny-branch
 created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches get test 1`] = `
-"id: test_branch_id
-name: test_branch_name
+exports[`branches get by id test 1`] = `
+"name: test-branch-sunny
+id: br-sunny-branch-123456
 created_at: 2019-01-01T00:00:00Z
+updated_at: 2019-01-01T00:00:00Z
+"
+`;
+
+exports[`branches get by name test 1`] = `
+"name: test-branch-sunny
+id: br-sunny-branch-123456
+created_at: 2019-01-01T00:00:00Z
+updated_at: 2019-01-01T00:00:00Z
 "
 `;
 
 exports[`branches list test 1`] = `
-"- id: 1
+"- id: br-main-branch-123456
   name: main
   created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-sunny-branch-123456
+  name: test_branch
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
 "
 `;
 

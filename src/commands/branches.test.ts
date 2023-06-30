@@ -44,8 +44,14 @@ describe('branches', () => {
   });
 
   testCliCommand({
-    name: 'delete',
-    args: ['branches', 'delete', 'test_branch_id', '--project.id', 'test'],
+    name: 'delete by id',
+    args: [
+      'branches',
+      'delete',
+      'br-sunny-branch-123456',
+      '--project.id',
+      'test',
+    ],
     expected: {
       snapshot: true,
     },
@@ -56,7 +62,7 @@ describe('branches', () => {
     args: [
       'branches',
       'update',
-      'test_branch_id',
+      'test_branch',
       '--project.id',
       'test',
       '--branch.name',
@@ -68,8 +74,16 @@ describe('branches', () => {
   });
 
   testCliCommand({
-    name: 'get',
-    args: ['branches', 'get', 'test_branch_id', '--project.id', 'test'],
+    name: 'get by id',
+    args: ['branches', 'get', 'br-sunny-branch-123456', '--project.id', 'test'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'get by name',
+    args: ['branches', 'get', 'test_branch', '--project.id', 'test'],
     expected: {
       snapshot: true,
     },
