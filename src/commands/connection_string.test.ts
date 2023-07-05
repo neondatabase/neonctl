@@ -72,4 +72,13 @@ describe('connection_string', () => {
       snapshot: true,
     },
   });
+
+  testCliCommand({
+    name: 'connection_string without any args should pass',
+    args: ['connection-string'],
+    mockDir: 'single_project',
+    expected: {
+      snapshot: true,
+    },
+  });
 });
