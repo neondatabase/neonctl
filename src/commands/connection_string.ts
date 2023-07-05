@@ -36,6 +36,11 @@ export const builder = (argv: yargs.Argv) => {
         describe: 'Use connection string for Prisma setup',
         default: false,
       },
+      'endpoint.type': {
+        type: 'string',
+        choices: Object.values(EndpointType),
+        describe: 'Endpoint type',
+      },
     })
     .middleware(fillSingleProject as any);
 };
@@ -47,6 +52,7 @@ export const handler = async (
     database: { name: string };
     pooled: boolean;
     prisma: boolean;
+    endpoint?: { type: EndpointType };
   }
 ) => {
   const projectId = props.project.id;
@@ -55,9 +61,17 @@ export const handler = async (
   const {
     data: { endpoints },
   } = await props.apiClient.listProjectBranchEndpoints(projectId, branchId);
-  const endpoint = endpoints.find((e) => e.type === EndpointType.ReadWrite);
+  const matchEndpointType = props.endpoint?.type ?? EndpointType.ReadWrite;
+  let endpoint = endpoints.find((e) => e.type === matchEndpointType);
+  if (!endpoint && props.endpoint?.type == null) {
+    endpoint = endpoints[0];
+  }
   if (!endpoint) {
-    throw new Error(`No endpoint found for the branch: ${branchId}`);
+    throw new Error(
+      `No ${
+        props.endpoint?.type ?? ''
+      } endpoint found for the branch: ${branchId}`
+    );
   }
 
   const role =
