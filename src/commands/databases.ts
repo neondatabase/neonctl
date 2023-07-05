@@ -1,7 +1,7 @@
 import { DatabaseCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
 import { retryOnLock } from '../api.js';
-import { branchIdFromProps } from '../enrichers.js';
+import { branchIdFromProps, fillSingleProject } from '../enrichers.js';
 import { databaseCreateRequest } from '../parameters.gen.js';
 
 import { BranchScopeProps } from '../types.js';
@@ -22,14 +22,13 @@ export const builder = (argv: yargs.Argv) =>
       'project.id': {
         describe: 'Project ID',
         type: 'string',
-        demandOption: true,
       },
       branch: {
         describe: 'Branch ID or name',
         type: 'string',
-        demandOption: true,
       },
     })
+    .middleware(fillSingleProject as any)
     .command(
       'list',
       'List databases',

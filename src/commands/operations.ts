@@ -1,4 +1,5 @@
 import yargs from 'yargs';
+import { fillSingleProject } from '../enrichers.js';
 
 import { ProjectScopeProps } from '../types.js';
 import { commandFailHandler } from '../utils.js';
@@ -18,9 +19,9 @@ export const builder = (argv: yargs.Argv) =>
       'project.id': {
         describe: 'Project ID',
         type: 'string',
-        demandOption: true,
       },
     })
+    .middleware(fillSingleProject as any)
     .command(
       'list',
       'List operations',

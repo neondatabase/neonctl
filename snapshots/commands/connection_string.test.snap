@@ -7,3 +7,5 @@ exports[`connection_string connection_string prisma pooled test 1`] = `"postgres
 exports[`connection_string connection_string prisma test 1`] = `"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?connect_timeout=30"`;
 
 exports[`connection_string connection_string test 1`] = `"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db"`;
+
+exports[`connection_string connection_string without any args should pass test 1`] = `"postgres://test_role:password@undefined/db1"`;
