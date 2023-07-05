@@ -13,7 +13,7 @@ import {
 } from '../parameters.gen.js';
 import { commandFailHandler } from '../utils.js';
 import { retryOnLock } from '../api.js';
-import { branchIdFromProps } from '../enrichers.js';
+import { branchIdFromProps, fillSingleProject } from '../enrichers.js';
 
 const BRANCH_FIELDS = ['id', 'name', 'created_at', 'updated_at'] as const;
 
@@ -29,9 +29,9 @@ export const builder = (argv: yargs.Argv) =>
       'project.id': {
         describe: 'Project ID',
         type: 'string',
-        demandOption: true,
       },
     })
+    .middleware(fillSingleProject as any)
     .command(
       'list',
       'List branches',

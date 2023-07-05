@@ -84,7 +84,9 @@ builder = builder
   .completion()
   .fail(async (msg, err) => {
     if (isAxiosError(err)) {
-      if (err.response?.status === 401) {
+      if (err.code === 'ECONNABORTED') {
+        log.error('Request timed out');
+      } else if (err.response?.status === 401) {
         log.error('Authentication failed, please run `neonctl auth`');
       } else {
         log.error(
@@ -97,6 +99,7 @@ builder = builder
     } else {
       log.error(msg || err?.message);
     }
+    err.stack && log.degug('Stack: %s', err.stack);
     process.exit(1);
   });
 

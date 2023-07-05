@@ -7,11 +7,11 @@ import { Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 
-const runMockServer = async () =>
+const runMockServer = async (mockDir: string) =>
   new Promise<Server>((resolve) => {
     const app = express();
     app.use(express.json());
-    app.use('/', emocks(join(process.cwd(), 'mocks')));
+    app.use('/', emocks(join(process.cwd(), 'mocks', mockDir)));
 
     const server = app.listen(0);
     server.on('listening', () => {
@@ -25,6 +25,7 @@ const runMockServer = async () =>
 export type TestCliCommandOptions = {
   name: string;
   args: string[];
+  mockDir?: string;
   expected?: {
     snapshot?: true;
     stdout?: string | ReturnType<typeof expect.stringMatching>;
@@ -36,11 +37,12 @@ export const testCliCommand = ({
   args,
   name,
   expected,
+  mockDir = 'main',
 }: TestCliCommandOptions) => {
   let server: Server;
   describe(name, () => {
     beforeAll(async () => {
-      server = await runMockServer();
+      server = await runMockServer(mockDir);
     });
 
     afterAll(async () => {
@@ -86,6 +88,9 @@ export const testCliCommand = ({
 
         cp.on('close', (code) => {
           try {
+            if (code !== 0 && error) {
+              console.error(error);
+            }
             expect(code).toBe(0);
             if (code === 0 && expected) {
               if (expected.snapshot) {
