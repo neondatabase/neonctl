@@ -2,7 +2,7 @@ import { format } from 'node:util';
 import { isDebug } from './env.js';
 
 export const log = {
-  degug: (...args: unknown[]) => {
+  debug: (...args: unknown[]) => {
     if (isDebug()) {
       process.stderr.write(`DEBUG: ${format(...args)}\n`);
     }

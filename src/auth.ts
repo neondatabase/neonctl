@@ -38,7 +38,7 @@ export const refreshToken = async (
   { oauthHost, clientId }: AuthProps,
   tokenSet: TokenSet
 ) => {
-  log.info('Discovering oauth server');
+  log.debug('Discovering oauth server');
   const issuer = await Issuer.discover(oauthHost);
 
   const neonOAuthClient = new issuer.Client({
@@ -50,7 +50,7 @@ export const refreshToken = async (
 };
 
 export const auth = async ({ oauthHost, clientId }: AuthProps) => {
-  log.info('Discovering oauth server');
+  log.debug('Discovering oauth server');
   const issuer = await Issuer.discover(oauthHost);
 
   //
@@ -87,7 +87,7 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
         response.end();
         return;
       }
-      log.info(`Callback received: ${request.url}`);
+      log.debug(`Callback received: ${request.url}`);
       const params = neonOAuthClient.callbackParams(request);
       const tokenSet = await neonOAuthClient.callback(
         REDIRECT_URI(listen_port),
