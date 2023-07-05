@@ -78,7 +78,7 @@ export const ensureAuth = async (
       );
       const tokenSet = new TokenSet(tokenSetContents);
       if (tokenSet.expired()) {
-        log.info('using refresh token to update access token');
+        log.debug('using refresh token to update access token');
         const refreshedTokenSet = await refreshToken(
           {
             oauthHost: props.oauthHost,

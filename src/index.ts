@@ -99,7 +99,7 @@ builder = builder
     } else {
       log.error(msg || err?.message);
     }
-    err.stack && log.degug('Stack: %s', err.stack);
+    err?.stack && log.debug('Stack: %s', err.stack);
     process.exit(1);
   });
 
