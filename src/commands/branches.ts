@@ -1,19 +1,17 @@
-import {
-  BranchCreateRequest,
-  BranchCreateRequestEndpointOptions,
-  BranchUpdateRequest,
-} from '@neondatabase/api-client';
+import { EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
-import {
-  branchCreateRequest,
-  branchCreateRequestEndpointOptions,
-} from '../parameters.gen.js';
-import { commandFailHandler } from '../utils.js';
+import { branchCreateRequest } from '../parameters.gen.js';
+import { commandFailHandler } from '../utils/middlewares.js';
 import { retryOnLock } from '../api.js';
-import { branchIdFromProps, fillSingleProject } from '../enrichers.js';
+import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
+import {
+  looksLikeBranchId,
+  looksLikeLSN,
+  looksLikeTimestamp,
+} from '../utils/formats.js';
 
 const BRANCH_FIELDS = ['id', 'name', 'created_at', 'updated_at'] as const;
 
@@ -26,7 +24,7 @@ export const builder = (argv: yargs.Argv) =>
     .fail(commandFailHandler)
     .usage('usage: $0 branches <sub-command> [options]')
     .options({
-      'project.id': {
+      'project-id': {
         describe: 'Project ID',
         type: 'string',
       },
@@ -43,28 +41,31 @@ export const builder = (argv: yargs.Argv) =>
       'Create a branch',
       (yargs) =>
         yargs.options({
-          ...branchCreateRequest,
-          ...Object.fromEntries(
-            Object.entries(branchCreateRequestEndpointOptions).map(
-              ([key, value]) =>
-                [`endpoint.${key}`, { ...value, demandOption: false }] as const
-            )
-          ),
+          name: branchCreateRequest['branch.name'],
+          parent: {
+            describe:
+              'Parent branch name or id or timestamp or LSN. Defaults to the primary branch',
+            type: 'string',
+          },
+          endpoint: {
+            describe:
+              'Create a branch with or without an endpoint. By default branch is created with a read-write endpoint. To create a branch without endpoint use --no-endpoint',
+            type: 'boolean',
+            default: true,
+          },
+          readonly: {
+            describe: 'Create a read-only branch',
+            type: 'boolean',
+            implies: 'endpoint',
+          },
         }),
       async (args) => await create(args as any)
     )
     .command(
-      'update <id|name>',
-      'Update a branch',
-      (yargs) =>
-        yargs.options({
-          'branch.name': {
-            describe: 'Branch name',
-            type: 'string',
-            demandOption: true,
-          },
-        }),
-      async (args) => await update(args as any)
+      'rename <id|name> <new-name>',
+      'Rename a branch',
+      (yargs) => yargs,
+      async (args) => await rename(args as any)
     )
     .command(
       'delete <id|name>',
@@ -84,22 +85,70 @@ export const handler = (args: yargs.Argv) => {
 };
 
 const list = async (props: ProjectScopeProps) => {
-  const { data } = await props.apiClient.listProjectBranches(props.project.id);
+  const { data } = await props.apiClient.listProjectBranches(props.projectId);
   writer(props).end(data.branches, {
     fields: BRANCH_FIELDS,
   });
 };
 
 const create = async (
-  props: ProjectScopeProps &
-    Pick<BranchCreateRequest, 'branch'> & {
-      endpoint: BranchCreateRequestEndpointOptions;
-    }
+  props: ProjectScopeProps & {
+    name: string;
+    endpoint: boolean;
+    parent?: string;
+    readonly?: boolean;
+  }
 ) => {
+  const parentProps = await (() => {
+    if (!props.parent) {
+      return props.apiClient
+        .listProjectBranches(props.projectId)
+        .then(({ data }) => {
+          const branch = data.branches.find((b) => b.primary);
+          if (!branch) {
+            throw new Error('No primary branch found');
+          }
+          return { parent_id: branch.id };
+        });
+    }
+
+    if (looksLikeLSN(props.parent)) {
+      return { parent_lsn: props.parent };
+    }
+
+    if (looksLikeTimestamp(props.parent)) {
+      return { parent_timestamp: props.parent };
+    }
+
+    if (looksLikeBranchId(props.parent)) {
+      return { parent_id: props.parent };
+    }
+    return props.apiClient
+      .listProjectBranches(props.projectId)
+      .then(({ data }) => {
+        const branch = data.branches.find((b) => b.name === props.parent);
+        if (!branch) {
+          throw new Error(`Branch ${props.parent} not found`);
+        }
+        return { parent_id: branch.id };
+      });
+  })();
+
   const { data } = await retryOnLock(() =>
-    props.apiClient.createProjectBranch(props.project.id, {
-      branch: props.branch,
-      endpoints: props.endpoint ? [props.endpoint] : undefined,
+    props.apiClient.createProjectBranch(props.projectId, {
+      branch: {
+        name: props.name,
+        ...parentProps,
+      },
+      endpoints: props.endpoint
+        ? [
+            {
+              type: props.readonly
+                ? EndpointType.ReadOnly
+                : EndpointType.ReadWrite,
+            },
+          ]
+        : [],
     })
   );
   const out = writer(props);
@@ -123,13 +172,15 @@ const create = async (
   out.end();
 };
 
-const update = async (
-  props: ProjectScopeProps & IdOrNameProps & BranchUpdateRequest
+const rename = async (
+  props: ProjectScopeProps & IdOrNameProps & { newName: string }
 ) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.updateProjectBranch(props.project.id, branchId, {
-      branch: props.branch,
+    props.apiClient.updateProjectBranch(props.projectId, branchId, {
+      branch: {
+        name: props.newName,
+      },
     })
   );
   writer(props).end(data.branch, {
@@ -140,7 +191,7 @@ const update = async (
 const deleteBranch = async (props: ProjectScopeProps & IdOrNameProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.deleteProjectBranch(props.project.id, branchId)
+    props.apiClient.deleteProjectBranch(props.projectId, branchId)
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
@@ -150,7 +201,7 @@ const deleteBranch = async (props: ProjectScopeProps & IdOrNameProps) => {
 const get = async (props: ProjectScopeProps & IdOrNameProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.getProjectBranch(
-    props.project.id,
+    props.projectId,
     branchId
   );
   writer(props).end(data.branch, {

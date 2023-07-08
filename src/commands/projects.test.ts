@@ -12,7 +12,7 @@ describe('projects', () => {
 
   testCliCommand({
     name: 'create',
-    args: ['projects', 'create', '--project.name', 'test_project'],
+    args: ['projects', 'create', '--name', 'test_project'],
     expected: {
       snapshot: true,
     },
@@ -28,7 +28,7 @@ describe('projects', () => {
 
   testCliCommand({
     name: 'update',
-    args: ['projects', 'update', 'test', '--project.name', 'test_project'],
+    args: ['projects', 'update', 'test', '--name', 'test_project'],
     expected: {
       snapshot: true,
     },

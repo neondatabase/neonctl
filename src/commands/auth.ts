@@ -21,6 +21,7 @@ type AuthProps = {
 };
 
 export const command = 'auth';
+export const aliases = ['login'];
 export const describe = 'Authenticate';
 export const builder = (yargs: yargs.Argv) => yargs;
 export const handler = async (args: AuthProps) => {

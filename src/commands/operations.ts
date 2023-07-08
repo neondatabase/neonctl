@@ -1,8 +1,8 @@
 import yargs from 'yargs';
-import { fillSingleProject } from '../enrichers.js';
+import { fillSingleProject } from '../utils/enrichers.js';
 
 import { ProjectScopeProps } from '../types.js';
-import { commandFailHandler } from '../utils.js';
+import { commandFailHandler } from '../utils/middlewares.js';
 import { writer } from '../writer.js';
 
 const OPERATIONS_FIELDS = ['id', 'action', 'status', 'created_at'] as const;
@@ -16,7 +16,7 @@ export const builder = (argv: yargs.Argv) =>
     .fail(commandFailHandler)
     .usage('usage: $0 operations <sub-command> [options]')
     .options({
-      'project.id': {
+      'project-id': {
         describe: 'Project ID',
         type: 'string',
       },
@@ -35,7 +35,7 @@ export const handler = (args: yargs.Argv) => {
 
 export const list = async (props: ProjectScopeProps & { limit: number }) => {
   const { data } = await props.apiClient.listProjectOperations({
-    projectId: props.project.id,
+    projectId: props.projectId,
     limit: props.limit,
   });
   writer(props).end(data.operations, {

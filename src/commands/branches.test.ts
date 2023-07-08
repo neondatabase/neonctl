@@ -5,23 +5,37 @@ import { testCliCommand } from '../test_utils.js';
 describe('branches', () => {
   testCliCommand({
     name: 'list',
-    args: ['branches', 'list', '--project.id', 'test'],
+    args: ['branches', 'list', '--project-id', 'test'],
     expected: {
       snapshot: true,
     },
   });
 
   testCliCommand({
-    name: 'create with endpoint',
+    name: 'create by default with r/w endpoint',
     args: [
       'branches',
       'create',
-      '--project.id',
+      '--project-id',
       'test',
-      '--branch.name',
+      '--name',
       'test_branch',
-      '--endpoint.type',
-      'read_only',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create with readonly endpoint',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch',
+      '--readonly',
     ],
     expected: {
       snapshot: true,
@@ -33,10 +47,62 @@ describe('branches', () => {
     args: [
       'branches',
       'create',
-      '--project.id',
+      '--project-id',
       'test',
-      '--branch.name',
+      '--name',
       'test_branch',
+      '--no-endpoint',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create with parent by name',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_with_parent_name',
+      '--parent',
+      'main',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create with parent by lsn',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_with_parent_lsn',
+      '--parent',
+      '0/123ABC',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create with parent by timestamp',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_with_parent_timestamp',
+      '--parent',
+      '2021-01-01T00:00:00.000Z',
     ],
     expected: {
       snapshot: true,
@@ -49,7 +115,7 @@ describe('branches', () => {
       'branches',
       'delete',
       'br-sunny-branch-123456',
-      '--project.id',
+      '--project-id',
       'test',
     ],
     expected: {
@@ -58,15 +124,14 @@ describe('branches', () => {
   });
 
   testCliCommand({
-    name: 'update',
+    name: 'rename',
     args: [
       'branches',
-      'update',
+      'rename',
       'test_branch',
-      '--project.id',
-      'test',
-      '--branch.name',
       'new_test_branch',
+      '--project-id',
+      'test',
     ],
     expected: {
       snapshot: true,
@@ -75,7 +140,7 @@ describe('branches', () => {
 
   testCliCommand({
     name: 'get by id',
-    args: ['branches', 'get', 'br-sunny-branch-123456', '--project.id', 'test'],
+    args: ['branches', 'get', 'br-sunny-branch-123456', '--project-id', 'test'],
     expected: {
       snapshot: true,
     },
@@ -83,7 +148,7 @@ describe('branches', () => {
 
   testCliCommand({
     name: 'get by name',
-    args: ['branches', 'get', 'test_branch', '--project.id', 'test'],
+    args: ['branches', 'get', 'test_branch', '--project-id', 'test'],
     expected: {
       snapshot: true,
     },

@@ -5,7 +5,7 @@ import { testCliCommand } from '../test_utils.js';
 describe('roles', () => {
   testCliCommand({
     name: 'list',
-    args: ['roles', 'list', '--project.id', 'test', '--branch', 'test_branch'],
+    args: ['roles', 'list', '--project-id', 'test', '--branch', 'test_branch'],
     expected: {
       snapshot: true,
     },
@@ -16,11 +16,11 @@ describe('roles', () => {
     args: [
       'roles',
       'create',
-      '--project.id',
+      '--project-id',
       'test',
       '--branch',
       'test_branch',
-      '--role.name',
+      '--name',
       'test_role',
     ],
     expected: {
@@ -34,7 +34,7 @@ describe('roles', () => {
       'roles',
       'delete',
       'test_role',
-      '--project.id',
+      '--project-id',
       'test',
       '--branch',
       'test_branch',
