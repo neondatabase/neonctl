@@ -1,11 +1,9 @@
-import { DatabaseCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
 import { retryOnLock } from '../api.js';
-import { branchIdFromProps, fillSingleProject } from '../enrichers.js';
-import { databaseCreateRequest } from '../parameters.gen.js';
+import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 
 import { BranchScopeProps } from '../types.js';
-import { commandFailHandler } from '../utils.js';
+import { commandFailHandler } from '../utils/middlewares.js';
 import { writer } from '../writer.js';
 
 const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
@@ -19,7 +17,7 @@ export const builder = (argv: yargs.Argv) =>
     .fail(commandFailHandler)
     .usage('usage: $0 databases <sub-command> [options]')
     .options({
-      'project.id': {
+      'project-id': {
         describe: 'Project ID',
         type: 'string',
       },
@@ -38,7 +36,18 @@ export const builder = (argv: yargs.Argv) =>
     .command(
       'create',
       'Create a database',
-      (yargs) => yargs.options(databaseCreateRequest),
+      (yargs) =>
+        yargs.options({
+          name: {
+            describe: 'Database name',
+            type: 'string',
+            demandOption: true,
+          },
+          'owner-name': {
+            describe: 'Owner name',
+            type: 'string',
+          },
+        }),
       async (args) => await create(args as any)
     )
     .command(
@@ -55,7 +64,7 @@ export const handler = (args: yargs.Argv) => {
 export const list = async (props: BranchScopeProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.listProjectBranchDatabases(
-    props.project.id,
+    props.projectId,
     branchId
   );
   writer(props).end(data.databases, {
@@ -64,12 +73,39 @@ export const list = async (props: BranchScopeProps) => {
 };
 
 export const create = async (
-  props: BranchScopeProps & DatabaseCreateRequest
+  props: BranchScopeProps & {
+    name: string;
+    ownerName?: string;
+  }
 ) => {
   const branchId = await branchIdFromProps(props);
+  const owner =
+    props.ownerName ??
+    (await props.apiClient
+      .listProjectBranchRoles(props.projectId, branchId)
+      .then(({ data }) => {
+        if (data.roles.length === 0) {
+          throw new Error(`No roles found in branch ${branchId}`);
+        }
+        if (data.roles.length > 1) {
+          throw new Error(
+            `More than one role found in branch ${branchId}. Please specify the owner name. Roles: ${data.roles
+              .map((r) => r.name)
+              .join(', ')}`
+          );
+        }
+        return data.roles[0].name;
+      }));
+  if (!owner) {
+    throw new Error('No owner found');
+  }
+
   const { data } = await retryOnLock(() =>
-    props.apiClient.createProjectBranchDatabase(props.project.id, branchId, {
-      database: props.database,
+    props.apiClient.createProjectBranchDatabase(props.projectId, branchId, {
+      database: {
+        name: props.name,
+        owner_name: owner,
+      },
     })
   );
 
@@ -84,7 +120,7 @@ export const deleteDb = async (
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
     props.apiClient.deleteProjectBranchDatabase(
-      props.project.id,
+      props.projectId,
       branchId,
       props.database
     )

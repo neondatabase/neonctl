@@ -5,7 +5,7 @@ import { testCliCommand } from '../test_utils.js';
 describe('operations', () => {
   testCliCommand({
     name: 'list',
-    args: ['operations', 'list', '--project.id', 'test'],
+    args: ['operations', 'list', '--project-id', 'test'],
     expected: {
       snapshot: true,
     },

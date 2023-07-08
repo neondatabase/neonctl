@@ -8,9 +8,7 @@ export type CommonProps = {
 };
 
 export type ProjectScopeProps = CommonProps & {
-  project: {
-    id: string;
-  };
+  projectId: string;
 };
 
 export type IdOrNameProps = {

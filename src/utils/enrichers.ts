@@ -1,6 +1,5 @@
-import { BranchScopeProps, CommonProps, ProjectScopeProps } from './types';
-
-const HAIKU_REGEX = /^[a-z]+-[a-z]+-\d{6}$/;
+import { BranchScopeProps, CommonProps, ProjectScopeProps } from '../types.js';
+import { looksLikeBranchId } from './formats.js';
 
 export const branchIdResolve = async ({
   branch,
@@ -11,7 +10,7 @@ export const branchIdResolve = async ({
   apiClient: CommonProps['apiClient'];
   projectId: string;
 }) => {
-  if (branch.startsWith('br-') && HAIKU_REGEX.test(branch.substring(3))) {
+  if (looksLikeBranchId(branch)) {
     return branch;
   }
 
@@ -37,11 +36,11 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
     return await branchIdResolve({
       branch,
       apiClient: props.apiClient,
-      projectId: props.project.id,
+      projectId: props.projectId,
     });
   }
 
-  const { data } = await props.apiClient.listProjectBranches(props.project.id);
+  const { data } = await props.apiClient.listProjectBranches(props.projectId);
   const primaryBranch = data.branches.find((b) => b.primary);
 
   if (primaryBranch) {
@@ -52,9 +51,9 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
 };
 
 export const fillSingleProject = async (
-  props: CommonProps & Partial<Pick<ProjectScopeProps, 'project'>>
+  props: CommonProps & Partial<Pick<ProjectScopeProps, 'projectId'>>
 ) => {
-  if (props.project) {
+  if (props.projectId) {
     return props;
   }
   const { data } = await props.apiClient.listProjects({});
@@ -68,6 +67,6 @@ export const fillSingleProject = async (
   }
   return {
     ...props,
-    project: { id: data.projects[0].id },
+    projectId: data.projects[0].id,
   };
 };
