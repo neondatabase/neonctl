@@ -1,6 +1,6 @@
 import { EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
-import { branchIdFromProps, fillSingleProject } from '../enrichers.js';
+import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
 
 export const command = 'connection-string [branch]';
@@ -14,15 +14,15 @@ export const builder = (argv: yargs.Argv) => {
       type: 'string',
     })
     .options({
-      'project.id': {
+      'project-id': {
         type: 'string',
         describe: 'Project ID',
       },
-      'role.name': {
+      'role-name': {
         type: 'string',
         describe: 'Role name',
       },
-      'database.name': {
+      'database-name': {
         type: 'string',
         describe: 'Database name',
       },
@@ -36,7 +36,7 @@ export const builder = (argv: yargs.Argv) => {
         describe: 'Use connection string for Prisma setup',
         default: false,
       },
-      'endpoint.type': {
+      'endpoint-type': {
         type: 'string',
         choices: Object.values(EndpointType),
         describe: 'Endpoint type',
@@ -48,34 +48,34 @@ export const builder = (argv: yargs.Argv) => {
 export const handler = async (
   props: BranchScopeProps & {
     branch?: string;
-    role: { name: string };
-    database: { name: string };
+    roleName: string;
+    databaseName: string;
     pooled: boolean;
     prisma: boolean;
-    endpoint?: { type: EndpointType };
+    endpointType?: EndpointType;
   }
 ) => {
-  const projectId = props.project.id;
+  const projectId = props.projectId;
   const branchId = await branchIdFromProps(props);
 
   const {
     data: { endpoints },
   } = await props.apiClient.listProjectBranchEndpoints(projectId, branchId);
-  const matchEndpointType = props.endpoint?.type ?? EndpointType.ReadWrite;
+  const matchEndpointType = props.endpointType ?? EndpointType.ReadWrite;
   let endpoint = endpoints.find((e) => e.type === matchEndpointType);
-  if (!endpoint && props.endpoint?.type == null) {
+  if (!endpoint && props.endpointType == null) {
     endpoint = endpoints[0];
   }
   if (!endpoint) {
     throw new Error(
       `No ${
-        props.endpoint?.type ?? ''
+        props.endpointType ?? ''
       } endpoint found for the branch: ${branchId}`
     );
   }
 
   const role =
-    props.role?.name ||
+    props.roleName ||
     (await props.apiClient
       .listProjectBranchRoles(projectId, branchId)
       .then(({ data }) => {
@@ -93,7 +93,7 @@ export const handler = async (
       }));
 
   const database =
-    props.database?.name ||
+    props.databaseName ||
     (await props.apiClient
       .listProjectBranchDatabases(projectId, branchId)
       .then(({ data }) => {
@@ -104,12 +104,14 @@ export const handler = async (
           return data.databases[0].name;
         }
         throw new Error(
-          `Multiple databases found for the branch, please provide one with the --database.name option: ${data.databases}`
+          `Multiple databases found for the branch, please provide one with the --database.name option: ${data.databases
+            .map((d) => d.name)
+            .join(', ')}`
         );
       }));
 
   const { data: password } = await props.apiClient.getProjectBranchRolePassword(
-    props.project.id,
+    props.projectId,
     endpoint.branch_id,
     role
   );

@@ -1,11 +1,9 @@
-import { RoleCreateRequest } from '@neondatabase/api-client';
 import yargs from 'yargs';
 import { retryOnLock } from '../api.js';
-import { branchIdFromProps, fillSingleProject } from '../enrichers.js';
-import { roleCreateRequest } from '../parameters.gen.js';
+import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 
 import { BranchScopeProps } from '../types.js';
-import { commandFailHandler } from '../utils.js';
+import { commandFailHandler } from '../utils/middlewares.js';
 import { writer } from '../writer.js';
 
 const ROLES_FIELDS = ['name', 'created_at'] as const;
@@ -19,7 +17,7 @@ export const builder = (argv: yargs.Argv) =>
     .fail(commandFailHandler)
     .usage('usage: $0 roles <sub-command> [options]')
     .options({
-      'project.id': {
+      'project-id': {
         describe: 'Project ID',
         type: 'string',
       },
@@ -38,7 +36,14 @@ export const builder = (argv: yargs.Argv) =>
     .command(
       'create',
       'Create a role',
-      (yargs) => yargs.options(roleCreateRequest),
+      (yargs) =>
+        yargs.options({
+          name: {
+            describe: 'Role name',
+            type: 'string',
+            demandOption: true,
+          },
+        }),
       async (args) => await create(args as any)
     )
     .command(
@@ -55,7 +60,7 @@ export const handler = (args: yargs.Argv) => {
 export const list = async (props: BranchScopeProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.listProjectBranchRoles(
-    props.project.id,
+    props.projectId,
     branchId
   );
   writer(props).end(data.roles, {
@@ -63,11 +68,17 @@ export const list = async (props: BranchScopeProps) => {
   });
 };
 
-export const create = async (props: BranchScopeProps & RoleCreateRequest) => {
+export const create = async (
+  props: BranchScopeProps & {
+    name: string;
+  }
+) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.createProjectBranchRole(props.project.id, branchId, {
-      role: props.role,
+    props.apiClient.createProjectBranchRole(props.projectId, branchId, {
+      role: {
+        name: props.name,
+      },
     })
   );
   writer(props).end(data.role, {
@@ -81,7 +92,7 @@ export const deleteRole = async (
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
     props.apiClient.deleteProjectBranchRole(
-      props.project.id,
+      props.projectId,
       branchId,
       props.role
     )

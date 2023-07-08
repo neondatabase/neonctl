@@ -18,7 +18,7 @@ import { ensureAuth } from './commands/auth.js';
 import { defaultDir, ensureConfigDir } from './config.js';
 import { log } from './log.js';
 import { defaultClientID } from './auth.js';
-import { fillInArgs } from './utils.js';
+import { fillInArgs } from './utils/middlewares.js';
 import pkg from './pkg.js';
 import commands from './commands/index.js';
 import { analyticsMiddleware } from './analytics.js';
@@ -32,6 +32,7 @@ builder = builder
   .help()
   .option('output', {
     alias: 'o',
+    group: 'Global options:',
     describe: 'Set output format',
     type: 'string',
     choices: ['json', 'yaml', 'table'],
@@ -45,6 +46,7 @@ builder = builder
   // Setup config directory
   .option('config-dir', {
     describe: 'Path to config directory',
+    group: 'Global options:',
     type: 'string',
     default: defaultDir,
   })
@@ -63,6 +65,7 @@ builder = builder
   })
   .option('api-key', {
     describe: 'API key',
+    group: 'Global options:',
     type: 'string',
     default: process.env.NEON_API_KEY ?? '',
   })
@@ -77,10 +80,15 @@ builder = builder
   .strictCommands()
   .option('analytics', {
     describe: 'Manage analytics. Example: --no-analytics, --analytics false',
+    group: 'Global options:',
     type: 'boolean',
     default: !isCi(),
   })
   .middleware(analyticsMiddleware)
+  .group('version', 'Global options:')
+  .alias('version', 'v')
+  .group('help', 'Global options:')
+  .alias('help', 'h')
   .completion()
   .fail(async (msg, err) => {
     if (isAxiosError(err)) {
