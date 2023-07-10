@@ -86,7 +86,7 @@ export const handler = async (
           return data.roles[0].name;
         }
         throw new Error(
-          `Multiple roles found for the branch, please provide one with the --role.name option: ${data.roles
+          `Multiple roles found for the branch, please provide one with the --role-name option: ${data.roles
             .map((r) => r.name)
             .join(', ')}`
         );
@@ -104,7 +104,7 @@ export const handler = async (
           return data.databases[0].name;
         }
         throw new Error(
-          `Multiple databases found for the branch, please provide one with the --database.name option: ${data.databases
+          `Multiple databases found for the branch, please provide one with the --database-name option: ${data.databases
             .map((d) => d.name)
             .join(', ')}`
         );
