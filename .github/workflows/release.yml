@@ -16,6 +16,7 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+      - run: git fetch origin main
       - run: git checkout main
       - run: git merge --ff-only release
       - run: git push origin main
