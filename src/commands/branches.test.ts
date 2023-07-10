@@ -35,7 +35,8 @@ describe('branches', () => {
       'test',
       '--name',
       'test_branch',
-      '--readonly',
+      '--type',
+      'read_only',
     ],
     expected: {
       snapshot: true,
@@ -51,7 +52,7 @@ describe('branches', () => {
       'test',
       '--name',
       'test_branch',
-      '--no-endpoint',
+      '--no-compute',
     ],
     expected: {
       snapshot: true,
@@ -163,6 +164,14 @@ describe('branches', () => {
   testCliCommand({
     name: 'get by name',
     args: ['branches', 'get', 'test_branch', '--project-id', 'test'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'add compute',
+    args: ['branches', 'add-compute', 'test_branch', '--project-id', 'test'],
     expected: {
       snapshot: true,
     },

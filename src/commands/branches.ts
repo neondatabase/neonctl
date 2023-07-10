@@ -53,16 +53,18 @@ export const builder = (argv: yargs.Argv) =>
               'Parent branch name or id or timestamp or LSN. Defaults to the primary branch',
             type: 'string',
           },
-          endpoint: {
+          compute: {
             describe:
-              'Create a branch with or without an endpoint. By default branch is created with a read-write endpoint. To create a branch without endpoint use --no-endpoint',
+              'Create a branch with or without a compute. By default branch is created with a read-write compute. To create a branch without compute use --no-compute',
             type: 'boolean',
             default: true,
           },
-          readonly: {
-            describe: 'Create a read-only branch',
-            type: 'boolean',
-            implies: 'endpoint',
+          type: {
+            describe: 'Type of compute to add',
+            type: 'string',
+            implies: 'compute',
+            default: EndpointType.ReadWrite,
+            choices: Object.values(EndpointType),
           },
         }),
       async (args) => await create(args as any)
@@ -78,6 +80,20 @@ export const builder = (argv: yargs.Argv) =>
       'Set a branch as primary',
       (yargs) => yargs,
       async (args) => await setPrimary(args as any)
+    )
+    .command(
+      'add-compute <id|name>',
+      'Add a compute to a branch',
+      (yargs) =>
+        yargs.options({
+          type: {
+            type: 'string',
+            choices: Object.values(EndpointType),
+            describe: 'Type of compute to add',
+            default: EndpointType.ReadOnly,
+          },
+        }),
+      async (args) => await addCompute(args as any)
     )
     .command(
       'delete <id|name>',
@@ -106,9 +122,9 @@ const list = async (props: ProjectScopeProps) => {
 const create = async (
   props: ProjectScopeProps & {
     name: string;
-    endpoint: boolean;
+    compute: boolean;
     parent?: string;
-    readonly?: boolean;
+    type: EndpointType;
   }
 ) => {
   const parentProps = await (() => {
@@ -152,12 +168,10 @@ const create = async (
         name: props.name,
         ...parentProps,
       },
-      endpoints: props.endpoint
+      endpoints: props.compute
         ? [
             {
-              type: props.readonly
-                ? EndpointType.ReadOnly
-                : EndpointType.ReadWrite,
+              type: props.type,
             },
           ]
         : [],
@@ -228,5 +242,25 @@ const get = async (props: ProjectScopeProps & IdOrNameProps) => {
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
+  });
+};
+
+const addCompute = async (
+  props: ProjectScopeProps &
+    IdOrNameProps & {
+      type: EndpointType;
+    }
+) => {
+  const branchId = await branchIdFromProps(props);
+  const { data } = await retryOnLock(() =>
+    props.apiClient.createProjectEndpoint(props.projectId, {
+      endpoint: {
+        branch_id: branchId,
+        type: props.type,
+      },
+    })
+  );
+  writer(props).end(data.endpoint, {
+    fields: ['id', 'host'],
   });
 };
