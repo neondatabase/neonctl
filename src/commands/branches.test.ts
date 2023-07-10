@@ -139,6 +139,20 @@ describe('branches', () => {
   });
 
   testCliCommand({
+    name: 'set primary by id',
+    args: [
+      'branches',
+      'set-primary',
+      'br-sunny-branch-123456',
+      '--project-id',
+      'test',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'get by id',
     args: ['branches', 'get', 'br-sunny-branch-123456', '--project-id', 'test'],
     expected: {

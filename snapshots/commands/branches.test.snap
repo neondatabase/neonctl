@@ -55,6 +55,7 @@ created_at: 2021-01-01T00:00:00.000Z
 exports[`branches get by id test 1`] = `
 "name: test-branch-sunny
 id: br-sunny-branch-123456
+primary: true
 created_at: 2019-01-01T00:00:00Z
 updated_at: 2019-01-01T00:00:00Z
 "
@@ -63,6 +64,7 @@ updated_at: 2019-01-01T00:00:00Z
 exports[`branches get by name test 1`] = `
 "name: test-branch-sunny
 id: br-sunny-branch-123456
+primary: true
 created_at: 2019-01-01T00:00:00Z
 updated_at: 2019-01-01T00:00:00Z
 "
@@ -84,5 +86,14 @@ exports[`branches list test 1`] = `
 exports[`branches rename test 1`] = `
 "name: new_test_branch
 created_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches set primary by id test 1`] = `
+"name: test-branch-sunny
+id: br-sunny-branch-123456
+primary: true
+created_at: 2019-01-01T00:00:00Z
+updated_at: 2019-01-01T00:00:00Z
 "
 `;

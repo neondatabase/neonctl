@@ -13,7 +13,13 @@ import {
   looksLikeTimestamp,
 } from '../utils/formats.js';
 
-const BRANCH_FIELDS = ['id', 'name', 'created_at', 'updated_at'] as const;
+const BRANCH_FIELDS = [
+  'id',
+  'name',
+  'primary',
+  'created_at',
+  'updated_at',
+] as const;
 
 export const command = 'branches';
 export const describe = 'Manage branches';
@@ -66,6 +72,12 @@ export const builder = (argv: yargs.Argv) =>
       'Rename a branch',
       (yargs) => yargs,
       async (args) => await rename(args as any)
+    )
+    .command(
+      'set-primary <id|name>',
+      'Set a branch as primary',
+      (yargs) => yargs,
+      async (args) => await setPrimary(args as any)
     )
     .command(
       'delete <id|name>',
@@ -182,6 +194,16 @@ const rename = async (
         name: props.newName,
       },
     })
+  );
+  writer(props).end(data.branch, {
+    fields: BRANCH_FIELDS,
+  });
+};
+
+const setPrimary = async (props: ProjectScopeProps & IdOrNameProps) => {
+  const branchId = await branchIdFromProps(props);
+  const { data } = await retryOnLock(() =>
+    props.apiClient.setPrimaryProjectBranch(props.projectId, branchId)
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
