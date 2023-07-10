@@ -18,5 +18,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
       - run: git fetch origin main
       - run: git checkout main
-      - run: git merge --ff-only release
+      - run: git rebase origin/release
+      - run: git pull origin main --rebase
       - run: git push origin main
+
