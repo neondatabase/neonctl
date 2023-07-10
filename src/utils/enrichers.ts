@@ -62,7 +62,7 @@ export const fillSingleProject = async (
   }
   if (data.projects.length > 1) {
     throw new Error(
-      `Multiple projects found, please provide one with the --project.id option`
+      `Multiple projects found, please provide one with the --project-id option`
     );
   }
   return {
