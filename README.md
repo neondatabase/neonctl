@@ -1,10 +1,3 @@
----
-title: Neon CLI
-subtitle: Use the Neon CLI to manage Neon projects directly from your terminal
-enableTableOfContents: true
-isDraft: true
----
-
 The Neon CLI supports numerous operations, such as authentication and management of Neon projects, branches, compute endpoints, databases, roles, and more.
 
 The Neon CLI command name is `neonctl`. The GitHub repository for the Neon CLI is found [here](https://github.com/neondatabase/neonctl).
@@ -63,21 +56,21 @@ For information about obtaining an Neon API key, see [Authentication](https://ap
 
 ## Configure autocompletion
 
-The Neon CLI supports autocompletion, which you can configure in a few easy steps. See [Neon CLI commands — completion](/docs/reference/cli-completion) for instructions.
+The Neon CLI supports autocompletion, which you can configure in a few easy steps. See [Neon CLI commands — completion](https://neon.tech/docs/reference/cli-completion) for instructions.
 
 ## Commands
 
 | Command                                                 | Subcommands                            | Description               |
 |---------------------------------------------------------|----------------------------------------|---------------------------|
-| [auth](../reference/cli-auth)                                     |                                        | Authenticate              |
-| [projects](../reference/cli-projects)                             | `list`, `create`, `update`, `delete`, `get` | Manage projects           |
+| [auth](https://neon.tech/docs/reference/cli-auth)                                     |                                        | Authenticate              |
+| [projects](https://neon.tech/docs/reference/cli-projects)                             | `list`, `create`, `update`, `delete`, `get` | Manage projects           |
 | [me](../reference/cli-me)                                         |                                        | Show current user         |
-| [branches](../reference/cli-branches)                             | `list`, `create`, `rename`, `add-compute`, `set-primary`, `delete`, `get` | Manage branches           |
-| [databases](../reference/cli-databases)                           | `list`, `create`, `delete`             | Manage databases          |
-| [roles](../reference/cli-roles)                                   | `list`, `create`,  `delete`            | Manage roles              |
-| [operations](../reference/cli-operations)                         | `list`                                 | Manage operations         |
-| [connection-string](../reference/cli-connection-string)           |                                        | Get connection string     |
-| [completion](../reference/cli-completion)           |                                        | Generate a completion script     |
+| [branches](https://neon.tech/docs/reference/cli-branches)                             | `list`, `create`, `rename`, `add-compute`, `set-primary`, `delete`, `get` | Manage branches           |
+| [databases](https://neon.tech/docs/reference/cli-databases)                           | `list`, `create`, `delete`             | Manage databases          |
+| [roles](https://neon.tech/docs/reference/cli-roles)                                   | `list`, `create`,  `delete`            | Manage roles              |
+| [operations](https://neon.tech/reference/cli-operations)                         | `list`                                 | Manage operations         |
+| [connection-string](https://neon.tech/reference/cli-connection-string)           |                                        | Get connection string     |
+| [completion](https://neon.tech/reference/cli-completion)           |                                        | Generate a completion script     |
 
 ## Global options
 
@@ -135,8 +128,8 @@ Global options are supported with any Neon CLI command.
 
   ```bash
   neonctl --help
- 
+
   neonctl branches --help
-  
+
   neonctl branches create --help
   ```
