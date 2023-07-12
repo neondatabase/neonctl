@@ -83,11 +83,16 @@ export const writer = (
 
       chunks.forEach(({ data, config }) => {
         const arrayData = Array.isArray(data) ? data : [data];
+        const fields = config.fields.filter((field) =>
+          arrayData.some(
+            (item) => item[field] !== undefined && item[field] !== ''
+          )
+        );
         const table = new Table({
           style: {
             head: ['green'],
           },
-          head: config.fields.map((field: string) =>
+          head: fields.map((field: string) =>
             field
               .split('_')
               .map((word) => word[0].toUpperCase() + word.slice(1))
@@ -95,9 +100,7 @@ export const writer = (
           ),
         });
         arrayData.forEach((item) => {
-          table.push(
-            config.fields.map((field: string | number) => item[field] ?? '')
-          );
+          table.push(fields.map((field: string | number) => item[field]));
         });
 
         if (config.title) {
