@@ -97,12 +97,12 @@ builder = builder
       } else if (err.response?.status === 401) {
         log.error('Authentication failed, please run `neonctl auth`');
       } else {
-        log.error(
-          '%d: %s\n%s',
+        log.debug(
+          'Fail: %d | %s',
           err.response?.status,
-          err.response?.statusText,
-          err.response?.data?.message
+          err.response?.statusText
         );
+        log.error(err.response?.data?.message);
       }
     } else {
       log.error(msg || err?.message);
