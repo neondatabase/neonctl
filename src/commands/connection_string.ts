@@ -132,5 +132,5 @@ export const handler = async (
     }
   }
 
-  process.stdout.write(connectionString.toString());
+  process.stdout.write(connectionString.toString() + '\n');
 };
