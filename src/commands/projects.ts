@@ -1,5 +1,9 @@
-import { ProjectCreateRequest } from '@neondatabase/api-client';
+import {
+  ProjectCreateRequest,
+  ProjectListItem,
+} from '@neondatabase/api-client';
 import yargs from 'yargs';
+import { log } from '../log.js';
 
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
@@ -16,6 +20,8 @@ const REGIONS = [
   'aws-us-east-1',
 ];
 
+const PROJECTS_LIST_LIMIT = 100;
+
 export const command = 'projects';
 export const describe = 'Manage projects';
 export const aliases = ['project'];
@@ -27,14 +33,7 @@ export const builder = (argv: yargs.Argv) => {
     .command(
       'list',
       'List projects',
-      (yargs) =>
-        yargs.options({
-          limit: {
-            type: 'number',
-            describe: 'Limit the number of projects returned',
-            default: 100,
-          },
-        }),
+      (yargs) => yargs,
       async (args) => {
         await list(args as any);
       }
@@ -92,11 +91,23 @@ export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-const list = async (props: CommonProps & { limit: number }) => {
-  const { data } = await props.apiClient.listProjects({
-    limit: props.limit,
-  });
-  writer(props).end(data.projects, { fields: PROJECT_FIELDS });
+const list = async (props: CommonProps) => {
+  const result: ProjectListItem[] = [];
+  let cursor: string | undefined;
+  let end = false;
+  while (!end) {
+    const { data } = await props.apiClient.listProjects({
+      limit: PROJECTS_LIST_LIMIT,
+      cursor,
+    });
+    result.push(...data.projects);
+    cursor = data.pagination?.cursor;
+    log.debug('Got %d projects, with cursor: %s', data.projects.length, cursor);
+    if (data.projects.length < PROJECTS_LIST_LIMIT) {
+      end = true;
+    }
+  }
+  writer(props).end(result, { fields: PROJECT_FIELDS });
 };
 
 const create = async (
