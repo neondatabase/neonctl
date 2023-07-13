@@ -27,7 +27,14 @@ export const builder = (argv: yargs.Argv) => {
     .command(
       'list',
       'List projects',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.options({
+          limit: {
+            type: 'number',
+            describe: 'Limit the number of projects returned',
+            default: 100,
+          },
+        }),
       async (args) => {
         await list(args as any);
       }
@@ -85,8 +92,10 @@ export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-const list = async (props: CommonProps) => {
-  const { data } = await props.apiClient.listProjects({});
+const list = async (props: CommonProps & { limit: number }) => {
+  const { data } = await props.apiClient.listProjects({
+    limit: props.limit,
+  });
   writer(props).end(data.projects, { fields: PROJECT_FIELDS });
 };
 
