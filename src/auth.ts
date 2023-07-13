@@ -57,7 +57,7 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   // Start HTTP server and wait till /callback is hit
   //
   const server = createServer();
-  server.listen(0, function (this: typeof server) {
+  server.listen(0, 'localhost', function (this: typeof server) {
     log.info(`Listening on port ${(this.address() as AddressInfo).port}`);
   });
   const listen_port = (server.address() as AddressInfo).port;
