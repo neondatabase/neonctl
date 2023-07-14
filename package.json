@@ -1,8 +1,8 @@
 {
-  "name": "neonctl",
+  "name": "neonctl-test-release",
   "repository": {
     "type": "git",
-    "url": "git@github.com:neondatabase/neonctl.git"
+    "url": "git@github.com:duskpoet/neonctl.git"
   },
   "type": "module",
   "version": "1.17.2",
