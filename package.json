@@ -15,7 +15,8 @@
     "node": ">=18"
   },
   "bin": {
-    "neonctl": "cli.js"
+    "neonctl": "cli.js",
+    "neon": "cli.js"
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "^10.1.0",
