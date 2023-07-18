@@ -26,17 +26,17 @@
       {
         "assets": [
           {
-            "path": "bundle/neonctl-test-release-linux",
+            "path": "bundle/neonctl-linux",
             "name": "neonctl-linux",
             "label": "Linux version"
           },
           {
-            "path": "bundle/neonctl-test-release-macos",
+            "path": "bundle/neonctl-macos",
             "name": "neonctl-macos",
             "label": "MacOS version"
           },
           {
-            "path": "bundle/neonctl-test-release-win.exe",
+            "path": "bundle/neonctl-win.exe",
             "name": "neonctl-win.exe",
             "label": "Windows version"
           }
