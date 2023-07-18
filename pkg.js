@@ -3,12 +3,9 @@ import { join } from 'node:path';
 
 import { rollup } from 'rollup';
 import { exec } from 'pkg';
-import { system } from 'pkg-fetch';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import json from '@rollup/plugin-json';
-
-console.log('SYSTEM IS:', system.hostPlatform, system.hostArch);
 
 const bundle = await rollup({
   input: 'dist/cli.js',
