@@ -1,5 +1,4 @@
 export default function (req, res) {
-  console.log('Request Body', req.body);
   if (req.body.branch?.name === 'test_branch_with_parent_name') {
     expect(req.body).toMatchObject({
       branch: {

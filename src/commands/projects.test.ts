@@ -1,5 +1,5 @@
 import { describe } from '@jest/globals';
-import { testCliCommand } from '../test_utils.js';
+import { testCliCommand } from '../test_utils/test_cli_command.js';
 
 describe('projects', () => {
   testCliCommand({

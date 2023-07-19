@@ -50,6 +50,12 @@ builder = builder
     type: 'string',
     default: defaultDir,
   })
+  .option('force-auth', {
+    describe: 'Force authentication',
+    type: 'boolean',
+    hidden: true,
+    default: false,
+  })
   .middleware(ensureConfigDir)
   // Auth flow
   .option('oauth-host', {

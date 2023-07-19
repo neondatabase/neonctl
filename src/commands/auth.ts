@@ -18,6 +18,7 @@ type AuthProps = {
   oauthHost: string;
   apiHost: string;
   clientId: string;
+  forceAuth: boolean;
 };
 
 export const command = 'auth';
@@ -32,12 +33,10 @@ export const authFlow = async ({
   configDir,
   oauthHost,
   clientId,
+  forceAuth,
 }: AuthProps) => {
-  if (isCi()) {
+  if (!forceAuth && isCi()) {
     throw new Error('Cannot run interactive auth in CI');
-  }
-  if (!clientId) {
-    throw new Error('Missing client id');
   }
   const tokenSet = await auth({
     oauthHost: oauthHost,

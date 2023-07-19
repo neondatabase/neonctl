@@ -12,8 +12,9 @@ export const defaultDir = join(
 
 export const ensureConfigDir = async ({
   'config-dir': configDir,
+  'force-auth': forceAuth,
 }: yargs.Arguments<{ 'config-dir': string }>) => {
-  if (!existsSync(configDir) && !isCi()) {
+  if (!existsSync(configDir) && (!isCi() || forceAuth)) {
     mkdirSync(configDir, { recursive: true });
   }
 };
