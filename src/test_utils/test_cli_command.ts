@@ -1,26 +1,11 @@
-/* eslint-disable no-console */
 import { test, expect, describe, beforeAll, afterAll } from '@jest/globals';
-import emocks from 'emocks';
-import express from 'express';
 import { fork } from 'node:child_process';
 import { Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { join } from 'node:path';
+import { log } from '../log.js';
 
-const runMockServer = async (mockDir: string) =>
-  new Promise<Server>((resolve) => {
-    const app = express();
-    app.use(express.json());
-    app.use('/', emocks(join(process.cwd(), 'mocks', mockDir)));
-
-    const server = app.listen(0);
-    server.on('listening', () => {
-      console.log(
-        `Mock server listening at ${(server.address() as AddressInfo).port}`
-      );
-    });
-    resolve(server);
-  });
+import { runMockServer } from './mock_server.js';
 
 export type TestCliCommandOptions = {
   name: string;
@@ -62,10 +47,10 @@ export const testCliCommand = ({
         [
           '--api-host',
           `http://localhost:${(server.address() as AddressInfo).port}`,
-          '--api-key',
-          'test-key',
           '--output',
           'yaml',
+          '--api-key',
+          'test-key',
           ...args,
         ],
         {
@@ -80,6 +65,7 @@ export const testCliCommand = ({
 
         cp.stderr?.on('data', (data) => {
           error += data.toString();
+          log.error(data.toString());
         });
 
         cp.on('error', (err) => {
@@ -88,9 +74,6 @@ export const testCliCommand = ({
 
         cp.on('close', (code) => {
           try {
-            if (code !== 0 && error) {
-              console.error(error);
-            }
             expect(code).toBe(0);
             if (code === 0 && expected) {
               if (expected.snapshot) {
