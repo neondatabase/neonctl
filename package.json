@@ -85,7 +85,7 @@
     "lint": "tsc --noEmit && eslint src --ext .ts",
     "build": "npm run generateParams && npm run clean && tsc && cp src/*.html package*.json README.md ./dist",
     "clean": "rm -rf dist",
-    "generateParams": "ts-node --esm generateOptionsFromSpec.ts",
+    "generateParams": "node --loader ts-node/esm ./generateOptionsFromSpec.ts",
     "start": "node src/index.js",
     "test": "node --experimental-vm-modules node_modules/.bin/jest"
   },
