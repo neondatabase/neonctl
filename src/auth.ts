@@ -58,7 +58,7 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   //
   const server = createServer();
   server.listen(0, '127.0.0.1', function (this: typeof server) {
-    log.info(`Listening on port ${(this.address() as AddressInfo).port}`);
+    log.debug(`Listening on port ${(this.address() as AddressInfo).port}`);
   });
   await new Promise((resolve) => server.once('listening', resolve));
   const listen_port = (server.address() as AddressInfo).port;
