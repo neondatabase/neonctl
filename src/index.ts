@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import axiosDebug from 'axios-debug-log';
@@ -96,6 +97,7 @@ builder = builder
   .group('help', 'Global options:')
   .alias('help', 'h')
   .completion()
+  .scriptName(basename(process.argv[1]) === 'neon' ? 'neon' : 'neonctl')
   .fail(async (msg, err) => {
     if (isAxiosError(err)) {
       if (err.code === 'ECONNABORTED') {
