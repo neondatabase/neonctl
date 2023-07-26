@@ -125,6 +125,20 @@ describe('branches', () => {
   });
 
   testCliCommand({
+    name: 'delete by id',
+    args: [
+      'branches',
+      'delete',
+      'br-cloudy-branch-12345678',
+      '--project-id',
+      'test',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'rename',
     args: [
       'branches',
@@ -154,8 +168,30 @@ describe('branches', () => {
   });
 
   testCliCommand({
+    name: 'set primary by id',
+    args: [
+      'branches',
+      'set-primary',
+      'br-cloudy-branch-12345678',
+      '--project-id',
+      'test',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'get by id',
     args: ['branches', 'get', 'br-sunny-branch-123456', '--project-id', 'test'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'get by id',
+    args: ['branches', 'get', 'br-cloudy-branch-12345678', '--project-id', 'test'],
     expected: {
       snapshot: true,
     },
