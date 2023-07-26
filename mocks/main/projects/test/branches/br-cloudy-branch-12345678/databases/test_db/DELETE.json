@@ -1,0 +1,6 @@
+{
+  "database": {
+    "name": "test_db",
+    "owner_name": "test_owner"
+  }
+}
