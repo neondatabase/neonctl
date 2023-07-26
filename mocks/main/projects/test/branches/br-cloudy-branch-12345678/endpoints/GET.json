@@ -1,0 +1,26 @@
+{
+  "endpoints": [
+    {
+      "host": "ep-lame-king-930914.us-east-2.aws.neon.tech",
+      "id": "ep-lame-king-930914",
+      "project_id": "test",
+      "branch_id": "br-cloudy-branch-12345678",
+      "type": "read_write",
+      "created_at": "2023-06-22T14:26:33Z",
+      "updated_at": "2023-06-30T04:07:32Z",
+      "proxy_host": "us-east-2.aws.neon.tech",
+      "provisioner": "k8s-pod"
+    },
+    {
+      "host": "ep-lame-king-933333.us-east-2.aws.neon.tech",
+      "id": "ep-lame-king-933333",
+      "project_id": "test",
+      "branch_id": "br-cloudy-branch-12345678",
+      "type": "read_only",
+      "created_at": "2023-06-22T14:26:33Z",
+      "updated_at": "2023-06-30T04:07:32Z",
+      "proxy_host": "us-east-2.aws.neon.tech",
+      "provisioner": "k8s-pod"
+    }
+  ]
+}
