@@ -1,9 +1,10 @@
-import { Analytics } from '@segment/analytics-node';
-import { isAxiosError } from 'axios';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { CREDENTIALS_FILE } from './config.js';
 
+import { Analytics } from '@segment/analytics-node';
+import { isAxiosError } from 'axios';
+
+import { CREDENTIALS_FILE } from './config.js';
 import { isCi } from './env.js';
 import { ErrorCode } from './errors.js';
 import { log } from './log.js';

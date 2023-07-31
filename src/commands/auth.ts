@@ -95,7 +95,7 @@ export const ensureAuth = async (
         readFileSync(credentialsPath, 'utf8')
       );
       const tokenSet = new TokenSet(tokenSetContents);
-      if (tokenSet.expired() || !tokenSetContents.user_id) {
+      if (tokenSet.expired()) {
         log.debug('using refresh token to update access token');
         const refreshedTokenSet = await refreshToken(
           {
