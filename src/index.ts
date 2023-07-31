@@ -22,9 +22,10 @@ import { defaultClientID } from './auth.js';
 import { fillInArgs } from './utils/middlewares.js';
 import pkg from './pkg.js';
 import commands from './commands/index.js';
-import { analyticsMiddleware } from './analytics.js';
+import { analyticsMiddleware, sendError } from './analytics.js';
 import { isCi } from './env.js';
 import { isAxiosError } from 'axios';
+import { matchErrorCode } from './errors.js';
 
 let builder = yargs(hideBin(process.argv));
 builder = builder
@@ -91,7 +92,7 @@ builder = builder
     type: 'boolean',
     default: !isCi(),
   })
-  .middleware(analyticsMiddleware)
+  .middleware(analyticsMiddleware, true)
   .group('version', 'Global options:')
   .alias('version', 'v')
   .group('help', 'Global options:')
@@ -102,7 +103,9 @@ builder = builder
     if (isAxiosError(err)) {
       if (err.code === 'ECONNABORTED') {
         log.error('Request timed out');
+        sendError(err, 'REQUEST_TIMEOUT');
       } else if (err.response?.status === 401) {
+        sendError(err, 'AUTH_FAILED');
         log.error('Authentication failed, please run `neonctl auth`');
       } else {
         log.debug(
@@ -111,8 +114,10 @@ builder = builder
           err.response?.statusText
         );
         log.error(err.response?.data?.message);
+        sendError(err, 'API_ERROR');
       }
     } else {
+      sendError(err || new Error(msg), matchErrorCode(msg || err?.message));
       log.error(msg || err?.message);
     }
     err?.stack && log.debug('Stack: %s', err.stack);

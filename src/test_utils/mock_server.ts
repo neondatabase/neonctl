@@ -13,10 +13,10 @@ export const runMockServer = async (mockDir: string) =>
 
     const server = app.listen(0);
     server.on('listening', () => {
+      resolve(server);
       log.info(
         'Mock server listening at %d',
         (server.address() as AddressInfo).port
       );
     });
-    resolve(server);
   });
