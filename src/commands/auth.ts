@@ -9,8 +9,7 @@ import { auth, refreshToken } from '../auth.js';
 import { log } from '../log.js';
 import { getApiClient } from '../api.js';
 import { isCi } from '../env.js';
-
-const CREDENTIALS_FILE = 'credentials.json';
+import { CREDENTIALS_FILE } from '../config.js';
 
 type AuthProps = {
   _: (string | number)[];
@@ -33,6 +32,7 @@ export const authFlow = async ({
   configDir,
   oauthHost,
   clientId,
+  apiHost,
   forceAuth,
 }: AuthProps) => {
   if (!forceAuth && isCi()) {
@@ -44,18 +44,36 @@ export const authFlow = async ({
   });
 
   const credentialsPath = join(configDir, CREDENTIALS_FILE);
-  updateCredentialsFile(credentialsPath, JSON.stringify(tokenSet));
+  await preserveCredentials(
+    credentialsPath,
+    tokenSet,
+    getApiClient({
+      apiKey: tokenSet.access_token || '',
+      apiHost,
+    })
+  );
   log.info(`Saved credentials to ${credentialsPath}`);
   log.info('Auth complete');
   return tokenSet.access_token || '';
 };
 
-// updateCredentialsFile correctly sets needed permissions for the credentials file
-function updateCredentialsFile(path: string, contents: string) {
+const preserveCredentials = async (
+  path: string,
+  credentials: TokenSet,
+  apiClient: Api<unknown>
+) => {
+  const {
+    data: { id },
+  } = await apiClient.getCurrentUserInfo();
+  const contents = JSON.stringify({
+    ...credentials,
+    user_id: id,
+  });
+  // correctly sets needed permissions for the credentials file
   writeFileSync(path, contents, {
     mode: 0o700,
   });
-}
+};
 
 export const ensureAuth = async (
   props: AuthProps & { apiKey: string; apiClient: Api<unknown> }
@@ -95,9 +113,10 @@ export const ensureAuth = async (
           apiKey: props.apiKey,
           apiHost: props.apiHost,
         });
-        updateCredentialsFile(
+        await preserveCredentials(
           credentialsPath,
-          JSON.stringify(refreshedTokenSet)
+          refreshedTokenSet,
+          props.apiClient
         );
         return;
       }
