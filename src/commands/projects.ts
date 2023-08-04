@@ -127,8 +127,11 @@ const create = async (
     project,
   });
   const out = writer(props);
-  out.write(data.project, { fields: PROJECT_FIELDS });
-  out.write(data.connection_uris, { fields: ['connection_uri'] });
+  out.write(data.project, { fields: PROJECT_FIELDS, title: 'Project' });
+  out.write(data.connection_uris, {
+    fields: ['connection_uri'],
+    title: 'Connection URIs',
+  });
   out.end();
 };
 
