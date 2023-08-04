@@ -4,6 +4,7 @@ import chalk from 'chalk';
 
 import { CommonProps } from './types.js';
 import { isCi } from './env.js';
+import { toSnakeCase } from './utils/string.js';
 
 type ExtractFromArray<T> = T extends (infer R)[] ? R : T;
 type OnlyStrings<T> = T extends string ? T : never;
@@ -52,7 +53,7 @@ export const writer = (
               ? chunks[0].data
               : Object.fromEntries(
                   chunks.map(({ config, data }, idx) => [
-                    config.title ?? idx,
+                    config.title ? toSnakeCase(config.title) : idx,
                     data,
                   ])
                 ),
@@ -70,7 +71,7 @@ export const writer = (
               ? chunks[0].data
               : Object.fromEntries(
                   chunks.map(({ config, data }, idx) => [
-                    config.title ?? idx,
+                    config.title ? toSnakeCase(config.title) : idx,
                     data,
                   ])
                 ),

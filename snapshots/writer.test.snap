@@ -2,10 +2,10 @@
 
 exports[`writer outputs json outputs multiple data 1`] = `
 "{
-  "T1": {
+  "t1": {
     "foo": "bar"
   },
-  "T2": {
+  "t2": {
     "baz": "xyz"
   }
 }"
@@ -42,9 +42,9 @@ exports[`writer outputs table outputs single data with title 1`] = `
 `;
 
 exports[`writer outputs yaml outputs multiple data 1`] = `
-"T1:
+"t1:
   foo: bar
-T2:
+t2:
   baz: xyz
 "
 `;

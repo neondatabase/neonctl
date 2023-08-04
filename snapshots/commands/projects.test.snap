@@ -1,11 +1,11 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`projects create test 1`] = `
-""0":
+"project:
   id: new-project-123456
   name: test_project
   created_at: 2021-01-01T00:00:00.000Z
-"1":
+connection_uris:
   - connection_uri: postgres://localhost:5432/test_project
 "
 `;
