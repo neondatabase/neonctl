@@ -4,7 +4,6 @@ import yargs from 'yargs';
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { branchCreateRequest } from '../parameters.gen.js';
-import { commandFailHandler } from '../utils/middlewares.js';
 import { retryOnLock } from '../api.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import {
@@ -12,6 +11,7 @@ import {
   looksLikeLSN,
   looksLikeTimestamp,
 } from '../utils/formats.js';
+import { showHelpMiddleware } from '../help.js';
 
 const BRANCH_FIELDS = [
   'id',
@@ -26,8 +26,7 @@ export const describe = 'Manage branches';
 export const aliases = ['branch'];
 export const builder = (argv: yargs.Argv) =>
   argv
-    .demandCommand(1, '')
-    .fail(commandFailHandler)
+    .middleware(showHelpMiddleware(argv))
     .usage('usage: $0 branches <sub-command> [options]')
     .options({
       'project-id': {

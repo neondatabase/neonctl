@@ -2,8 +2,8 @@ import yargs from 'yargs';
 import { fillSingleProject } from '../utils/enrichers.js';
 
 import { ProjectScopeProps } from '../types.js';
-import { commandFailHandler } from '../utils/middlewares.js';
 import { writer } from '../writer.js';
+import { showHelpMiddleware } from '../help.js';
 
 const OPERATIONS_FIELDS = ['id', 'action', 'status', 'created_at'] as const;
 
@@ -12,9 +12,8 @@ export const describe = 'Manage operations';
 export const aliases = ['operation'];
 export const builder = (argv: yargs.Argv) =>
   argv
-    .demandCommand(1, '')
-    .fail(commandFailHandler)
     .usage('usage: $0 operations <sub-command> [options]')
+    .middleware(showHelpMiddleware(argv))
     .options({
       'project-id': {
         describe: 'Project ID',

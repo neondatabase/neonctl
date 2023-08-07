@@ -26,6 +26,7 @@ import { analyticsMiddleware, sendError } from './analytics.js';
 import { isCi } from './env.js';
 import { isAxiosError } from 'axios';
 import { matchErrorCode } from './errors.js';
+import { showHelp } from './help.js';
 
 let builder = yargs(hideBin(process.argv));
 builder = builder
@@ -95,6 +96,7 @@ builder = builder
   .middleware(analyticsMiddleware, true)
   .group('version', 'Global options:')
   .alias('version', 'v')
+  .help(false)
   .group('help', 'Global options:')
   .alias('help', 'h')
   .completion()
@@ -126,8 +128,8 @@ builder = builder
 
 (async () => {
   const args = await builder.argv;
-  if (args._.length === 0) {
-    builder.showHelp();
+  if (args._.length === 0 || args.help) {
+    await showHelp(builder);
     process.exit(0);
   }
 })();

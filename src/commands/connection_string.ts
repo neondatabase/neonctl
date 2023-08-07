@@ -2,6 +2,7 @@ import { EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
+import { showHelpMiddleware } from '../help.js';
 
 export const command = 'connection-string [branch]';
 export const aliases = ['cs'];
@@ -9,6 +10,7 @@ export const describe = 'Get connection string';
 export const builder = (argv: yargs.Argv) => {
   return argv
     .usage('usage: $0 connection-string [branch] [options]')
+    .middleware(showHelpMiddleware(argv, true))
     .positional('branch', {
       describe: 'Branch name or id. If ommited will use the primary branch',
       type: 'string',
