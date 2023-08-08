@@ -9,7 +9,7 @@ import { log } from '../log.js';
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
-import { psql } from '../utils/psql.js';
+import { psql, psqlArgs } from '../utils/psql.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
@@ -135,7 +135,7 @@ const create = async (
 
   if (props.psql) {
     const connection_uri = data.connection_uris[0].connection_uri;
-    psql(connection_uri);
+    await psql(connection_uri, psqlArgs(process.argv));
   } else {
     const out = writer(props);
     out.write(data.project, { fields: PROJECT_FIELDS, title: 'Project' });
