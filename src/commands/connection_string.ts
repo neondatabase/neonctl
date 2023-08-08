@@ -4,6 +4,7 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
 import { showHelpMiddleware } from '../help.js';
 import { writer } from '../writer.js';
+import { psql } from '../utils/psql.js';
 
 export const command = 'connection-string [branch]';
 export const aliases = ['cs'];
@@ -47,6 +48,10 @@ export const builder = (argv: yargs.Argv) => {
       extended: {
         type: 'boolean',
         describe: 'Show extended information',
+      },
+      psql: {
+        type: 'boolean',
+        describe: 'Connect to a database via psql using connection string',
         default: false,
       },
     })
@@ -62,6 +67,7 @@ export const handler = async (
     prisma: boolean;
     extended: boolean;
     endpointType?: EndpointType;
+    psql: boolean;
   }
 ) => {
   const projectId = props.projectId;
@@ -143,7 +149,9 @@ export const handler = async (
     }
   }
 
-  if (props.extended) {
+  if (props.psql) {
+    psql(connectionString.toString());
+  } else if (props.extended) {
     writer(props).end(
       {
         connection_string: connectionString.toString(),

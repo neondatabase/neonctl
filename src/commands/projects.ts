@@ -9,6 +9,7 @@ import { log } from '../log.js';
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
+import { psql } from '../utils/psql.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
@@ -49,6 +50,11 @@ export const builder = (argv: yargs.Argv) => {
           'region-id': {
             describe: `The region ID. Possible values: ${REGIONS.join(', ')}`,
             type: 'string',
+          },
+          psql: {
+            type: 'boolean',
+            describe: 'Connect to a new project via psql',
+            default: false,
           },
         }),
       async (args) => {
@@ -113,6 +119,7 @@ const create = async (
   props: CommonProps & {
     name?: string;
     regionId?: string;
+    psql: boolean;
   }
 ) => {
   const project: ProjectCreateRequest['project'] = {};
@@ -125,13 +132,19 @@ const create = async (
   const { data } = await props.apiClient.createProject({
     project,
   });
-  const out = writer(props);
-  out.write(data.project, { fields: PROJECT_FIELDS, title: 'Project' });
-  out.write(data.connection_uris, {
-    fields: ['connection_uri'],
-    title: 'Connection URIs',
-  });
-  out.end();
+
+  if (props.psql) {
+    const connection_uri = data.connection_uris[0].connection_uri;
+    psql(connection_uri);
+  } else {
+    const out = writer(props);
+    out.write(data.project, { fields: PROJECT_FIELDS, title: 'Project' });
+    out.write(data.connection_uris, {
+      fields: ['connection_uri'],
+      title: 'Connection URIs',
+    });
+    out.end();
+  }
 };
 
 const deleteProject = async (props: CommonProps & IdOrNameProps) => {
