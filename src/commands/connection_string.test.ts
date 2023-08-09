@@ -136,4 +136,49 @@ describe('connection_string', () => {
       snapshot: true,
     },
   });
+
+  testCliCommand({
+    name: 'connection_string with psql',
+    args: [
+      'connection-string',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--database-name',
+      'test_db',
+      '--role-name',
+      'test_role',
+      '--psql',
+    ],
+    env: {
+      PATH: `mocks/bin:${process.env.PATH}`,
+    },
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'connection_string with psql and psql args',
+    args: [
+      'connection-string',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--database-name',
+      'test_db',
+      '--role-name',
+      'test_role',
+      '--psql',
+      '--',
+      '-c',
+      'SELECT 1',
+    ],
+    env: {
+      PATH: `mocks/bin:${process.env.PATH}`,
+    },
+    expected: {
+      snapshot: true,
+    },
+  });
 });

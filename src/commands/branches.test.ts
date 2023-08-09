@@ -27,6 +27,47 @@ describe('branches', () => {
   });
 
   testCliCommand({
+    name: 'create branch and connect with psql',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch',
+      '--psql',
+    ],
+    env: {
+      PATH: `mocks/bin:${process.env.PATH}`,
+    },
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create branch and connect with psql and psql args',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch',
+      '--psql',
+      '--',
+      '-c',
+      'SELECT 1',
+    ],
+    env: {
+      PATH: `mocks/bin:${process.env.PATH}`,
+    },
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'create with readonly endpoint',
     args: [
       'branches',

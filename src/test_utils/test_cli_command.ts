@@ -16,6 +16,7 @@ export type TestCliCommandOptions = {
     stdout?: string | ReturnType<typeof expect.stringMatching>;
     stderr?: string | ReturnType<typeof expect.stringMatching>;
   };
+  env?: Record<string, string>;
 };
 
 export const testCliCommand = ({
@@ -23,6 +24,7 @@ export const testCliCommand = ({
   name,
   expected,
   mockDir = 'main',
+  env = {},
 }: TestCliCommandOptions) => {
   let server: Server;
   describe(name, () => {
@@ -55,6 +57,7 @@ export const testCliCommand = ({
         ],
         {
           stdio: 'pipe',
+          env: env,
         }
       );
 
