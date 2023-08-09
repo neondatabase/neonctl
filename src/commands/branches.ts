@@ -12,6 +12,7 @@ import {
   looksLikeTimestamp,
 } from '../utils/formats.js';
 import { showHelpMiddleware } from '../help.js';
+import { psql } from '../utils/psql.js';
 
 const BRANCH_FIELDS = [
   'id',
@@ -63,6 +64,11 @@ export const builder = (argv: yargs.Argv) =>
             implies: 'compute',
             default: EndpointType.ReadWrite,
             choices: Object.values(EndpointType),
+          },
+          psql: {
+            type: 'boolean',
+            describe: 'Connect to a new branch via psql',
+            default: false,
           },
         }),
       async (args) => await create(args as any)
@@ -124,6 +130,8 @@ const create = async (
     compute: boolean;
     parent?: string;
     type: EndpointType;
+    psql: boolean;
+    '--'?: string[];
   }
 ) => {
   const parentProps = await (() => {
@@ -176,25 +184,35 @@ const create = async (
         : [],
     })
   );
-  const out = writer(props);
-  out.write(data.branch, {
-    fields: BRANCH_FIELDS,
-    title: 'branch',
-  });
 
-  if (data.endpoints?.length > 0) {
-    out.write(data.endpoints, {
-      fields: ['id', 'created_at'],
-      title: 'endpoints',
+  if (props.psql) {
+    if (!data.connection_uris || !data.connection_uris?.length) {
+      throw new Error(`Branch ${data.branch.id} doesn't have a connection uri`);
+    }
+    const connection_uri = data.connection_uris[0].connection_uri;
+    const psqlArgs = props['--'];
+    await psql(connection_uri, psqlArgs);
+  } else {
+    const out = writer(props);
+    out.write(data.branch, {
+      fields: BRANCH_FIELDS,
+      title: 'branch',
     });
+
+    if (data.endpoints?.length > 0) {
+      out.write(data.endpoints, {
+        fields: ['id', 'created_at'],
+        title: 'endpoints',
+      });
+    }
+    if (data.connection_uris && data.connection_uris?.length > 0) {
+      out.write(data.connection_uris, {
+        fields: ['connection_uri'],
+        title: 'connection_uris',
+      });
+    }
+    out.end();
   }
-  if (data.connection_uris && data.connection_uris?.length > 0) {
-    out.write(data.connection_uris, {
-      fields: ['connection_uri'],
-      title: 'connection_uris',
-    });
-  }
-  out.end();
 };
 
 const rename = async (
