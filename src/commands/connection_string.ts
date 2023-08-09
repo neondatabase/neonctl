@@ -9,7 +9,7 @@ export const aliases = ['cs'];
 export const describe = 'Get connection string';
 export const builder = (argv: yargs.Argv) => {
   return argv
-    .usage('usage: $0 connection-string [branch] [options]')
+    .usage('$0 connection-string [branch] [options]')
     .middleware(showHelpMiddleware(argv, true))
     .positional('branch', {
       describe: 'Branch name or id. If ommited will use the primary branch',

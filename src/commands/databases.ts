@@ -13,7 +13,7 @@ export const describe = 'Manage databases';
 export const aliases = ['database', 'db'];
 export const builder = (argv: yargs.Argv) =>
   argv
-    .usage('usage: $0 databases <sub-command> [options]')
+    .usage('$0 databases <sub-command> [options]')
     .middleware(showHelpMiddleware(argv))
     .options({
       'project-id': {

@@ -27,7 +27,7 @@ export const describe = 'Manage projects';
 export const aliases = ['project'];
 export const builder = (argv: yargs.Argv) => {
   return argv
-    .usage('usage: $0 projects <sub-command> [options]')
+    .usage('$0 projects <sub-command> [options]')
     .middleware(showHelpMiddleware(argv))
     .command(
       'list',

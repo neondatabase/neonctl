@@ -14,7 +14,7 @@ export const aliases = ['role'];
 export const builder = (argv: yargs.Argv) =>
   argv
     .middleware(showHelpMiddleware(argv))
-    .usage('usage: $0 roles <sub-command> [options]')
+    .usage('$0 roles <sub-command> [options]')
     .options({
       'project-id': {
         describe: 'Project ID',

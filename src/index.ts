@@ -31,7 +31,7 @@ import { showHelp } from './help.js';
 let builder = yargs(hideBin(process.argv));
 builder = builder
   .scriptName(pkg.name)
-  .usage('usage: $0 <command> [options]')
+  .usage('$0 <command> [options]')
   .help()
   .option('output', {
     alias: 'o',
@@ -98,10 +98,20 @@ builder = builder
   .alias('version', 'v')
   .help(false)
   .group('help', 'Global options:')
+  .option('help', {
+    describe: 'Show help',
+    type: 'boolean',
+    default: false,
+  })
   .alias('help', 'h')
   .completion()
   .scriptName(basename(process.argv[1]) === 'neon' ? 'neon' : 'neonctl')
   .fail(async (msg, err) => {
+    if (process.argv.some((arg) => arg === '--help' || arg === '-h')) {
+      await showHelp(builder);
+      process.exit(0);
+    }
+
     if (isAxiosError(err)) {
       if (err.code === 'ECONNABORTED') {
         log.error('Request timed out');

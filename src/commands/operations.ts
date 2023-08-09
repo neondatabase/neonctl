@@ -12,7 +12,7 @@ export const describe = 'Manage operations';
 export const aliases = ['operation'];
 export const builder = (argv: yargs.Argv) =>
   argv
-    .usage('usage: $0 operations <sub-command> [options]')
+    .usage('$0 operations <sub-command> [options]')
     .middleware(showHelpMiddleware(argv))
     .options({
       'project-id': {

@@ -26,8 +26,7 @@ export const describe = 'Manage branches';
 export const aliases = ['branch'];
 export const builder = (argv: yargs.Argv) =>
   argv
-    .middleware(showHelpMiddleware(argv))
-    .usage('usage: $0 branches <sub-command> [options]')
+    .usage('$0 branches <sub-command> [options]')
     .options({
       'project-id': {
         describe: 'Project ID',
@@ -105,7 +104,8 @@ export const builder = (argv: yargs.Argv) =>
       'Get a branch',
       (yargs) => yargs,
       async (args) => await get(args as any)
-    );
+    )
+    .middleware(showHelpMiddleware(argv), true);
 
 export const handler = (args: yargs.Argv) => {
   return args;
