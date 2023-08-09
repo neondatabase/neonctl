@@ -4,7 +4,7 @@ export const psql = async (
   connection_uri: string,
   args: string[] = [],
 ) => {
-  const { execSync, spawnSync } = await import('child_process');
+  const { execSync, spawn } = await import('child_process');
 
   const which = process.platform === 'win32' ? 'where' : 'which';
   try {
@@ -14,8 +14,12 @@ export const psql = async (
     process.exit(1);
   }
 
-  return spawnSync('psql', [connection_uri, ...args], {
+  const psql = spawn('psql', [connection_uri, ...args], {
     stdio: 'inherit',
+  });
+
+  psql.on('exit', (code) => {
+    process.exit(code === null ? 1 : code);
   });
 };
 
