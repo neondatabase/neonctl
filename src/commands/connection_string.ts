@@ -165,8 +165,6 @@ export const handler = async (
       },
       { fields: ['host', 'role', 'password', 'database'] }
     );
-    const psqlArgs = props['--'];
-    await psql(connectionString.toString(), psqlArgs);
   } else {
     process.stdout.write(connectionString.toString() + '\n');
   }
