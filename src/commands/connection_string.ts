@@ -4,7 +4,7 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
 import { showHelpMiddleware } from '../help.js';
 import { writer } from '../writer.js';
-import { psql, psqlArgs } from '../utils/psql.js';
+import { psql } from '../utils/psql.js';
 
 export const command = 'connection-string [branch]';
 export const aliases = ['cs'];
@@ -68,6 +68,7 @@ export const handler = async (
     extended: boolean;
     endpointType?: EndpointType;
     psql: boolean;
+    '--'?: string[];
   }
 ) => {
   const projectId = props.projectId;
@@ -150,7 +151,8 @@ export const handler = async (
   }
 
   if (props.psql) {
-    await psql(connectionString.toString(), psqlArgs(process.argv));
+    const psqlArgs = props['--'];
+    await psql(connectionString.toString(), psqlArgs);
   } else if (props.extended) {
     writer(props).end(
       {
@@ -163,6 +165,8 @@ export const handler = async (
       },
       { fields: ['host', 'role', 'password', 'database'] }
     );
+    const psqlArgs = props['--'];
+    await psql(connectionString.toString(), psqlArgs);
   } else {
     process.stdout.write(connectionString.toString() + '\n');
   }

@@ -1,31 +1,24 @@
 import { log } from '../log.js';
+import { spawn } from 'child_process';
+import which from 'which';
 
 export const psql = async (
   connection_uri: string,
   args: string[] = [],
 ) => {
-  const { execSync, spawn } = await import('child_process');
+  const psqlPathOrNull = await which('psql', { nothrow: true });
 
-  const which = process.platform === 'win32' ? 'where' : 'which';
-  try {
-    execSync(`${which} psql`, { stdio: 'ignore' });
-  } catch (error) {
+  if (psqlPathOrNull === null) {
     log.error(`psql is not available in the PATH`);
     process.exit(1);
   }
 
-  const psql = spawn('psql', [connection_uri, ...args], {
+  log.info('Connecting to the database using psql...');
+  const psql = spawn(psqlPathOrNull, [connection_uri, ...args], {
     stdio: 'inherit',
   });
 
-  psql.on('exit', (code) => {
+  psql.on('exit', (code: number|null) => {
     process.exit(code === null ? 1 : code);
   });
 };
-
-export const psqlArgs = (
-  argv: string[]
-) => {
-    const doubleDashIndex = argv.indexOf('--');
-    return doubleDashIndex === -1 ? [] : argv.slice(doubleDashIndex + 1);
-}
