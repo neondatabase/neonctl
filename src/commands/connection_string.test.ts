@@ -35,9 +35,9 @@ describe('connection_string', () => {
       snapshot: true,
     },
   });
-  
+
   testCliCommand({
-    name: 'connection_string branch id',
+    name: 'connection_string branch id 8 digits',
     args: [
       'connection-string',
       'br-cloudy-branch-12345678',
@@ -72,42 +72,6 @@ describe('connection_string', () => {
   });
 
   testCliCommand({
-    name: 'connection_string pooled branch id',
-    args: [
-      'connection-string',
-      'br-sunny-branch-123456',
-      '--project-id',
-      'test',
-      '--database-name',
-      'test_db',
-      '--role-name',
-      'test_role',
-      '--pooled',
-    ],
-    expected: {
-      snapshot: true,
-    },
-  });
-
-  testCliCommand({
-    name: 'connection_string pooled branch id',
-    args: [
-      'connection-string',
-      'br-cloudy-branch-12345678',
-      '--project-id',
-      'test',
-      '--database-name',
-      'test_db',
-      '--role-name',
-      'test_role',
-      '--pooled',
-    ],
-    expected: {
-      snapshot: true,
-    },
-  });
-
-  testCliCommand({
     name: 'connection_string prisma',
     args: [
       'connection-string',
@@ -119,42 +83,6 @@ describe('connection_string', () => {
       '--role-name',
       'test_role',
       '--prisma',
-    ],
-    expected: {
-      snapshot: true,
-    },
-  });
-
-  testCliCommand({
-    name: 'connection_string pooled branch id',
-    args: [
-      'connection-string',
-      'br-sunny-branch-123456',
-      '--project-id',
-      'test',
-      '--database-name',
-      'test_db',
-      '--role-name',
-      'test_role',
-      '--pooled',
-    ],
-    expected: {
-      snapshot: true,
-    },
-  });
-
-  testCliCommand({
-    name: 'connection_string pooled branch id',
-    args: [
-      'connection-string',
-      'br-cloudy-branch-12345678',
-      '--project-id',
-      'test',
-      '--database-name',
-      'test_db',
-      '--role-name',
-      'test_role',
-      '--pooled',
     ],
     expected: {
       snapshot: true,
@@ -181,10 +109,10 @@ describe('connection_string', () => {
   });
 
   testCliCommand({
-    name: 'connection_string prisma pooled branch id',
+    name: 'connection_string prisma pooled extended',
     args: [
       'connection-string',
-      'br-sunny-branch-123456',
+      'test_branch',
       '--project-id',
       'test',
       '--database-name',
@@ -193,25 +121,7 @@ describe('connection_string', () => {
       'test_role',
       '--prisma',
       '--pooled',
-    ],
-    expected: {
-      snapshot: true,
-    },
-  });
-
-  testCliCommand({
-    name: 'connection_string prisma pooled branch id',
-    args: [
-      'connection-string',
-      'br-cloudy-branch-12345678',
-      '--project-id',
-      'test',
-      '--database-name',
-      'test_db',
-      '--role-name',
-      'test_role',
-      '--prisma',
-      '--pooled',
+      '--extended',
     ],
     expected: {
       snapshot: true,

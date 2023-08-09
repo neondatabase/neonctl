@@ -2,6 +2,7 @@ import { EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
+import { writer } from '../writer.js';
 
 export const command = 'connection-string [branch]';
 export const aliases = ['cs'];
@@ -41,6 +42,11 @@ export const builder = (argv: yargs.Argv) => {
         choices: Object.values(EndpointType),
         describe: 'Endpoint type',
       },
+      extended: {
+        type: 'boolean',
+        describe: 'Show extended information',
+        default: false,
+      },
     })
     .middleware(fillSingleProject as any);
 };
@@ -52,6 +58,7 @@ export const handler = async (
     databaseName: string;
     pooled: boolean;
     prisma: boolean;
+    extended: boolean;
     endpointType?: EndpointType;
   }
 ) => {
@@ -110,7 +117,9 @@ export const handler = async (
         );
       }));
 
-  const { data: password } = await props.apiClient.getProjectBranchRolePassword(
+  const {
+    data: { password },
+  } = await props.apiClient.getProjectBranchRolePassword(
     props.projectId,
     endpoint.branch_id,
     role
@@ -122,7 +131,7 @@ export const handler = async (
   const connectionString = new URL(`postgres://${host}`);
   connectionString.pathname = database;
   connectionString.username = role;
-  connectionString.password = password.password;
+  connectionString.password = password;
 
   if (props.prisma) {
     connectionString.searchParams.set('connect_timeout', '30');
@@ -132,5 +141,19 @@ export const handler = async (
     }
   }
 
-  process.stdout.write(connectionString.toString() + '\n');
+  if (props.extended) {
+    writer(props).end(
+      {
+        connection_string: connectionString.toString(),
+        host,
+        role,
+        password,
+        database,
+        options: connectionString.searchParams.toString(),
+      },
+      { fields: ['host', 'role', 'password', 'database'] }
+    );
+  } else {
+    process.stdout.write(connectionString.toString() + '\n');
+  }
 };

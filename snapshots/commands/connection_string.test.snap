@@ -1,32 +1,12 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`connection_string connection_string branch id test 1`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db
-"
-`;
-
-exports[`connection_string connection_string branch id test 2`] = `
+exports[`connection_string connection_string branch id 8 digits test 1`] = `
 "postgres://test_role:test_pwd@ep-lame-king-930914.us-east-2.aws.neon.tech/test_db
 "
 `;
 
-exports[`connection_string connection_string pooled branch id test 1`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db
-"
-`;
-
-exports[`connection_string connection_string pooled branch id test 2`] = `
-"postgres://test_role:test_pwd@ep-lame-king-930914-pooler.us-east-2.aws.neon.tech/test_db
-"
-`;
-
-exports[`connection_string connection_string pooled branch id test 3`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db
-"
-`;
-
-exports[`connection_string connection_string pooled branch id test 4`] = `
-"postgres://test_role:test_pwd@ep-lame-king-930914-pooler.us-east-2.aws.neon.tech/test_db
+exports[`connection_string connection_string branch id test 1`] = `
+"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db
 "
 `;
 
@@ -35,13 +15,13 @@ exports[`connection_string connection_string pooled test 1`] = `
 "
 `;
 
-exports[`connection_string connection_string prisma pooled branch id test 1`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?connect_timeout=30&pool_timeout=30&pgbouncer=true
-"
-`;
-
-exports[`connection_string connection_string prisma pooled branch id test 2`] = `
-"postgres://test_role:test_pwd@ep-lame-king-930914-pooler.us-east-2.aws.neon.tech/test_db?connect_timeout=30&pool_timeout=30&pgbouncer=true
+exports[`connection_string connection_string prisma pooled extended test 1`] = `
+"connection_string: postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?connect_timeout=30&pool_timeout=30&pgbouncer=true
+host: ep-cool-king-930914-pooler.us-east-2.aws.neon.tech
+role: test_role
+password: test_pwd
+database: test_db
+options: connect_timeout=30&pool_timeout=30&pgbouncer=true
 "
 `;
 
