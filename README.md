@@ -142,6 +142,12 @@ To run the CLI locally execute build command after making changes:
 npm run build
 ```
 
+To develop continuously:
+
+```shell
+npm run watch
+```
+
 To run commands from the local build replace the `neonctl` command with `node dist`, for example:
 
 ```shell
