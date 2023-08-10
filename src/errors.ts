@@ -10,7 +10,10 @@ const ERROR_MATCHERS = [
   [/^Unknown command: (.*)$/, 'UNKNOWN_COMMAND'],
   [/^Missing required argument: (.*)$/, 'MISSING_ARGUMENT'],
 ] as const;
-export const matchErrorCode = (message: string): ErrorCode => {
+export const matchErrorCode = (message?: string): ErrorCode => {
+  if (!message) {
+    return 'UNKNOWN_ERROR';
+  }
   for (const [matcher, code] of ERROR_MATCHERS) {
     const match = message.match(matcher);
     if (match) {

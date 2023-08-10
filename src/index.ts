@@ -26,11 +26,12 @@ import { analyticsMiddleware, sendError } from './analytics.js';
 import { isCi } from './env.js';
 import { isAxiosError } from 'axios';
 import { matchErrorCode } from './errors.js';
+import { showHelp } from './help.js';
 
 let builder = yargs(hideBin(process.argv));
 builder = builder
   .scriptName(pkg.name)
-  .usage('usage: $0 <command> [options]')
+  .usage('$0 <command> [options]')
   .help()
   .option('output', {
     alias: 'o',
@@ -95,11 +96,22 @@ builder = builder
   .middleware(analyticsMiddleware, true)
   .group('version', 'Global options:')
   .alias('version', 'v')
+  .help(false)
   .group('help', 'Global options:')
+  .option('help', {
+    describe: 'Show help',
+    type: 'boolean',
+    default: false,
+  })
   .alias('help', 'h')
   .completion()
   .scriptName(basename(process.argv[1]) === 'neon' ? 'neon' : 'neonctl')
   .fail(async (msg, err) => {
+    if (process.argv.some((arg) => arg === '--help' || arg === '-h')) {
+      await showHelp(builder);
+      process.exit(0);
+    }
+
     if (isAxiosError(err)) {
       if (err.code === 'ECONNABORTED') {
         log.error('Request timed out');
@@ -126,8 +138,8 @@ builder = builder
 
 (async () => {
   const args = await builder.argv;
-  if (args._.length === 0) {
-    builder.showHelp();
+  if (args._.length === 0 || args.help) {
+    await showHelp(builder);
     process.exit(0);
   }
 })();

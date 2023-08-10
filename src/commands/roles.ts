@@ -3,8 +3,8 @@ import { retryOnLock } from '../api.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 
 import { BranchScopeProps } from '../types.js';
-import { commandFailHandler } from '../utils/middlewares.js';
 import { writer } from '../writer.js';
+import { showHelpMiddleware } from '../help.js';
 
 const ROLES_FIELDS = ['name', 'created_at'] as const;
 
@@ -13,9 +13,8 @@ export const describe = 'Manage roles';
 export const aliases = ['role'];
 export const builder = (argv: yargs.Argv) =>
   argv
-    .demandCommand(1, '')
-    .fail(commandFailHandler)
-    .usage('usage: $0 roles <sub-command> [options]')
+    .middleware(showHelpMiddleware(argv))
+    .usage('$0 roles <sub-command> [options]')
     .options({
       'project-id': {
         describe: 'Project ID',
