@@ -12,17 +12,17 @@ Before installing, ensure that you have met the following prerequisites:
 
 - Node.js 16.0 or higher. To check if you already have Node.js, run the following command:
 
-    ```shell
-    node -v
-    ```
+  ```shell
+  node -v
+  ```
 
-- The `npm` package manager.  To check if you already have `npm`, run the following command:
+- The `npm` package manager. To check if you already have `npm`, run the following command:
 
-   ```shell
-   npm -v
-   ```
+  ```shell
+  npm -v
+  ```
 
-  If you need to install  `Node.js` or `npm`, refer to instructions on the [official nodejs page](https://nodejs.org) or use the [Node version manager](https://github.com/nvm-sh/nvm).
+  If you need to install `Node.js` or `npm`, refer to instructions on the [official nodejs page](https://nodejs.org) or use the [Node version manager](https://github.com/nvm-sh/nvm).
 
 ### Install
 
@@ -60,30 +60,30 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 
 ## Commands
 
-| Command                                                 | Subcommands                            | Description               |
-|---------------------------------------------------------|----------------------------------------|---------------------------|
-| [auth](https://neon.tech/docs/reference/cli-auth)                                     |                                        | Authenticate              |
-| [projects](https://neon.tech/docs/reference/cli-projects)                             | `list`, `create`, `update`, `delete`, `get` | Manage projects           |
-| [me](../reference/cli-me)                                         |                                        | Show current user         |
-| [branches](https://neon.tech/docs/reference/cli-branches)                             | `list`, `create`, `rename`, `add-compute`, `set-primary`, `delete`, `get` | Manage branches           |
-| [databases](https://neon.tech/docs/reference/cli-databases)                           | `list`, `create`, `delete`             | Manage databases          |
-| [roles](https://neon.tech/docs/reference/cli-roles)                                   | `list`, `create`,  `delete`            | Manage roles              |
-| [operations](https://neon.tech/reference/cli-operations)                         | `list`                                 | Manage operations         |
-| [connection-string](https://neon.tech/reference/cli-connection-string)           |                                        | Get connection string     |
-| [completion](https://neon.tech/reference/cli-completion)           |                                        | Generate a completion script     |
+| Command                                                                | Subcommands                                                               | Description                  |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------- |
+| [auth](https://neon.tech/docs/reference/cli-auth)                      |                                                                           | Authenticate                 |
+| [projects](https://neon.tech/docs/reference/cli-projects)              | `list`, `create`, `update`, `delete`, `get`                               | Manage projects              |
+| [me](../reference/cli-me)                                              |                                                                           | Show current user            |
+| [branches](https://neon.tech/docs/reference/cli-branches)              | `list`, `create`, `rename`, `add-compute`, `set-primary`, `delete`, `get` | Manage branches              |
+| [databases](https://neon.tech/docs/reference/cli-databases)            | `list`, `create`, `delete`                                                | Manage databases             |
+| [roles](https://neon.tech/docs/reference/cli-roles)                    | `list`, `create`, `delete`                                                | Manage roles                 |
+| [operations](https://neon.tech/reference/cli-operations)               | `list`                                                                    | Manage operations            |
+| [connection-string](https://neon.tech/reference/cli-connection-string) |                                                                           | Get connection string        |
+| [completion](https://neon.tech/reference/cli-completion)               |                                                                           | Generate a completion script |
 
 ## Global options
 
 Global options are supported with any Neon CLI command.
 
-| Option      | Description                         | Type   | Default                           |
-| :---------  | :---------------------------------- | :----- | :-------------------------------- |
-| [-o, --output](#output)| Set the Neon CLI output format (`json`, `yaml`, or `table`)                 | string | table                           |
-| [--config-dir](#config-dir)| Path to the Neon CLI configuration directory            | string | `/home/<user>/.config/neonctl`   |
-| [--api-key](#api-key)   | Neon API key                             | string | ""                                |
-| [--analytics](#analytics) | Manage analytics                    | boolean| true                              |
-| [-v, --version](#version)   | Show the Neon CLI version number                 | boolean| -                                 |
-| [-h, --help](#help)      | Show the Neon CLI help                           | boolean| -                                 |
+| Option                      | Description                                                 | Type    | Default                        |
+| :-------------------------- | :---------------------------------------------------------- | :------ | :----------------------------- |
+| [-o, --output](#output)     | Set the Neon CLI output format (`json`, `yaml`, or `table`) | string  | table                          |
+| [--config-dir](#config-dir) | Path to the Neon CLI configuration directory                | string  | `/home/<user>/.config/neonctl` |
+| [--api-key](#api-key)       | Neon API key                                                | string  | ""                             |
+| [--analytics](#analytics)   | Manage analytics                                            | boolean | true                           |
+| [-v, --version](#version)   | Show the Neon CLI version number                            | boolean | -                              |
+| [-h, --help](#help)         | Show the Neon CLI help                                      | boolean | -                              |
 
 - <a id="output"></a>`-o, --output`
 
@@ -133,3 +133,23 @@ Global options are supported with any Neon CLI command.
 
   neonctl branches create --help
   ```
+
+## Contribute
+
+To run the CLI locally execute build command after making changes:
+
+```shell
+npm run build
+```
+
+To develop continuously:
+
+```shell
+npm run watch
+```
+
+To run commands from the local build replace the `neonctl` command with `node dist`, for example:
+
+```shell
+node dist branches --help
+```
