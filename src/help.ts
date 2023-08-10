@@ -20,7 +20,9 @@ const formatHelp = (help: string) => {
 
   if (topLevelCommand) {
     result.push(
-      chalk.blue(topLevelCommand.replace('[options]', chalk.green('[options]')))
+      chalk.bold(
+        topLevelCommand.replace('[options]', chalk.reset.green('[options]'))
+      )
     );
     result.push('');
   }
@@ -36,7 +38,15 @@ const formatHelp = (help: string) => {
     });
     commandsBlock.forEach((line) => {
       const [command, description] = splitColumns(line);
-      ui.div(command, description);
+      ui.div(chalk.cyan(command));
+      ui.div(
+        {
+          text: chalk.gray(drawPointer(SPACE_WIDTH)),
+          width: SPACE_WIDTH,
+          padding: [0, 0, 0, 0],
+        },
+        { text: description, padding: [0, 0, 0, 2] }
+      );
     });
     result.push(ui.toString());
     result.push('');
