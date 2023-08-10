@@ -37,9 +37,6 @@ describe('branches', () => {
       'test_branch',
       '--psql',
     ],
-    env: {
-      PATH: `mocks/bin:${process.env.PATH}`,
-    },
     expected: {
       snapshot: true,
     },
@@ -59,9 +56,6 @@ describe('branches', () => {
       '-c',
       'SELECT 1',
     ],
-    env: {
-      PATH: `mocks/bin:${process.env.PATH}`,
-    },
     expected: {
       snapshot: true,
     },

@@ -150,9 +150,6 @@ describe('connection_string', () => {
       'test_role',
       '--psql',
     ],
-    env: {
-      PATH: `mocks/bin:${process.env.PATH}`,
-    },
     expected: {
       snapshot: true,
     },
@@ -174,9 +171,6 @@ describe('connection_string', () => {
       '-c',
       'SELECT 1',
     ],
-    env: {
-      PATH: `mocks/bin:${process.env.PATH}`,
-    },
     expected: {
       snapshot: true,
     },

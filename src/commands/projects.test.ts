@@ -21,9 +21,6 @@ describe('projects', () => {
   testCliCommand({
     name: 'create and connect with psql',
     args: ['projects', 'create', '--name', 'test_project', '--psql'],
-    env: {
-      PATH: `mocks/bin:${process.env.PATH}`,
-    },
     expected: {
       snapshot: true,
     },
@@ -32,9 +29,6 @@ describe('projects', () => {
   testCliCommand({
     name: 'create and connect with psql and psql args',
     args: ['projects', 'create', '--name', 'test_project', '--psql', '--', '-c', 'SELECT 1'],
-    env: {
-      PATH: `mocks/bin:${process.env.PATH}`,
-    },
     expected: {
       snapshot: true,
     },
