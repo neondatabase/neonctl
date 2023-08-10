@@ -10,6 +10,7 @@ import { log } from '../log.js';
 import { getApiClient } from '../api.js';
 import { isCi } from '../env.js';
 import { CREDENTIALS_FILE } from '../config.js';
+import { showHelpMiddleware } from '../help.js';
 
 type AuthProps = {
   _: (string | number)[];
@@ -23,7 +24,8 @@ type AuthProps = {
 export const command = 'auth';
 export const aliases = ['login'];
 export const describe = 'Authenticate';
-export const builder = (yargs: yargs.Argv) => yargs;
+export const builder = (yargs: yargs.Argv) =>
+  yargs.middleware(showHelpMiddleware(yargs, true));
 export const handler = async (args: AuthProps) => {
   await authFlow(args);
 };

@@ -3,8 +3,8 @@ import { retryOnLock } from '../api.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 
 import { BranchScopeProps } from '../types.js';
-import { commandFailHandler } from '../utils/middlewares.js';
 import { writer } from '../writer.js';
+import { showHelpMiddleware } from '../help.js';
 
 const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
 
@@ -13,9 +13,8 @@ export const describe = 'Manage databases';
 export const aliases = ['database', 'db'];
 export const builder = (argv: yargs.Argv) =>
   argv
-    .demandCommand(1, '')
-    .fail(commandFailHandler)
-    .usage('usage: $0 databases <sub-command> [options]')
+    .usage('$0 databases <sub-command> [options]')
+    .middleware(showHelpMiddleware(argv))
     .options({
       'project-id': {
         describe: 'Project ID',

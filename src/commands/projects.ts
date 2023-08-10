@@ -3,11 +3,11 @@ import {
   ProjectListItem,
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
-import { log } from '../log.js';
 
+import { showHelpMiddleware } from '../help.js';
+import { log } from '../log.js';
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
-import { commandFailHandler } from '../utils/middlewares.js';
 import { writer } from '../writer.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
@@ -27,9 +27,8 @@ export const describe = 'Manage projects';
 export const aliases = ['project'];
 export const builder = (argv: yargs.Argv) => {
   return argv
-    .demandCommand(1, '')
-    .fail(commandFailHandler)
-    .usage('usage: $0 projects <sub-command> [options]')
+    .usage('$0 projects <sub-command> [options]')
+    .middleware(showHelpMiddleware(argv))
     .command(
       'list',
       'List projects',

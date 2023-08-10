@@ -1,6 +1,3 @@
-import yargs from 'yargs';
-import { hideBin } from 'yargs/helpers';
-
 /**
  * This middleware is needed to fill in the args for nested objects,
  * so that required arguments would work
@@ -23,16 +20,4 @@ export const fillInArgs = (
       args[acc.join('.') + '.' + k] = v;
     }
   });
-};
-
-export const commandFailHandler = async (
-  _msg: string,
-  _err: any,
-  yyargs: yargs.Argv
-) => {
-  const argv = yargs(hideBin(process.argv));
-  if ((argv.argv as yargs.Arguments)._.length === 1) {
-    yyargs.showHelp();
-    process.exit(1);
-  }
 };
