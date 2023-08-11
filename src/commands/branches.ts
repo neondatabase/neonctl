@@ -185,6 +185,26 @@ const create = async (
     })
   );
 
+  const out = writer(props);
+  out.write(data.branch, {
+    fields: BRANCH_FIELDS,
+    title: 'branch',
+  });
+
+  if (data.endpoints?.length > 0) {
+    out.write(data.endpoints, {
+      fields: ['id', 'created_at'],
+      title: 'endpoints',
+    });
+  }
+  if (data.connection_uris && data.connection_uris?.length > 0) {
+    out.write(data.connection_uris, {
+      fields: ['connection_uri'],
+      title: 'connection_uris',
+    });
+  }
+  out.end();
+
   if (props.psql) {
     if (!data.connection_uris || !data.connection_uris?.length) {
       throw new Error(`Branch ${data.branch.id} doesn't have a connection uri`);
@@ -192,26 +212,6 @@ const create = async (
     const connection_uri = data.connection_uris[0].connection_uri;
     const psqlArgs = props['--'];
     await psql(connection_uri, psqlArgs);
-  } else {
-    const out = writer(props);
-    out.write(data.branch, {
-      fields: BRANCH_FIELDS,
-      title: 'branch',
-    });
-
-    if (data.endpoints?.length > 0) {
-      out.write(data.endpoints, {
-        fields: ['id', 'created_at'],
-        title: 'endpoints',
-      });
-    }
-    if (data.connection_uris && data.connection_uris?.length > 0) {
-      out.write(data.connection_uris, {
-        fields: ['connection_uri'],
-        title: 'connection_uris',
-      });
-    }
-    out.end();
   }
 };
 

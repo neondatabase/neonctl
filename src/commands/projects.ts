@@ -134,18 +134,18 @@ const create = async (
     project,
   });
 
+  const out = writer(props);
+  out.write(data.project, { fields: PROJECT_FIELDS, title: 'Project' });
+  out.write(data.connection_uris, {
+    fields: ['connection_uri'],
+    title: 'Connection URIs',
+  });
+  out.end();
+
   if (props.psql) {
     const connection_uri = data.connection_uris[0].connection_uri;
     const psqlArgs = props['--'];
     await psql(connection_uri, psqlArgs);
-  } else {
-    const out = writer(props);
-    out.write(data.project, { fields: PROJECT_FIELDS, title: 'Project' });
-    out.write(data.connection_uris, {
-      fields: ['connection_uri'],
-      title: 'Connection URIs',
-    });
-    out.end();
   }
 };
 
