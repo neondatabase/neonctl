@@ -32,6 +32,9 @@ let builder = yargs(hideBin(process.argv));
 builder = builder
   .scriptName(pkg.name)
   .usage('$0 <command> [options]')
+  .parserConfiguration({
+    'populate--': true,
+  })
   .help()
   .option('output', {
     alias: 'o',

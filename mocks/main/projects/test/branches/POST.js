@@ -64,6 +64,9 @@ export default function (req, res) {
         created_at: '2021-01-01T00:00:00.000Z',
         host: `${endpoint.name}.example.com`,
       }));
+      result.connection_uris = req.body.endpoints.map((endpoint) => ({
+        connection_uri: `postgres://ep-${endpoint.name}-123456.example.com:5432/test_project`,
+      }));
     }
     res.send(result);
   }

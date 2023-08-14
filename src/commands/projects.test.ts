@@ -19,6 +19,22 @@ describe('projects', () => {
   });
 
   testCliCommand({
+    name: 'create and connect with psql',
+    args: ['projects', 'create', '--name', 'test_project', '--psql'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create and connect with psql and psql args',
+    args: ['projects', 'create', '--name', 'test_project', '--psql', '--', '-c', 'SELECT 1'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'delete',
     args: ['projects', 'delete', 'test'],
     expected: {

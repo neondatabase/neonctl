@@ -40,6 +40,10 @@ exports[`connection_string connection_string test 1`] = `
 "
 `;
 
+exports[`connection_string connection_string with psql and psql args test 1`] = `"{"psql-cli-args":["postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db","-c","SELECT 1"]}"`;
+
+exports[`connection_string connection_string with psql test 1`] = `"{"psql-cli-args":["postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db"]}"`;
+
 exports[`connection_string connection_string without any args should pass test 1`] = `
 "postgres://test_role:password@undefined/db1
 "
