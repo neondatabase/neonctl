@@ -27,6 +27,41 @@ describe('branches', () => {
   });
 
   testCliCommand({
+    name: 'create branch and connect with psql',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch',
+      '--psql',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create branch and connect with psql and psql args',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch',
+      '--psql',
+      '--',
+      '-c',
+      'SELECT 1',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'create with readonly endpoint',
     args: [
       'branches',

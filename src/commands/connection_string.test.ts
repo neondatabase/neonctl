@@ -136,4 +136,43 @@ describe('connection_string', () => {
       snapshot: true,
     },
   });
+
+  testCliCommand({
+    name: 'connection_string with psql',
+    args: [
+      'connection-string',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--database-name',
+      'test_db',
+      '--role-name',
+      'test_role',
+      '--psql',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'connection_string with psql and psql args',
+    args: [
+      'connection-string',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--database-name',
+      'test_db',
+      '--role-name',
+      'test_role',
+      '--psql',
+      '--',
+      '-c',
+      'SELECT 1',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
 });

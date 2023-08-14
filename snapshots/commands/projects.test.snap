@@ -1,5 +1,25 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
+exports[`projects create and connect with psql and psql args test 1`] = `
+"project:
+  id: new-project-123456
+  name: test_project
+  created_at: 2021-01-01T00:00:00.000Z
+connection_uris:
+  - connection_uri: postgres://localhost:5432/test_project
+{"psql-cli-args":["postgres://localhost:5432/test_project","-c","SELECT 1"]}"
+`;
+
+exports[`projects create and connect with psql test 1`] = `
+"project:
+  id: new-project-123456
+  name: test_project
+  created_at: 2021-01-01T00:00:00.000Z
+connection_uris:
+  - connection_uri: postgres://localhost:5432/test_project
+{"psql-cli-args":["postgres://localhost:5432/test_project"]}"
+`;
+
 exports[`projects create test 1`] = `
 "project:
   id: new-project-123456

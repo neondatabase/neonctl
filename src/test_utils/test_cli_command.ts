@@ -55,6 +55,9 @@ export const testCliCommand = ({
         ],
         {
           stdio: 'pipe',
+          env: {
+            PATH: `mocks/bin:${process.env.PATH}`,
+          },
         }
       );
 
