@@ -3,7 +3,10 @@ import yargs from 'yargs';
 
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
-import { branchCreateRequest } from '../parameters.gen.js';
+import {
+  branchCreateRequest,
+  branchCreateRequestEndpointOptions,
+} from '../parameters.gen.js';
 import { retryOnLock } from '../api.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import {
@@ -64,6 +67,14 @@ export const builder = (argv: yargs.Argv) =>
             implies: 'compute',
             default: EndpointType.ReadWrite,
             choices: Object.values(EndpointType),
+          },
+          'suspend-timeout': {
+            describe:
+              branchCreateRequestEndpointOptions.suspend_timeout_seconds
+                .description,
+            type: 'number',
+            implies: 'compute',
+            default: 0,
           },
           psql: {
             type: 'boolean',
@@ -131,6 +142,7 @@ const create = async (
     parent?: string;
     type: EndpointType;
     psql: boolean;
+    suspendTimeout: number;
     '--'?: string[];
   }
 ) => {
@@ -179,6 +191,7 @@ const create = async (
         ? [
             {
               type: props.type,
+              suspend_timeout_seconds: props.suspendTimeout,
             },
           ]
         : [],
