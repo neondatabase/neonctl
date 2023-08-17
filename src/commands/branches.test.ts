@@ -146,6 +146,23 @@ describe('branches', () => {
   });
 
   testCliCommand({
+    name: 'create with suspend timeout',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_with_suspend_timeout',
+      '--suspend-timeout',
+      '60',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'delete by id',
     args: [
       'branches',
@@ -226,7 +243,13 @@ describe('branches', () => {
 
   testCliCommand({
     name: 'get by id',
-    args: ['branches', 'get', 'br-cloudy-branch-12345678', '--project-id', 'test'],
+    args: [
+      'branches',
+      'get',
+      'br-cloudy-branch-12345678',
+      '--project-id',
+      'test',
+    ],
     expected: {
       snapshot: true,
     },
