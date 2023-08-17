@@ -44,6 +44,16 @@ export default function (req, res) {
         created_at: '2021-01-01T00:00:00.000Z',
       },
     });
+  } else if (req.body.branch?.name === 'test_branch_with_suspend_timeout') {
+    res.send({
+      branch: {
+        id: 'br-new-branch-123456',
+        name: 'test_branch_with_suspend_timeout',
+        parent_id: 'br-main-branch-123456',
+        created_at: '2021-01-01T00:00:00.000Z',
+        suspend_timeout: req.body.endpoints[0].suspend_timeout_seconds,
+      },
+    });
   } else {
     expect(req.body).toMatchObject({
       branch: {
