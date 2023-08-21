@@ -6,3 +6,4 @@ bundle/
 .eslintcache
 .vscode
 coverage
+tmp/
