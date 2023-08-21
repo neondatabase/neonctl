@@ -18,6 +18,14 @@ export const psql = async (
     stdio: 'inherit',
   });
 
+  for (const signame of ['SIGINT', 'SIGTERM']) {
+    process.on(signame, (code) => {
+      if (!psql.killed && code !== null) {
+        psql.kill(code);
+      }
+    });
+  }
+
   psql.on('exit', (code: number|null) => {
     process.exit(code === null ? 1 : code);
   });
