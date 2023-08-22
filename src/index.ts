@@ -31,6 +31,7 @@ import { showHelp } from './help.js';
 let builder = yargs(hideBin(process.argv));
 builder = builder
   .scriptName(pkg.name)
+  .locale('en')
   .usage('$0 <command> [options]')
   .parserConfiguration({
     'populate--': true,
