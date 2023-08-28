@@ -191,7 +191,8 @@ const create = async (
         ? [
             {
               type: props.type,
-              suspend_timeout_seconds: props.suspendTimeout,
+              suspend_timeout_seconds:
+                props.suspendTimeout === 0 ? undefined : props.suspendTimeout,
             },
           ]
         : [],
