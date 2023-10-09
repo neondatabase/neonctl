@@ -23,7 +23,6 @@ import { fillInArgs } from './utils/middlewares.js';
 import pkg from './pkg.js';
 import commands from './commands/index.js';
 import { analyticsMiddleware, sendError } from './analytics.js';
-import { isCi } from './env.js';
 import { isAxiosError } from 'axios';
 import { matchErrorCode } from './errors.js';
 import { showHelp } from './help.js';
@@ -95,7 +94,7 @@ builder = builder
     describe: 'Manage analytics. Example: --no-analytics, --analytics false',
     group: 'Global options:',
     type: 'boolean',
-    default: !isCi(),
+    default: true
   })
   .middleware(analyticsMiddleware, true)
   .group('version', 'Global options:')
