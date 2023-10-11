@@ -1,0 +1,14 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`set_context should set the context list branches selecting project from the context test 1`] = `
+"- id: br-main-branch-123456
+  name: main
+  primary: true
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-sunny-branch-123456
+  name: test_branch
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+"
+`;

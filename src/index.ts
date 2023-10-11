@@ -26,6 +26,7 @@ import { analyticsMiddleware, sendError } from './analytics.js';
 import { isAxiosError } from 'axios';
 import { matchErrorCode } from './errors.js';
 import { showHelp } from './help.js';
+import { currentContextFile, enrichFromContext } from './context.js';
 
 let builder = yargs(hideBin(process.argv));
 builder = builder
@@ -63,38 +64,45 @@ builder = builder
     default: false,
   })
   .middleware(ensureConfigDir)
-  // Auth flow
-  .option('oauth-host', {
-    description: 'URL to Neon OAuth host',
-    hidden: true,
-    default: 'https://oauth2.neon.tech',
-  })
-  .option('client-id', {
-    description: 'OAuth client id',
-    hidden: true,
-    type: 'string',
-    default: defaultClientID,
-  })
-  .option('api-key', {
-    describe: 'API key',
-    group: 'Global options:',
-    type: 'string',
-    default: process.env.NEON_API_KEY ?? '',
-  })
-  .option('apiClient', {
-    hidden: true,
-    coerce: (v) => v as Api<unknown>,
-    default: null as unknown as Api<unknown>,
+  .options({
+    'oauth-host': {
+      description: 'URL to Neon OAuth host',
+      hidden: true,
+      default: 'https://oauth2.neon.tech',
+    },
+    'client-id': {
+      description: 'OAuth client id',
+      hidden: true,
+      type: 'string',
+      default: defaultClientID,
+    },
+    'api-key': {
+      describe: 'API key',
+      group: 'Global options:',
+      type: 'string',
+      default: process.env.NEON_API_KEY ?? '',
+    },
+    apiClient: {
+      hidden: true,
+      coerce: (v) => v as Api<unknown>,
+      default: null as unknown as Api<unknown>,
+    },
+    'context-file': {
+      describe: 'Context file',
+      type: 'string',
+      default: currentContextFile,
+    },
   })
   .middleware((args) => fillInArgs(args), true)
   .middleware(ensureAuth)
+  .middleware(enrichFromContext as any)
   .command(commands as any)
   .strictCommands()
   .option('analytics', {
     describe: 'Manage analytics. Example: --no-analytics, --analytics false',
     group: 'Global options:',
     type: 'boolean',
-    default: true
+    default: true,
   })
   .middleware(analyticsMiddleware, true)
   .group('version', 'Global options:')
