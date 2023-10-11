@@ -4,6 +4,7 @@ import { Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { log } from '../log.js';
+import strip from 'strip-ansi';
 
 import { runMockServer } from './mock_server.js';
 
@@ -83,10 +84,10 @@ export const testCliCommand = ({
                 expect(output).toMatchSnapshot();
               }
               if (expected.stdout !== undefined) {
-                expect(output).toEqual(expected.stdout);
+                expect(strip(output)).toEqual(expected.stdout);
               }
               if (expected.stderr !== undefined) {
-                expect(error).toEqual(expected.stderr);
+                expect(strip(error)).toEqual(expected.stderr);
               }
             }
             resolve();

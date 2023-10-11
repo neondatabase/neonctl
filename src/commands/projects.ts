@@ -10,6 +10,7 @@ import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
+import { updateContextFile } from '../context.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
@@ -19,6 +20,7 @@ const REGIONS = [
   'aws-eu-central-1',
   'aws-us-east-2',
   'aws-us-east-1',
+  'aws-il-central-1',
 ];
 
 const PROJECTS_LIST_LIMIT = 100;
@@ -54,6 +56,11 @@ export const builder = (argv: yargs.Argv) => {
           psql: {
             type: 'boolean',
             describe: 'Connect to a new project via psql',
+            default: false,
+          },
+          'set-context': {
+            type: 'boolean',
+            describe: 'Set the current context to the new project',
             default: false,
           },
         }),
@@ -120,6 +127,7 @@ const create = async (
     name?: string;
     regionId?: string;
     psql: boolean;
+    setContext: boolean;
     '--'?: string[];
   }
 ) => {
@@ -133,6 +141,13 @@ const create = async (
   const { data } = await props.apiClient.createProject({
     project,
   });
+
+  if (props.setContext) {
+    updateContextFile(props.contextFile, {
+      projectId: data.project.id,
+      branchId: data.branch.id,
+    });
+  }
 
   const out = writer(props);
   out.write(data.project, { fields: PROJECT_FIELDS, title: 'Project' });

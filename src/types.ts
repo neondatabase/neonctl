@@ -5,6 +5,7 @@ export type CommonProps = {
   apiKey: string;
   apiHost: string;
   output: 'yaml' | 'json' | 'table';
+  contextFile: string;
 };
 
 export type ProjectScopeProps = CommonProps & {
