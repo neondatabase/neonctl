@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { Api } from '@neondatabase/api-client';
 import { Analytics } from '@segment/analytics-node';
 import { isAxiosError } from 'axios';
 
@@ -17,6 +18,7 @@ let userId = '';
 
 export const analyticsMiddleware = async (args: {
   analytics: boolean;
+  apiClient: Api<unknown>;
   configDir: string;
   _: (string | number)[];
   [key: string]: unknown;
@@ -31,6 +33,15 @@ export const analyticsMiddleware = async (args: {
     userId = JSON.parse(credentials).user_id;
   } catch (err) {
     log.debug('Failed to read credentials file', err);
+  }
+
+  try {
+    if (!userId) {
+      const resp = await args.apiClient?.getCurrentUserInfo?.();
+      userId = resp?.data?.id;
+    }
+  } catch (err) {
+    log.debug('Failed to get user id from api', err);
   }
 
   client = new Analytics({
