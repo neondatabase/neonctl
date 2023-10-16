@@ -15,7 +15,7 @@ const WRITE_KEY = '3SQXn5ejjXWLEJ8xU2PRYhAotLtTaeeV';
 let client: Analytics | undefined;
 let userId = '';
 
-export const analyticsMiddleware = (args: {
+export const analyticsMiddleware = async (args: {
   analytics: boolean;
   configDir: string;
   _: (string | number)[];
@@ -53,7 +53,7 @@ export const analyticsMiddleware = (args: {
       ci: isCi(),
     },
   });
-  client.closeAndFlush();
+  await client.closeAndFlush();
   log.debug('Sent CLI started event with userId: %s', userId);
 };
 
