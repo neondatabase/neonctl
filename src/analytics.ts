@@ -9,6 +9,7 @@ import { isCi } from './env.js';
 import { ErrorCode } from './errors.js';
 import { log } from './log.js';
 import pkg from './pkg.js';
+import { getApiClient } from './api.js';
 
 const WRITE_KEY = '3SQXn5ejjXWLEJ8xU2PRYhAotLtTaeeV';
 
@@ -17,6 +18,8 @@ let userId = '';
 
 export const analyticsMiddleware = async (args: {
   analytics: boolean;
+  apiKey?: string;
+  apiHost?: string;
   configDir: string;
   _: (string | number)[];
   [key: string]: unknown;
@@ -33,10 +36,24 @@ export const analyticsMiddleware = async (args: {
     log.debug('Failed to read credentials file', err);
   }
 
+  try {
+    if (!userId && args.apiKey) {
+      const apiClient = getApiClient({
+        apiKey: args.apiKey,
+        apiHost: args.apiHost,
+      });
+      const resp = await apiClient?.getCurrentUserInfo?.();
+      userId = resp?.data?.id;
+    }
+  } catch (err) {
+    log.debug('Failed to get user id from api', err);
+  }
+
   client = new Analytics({
     writeKey: WRITE_KEY,
     host: 'https://track.neon.tech',
   });
+
   client.identify({
     userId: userId?.toString() ?? 'anonymous',
   });
@@ -53,8 +70,9 @@ export const analyticsMiddleware = async (args: {
       ci: isCi(),
     },
   });
+  log.debug('Flushing CLI started event with userId: %s', userId);
   await client.closeAndFlush();
-  log.debug('Sent CLI started event with userId: %s', userId);
+  log.debug('Flushed CLI started event with userId: %s', userId);
 };
 
 export const sendError = (err: Error, errCode: ErrorCode) => {
