@@ -4,7 +4,6 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 
 import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
-import { showHelpMiddleware } from '../help.js';
 
 const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
 
@@ -14,7 +13,6 @@ export const aliases = ['database', 'db'];
 export const builder = (argv: yargs.Argv) =>
   argv
     .usage('$0 databases <sub-command> [options]')
-    .middleware(showHelpMiddleware(argv))
     .options({
       'project-id': {
         describe: 'Project ID',

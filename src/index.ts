@@ -28,6 +28,8 @@ import { matchErrorCode } from './errors.js';
 import { showHelp } from './help.js';
 import { currentContextFile, enrichFromContext } from './context.js';
 
+const NO_SUBCOMMANDS_VERBS = ['auth', 'me', 'cs', 'connection-string', 'set-context'];
+
 let builder = yargs(hideBin(process.argv));
 builder = builder
   .scriptName(pkg.name)
@@ -94,6 +96,19 @@ builder = builder
     },
   })
   .middleware((args) => fillInArgs(args), true)
+  .help(false)
+  .group('help', 'Global options:')
+  .option('help', {
+    describe: 'Show help',
+    type: 'boolean',
+    default: false,
+  })
+  .alias('help', 'h')
+  .middleware(async(args) => {
+    if (args.help || args._.length === 1 && !NO_SUBCOMMANDS_VERBS.includes(args._[0] as string)) {
+      await showHelp(builder);
+    }
+  })
   .middleware(ensureAuth)
   .middleware(enrichFromContext as any)
   .command(commands as any)
@@ -107,14 +122,6 @@ builder = builder
   .middleware(analyticsMiddleware, true)
   .group('version', 'Global options:')
   .alias('version', 'v')
-  .help(false)
-  .group('help', 'Global options:')
-  .option('help', {
-    describe: 'Show help',
-    type: 'boolean',
-    default: false,
-  })
-  .alias('help', 'h')
   .completion()
   .scriptName(basename(process.argv[1]) === 'neon' ? 'neon' : 'neonctl')
   .fail(async (msg, err) => {
