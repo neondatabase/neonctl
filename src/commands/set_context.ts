@@ -1,5 +1,4 @@
 import yargs from 'yargs';
-import { showHelpMiddleware } from '../help.js';
 import { Context, updateContextFile } from '../context.js';
 import { branchIdFromProps } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
@@ -8,7 +7,6 @@ export const command = 'set-context';
 export const describe = 'Set the current context';
 export const builder = (argv: yargs.Argv) =>
   argv
-    .middleware(showHelpMiddleware(yargs, true))
     .usage('$0 set-context [options]')
     .options({
       'project-id': {

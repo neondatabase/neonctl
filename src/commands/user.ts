@@ -1,13 +1,11 @@
 import yargs from 'yargs';
-import { showHelpMiddleware } from '../help.js';
 
 import { CommonProps } from '../types.js';
 import { writer } from '../writer.js';
 
 export const command = 'me';
 export const describe = 'Show current user';
-export const builder = (yargs: yargs.Argv) =>
-  yargs.middleware(showHelpMiddleware(yargs, true));
+export const builder = (yargs: yargs.Argv) => yargs;
 export const handler = async (args: CommonProps) => {
   await me(args);
 };

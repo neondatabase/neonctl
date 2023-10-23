@@ -14,7 +14,6 @@ import {
   looksLikeLSN,
   looksLikeTimestamp,
 } from '../utils/formats.js';
-import { showHelpMiddleware } from '../help.js';
 import { psql } from '../utils/psql.js';
 
 const BRANCH_FIELDS = [
@@ -121,8 +120,7 @@ export const builder = (argv: yargs.Argv) =>
       'Get a branch',
       (yargs) => yargs,
       async (args) => await get(args as any)
-    )
-    .middleware(showHelpMiddleware(argv), true);
+    );
 
 export const handler = (args: yargs.Argv) => {
   return args;
