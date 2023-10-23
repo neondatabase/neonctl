@@ -44,7 +44,11 @@ export const consumeBlockIfMatches = (lines: string[], matcher: RegExp) => {
   return result;
 };
 
-export const splitColumns = (line: string) => line.trim().split(/\s{2,}/);
+export const splitColumns = (line: string) => {
+  const result = line.trim().split(/\s{2,}/);
+  result[1] = result[1] ?? '';
+  return result;
+};
 
 export const drawPointer = (width: number) => {
   const result = [] as string[];

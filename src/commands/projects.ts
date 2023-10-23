@@ -4,7 +4,6 @@ import {
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
-import { showHelpMiddleware } from '../help.js';
 import { log } from '../log.js';
 import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
@@ -31,7 +30,6 @@ export const aliases = ['project'];
 export const builder = (argv: yargs.Argv) => {
   return argv
     .usage('$0 projects <sub-command> [options]')
-    .middleware(showHelpMiddleware(argv))
     .command(
       'list',
       'List projects',

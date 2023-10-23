@@ -144,11 +144,3 @@ export const showHelp = async (argv: yargs.Argv) => {
   process.stderr.write(formatHelp(help).join('\n') + '\n');
   process.exit(0);
 };
-
-export const showHelpMiddleware =
-  (argv: yargs.Argv, ignoreSubCmdPresence?: boolean) =>
-  async (args: yargs.Arguments) => {
-    if ((!ignoreSubCmdPresence && args._.length === 1) || args.help) {
-      await showHelp(argv);
-    }
-  };
