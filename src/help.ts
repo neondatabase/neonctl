@@ -38,6 +38,13 @@ const formatHelp = (help: string) => {
     });
     commandsBlock.forEach((line) => {
       const [command, description] = splitColumns(line);
+
+      // patch the previous command if it was multiline
+      if (!description && ui.rows.length > 1) {
+        ui.rows[ui.rows.length - 2][0].text += command;
+        return;
+      }
+
       ui.div(chalk.cyan(command));
       ui.div(
         {
