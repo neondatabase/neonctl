@@ -11,6 +11,8 @@ import { runMockServer } from './mock_server.js';
 export type TestCliCommandOptions = {
   name: string;
   args: string[];
+  before?: () => Promise<void>;
+  after?: () => Promise<void>;
   mockDir?: string;
   expected?: {
     snapshot?: true;
@@ -23,15 +25,23 @@ export const testCliCommand = ({
   args,
   name,
   expected,
+  before,
+  after,
   mockDir = 'main',
 }: TestCliCommandOptions) => {
   let server: Server;
   describe(name, () => {
     beforeAll(async () => {
+      if (before) {
+        await before();
+      }
       server = await runMockServer(mockDir);
     });
 
     afterAll(async () => {
+      if (after) {
+        await after();
+      }
       return new Promise<void>((resolve) => {
         server.close(() => {
           resolve();

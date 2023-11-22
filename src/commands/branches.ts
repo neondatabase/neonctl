@@ -1,4 +1,4 @@
-import { EndpointType } from '@neondatabase/api-client';
+import { Branch, EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
@@ -22,6 +22,14 @@ const BRANCH_FIELDS = [
   'primary',
   'created_at',
   'updated_at',
+] as const;
+
+const BRANCH_FIELDS_RESET = [
+  'id',
+  'name',
+  'primary',
+  'created_at',
+  'last_reset_at',
 ] as const;
 
 export const command = 'branches';
@@ -82,6 +90,22 @@ export const builder = (argv: yargs.Argv) =>
           },
         }),
       async (args) => await create(args as any)
+    )
+    .command(
+      'reset <id|name>',
+      'Reset a branch',
+      (yargs) =>
+        yargs.options({
+          parent: {
+            describe: 'Reset to a parent branch',
+            type: 'boolean',
+            default: false,
+          },
+          'preserve-under-name': {
+            describe: 'Name under which to preserve the old branch',
+          },
+        }),
+      async (args) => await reset(args as any)
     )
     .command(
       'rename <id|name> <new-name>',
@@ -291,5 +315,41 @@ const addCompute = async (
   );
   writer(props).end(data.endpoint, {
     fields: ['id', 'host'],
+  });
+};
+
+const reset = async (
+  props: ProjectScopeProps &
+    IdOrNameProps & {
+      parent: boolean;
+      preserveUnderName?: string;
+    }
+) => {
+  if (!props.parent) {
+    throw new Error('Only resetting to parent is supported for now');
+  }
+  const branchId = await branchIdFromProps(props);
+  const {
+    data: { branch },
+  } = await props.apiClient.getProjectBranch(props.projectId, branchId);
+  if (!branch.parent_id) {
+    throw new Error('Branch has no parent');
+  }
+  const { data } = await retryOnLock(() =>
+    props.apiClient.request({
+      method: 'POST',
+      path: `/projects/${props.projectId}/branches/${branch.id}/reset`,
+      body: {
+        source_branch_id: branch.parent_id,
+        preserve_under_name: props.preserveUnderName || undefined,
+      },
+    })
+  );
+
+  const resultBranch = data.branch as Branch;
+
+  writer(props).end(resultBranch, {
+    // need to reset types until we expose reset api
+    fields: BRANCH_FIELDS_RESET as any,
   });
 };
