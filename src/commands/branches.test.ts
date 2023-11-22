@@ -270,4 +270,19 @@ describe('branches', () => {
       snapshot: true,
     },
   });
+
+  testCliCommand({
+    name: 'reset branch to parent',
+    args: [
+      'branches',
+      'reset',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--parent',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
 });
