@@ -15,12 +15,7 @@
         "prepareCmd": "cp dist/package.json ./"
       }
     ],
-    [
-      "@semantic-release/git",
-      {
-        "assets": ["package.json", "package-lock.json"]
-      }
-    ],
+    "@semantic-release/git",
     [
       "@semantic-release/github",
       {
