@@ -67,7 +67,7 @@ export const handler = async (
     endpointType?: EndpointType;
     psql: boolean;
     '--'?: string[];
-  }
+  },
 ) => {
   const projectId = props.projectId;
   const branchId = await branchIdFromProps(props);
@@ -84,7 +84,7 @@ export const handler = async (
     throw new Error(
       `No ${
         props.endpointType ?? ''
-      } endpoint found for the branch: ${branchId}`
+      } endpoint found for the branch: ${branchId}`,
     );
   }
 
@@ -102,7 +102,7 @@ export const handler = async (
         throw new Error(
           `Multiple roles found for the branch, please provide one with the --role-name option: ${data.roles
             .map((r) => r.name)
-            .join(', ')}`
+            .join(', ')}`,
         );
       }));
 
@@ -120,7 +120,7 @@ export const handler = async (
         throw new Error(
           `Multiple databases found for the branch, please provide one with the --database-name option: ${data.databases
             .map((d) => d.name)
-            .join(', ')}`
+            .join(', ')}`,
         );
       }));
 
@@ -129,7 +129,7 @@ export const handler = async (
   } = await props.apiClient.getProjectBranchRolePassword(
     props.projectId,
     endpoint.branch_id,
-    role
+    role,
   );
 
   const host = props.pooled
@@ -161,7 +161,7 @@ export const handler = async (
         database,
         options: connectionString.searchParams.toString(),
       },
-      { fields: ['host', 'role', 'password', 'database'] }
+      { fields: ['host', 'role', 'password', 'database'] },
     );
   } else {
     process.stdout.write(connectionString.toString() + '\n');

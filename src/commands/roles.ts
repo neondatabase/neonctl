@@ -28,7 +28,7 @@ export const builder = (argv: yargs.Argv) =>
       'list',
       'List roles',
       (yargs) => yargs,
-      async (args) => await list(args as any)
+      async (args) => await list(args as any),
     )
     .command(
       'create',
@@ -41,13 +41,13 @@ export const builder = (argv: yargs.Argv) =>
             demandOption: true,
           },
         }),
-      async (args) => await create(args as any)
+      async (args) => await create(args as any),
     )
     .command(
       'delete <role>',
       'Delete a role',
       (yargs) => yargs,
-      async (args) => await deleteRole(args as any)
+      async (args) => await deleteRole(args as any),
     );
 
 export const handler = (args: yargs.Argv) => {
@@ -58,7 +58,7 @@ export const list = async (props: BranchScopeProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.listProjectBranchRoles(
     props.projectId,
-    branchId
+    branchId,
   );
   writer(props).end(data.roles, {
     fields: ROLES_FIELDS,
@@ -68,7 +68,7 @@ export const list = async (props: BranchScopeProps) => {
 export const create = async (
   props: BranchScopeProps & {
     name: string;
-  }
+  },
 ) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
@@ -76,7 +76,7 @@ export const create = async (
       role: {
         name: props.name,
       },
-    })
+    }),
   );
   writer(props).end(data.role, {
     fields: ROLES_FIELDS,
@@ -84,15 +84,15 @@ export const create = async (
 };
 
 export const deleteRole = async (
-  props: BranchScopeProps & { role: string }
+  props: BranchScopeProps & { role: string },
 ) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
     props.apiClient.deleteProjectBranchRole(
       props.projectId,
       branchId,
-      props.role
-    )
+      props.role,
+    ),
   );
   writer(props).end(data.role, {
     fields: ROLES_FIELDS,

@@ -32,7 +32,7 @@ export const retryOnLock = async <T>(fn: () => Promise<T>): Promise<T> => {
       if (isAxiosError(err) && err.response?.status === 423) {
         attempt++;
         log.info(
-          `Resource is locked. Waiting ${RETRY_DELAY}ms before retrying...`
+          `Resource is locked. Waiting ${RETRY_DELAY}ms before retrying...`,
         );
         await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY));
       } else {

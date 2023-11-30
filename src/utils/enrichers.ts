@@ -20,7 +20,7 @@ export const branchIdResolve = async ({
     throw new Error(
       `Branch ${branch} not found.\nAvailable branches: ${data.branches
         .map((b) => b.name)
-        .join(', ')}`
+        .join(', ')}`,
     );
   }
   return branchData.id;
@@ -51,7 +51,7 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
 };
 
 export const fillSingleProject = async (
-  props: CommonProps & Partial<Pick<ProjectScopeProps, 'projectId'>>
+  props: CommonProps & Partial<Pick<ProjectScopeProps, 'projectId'>>,
 ) => {
   if (props.projectId) {
     return props;
@@ -62,7 +62,7 @@ export const fillSingleProject = async (
   }
   if (data.projects.length > 1) {
     throw new Error(
-      `Multiple projects found, please provide one with the --project-id option`
+      `Multiple projects found, please provide one with the --project-id option`,
     );
   }
   return {

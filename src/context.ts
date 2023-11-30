@@ -42,7 +42,7 @@ export const readContextFile = (file: string): Context => {
 };
 
 export const enrichFromContext = (
-  args: yargs.Arguments<{ contextFile: string }>
+  args: yargs.Arguments<{ contextFile: string }>,
 ) => {
   if (args._[0] === 'set-context') {
     return;

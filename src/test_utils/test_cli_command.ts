@@ -69,7 +69,7 @@ export const testCliCommand = ({
           env: {
             PATH: `mocks/bin:${process.env.PATH}`,
           },
-        }
+        },
       );
 
       return new Promise<void>((resolve, reject) => {

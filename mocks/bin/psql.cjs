@@ -4,6 +4,6 @@
 // Node.js script should have an extension (otherwise ERR_UNKNOWN_FILE_EXTENSION is thrown), so we use a symlink psql -> psql.cjs
 if (require.main === module) {
   process.stdout.write(
-    JSON.stringify({ 'psql-cli-args': process.argv.slice(2) })
+    JSON.stringify({ 'psql-cli-args': process.argv.slice(2) }),
   );
 }

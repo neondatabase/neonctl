@@ -80,7 +80,7 @@ describe('writer', () => {
       const out = writer({ output: 'table', out: stream });
       out.end(
         { foo: 'bar', extra: 'extra' },
-        { fields: ['foo'], title: 'baz' }
+        { fields: ['foo'], title: 'baz' },
       );
       expect(stream.data).toMatchSnapshot();
     });
