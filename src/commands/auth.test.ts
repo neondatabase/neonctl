@@ -1,12 +1,5 @@
 import axios from 'axios';
-import {
-  beforeAll,
-  describe,
-  test,
-  jest,
-  afterAll,
-  expect,
-} from '@jest/globals';
+import { vi, beforeAll, describe, test, afterAll, expect } from 'vitest';
 import { AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { Server } from 'node:http';
@@ -15,12 +8,7 @@ import { startOauthServer } from '../test_utils/oauth_server';
 import { OAuth2Server } from 'oauth2-mock-server';
 import { runMockServer } from '../test_utils/mock_server';
 
-jest.unstable_mockModule('open', () => ({
-  __esModule: true,
-  default: jest.fn((url: string) => {
-    return axios.get(url);
-  }),
-}));
+vi.mock('open', () => ({ default: vi.fn((url: string) => axios.get(url)) }));
 
 // "open" module should be imported after mocking
 const authModule = await import('./auth');
