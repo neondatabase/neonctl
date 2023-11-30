@@ -85,7 +85,7 @@
   },
   "scripts": {
     "watch": "tsc --watch",
-    "lint": "tsc --noEmit && eslint src --ext .ts",
+    "lint": "tsc --noEmit && eslint src --ext .ts && prettier --check .",
     "build": "npm run generateParams && npm run clean && tsc && cp src/*.html package*.json README.md ./dist",
     "clean": "rm -rf dist",
     "generateParams": "node --loader ts-node/esm ./generateOptionsFromSpec.ts",
