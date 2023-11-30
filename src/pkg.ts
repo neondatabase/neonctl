@@ -1,9 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import pkgJson from '../package.json';
 
-export default JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL('./package.json', import.meta.url)),
-    'utf-8'
-  )
-);
+export default pkgJson;

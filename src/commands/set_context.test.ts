@@ -1,7 +1,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rmSync, writeFileSync } from 'node:fs';
-import { afterAll, describe } from '@jest/globals';
+import { afterAll, describe } from 'vitest';
 import { testCliCommand } from '../test_utils/test_cli_command';
 
 const CONTEXT_FILE = join(tmpdir(), `neon_${Date.now()}`);

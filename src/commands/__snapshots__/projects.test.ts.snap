@@ -1,26 +1,6 @@
-// Jest Snapshot v1, https://goo.gl/fbAQLP
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`projects create and connect with psql and psql args test 1`] = `
-"project:
-  id: new-project-123456
-  name: test_project
-  created_at: 2021-01-01T00:00:00.000Z
-connection_uris:
-  - connection_uri: postgres://localhost:5432/test_project
-{"psql-cli-args":["postgres://localhost:5432/test_project","-c","SELECT 1"]}"
-`;
-
-exports[`projects create and connect with psql test 1`] = `
-"project:
-  id: new-project-123456
-  name: test_project
-  created_at: 2021-01-01T00:00:00.000Z
-connection_uris:
-  - connection_uri: postgres://localhost:5432/test_project
-{"psql-cli-args":["postgres://localhost:5432/test_project"]}"
-`;
-
-exports[`projects create project with setting the context test 1`] = `
+exports[`projects > create > test 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -30,7 +10,27 @@ connection_uris:
 "
 `;
 
-exports[`projects create test 1`] = `
+exports[`projects > create and connect with psql > test 1`] = `
+"project:
+  id: new-project-123456
+  name: test_project
+  created_at: 2021-01-01T00:00:00.000Z
+connection_uris:
+  - connection_uri: postgres://localhost:5432/test_project
+{\\"psql-cli-args\\":[\\"postgres://localhost:5432/test_project\\"]}"
+`;
+
+exports[`projects > create and connect with psql and psql args > test 1`] = `
+"project:
+  id: new-project-123456
+  name: test_project
+  created_at: 2021-01-01T00:00:00.000Z
+connection_uris:
+  - connection_uri: postgres://localhost:5432/test_project
+{\\"psql-cli-args\\":[\\"postgres://localhost:5432/test_project\\",\\"-c\\",\\"SELECT 1\\"]}"
+`;
+
+exports[`projects > create project with setting the context > test 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -40,21 +40,21 @@ connection_uris:
 "
 `;
 
-exports[`projects delete test 1`] = `
+exports[`projects > delete > test 1`] = `
 "id: test
 name: test
 create_at: 2018-01-01T00:00:00.000Z
 "
 `;
 
-exports[`projects get test 1`] = `
+exports[`projects > get > test 1`] = `
 "id: test
 name: test_project
 created_at: 2019-01-01T00:00:00Z
 "
 `;
 
-exports[`projects list test 1`] = `
+exports[`projects > list > test 1`] = `
 "- id: 1
   name: Project_1
   created_at: 2019-01-01T00:00:00.000Z
@@ -70,7 +70,7 @@ exports[`projects list test 1`] = `
 "
 `;
 
-exports[`projects update test 1`] = `
+exports[`projects > update > test 1`] = `
 "id: 1
 name: test_project
 created_at: 2019-01-01T00:00:00Z

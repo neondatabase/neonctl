@@ -100,9 +100,7 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       );
 
       response.writeHead(200, { 'Content-Type': 'text/html' });
-      createReadStream(
-        join(fileURLToPath(new URL('.', import.meta.url)), './callback.html')
-      ).pipe(response);
+      createReadStream(join(__dirname, './callback.html')).pipe(response);
       resolve(tokenSet);
       server.close();
     });
