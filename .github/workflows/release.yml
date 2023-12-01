@@ -12,6 +12,9 @@ jobs:
         with:
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/setup-node@v3
+        with:
+          node-version-file: .nvmrc
+          cache: npm
       - run: npm ci
       - run: npm run build
       - run: npm test
