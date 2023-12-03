@@ -93,6 +93,9 @@
     "test": "node --experimental-vm-modules node_modules/.bin/jest"
   },
   "lint-staged": {
+    ".{cjs,js,json,md,html}": [
+      "prettier --write"
+    ],
     "*.ts": [
       "eslint --cache --fix",
       "prettier --write"
