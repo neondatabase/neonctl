@@ -31,7 +31,7 @@ type WriteOutConfig<T> = {
  *   .end()
  */
 export const writer = (
-  props: Pick<CommonProps, 'output'> & { out?: NodeJS.WritableStream }
+  props: Pick<CommonProps, 'output'> & { out?: NodeJS.WritableStream },
 ) => {
   const out = props.out ?? process.stdout;
   const chunks: { data: any; config: WriteOutConfig<any> }[] = [];
@@ -55,11 +55,11 @@ export const writer = (
                   chunks.map(({ config, data }, idx) => [
                     config.title ? toSnakeCase(config.title) : idx,
                     data,
-                  ])
+                  ]),
                 ),
             null,
-            2
-          )
+            2,
+          ),
         );
         return;
       }
@@ -73,11 +73,11 @@ export const writer = (
                   chunks.map(({ config, data }, idx) => [
                     config.title ? toSnakeCase(config.title) : idx,
                     data,
-                  ])
+                  ]),
                 ),
             null,
-            2
-          )
+            2,
+          ),
         );
         return;
       }
@@ -86,8 +86,8 @@ export const writer = (
         const arrayData = Array.isArray(data) ? data : [data];
         const fields = config.fields.filter((field) =>
           arrayData.some(
-            (item) => item[field] !== undefined && item[field] !== ''
-          )
+            (item) => item[field] !== undefined && item[field] !== '',
+          ),
         );
         const table = new Table({
           style: {
@@ -97,7 +97,7 @@ export const writer = (
             field
               .split('_')
               .map((word) => word[0].toUpperCase() + word.slice(1))
-              .join(' ')
+              .join(' '),
           ),
         });
         arrayData.forEach((item) => {

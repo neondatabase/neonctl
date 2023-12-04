@@ -49,7 +49,7 @@ export const builder = (argv: yargs.Argv) =>
       'list',
       'List branches',
       (yargs) => yargs,
-      async (args) => await list(args as any)
+      async (args) => await list(args as any),
     )
     .command(
       'create',
@@ -89,7 +89,7 @@ export const builder = (argv: yargs.Argv) =>
             default: false,
           },
         }),
-      async (args) => await create(args as any)
+      async (args) => await create(args as any),
     )
     .command(
       'reset <id|name>',
@@ -105,19 +105,19 @@ export const builder = (argv: yargs.Argv) =>
             describe: 'Name under which to preserve the old branch',
           },
         }),
-      async (args) => await reset(args as any)
+      async (args) => await reset(args as any),
     )
     .command(
       'rename <id|name> <new-name>',
       'Rename a branch',
       (yargs) => yargs,
-      async (args) => await rename(args as any)
+      async (args) => await rename(args as any),
     )
     .command(
       'set-primary <id|name>',
       'Set a branch as primary',
       (yargs) => yargs,
-      async (args) => await setPrimary(args as any)
+      async (args) => await setPrimary(args as any),
     )
     .command(
       'add-compute <id|name>',
@@ -131,19 +131,19 @@ export const builder = (argv: yargs.Argv) =>
             default: EndpointType.ReadOnly,
           },
         }),
-      async (args) => await addCompute(args as any)
+      async (args) => await addCompute(args as any),
     )
     .command(
       'delete <id|name>',
       'Delete a branch',
       (yargs) => yargs,
-      async (args) => await deleteBranch(args as any)
+      async (args) => await deleteBranch(args as any),
     )
     .command(
       'get <id|name>',
       'Get a branch',
       (yargs) => yargs,
-      async (args) => await get(args as any)
+      async (args) => await get(args as any),
     );
 
 export const handler = (args: yargs.Argv) => {
@@ -166,7 +166,7 @@ const create = async (
     psql: boolean;
     suspendTimeout: number;
     '--'?: string[];
-  }
+  },
 ) => {
   const parentProps = await (() => {
     if (!props.parent) {
@@ -218,7 +218,7 @@ const create = async (
             },
           ]
         : [],
-    })
+    }),
   );
 
   const out = writer(props);
@@ -252,7 +252,7 @@ const create = async (
 };
 
 const rename = async (
-  props: ProjectScopeProps & IdOrNameProps & { newName: string }
+  props: ProjectScopeProps & IdOrNameProps & { newName: string },
 ) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
@@ -260,7 +260,7 @@ const rename = async (
       branch: {
         name: props.newName,
       },
-    })
+    }),
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
@@ -270,7 +270,7 @@ const rename = async (
 const setPrimary = async (props: ProjectScopeProps & IdOrNameProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.setPrimaryProjectBranch(props.projectId, branchId)
+    props.apiClient.setPrimaryProjectBranch(props.projectId, branchId),
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
@@ -280,7 +280,7 @@ const setPrimary = async (props: ProjectScopeProps & IdOrNameProps) => {
 const deleteBranch = async (props: ProjectScopeProps & IdOrNameProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.deleteProjectBranch(props.projectId, branchId)
+    props.apiClient.deleteProjectBranch(props.projectId, branchId),
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
@@ -291,7 +291,7 @@ const get = async (props: ProjectScopeProps & IdOrNameProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.getProjectBranch(
     props.projectId,
-    branchId
+    branchId,
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
@@ -302,7 +302,7 @@ const addCompute = async (
   props: ProjectScopeProps &
     IdOrNameProps & {
       type: EndpointType;
-    }
+    },
 ) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
@@ -311,7 +311,7 @@ const addCompute = async (
         branch_id: branchId,
         type: props.type,
       },
-    })
+    }),
   );
   writer(props).end(data.endpoint, {
     fields: ['id', 'host'],
@@ -323,7 +323,7 @@ const reset = async (
     IdOrNameProps & {
       parent: boolean;
       preserveUnderName?: string;
-    }
+    },
 ) => {
   if (!props.parent) {
     throw new Error('Only resetting to parent is supported for now');
@@ -343,7 +343,7 @@ const reset = async (
         source_branch_id: branch.parent_id,
         preserve_under_name: props.preserveUnderName || undefined,
       },
-    })
+    }),
   );
 
   const resultBranch = data.branch as Branch;

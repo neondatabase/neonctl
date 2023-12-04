@@ -27,4 +27,3 @@ jobs:
       - run: git checkout main
       - run: git rebase origin/release
       - run: git push origin main --force-with-lease --tags
-

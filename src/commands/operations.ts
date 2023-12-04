@@ -23,7 +23,7 @@ export const builder = (argv: yargs.Argv) =>
       'list',
       'List operations',
       (yargs) => yargs,
-      async (args) => await list(args as any)
+      async (args) => await list(args as any),
     );
 
 export const handler = (args: yargs.Argv) => {

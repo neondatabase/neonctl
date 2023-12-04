@@ -28,7 +28,7 @@ export const builder = (argv: yargs.Argv) =>
       'list',
       'List databases',
       (yargs) => yargs,
-      async (args) => await list(args as any)
+      async (args) => await list(args as any),
     )
     .command(
       'create',
@@ -45,13 +45,13 @@ export const builder = (argv: yargs.Argv) =>
             type: 'string',
           },
         }),
-      async (args) => await create(args as any)
+      async (args) => await create(args as any),
     )
     .command(
       'delete <database>',
       'Delete a database',
       (yargs) => yargs,
-      async (args) => await deleteDb(args as any)
+      async (args) => await deleteDb(args as any),
     );
 
 export const handler = (args: yargs.Argv) => {
@@ -62,7 +62,7 @@ export const list = async (props: BranchScopeProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.listProjectBranchDatabases(
     props.projectId,
-    branchId
+    branchId,
   );
   writer(props).end(data.databases, {
     fields: DATABASE_FIELDS,
@@ -73,7 +73,7 @@ export const create = async (
   props: BranchScopeProps & {
     name: string;
     ownerName?: string;
-  }
+  },
 ) => {
   const branchId = await branchIdFromProps(props);
   const owner =
@@ -88,7 +88,7 @@ export const create = async (
           throw new Error(
             `More than one role found in branch ${branchId}. Please specify the owner name. Roles: ${data.roles
               .map((r) => r.name)
-              .join(', ')}`
+              .join(', ')}`,
           );
         }
         return data.roles[0].name;
@@ -103,7 +103,7 @@ export const create = async (
         name: props.name,
         owner_name: owner,
       },
-    })
+    }),
   );
 
   writer(props).end(data.database, {
@@ -112,15 +112,15 @@ export const create = async (
 };
 
 export const deleteDb = async (
-  props: BranchScopeProps & { database: string }
+  props: BranchScopeProps & { database: string },
 ) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
     props.apiClient.deleteProjectBranchDatabase(
       props.projectId,
       branchId,
-      props.database
-    )
+      props.database,
+    ),
   );
 
   writer(props).end(data.database, {

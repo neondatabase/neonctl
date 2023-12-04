@@ -44,7 +44,7 @@
     "lint-staged": "^13.0.3",
     "oauth2-mock-server": "^6.0.0",
     "pkg": "^5.8.1",
-    "prettier": "^2.7.1",
+    "prettier": "^3.1.0",
     "rollup": "^3.26.2",
     "semantic-release": "^21.0.2",
     "strip-ansi": "^7.1.0",
@@ -85,7 +85,7 @@
   },
   "scripts": {
     "watch": "tsc --watch",
-    "lint": "tsc --noEmit && eslint src --ext .ts",
+    "lint": "tsc --noEmit && eslint src --ext .ts && prettier --check .",
     "build": "npm run generateParams && npm run clean && tsc && cp src/*.html package*.json README.md ./dist",
     "clean": "rm -rf dist",
     "generateParams": "node --loader ts-node/esm ./generateOptionsFromSpec.ts",
@@ -93,6 +93,9 @@
     "test": "node --experimental-vm-modules node_modules/.bin/jest"
   },
   "lint-staged": {
+    ".{cjs,js,json,md,html}": [
+      "prettier --write"
+    ],
     "*.ts": [
       "eslint --cache --fix",
       "prettier --write"

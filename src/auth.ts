@@ -36,7 +36,7 @@ custom.setHttpOptionsDefaults({
 
 export const refreshToken = async (
   { oauthHost, clientId }: AuthProps,
-  tokenSet: TokenSet
+  tokenSet: TokenSet,
 ) => {
   log.debug('Discovering oauth server');
   const issuer = await Issuer.discover(oauthHost);
@@ -96,12 +96,12 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
         {
           code_verifier: codeVerifier,
           state,
-        }
+        },
       );
 
       response.writeHead(200, { 'Content-Type': 'text/html' });
       createReadStream(
-        join(fileURLToPath(new URL('.', import.meta.url)), './callback.html')
+        join(fileURLToPath(new URL('.', import.meta.url)), './callback.html'),
       ).pipe(response);
       resolve(tokenSet);
       server.close();

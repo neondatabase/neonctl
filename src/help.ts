@@ -21,8 +21,8 @@ const formatHelp = (help: string) => {
   if (topLevelCommand) {
     result.push(
       chalk.bold(
-        topLevelCommand.replace('[options]', chalk.reset.green('[options]'))
-      )
+        topLevelCommand.replace('[options]', chalk.reset.green('[options]')),
+      ),
     );
     result.push('');
   }
@@ -52,7 +52,7 @@ const formatHelp = (help: string) => {
           width: SPACE_WIDTH,
           padding: [0, 0, 0, 0],
         },
-        { text: description, padding: [0, 0, 0, 2] }
+        { text: description, padding: [0, 0, 0, 2] },
       );
     });
     result.push(ui.toString());
@@ -79,7 +79,7 @@ const formatHelp = (help: string) => {
         {
           text: description,
           padding: [0, 0, 0, 0],
-        }
+        },
       );
     });
     result.push(ui.toString());
@@ -121,7 +121,7 @@ const formatHelp = (help: string) => {
           {
             text: chalk.rgb(210, 210, 210)(description ?? ''),
             padding: [0, 0, 0, 0],
-          }
+          },
         );
       } else {
         ui.div(
@@ -133,7 +133,7 @@ const formatHelp = (help: string) => {
           {
             text: chalk.rgb(210, 210, 210)(option),
             padding: [0, 0, 0, 0],
-          }
+          },
         );
       }
 
