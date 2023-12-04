@@ -8,7 +8,7 @@ module.exports = {
     parts[0] = 'snapshots';
     parts[parts.length - 1] = parts[parts.length - 1].replace(
       '.js',
-      snapshotExtension
+      snapshotExtension,
     );
     const r = path.join(__dirname, ...parts);
     return r;
@@ -21,7 +21,7 @@ module.exports = {
     parts[0] = 'dist';
     parts[parts.length - 1] = parts[parts.length - 1].replace(
       snapshotExtension,
-      '.js'
+      '.js',
     );
     const r = path.join(__dirname, ...parts);
     return r;

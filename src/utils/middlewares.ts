@@ -6,7 +6,7 @@
 export const fillInArgs = (
   args: Record<string, unknown>,
   currentArgs: Record<string, unknown> = args,
-  acc: string[] = []
+  acc: string[] = [],
 ) => {
   Object.entries(currentArgs).forEach(([k, v]) => {
     if (k === '_') {

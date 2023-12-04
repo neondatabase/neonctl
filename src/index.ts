@@ -28,7 +28,13 @@ import { matchErrorCode } from './errors.js';
 import { showHelp } from './help.js';
 import { currentContextFile, enrichFromContext } from './context.js';
 
-const NO_SUBCOMMANDS_VERBS = ['auth', 'me', 'cs', 'connection-string', 'set-context'];
+const NO_SUBCOMMANDS_VERBS = [
+  'auth',
+  'me',
+  'cs',
+  'connection-string',
+  'set-context',
+];
 
 let builder = yargs(hideBin(process.argv));
 builder = builder
@@ -104,8 +110,12 @@ builder = builder
     default: false,
   })
   .alias('help', 'h')
-  .middleware(async(args) => {
-    if (args.help || args._.length === 1 && !NO_SUBCOMMANDS_VERBS.includes(args._[0] as string)) {
+  .middleware(async (args) => {
+    if (
+      args.help ||
+      (args._.length === 1 &&
+        !NO_SUBCOMMANDS_VERBS.includes(args._[0] as string))
+    ) {
       await showHelp(builder);
     }
   })
@@ -141,7 +151,7 @@ builder = builder
         log.debug(
           'Fail: %d | %s',
           err.response?.status,
-          err.response?.statusText
+          err.response?.statusText,
         );
         log.error(err.response?.data?.message);
         sendError(err, 'API_ERROR');

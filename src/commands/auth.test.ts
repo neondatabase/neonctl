@@ -53,7 +53,7 @@ describe('auth', () => {
     });
 
     const credentials = JSON.parse(
-      readFileSync(`${configDir}/credentials.json`, 'utf-8')
+      readFileSync(`${configDir}/credentials.json`, 'utf-8'),
     );
     expect(credentials.access_token).toEqual(expect.any(String));
     expect(credentials.refresh_token).toEqual(expect.any(String));

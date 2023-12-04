@@ -33,7 +33,7 @@ describe('set_context', () => {
 
     const overrideContextFile = join(
       tmpdir(),
-      `neon_override_ctx_${Date.now()}`
+      `neon_override_ctx_${Date.now()}`,
     );
     testCliCommand({
       name: 'get branch id overrides context set branch',
@@ -43,7 +43,7 @@ describe('set_context', () => {
           JSON.stringify({
             projectId: 'test',
             branchId: 'br-cloudy-branch-12345678',
-          })
+          }),
         );
       },
       after: async () => {

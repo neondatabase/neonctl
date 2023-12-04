@@ -50,7 +50,7 @@ export const authFlow = async ({
     getApiClient({
       apiKey: tokenSet.access_token || '',
       apiHost,
-    })
+    }),
   );
   log.info(`Saved credentials to ${credentialsPath}`);
   log.info('Auth complete');
@@ -60,7 +60,7 @@ export const authFlow = async ({
 const preserveCredentials = async (
   path: string,
   credentials: TokenSet,
-  apiClient: Api<unknown>
+  apiClient: Api<unknown>,
 ) => {
   const {
     data: { id },
@@ -76,7 +76,7 @@ const preserveCredentials = async (
 };
 
 export const ensureAuth = async (
-  props: AuthProps & { apiKey: string; apiClient: Api<unknown>; help: boolean }
+  props: AuthProps & { apiKey: string; apiClient: Api<unknown>; help: boolean },
 ) => {
   if (props._.length === 0 || props.help) {
     return;
@@ -92,7 +92,7 @@ export const ensureAuth = async (
   if (existsSync(credentialsPath)) {
     try {
       const tokenSetContents = await JSON.parse(
-        readFileSync(credentialsPath, 'utf8')
+        readFileSync(credentialsPath, 'utf8'),
       );
       const tokenSet = new TokenSet(tokenSetContents);
       if (tokenSet.expired()) {
@@ -102,7 +102,7 @@ export const ensureAuth = async (
             oauthHost: props.oauthHost,
             clientId: props.clientId,
           },
-          tokenSet
+          tokenSet,
         ).catch((e) => {
           log.error('failed to refresh token\n%s', e?.message);
           process.exit(1);
@@ -116,7 +116,7 @@ export const ensureAuth = async (
         await preserveCredentials(
           credentialsPath,
           refreshedTokenSet,
-          props.apiClient
+          props.apiClient,
         );
         return;
       }

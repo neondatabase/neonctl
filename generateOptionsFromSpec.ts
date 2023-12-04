@@ -23,7 +23,7 @@ const typesMapping = {
 
 (async () => {
   const spec: OpenAPIV3.Document = (await SwaggerParser.dereference(
-    './node_modules/@neondatabase/api-client/public-v2.yaml'
+    './node_modules/@neondatabase/api-client/public-v2.yaml',
   )) as any;
   const outFile = createWriteStream('./src/parameters.gen.ts', 'utf8');
   outFile.write('// FILE IS GENERATED, DO NOT EDIT\n\n');
@@ -31,10 +31,10 @@ const typesMapping = {
     const schema = spec.components?.schemas?.[name] as OpenAPIV3.SchemaObject;
     const parseProperties = (
       schema: OpenAPIV3.SchemaObject,
-      context: string[] = []
+      context: string[] = [],
     ) => {
       Object.entries(
-        schema.properties as Record<string, OpenAPIV3.SchemaObject>
+        schema.properties as Record<string, OpenAPIV3.SchemaObject>,
       ).forEach(([key, value]) => {
         if (value.type === 'object' && value.properties) {
           parseProperties(value, [...context, key]);
@@ -42,12 +42,12 @@ const typesMapping = {
           outFile.write(
             `  '${[...context, key].join('.')}': {
               type: ${JSON.stringify(
-                typesMapping[value.type as keyof typeof typesMapping]
+                typesMapping[value.type as keyof typeof typesMapping],
               )},
               description: ${JSON.stringify(value.description)},\n
               demandOption: ${
                 schema.required?.includes(key) ? 'true' : 'false'
-              },\n`
+              },\n`,
           );
           if (value.enum) {
             outFile.write(` choices: ${JSON.stringify(value.enum)},\n`);
@@ -57,7 +57,7 @@ const typesMapping = {
       });
     };
     outFile.write(
-      `export const ${name[0].toLowerCase()}${name.slice(1)} = {\n`
+      `export const ${name[0].toLowerCase()}${name.slice(1)} = {\n`,
     );
     parseProperties(schema);
     outFile.write(`} as const;\n\n`);

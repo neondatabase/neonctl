@@ -36,7 +36,7 @@ export const builder = (argv: yargs.Argv) => {
       (yargs) => yargs,
       async (args) => {
         await list(args as any);
-      }
+      },
     )
     .command(
       'create',
@@ -64,7 +64,7 @@ export const builder = (argv: yargs.Argv) => {
         }),
       async (args) => {
         await create(args as any);
-      }
+      },
     )
     .command(
       'update <id>',
@@ -78,7 +78,7 @@ export const builder = (argv: yargs.Argv) => {
         }),
       async (args) => {
         await update(args as any);
-      }
+      },
     )
     .command(
       'delete <id>',
@@ -86,7 +86,7 @@ export const builder = (argv: yargs.Argv) => {
       (yargs) => yargs,
       async (args) => {
         await deleteProject(args as any);
-      }
+      },
     )
     .command(
       'get <id>',
@@ -94,7 +94,7 @@ export const builder = (argv: yargs.Argv) => {
       (yargs) => yargs,
       async (args) => {
         await get(args as any);
-      }
+      },
     );
 };
 export const handler = (args: yargs.Argv) => {
@@ -127,7 +127,7 @@ const create = async (
     psql: boolean;
     setContext: boolean;
     '--'?: string[];
-  }
+  },
 ) => {
   const project: ProjectCreateRequest['project'] = {};
   if (props.name) {
@@ -173,7 +173,7 @@ const update = async (
   props: CommonProps &
     IdOrNameProps & {
       name: string;
-    }
+    },
 ) => {
   const { data } = await props.apiClient.updateProject(props.id, {
     project: {

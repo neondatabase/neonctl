@@ -2,10 +2,7 @@ import { log } from '../log.js';
 import { spawn } from 'child_process';
 import which from 'which';
 
-export const psql = async (
-  connection_uri: string,
-  args: string[] = [],
-) => {
+export const psql = async (connection_uri: string, args: string[] = []) => {
   const psqlPathOrNull = await which('psql', { nothrow: true });
 
   if (psqlPathOrNull === null) {
@@ -26,7 +23,7 @@ export const psql = async (
     });
   }
 
-  psql.on('exit', (code: number|null) => {
+  psql.on('exit', (code: number | null) => {
     process.exit(code === null ? 1 : code);
   });
 };

@@ -9,7 +9,7 @@ export const CREDENTIALS_FILE = 'credentials.json';
 
 export const defaultDir = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), '.config'),
-  'neonctl'
+  'neonctl',
 );
 
 export const ensureConfigDir = async ({
