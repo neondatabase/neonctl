@@ -1,4 +1,4 @@
-const HAIKU_REGEX = /^[a-z]+-[a-z]+-\d+$/;
+const HAIKU_REGEX = /^[a-z]+-[a-z]+-\d+(-\w+)?$/;
 
 export const looksLikeBranchId = (branch: string) =>
   branch.startsWith('br-') && HAIKU_REGEX.test(branch.substring(3));
