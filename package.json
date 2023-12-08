@@ -91,7 +91,7 @@
     "generateParams": "node --loader ts-node/esm ./generateOptionsFromSpec.ts",
     "start": "node src/index.js",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
-    "prepare": "[ -d .git ] && husky install"
+    "prepare": "test -d .git && husky install"
   },
   "lint-staged": {
     ".{cjs,js,json,md,html}": [
