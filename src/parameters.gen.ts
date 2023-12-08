@@ -3,25 +3,25 @@
 export const projectCreateRequest = {
   'project.settings.quota.active_time_seconds': {
               type: "number",
-              description: "The total amount of wall-clock time allowed to be spent by project's compute endpoints.\n",
+              description: "The total amount of wall-clock time allowed to be spent by the project's compute endpoints.\n",
 
               demandOption: false,
   },
   'project.settings.quota.compute_time_seconds': {
               type: "number",
-              description: "The total amount of CPU seconds allowed to be spent by project's compute endpoints.\n",
+              description: "The total amount of CPU seconds allowed to be spent by the project's compute endpoints.\n",
 
               demandOption: false,
   },
   'project.settings.quota.written_data_bytes': {
               type: "number",
-              description: "Total amount of data written to all project's branches.\n",
+              description: "Total amount of data written to all of a project's branches.\n",
 
               demandOption: false,
   },
   'project.settings.quota.data_transfer_bytes': {
               type: "number",
-              description: "Total amount of data transferred from all project's branches using proxy.\n",
+              description: "Total amount of data transferred from all of a project's branches using the proxy.\n",
 
               demandOption: false,
   },
@@ -30,6 +30,12 @@ export const projectCreateRequest = {
               description: "Limit on the logical size of every project's branch.\n",
 
               demandOption: false,
+  },
+  'project.settings.allowed_ips.primary_branch_only': {
+              type: "boolean",
+              description: undefined,
+
+              demandOption: true,
   },
   'project.name': {
               type: "string",
@@ -57,20 +63,26 @@ export const projectCreateRequest = {
   },
   'project.provisioner': {
               type: "string",
-              description: "The Neon compute provisioner.\n",
+              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n",
 
               demandOption: false,
- choices: ["k8s-pod","k8s-neonvm","docker"],
+ choices: ["k8s-pod","k8s-neonvm"],
   },
   'project.region_id': {
               type: "string",
-              description: "The region identifier. See [the documentation](https://neon.tech/docs/introduction/regions) for the list of supported regions.\n",
+              description: "The region identifier. Refer to our [Regions](https://neon.tech/docs/introduction/regions) documentation for supported regions. Values are specified in this format: `aws-us-east-1`\n",
+
+              demandOption: false,
+  },
+  'project.default_endpoint_settings.suspend_timeout_seconds': {
+              type: "number",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
 
               demandOption: false,
   },
   'project.pg_version': {
               type: "number",
-              description: "The major PostgreSQL version number. Currently supported version are `14` and `15`.",
+              description: "The major PostgreSQL version number. Currently supported versions are `14`, `15` and `16`.",
 
               demandOption: false,
   },
@@ -82,7 +94,7 @@ export const projectCreateRequest = {
   },
   'project.history_retention_seconds': {
               type: "number",
-              description: "The number of seconds to retain PITR backup history for this project. Defaults to 7 days\n",
+              description: "The number of seconds to retain the point-in-time restore (PITR) backup history for this project.\nThe default is 604800 seconds (7 days).\n",
 
               demandOption: false,
   },
@@ -91,7 +103,7 @@ export const projectCreateRequest = {
 export const branchCreateRequest = {
   'branch.parent_id': {
               type: "string",
-              description: "The `branch_id` of the parent branch\n",
+              description: "The `branch_id` of the parent branch. If omitted or empty, the branch will be created from the project's primary branch.\n",
 
               demandOption: false,
   },
@@ -125,14 +137,14 @@ export const branchCreateRequestEndpointOptions = {
   },
   'provisioner': {
               type: "string",
-              description: "The Neon compute provisioner.\n",
+              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n",
 
               demandOption: false,
- choices: ["k8s-pod","k8s-neonvm","docker"],
+ choices: ["k8s-pod","k8s-neonvm"],
   },
   'suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which endpoint will be\nautomatically suspended. Value `0` means use global default,\n`-1` means never suspend. Maximum value is 1 week in seconds.\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
 
               demandOption: false,
   },
@@ -169,10 +181,10 @@ export const endpointCreateRequest = {
   },
   'endpoint.provisioner': {
               type: "string",
-              description: "The Neon compute provisioner.\n",
+              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n",
 
               demandOption: false,
- choices: ["k8s-pod","k8s-neonvm","docker"],
+ choices: ["k8s-pod","k8s-neonvm"],
   },
   'endpoint.pooler_enabled': {
               type: "boolean",
@@ -189,7 +201,7 @@ export const endpointCreateRequest = {
   },
   'endpoint.disabled': {
               type: "boolean",
-              description: "Whether to restrict connections to the compute endpoint\n",
+              description: "Whether to restrict connections to the compute endpoint.\nEnabling this option schedules a suspend compute operation.\nA disabled compute endpoint cannot be enabled by a connection or\nconsole action. However, the compute endpoint is periodically\nenabled by check_availability operations.\n",
 
               demandOption: false,
   },
@@ -201,7 +213,7 @@ export const endpointCreateRequest = {
   },
   'endpoint.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which endpoint will be\nautomatically suspended. Value `0` means use global default,\n`-1` means never suspend. Maximum value is 1 week in seconds.\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
 
               demandOption: false,
   },
@@ -216,10 +228,10 @@ export const endpointUpdateRequest = {
   },
   'endpoint.provisioner': {
               type: "string",
-              description: "The Neon compute provisioner.\n",
+              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n",
 
               demandOption: false,
- choices: ["k8s-pod","k8s-neonvm","docker"],
+ choices: ["k8s-pod","k8s-neonvm"],
   },
   'endpoint.pooler_enabled': {
               type: "boolean",
@@ -236,7 +248,7 @@ export const endpointUpdateRequest = {
   },
   'endpoint.disabled': {
               type: "boolean",
-              description: "Whether to restrict connections to the compute endpoint\n",
+              description: "Whether to restrict connections to the compute endpoint.\nEnabling this option schedules a suspend compute operation.\nA disabled compute endpoint cannot be enabled by a connection or\nconsole action. However, the compute endpoint is periodically\nenabled by check_availability operations.\n",
 
               demandOption: false,
   },
@@ -248,7 +260,7 @@ export const endpointUpdateRequest = {
   },
   'endpoint.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which endpoint will be\nautomatically suspended. Value `0` means use global default,\n`-1` means never suspend. Maximum value is 1 week in seconds.\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
 
               demandOption: false,
   },
