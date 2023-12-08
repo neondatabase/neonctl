@@ -16,7 +16,7 @@ describe('branch formats', () => {
   });
 
   test('update 2, includes region', () => {
-    expect(looksLikeBranchId('br-cool-disk-18126145-1')).toBe(true);
+    expect(looksLikeBranchId('br-bold-recipe-a13oexw7')).toBe(true);
   });
 });
 
