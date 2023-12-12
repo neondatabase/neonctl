@@ -1,11 +1,15 @@
 import {
   ProjectCreateRequest,
   ProjectListItem,
+  ProjectUpdateRequest,
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
 import { log } from '../log.js';
-import { projectCreateRequest } from '../parameters.gen.js';
+import {
+  projectCreateRequest,
+  projectUpdateRequest,
+} from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
@@ -74,6 +78,24 @@ export const builder = (argv: yargs.Argv) => {
           name: {
             describe: projectCreateRequest['project.name'].description,
             type: 'string',
+          },
+          ipAllowIps: {
+            describe:
+              projectUpdateRequest['project.settings.allowed_ips.ips']
+                .description ??
+              'A list of IP addresses that are allowed to connect to the endpoint.',
+            type: 'string',
+            array: true,
+            group: 'IP Allow:',
+          },
+          ipAllowPrimaryBranchOnly: {
+            describe:
+              projectUpdateRequest[
+                'project.settings.allowed_ips.primary_branch_only'
+              ].description ??
+              'If set true, the list will be applied only to the primary branch.',
+            type: 'boolean',
+            group: 'IP Allow:',
           },
         }),
       async (args) => {
@@ -172,13 +194,33 @@ const deleteProject = async (props: CommonProps & IdOrNameProps) => {
 const update = async (
   props: CommonProps &
     IdOrNameProps & {
-      name: string;
+      name?: string;
+      ipAllowIps?: string[];
+      ipAllowPrimaryBranchOnly?: boolean;
     },
 ) => {
+  const project: ProjectUpdateRequest['project'] = {};
+  if (props.name) {
+    project.name = props.name;
+  }
+  if (props.ipAllowIps) {
+    project.settings = {
+      allowed_ips: {
+        ips: props.ipAllowIps,
+        primary_branch_only: props.ipAllowPrimaryBranchOnly ?? false,
+      },
+    };
+  } else if (props.ipAllowPrimaryBranchOnly) {
+    project.settings = {
+      allowed_ips: {
+        ips: [],
+        primary_branch_only: props.ipAllowPrimaryBranchOnly ?? false,
+      },
+    };
+  }
+
   const { data } = await props.apiClient.updateProject(props.id, {
-    project: {
-      name: props.name,
-    },
+    project,
   });
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };

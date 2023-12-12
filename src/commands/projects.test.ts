@@ -81,8 +81,24 @@ describe('projects', () => {
   });
 
   testCliCommand({
-    name: 'update',
-    args: ['projects', 'update', 'test', '--name', 'test_project'],
+    name: 'update name',
+    args: ['projects', 'update', 'test', '--name', 'test_project_new_name'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'update ip allow',
+    args: [
+      'projects',
+      'update',
+      'test',
+      '--ip-allow-ips',
+      '127.0.0.1',
+      '192.168.1.2/22',
+      '--ip-allow-primary-branch-only',
+    ],
     expected: {
       snapshot: true,
     },
