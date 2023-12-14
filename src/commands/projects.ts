@@ -82,8 +82,7 @@ export const builder = (argv: yargs.Argv) => {
           'ip-allow': {
             describe:
               projectUpdateRequest['project.settings.allowed_ips.ips']
-                .description ??
-              'A list of IP addresses that are allowed to connect to the endpoint.',
+                .description,
             type: 'string',
             array: true,
             group: 'IP Allow:',
@@ -92,8 +91,7 @@ export const builder = (argv: yargs.Argv) => {
             describe:
               projectUpdateRequest[
                 'project.settings.allowed_ips.primary_branch_only'
-              ].description ??
-              'If set true, the list will be applied only to the primary branch.',
+              ].description,
             type: 'boolean',
             group: 'IP Allow:',
           },
