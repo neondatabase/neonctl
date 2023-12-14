@@ -94,10 +94,10 @@ describe('projects', () => {
       'projects',
       'update',
       'test',
-      '--ip-allow-ips',
+      '--ip-allow',
       '127.0.0.1',
       '192.168.1.2/22',
-      '--ip-allow-primary-branch-only',
+      '--primary-only',
     ],
     expected: {
       snapshot: true,
