@@ -88,7 +88,7 @@ export const builder = (argv: yargs.Argv) => {
             array: true,
             group: 'IP Allow:',
           },
-          'primary-only': {
+          'ip-primary-only': {
             describe:
               projectUpdateRequest[
                 'project.settings.allowed_ips.primary_branch_only'
@@ -196,14 +196,14 @@ const update = async (
     IdOrNameProps & {
       name?: string;
       ipAllow?: string[];
-      primaryOnly?: boolean;
+      ipPrimaryOnly?: boolean;
     },
 ) => {
   const project: ProjectUpdateRequest['project'] = {};
   if (props.name) {
     project.name = props.name;
   }
-  if (props.ipAllow || props.primaryOnly != undefined) {
+  if (props.ipAllow || props.ipPrimaryOnly != undefined) {
     const { data } = await props.apiClient.getProject(props.id);
     const existingAllowedIps = data.project.settings?.allowed_ips;
 
@@ -211,7 +211,9 @@ const update = async (
       allowed_ips: {
         ips: props.ipAllow ?? existingAllowedIps?.ips ?? [],
         primary_branch_only:
-          props.primaryOnly ?? existingAllowedIps?.primary_branch_only ?? false,
+          props.ipPrimaryOnly ??
+          existingAllowedIps?.primary_branch_only ??
+          false,
       },
     };
   }

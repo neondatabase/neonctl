@@ -97,7 +97,7 @@ describe('projects', () => {
       '--ip-allow',
       '127.0.0.1',
       '192.168.1.2/22',
-      '--primary-only',
+      '--ip-primary-only',
     ],
     expected: {
       snapshot: true,
@@ -106,7 +106,7 @@ describe('projects', () => {
 
   testCliCommand({
     name: 'update ip allow primary only flag',
-    args: ['projects', 'update', 'test', '--primary-only', 'false'],
+    args: ['projects', 'update', 'test', '--ip-primary-only', 'false'],
     expected: {
       snapshot: true,
     },
