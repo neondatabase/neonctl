@@ -203,18 +203,15 @@ const update = async (
   if (props.name) {
     project.name = props.name;
   }
-  if (props.ipAllow) {
+  if (props.ipAllow || props.primaryOnly != undefined) {
+    const { data } = await props.apiClient.getProject(props.id);
+    const existingAllowedIps = data.project.settings?.allowed_ips;
+
     project.settings = {
       allowed_ips: {
-        ips: props.ipAllow,
-        primary_branch_only: props.primaryOnly ?? false,
-      },
-    };
-  } else if (props.primaryOnly) {
-    project.settings = {
-      allowed_ips: {
-        ips: [],
-        primary_branch_only: props.primaryOnly ?? false,
+        ips: props.ipAllow ?? existingAllowedIps?.ips ?? [],
+        primary_branch_only:
+          props.primaryOnly ?? existingAllowedIps?.primary_branch_only ?? false,
       },
     };
   }
@@ -222,6 +219,7 @@ const update = async (
   const { data } = await props.apiClient.updateProject(props.id, {
     project,
   });
+
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };
 

@@ -105,6 +105,22 @@ describe('projects', () => {
   });
 
   testCliCommand({
+    name: 'update ip allow primary only flag',
+    args: ['projects', 'update', 'test', '--primary-only', 'false'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'update ip allow remove',
+    args: ['projects', 'update', 'test', '--ip-allow'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'get',
     args: ['projects', 'get', 'test'],
     expected: {
