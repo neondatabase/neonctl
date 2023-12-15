@@ -28,12 +28,12 @@ export const projectCreateRequest = {
   },
   'project.settings.allowed_ips.ips': {
               type: "array",
-              description: undefined,
+              description: "A list of IP addresses that are allowed to connect to the endpoint.",
               demandOption: true,
   },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
-              description: undefined,
+              description: "If true, the list will be applied only to the primary branch.",
               demandOption: true,
   },
   'project.name': {
@@ -117,12 +117,12 @@ export const projectUpdateRequest = {
   },
   'project.settings.allowed_ips.ips': {
               type: "array",
-              description: undefined,
+              description: "A list of IP addresses that are allowed to connect to the endpoint.",
               demandOption: true,
   },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
-              description: undefined,
+              description: "If true, the list will be applied only to the primary branch.",
               demandOption: true,
   },
   'project.name': {
