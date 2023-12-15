@@ -85,7 +85,6 @@ export const builder = (argv: yargs.Argv) => {
                 .description,
             type: 'string',
             array: true,
-            group: 'IP Allow:',
           },
           'ip-primary-only': {
             describe:
@@ -93,7 +92,6 @@ export const builder = (argv: yargs.Argv) => {
                 'project.settings.allowed_ips.primary_branch_only'
               ].description,
             type: 'boolean',
-            group: 'IP Allow:',
           },
         }),
       async (args) => {
