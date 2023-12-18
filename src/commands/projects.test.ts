@@ -81,8 +81,40 @@ describe('projects', () => {
   });
 
   testCliCommand({
-    name: 'update',
-    args: ['projects', 'update', 'test', '--name', 'test_project'],
+    name: 'update name',
+    args: ['projects', 'update', 'test', '--name', 'test_project_new_name'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'update ip allow',
+    args: [
+      'projects',
+      'update',
+      'test',
+      '--ip-allow',
+      '127.0.0.1',
+      '192.168.1.2/22',
+      '--ip-primary-only',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'update ip allow primary only flag',
+    args: ['projects', 'update', 'test', '--ip-primary-only', 'false'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'update ip allow remove',
+    args: ['projects', 'update', 'test', '--ip-allow'],
     expected: {
       snapshot: true,
     },
