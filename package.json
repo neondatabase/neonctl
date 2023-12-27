@@ -53,7 +53,7 @@
     "typescript": "^4.7.4"
   },
   "dependencies": {
-    "@neondatabase/api-client": "1.1.0",
+    "@neondatabase/api-client": "1.4.1",
     "@segment/analytics-node": "^1.0.0-beta.26",
     "axios": "^1.4.0",
     "axios-debug-log": "^1.0.0",

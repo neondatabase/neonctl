@@ -1,11 +1,15 @@
 import {
   ProjectCreateRequest,
   ProjectListItem,
+  ProjectUpdateRequest,
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
 import { log } from '../log.js';
-import { projectCreateRequest } from '../parameters.gen.js';
+import {
+  projectCreateRequest,
+  projectUpdateRequest,
+} from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
@@ -74,6 +78,20 @@ export const builder = (argv: yargs.Argv) => {
           name: {
             describe: projectCreateRequest['project.name'].description,
             type: 'string',
+          },
+          'ip-allow': {
+            describe:
+              projectUpdateRequest['project.settings.allowed_ips.ips']
+                .description,
+            type: 'string',
+            array: true,
+          },
+          'ip-primary-only': {
+            describe:
+              projectUpdateRequest[
+                'project.settings.allowed_ips.primary_branch_only'
+              ].description,
+            type: 'boolean',
           },
         }),
       async (args) => {
@@ -172,14 +190,34 @@ const deleteProject = async (props: CommonProps & IdOrNameProps) => {
 const update = async (
   props: CommonProps &
     IdOrNameProps & {
-      name: string;
+      name?: string;
+      ipAllow?: string[];
+      ipPrimaryOnly?: boolean;
     },
 ) => {
+  const project: ProjectUpdateRequest['project'] = {};
+  if (props.name) {
+    project.name = props.name;
+  }
+  if (props.ipAllow || props.ipPrimaryOnly != undefined) {
+    const { data } = await props.apiClient.getProject(props.id);
+    const existingAllowedIps = data.project.settings?.allowed_ips;
+
+    project.settings = {
+      allowed_ips: {
+        ips: props.ipAllow ?? existingAllowedIps?.ips ?? [],
+        primary_branch_only:
+          props.ipPrimaryOnly ??
+          existingAllowedIps?.primary_branch_only ??
+          false,
+      },
+    };
+  }
+
   const { data } = await props.apiClient.updateProject(props.id, {
-    project: {
-      name: props.name,
-    },
+    project,
   });
+
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };
 

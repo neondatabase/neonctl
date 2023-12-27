@@ -6,6 +6,7 @@ import { OpenAPIV3 } from 'openapi-types';
 
 const EXTRACT_PROPERTIES = [
   'ProjectCreateRequest',
+  'ProjectUpdateRequest',
   'BranchCreateRequest',
   'BranchCreateRequestEndpointOptions',
   'BranchUpdateRequest',
@@ -16,6 +17,7 @@ const EXTRACT_PROPERTIES = [
 ];
 
 const typesMapping = {
+  array: 'array',
   integer: 'number',
   string: 'string',
   boolean: 'boolean',
@@ -44,7 +46,7 @@ const typesMapping = {
               type: ${JSON.stringify(
                 typesMapping[value.type as keyof typeof typesMapping],
               )},
-              description: ${JSON.stringify(value.description)},\n
+              description: ${JSON.stringify(value.description)},
               demandOption: ${
                 schema.required?.includes(key) ? 'true' : 'false'
               },\n`,
