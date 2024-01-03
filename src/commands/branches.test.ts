@@ -264,6 +264,14 @@ describe('branches', () => {
   });
 
   testCliCommand({
+    name: 'get by name with numeric name',
+    args: ['branches', 'get', '123', '--project-id', 'test'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'add compute',
     args: ['branches', 'add-compute', 'test_branch', '--project-id', 'test'],
     expected: {
