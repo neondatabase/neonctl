@@ -6,10 +6,11 @@ export const branchIdResolve = async ({
   apiClient,
   projectId,
 }: {
-  branch: string;
+  branch: string | number;
   apiClient: CommonProps['apiClient'];
   projectId: string;
 }) => {
+  branch = branch.toString();
   if (looksLikeBranchId(branch)) {
     return branch;
   }
