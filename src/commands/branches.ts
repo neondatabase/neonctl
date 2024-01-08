@@ -3,10 +3,7 @@ import yargs from 'yargs';
 
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
-import {
-  branchCreateRequest,
-  branchCreateRequestEndpointOptions,
-} from '../parameters.gen.js';
+import { branchCreateRequest } from '../parameters.gen.js';
 import { retryOnLock } from '../api.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import {
@@ -77,8 +74,7 @@ export const builder = (argv: yargs.Argv) =>
           },
           'suspend-timeout': {
             describe:
-              branchCreateRequestEndpointOptions.suspend_timeout_seconds
-                .description,
+              'Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week).',
             type: 'number',
             implies: 'compute',
             default: 0,
