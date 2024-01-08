@@ -1,40 +1,44 @@
-The Neon CLI supports numerous operations, such as authentication and management of Neon projects, branches, compute endpoints, databases, roles, and more.
-
-The Neon CLI command name is `neonctl`. The GitHub repository for the Neon CLI is found [here](https://github.com/neondatabase/neonctl).
+The Neon CLI is a command-line interface that lets you manage Neon directly from the terminal.
 
 ## Install the Neon CLI
 
-This section describes how to install the Neon CLI.
-
-### Prerequisites
-
-Before installing, ensure that you have met the following prerequisites:
-
-- Node.js 16.0 or higher. To check if you already have Node.js, run the following command:
-
-  ```shell
-  node -v
-  ```
-
-- The `npm` package manager. To check if you already have `npm`, run the following command:
-
-  ```shell
-  npm -v
-  ```
-
-  If you need to install `Node.js` or `npm`, refer to instructions on the [official nodejs page](https://nodejs.org) or use the [Node version manager](https://github.com/nvm-sh/nvm).
-
-### Install
-
-To install the Neon CLI, run the following command:
+**npm**
 
 ```shell
 npm i -g neonctl
 ```
 
+Requires Node.js 18.0 or higher.
+
+**Howebrew**
+
+```shell
+brew install neonctl
+```
+
+**Binary (macOS, Linux, Windows)**
+
+Download a binary file [here](https://github.com/neondatabase/neonctl/releases).
+
 ### Upgrade
 
-To upgrade to the latest version of the Neon CLI, run the `npm i -g neonctl` command again.
+**npm**
+
+```shell
+npm update -g neonctl
+```
+
+Requires Node.js 18.0 or higher.
+
+**Howebrew**
+
+```shell
+brew upgrade neonctl
+```
+
+**Binary (macOS, Linux, Windows)**
+
+To upgrade a binary version, download the latest binary, and replace your old binary with the new one.
 
 ## Connect
 
@@ -70,6 +74,7 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 | [roles](https://neon.tech/docs/reference/cli-roles)                    | `list`, `create`, `delete`                                                | Manage roles                 |
 | [operations](https://neon.tech/reference/cli-operations)               | `list`                                                                    | Manage operations            |
 | [connection-string](https://neon.tech/reference/cli-connection-string) |                                                                           | Get connection string        |
+| [set-context](https://neon.tech/reference/cli-set-context)             |                                                                           | Set context for session      |
 | [completion](https://neon.tech/reference/cli-completion)               |                                                                           | Generate a completion script |
 
 ## Global options
