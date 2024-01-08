@@ -1,4 +1,4 @@
-The Neon CLI is a command-line interface that lets you manage Neon directly from the terminal.
+The Neon CLI is a command-line interface that lets you manage [Neon Serverless Postgres](https://neon.tech/) directly from the terminal. For the complete documentation, see [Neon CLI](https://neon.tech/docs/reference/neon-cli).
 
 ## Install the Neon CLI
 
@@ -38,7 +38,7 @@ brew upgrade neonctl
 
 **Binary (macOS, Linux, Windows)**
 
-To upgrade a binary version, download the latest binary, and replace your old binary with the new one.
+To upgrade a binary version, download the latest binary file, as described above, and replace your old binary with the new one.
 
 ## Connect
 
@@ -141,7 +141,7 @@ Global options are supported with any Neon CLI command.
 
 ## Contribute
 
-To run the CLI locally execute build command after making changes:
+To run the CLI locally, execute the build command after making changes:
 
 ```shell
 npm run build
@@ -153,7 +153,7 @@ To develop continuously:
 npm run watch
 ```
 
-To run commands from the local build replace the `neonctl` command with `node dist`, for example:
+To run commands from the local build, replace the `neonctl` command with `node dist`; for example:
 
 ```shell
 node dist branches --help
