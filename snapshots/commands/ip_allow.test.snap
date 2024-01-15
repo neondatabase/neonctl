@@ -1,0 +1,9 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`ip-allow list IP allow test 1`] = `
+"id: test
+name: test_project
+IP_addresses: 192.168.1.1
+primary_branch_only: false
+"
+`;
