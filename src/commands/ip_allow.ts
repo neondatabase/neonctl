@@ -1,5 +1,5 @@
 import yargs from 'yargs';
-import { CommonProps, IdOrNameProps } from '../types';
+import { CommonProps, IdOrNameProps, ProjectScopeProps } from '../types';
 import { writer } from '../writer.js';
 import { Project } from '@neondatabase/api-client';
 
@@ -20,22 +20,30 @@ const IP_ALLOW_FIELDS = [
 export const command = 'ip-allow';
 export const describe = 'Manage IP Allow';
 export const builder = (argv: yargs.Argv) => {
-  return argv.usage('$0 ip-allow <sub-command> [options]').command(
-    'list <id>',
-    'LIST IP Allow configuration',
-    (yargs) => yargs,
-    async (args) => {
-      await list(args as any);
-    },
-  );
+  return argv
+    .usage('$0 ip-allow <sub-command> [options]')
+    .options({
+      projectId: {
+        describe: 'Project ID',
+        type: 'string',
+      },
+    })
+    .command(
+      'list',
+      'List IP Allow configuration',
+      (yargs) => yargs,
+      async (args) => {
+        await list(args as any);
+      },
+    );
 };
 
 export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-const list = async (props: CommonProps & IdOrNameProps) => {
-  const { data } = await props.apiClient.getProject(props.id);
+const list = async (props: CommonProps & ProjectScopeProps) => {
+  const { data } = await props.apiClient.getProject(props.projectId);
   writer(props).end(parse(data.project), {
     fields: IP_ALLOW_FIELDS,
   });
