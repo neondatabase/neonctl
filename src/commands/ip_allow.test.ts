@@ -60,7 +60,7 @@ describe('ip-allow', () => {
       snapshot: true,
       stdout: `id: test
 name: test_project
-IP_addresses: ""
+IP_addresses: []
 primary_branch_only: false
 `,
       stderr: `INFO: The IP allow list has been reset. All databases on project "test_project" are now exposed to the internet

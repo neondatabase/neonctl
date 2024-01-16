@@ -5,13 +5,6 @@ import { Project, ProjectUpdateRequest } from '@neondatabase/api-client';
 import { projectUpdateRequest } from '../parameters.gen.js';
 import { log } from '../log.js';
 
-interface IPAllowFields {
-  id: string;
-  name: string;
-  IP_addresses: string;
-  primary_branch_only: boolean;
-}
-
 const IP_ALLOW_FIELDS = [
   'id',
   'name',
@@ -100,7 +93,7 @@ export const handler = (args: yargs.Argv) => {
 
 const list = async (props: CommonProps & ProjectScopeProps) => {
   const { data } = await props.apiClient.getProject(props.projectId);
-  writer(props).end(parse(data.project), {
+  writer(props).end(parse(data.project, props), {
     fields: IP_ALLOW_FIELDS,
   });
 };
@@ -137,7 +130,7 @@ const add = async (
     },
   );
 
-  writer(props).end(parse(response.project), {
+  writer(props).end(parse(response.project, props), {
     fields: IP_ALLOW_FIELDS,
   });
 };
@@ -169,7 +162,7 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
     },
   );
 
-  writer(props).end(parse(response.project), {
+  writer(props).end(parse(response.project, props), {
     fields: IP_ALLOW_FIELDS,
   });
 };
@@ -187,7 +180,7 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
     project,
   });
 
-  writer(props).end(parse(data.project), {
+  writer(props).end(parse(data.project, props), {
     fields: IP_ALLOW_FIELDS,
   });
 
@@ -198,12 +191,12 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
   }
 };
 
-const parse: (project: Project) => IPAllowFields = (project: Project) => {
+const parse = (project: Project, props: CommonProps) => {
   const ips = project.settings?.allowed_ips?.ips ?? [];
   return {
     id: project.id,
     name: project.name,
-    IP_addresses: ips.join('\n'),
+    IP_addresses: props.output === 'table' ? ips.join('\n') : ips,
     primary_branch_only:
       project.settings?.allowed_ips?.primary_branch_only ?? false,
   };

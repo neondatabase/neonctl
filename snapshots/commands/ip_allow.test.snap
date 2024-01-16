@@ -3,10 +3,10 @@
 exports[`ip-allow Add IP allow test 1`] = `
 "id: test
 name: test_project
-IP_addresses: |-
-  127.0.0.1
-  192.168.10.1-192.168.10.15
-  192.168.1.1
+IP_addresses:
+  - 127.0.0.1
+  - 192.168.10.1-192.168.10.15
+  - 192.168.1.1
 primary_branch_only: true
 "
 `;
@@ -14,7 +14,7 @@ primary_branch_only: true
 exports[`ip-allow Remove IP allow test 1`] = `
 "id: test
 name: test_project
-IP_addresses: ""
+IP_addresses: []
 primary_branch_only: false
 "
 `;
@@ -22,7 +22,7 @@ primary_branch_only: false
 exports[`ip-allow Reset IP allow test 1`] = `
 "id: test
 name: test_project
-IP_addresses: ""
+IP_addresses: []
 primary_branch_only: false
 "
 `;
@@ -30,7 +30,8 @@ primary_branch_only: false
 exports[`ip-allow Reset IP allow to new list test 1`] = `
 "id: test
 name: test_project
-IP_addresses: 192.168.2.2
+IP_addresses:
+  - 192.168.2.2
 primary_branch_only: false
 "
 `;
@@ -38,7 +39,8 @@ primary_branch_only: false
 exports[`ip-allow list IP allow test 1`] = `
 "id: test
 name: test_project
-IP_addresses: 192.168.1.1
+IP_addresses:
+  - 192.168.1.1
 primary_branch_only: false
 "
 `;
