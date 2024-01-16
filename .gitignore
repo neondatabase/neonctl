@@ -6,5 +6,6 @@ bundle/
 .eslintcache
 .vscode
 .idea
+.neon
 coverage
 tmp/
