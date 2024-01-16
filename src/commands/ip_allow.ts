@@ -26,7 +26,7 @@ export const builder = (argv: yargs.Argv) => {
     })
     .command(
       'list',
-      'List IP allow list',
+      'List the IP allowlist',
       (yargs) => yargs,
       async (args) => {
         await list(args as any);
@@ -34,7 +34,7 @@ export const builder = (argv: yargs.Argv) => {
     )
     .command(
       'add [ips...]',
-      'Add IP addresses to IP allow list',
+      'Add IP addresses to the IP allowlist',
       (yargs) =>
         yargs
           .usage('$0 ip-allow add [ips...]')
@@ -59,7 +59,7 @@ export const builder = (argv: yargs.Argv) => {
     )
     .command(
       'remove [ips...]',
-      'remove IP addresses from IP allow list',
+      'Remove IP addresses from the IP allowlist',
       (yargs) =>
         yargs.usage('$0 ip-allow remove [ips...]').positional('ips', {
           describe: 'The list of IP addresses to remove',
@@ -73,7 +73,7 @@ export const builder = (argv: yargs.Argv) => {
     )
     .command(
       'reset [ips...]',
-      'reset IP allow list',
+      'Reset the IP allowlist',
       (yargs) =>
         yargs.usage('$0 ip-allow remove [ips...]').positional('ips', {
           describe: 'The list of IP addresses to reset',
@@ -107,7 +107,7 @@ const add = async (
 ) => {
   if (props.ips.length <= 0) {
     log.error(`Enter individual IP addresses, define ranges with a dash, or use CIDR notation for more flexibility.
-       Example: neonctl ip-allow add 192.168.1.1, 192.168.1.20-192.168.1.50, 192.168.1.0/24 --projectId <projectId>`);
+       Example: neonctl ip-allow add 192.168.1.1, 192.168.1.20-192.168.1.50, 192.168.1.0/24 --project-id <id>`);
     return;
   }
 
@@ -138,7 +138,7 @@ const add = async (
 const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
   if (props.ips.length <= 0) {
     log.error(
-      `Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --projectId <projectId>`,
+      `Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --project-id <id>`,
     );
     return;
   }
@@ -186,7 +186,7 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
 
   if (props.ips.length <= 0) {
     log.info(
-      `The IP allow list has been reset. All databases on project "${data.project.name}" are now exposed to the internet`,
+      `The IP allowlist has been reset. All databases on project "${data.project.name}" are now exposed to the internet`,
     );
   }
 };
