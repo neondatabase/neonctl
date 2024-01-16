@@ -92,7 +92,7 @@ export const handler = (args: yargs.Argv) => {
 
 const list = async (props: CommonProps & ProjectScopeProps) => {
   const { data } = await props.apiClient.getProject(props.projectId);
-  writer(props).end(parse(data.project, props), {
+  writer(props).end(parse(data.project), {
     fields: IP_ALLOW_FIELDS,
   });
 };
@@ -129,7 +129,7 @@ const add = async (
     },
   );
 
-  writer(props).end(parse(response.project, props), {
+  writer(props).end(parse(response.project), {
     fields: IP_ALLOW_FIELDS,
   });
 };
@@ -161,7 +161,7 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
     },
   );
 
-  writer(props).end(parse(response.project, props), {
+  writer(props).end(parse(response.project), {
     fields: IP_ALLOW_FIELDS,
   });
 };
@@ -179,7 +179,7 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
     project,
   });
 
-  writer(props).end(parse(data.project, props), {
+  writer(props).end(parse(data.project), {
     fields: IP_ALLOW_FIELDS,
   });
 
@@ -190,12 +190,12 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
   }
 };
 
-const parse = (project: Project, props: CommonProps) => {
+const parse = (project: Project) => {
   const ips = project.settings?.allowed_ips?.ips ?? [];
   return {
     id: project.id,
     name: project.name,
-    IP_addresses: props.output === 'table' ? ips.join('\n') : ips,
+    IP_addresses: ips,
     primary_branch_only:
       project.settings?.allowed_ips?.primary_branch_only ?? false,
   };
