@@ -46,8 +46,31 @@ describe('ip-allow', () => {
   });
 
   testCliCommand({
-    name: 'Remove allow',
-    args: ['ip-allow', 'add', '192.168.1.1', '--projectId', 'test'],
+    name: 'Remove IP allow',
+    args: ['ip-allow', 'remove', '192.168.1.1', '--projectId', 'test'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'Reset IP allow',
+    args: ['ip-allow', 'reset', '--projectId', 'test'],
+    expected: {
+      snapshot: true,
+      stdout: `id: test
+name: test_project
+IP_addresses: ""
+primary_branch_only: false
+`,
+      stderr: `INFO: The IP allow list has been reset. All databases on project "test_project" are now exposed to the internet
+`,
+    },
+  });
+
+  testCliCommand({
+    name: 'Reset IP allow to new list',
+    args: ['ip-allow', 'reset', '192.168.2.2', '--projectId', 'test'],
     expected: {
       snapshot: true,
     },

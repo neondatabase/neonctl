@@ -33,7 +33,7 @@ export const builder = (argv: yargs.Argv) => {
     })
     .command(
       'list',
-      'List IP Allow configuration',
+      'List IP allow list',
       (yargs) => yargs,
       async (args) => {
         await list(args as any);
@@ -41,12 +41,12 @@ export const builder = (argv: yargs.Argv) => {
     )
     .command(
       'add [ips...]',
-      'Add IP addresses to IP Allow configuration',
+      'Add IP addresses to IP allow list',
       (yargs) =>
         yargs
           .usage('$0 ip-allow add [ips...]')
           .positional('ips', {
-            describe: 'The list of IP Addresses to add',
+            describe: 'The list of IP addresses to add',
             type: 'string',
             default: [],
             array: true,
@@ -66,16 +66,30 @@ export const builder = (argv: yargs.Argv) => {
     )
     .command(
       'remove [ips...]',
-      'remove IP addresses to IP Allow configuration',
+      'remove IP addresses from IP allow list',
       (yargs) =>
         yargs.usage('$0 ip-allow remove [ips...]').positional('ips', {
-          describe: 'The list of IP Addresses to remove',
+          describe: 'The list of IP addresses to remove',
           type: 'string',
           default: [],
           array: true,
         }),
       async (args) => {
         await remove(args as any);
+      },
+    )
+    .command(
+      'reset [ips...]',
+      'reset IP allow list',
+      (yargs) =>
+        yargs.usage('$0 ip-allow remove [ips...]').positional('ips', {
+          describe: 'The list of IP addresses to reset',
+          type: 'string',
+          default: [],
+          array: true,
+        }),
+      async (args) => {
+        await reset(args as any);
       },
     );
 };
@@ -158,6 +172,30 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
   writer(props).end(parse(response.project), {
     fields: IP_ALLOW_FIELDS,
   });
+};
+
+const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
+  const project: ProjectUpdateRequest['project'] = {};
+  project.settings = {
+    allowed_ips: {
+      ips: props.ips,
+      primary_branch_only: false,
+    },
+  };
+
+  const { data } = await props.apiClient.updateProject(props.projectId, {
+    project,
+  });
+
+  writer(props).end(parse(data.project), {
+    fields: IP_ALLOW_FIELDS,
+  });
+
+  if (props.ips.length <= 0) {
+    log.info(
+      `The IP allow list has been reset. All databases on project "${data.project.name}" are now exposed to the internet`,
+    );
+  }
 };
 
 const parse: (project: Project) => IPAllowFields = (project: Project) => {
