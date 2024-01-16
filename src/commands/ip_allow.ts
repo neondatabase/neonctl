@@ -21,7 +21,6 @@ export const builder = (argv: yargs.Argv) => {
       'project-id': {
         describe: 'Project ID',
         type: 'string',
-        demandOption: true,
       },
     })
     .command(
