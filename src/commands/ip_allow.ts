@@ -63,6 +63,20 @@ export const builder = (argv: yargs.Argv) => {
       async (args) => {
         await add(args as any);
       },
+    )
+    .command(
+      'remove [ips...]',
+      'remove IP addresses to IP Allow configuration',
+      (yargs) =>
+        yargs.usage('$0 ip-allow remove [ips...]').positional('ips', {
+          describe: 'The list of IP Addresses to remove',
+          type: 'string',
+          default: [],
+          array: true,
+        }),
+      async (args) => {
+        await remove(args as any);
+      },
     );
 };
 
@@ -99,6 +113,38 @@ const add = async (
       ips: [...new Set(props.ips.concat(existingAllowedIps?.ips ?? []))],
       primary_branch_only:
         props.primaryOnly ?? existingAllowedIps?.primary_branch_only ?? false,
+    },
+  };
+
+  const { data: response } = await props.apiClient.updateProject(
+    props.projectId,
+    {
+      project,
+    },
+  );
+
+  writer(props).end(parse(response.project), {
+    fields: IP_ALLOW_FIELDS,
+  });
+};
+
+const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
+  if (props.ips.length <= 0) {
+    log.error(
+      `Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --projectId <projectId>`,
+    );
+    return;
+  }
+
+  const project: ProjectUpdateRequest['project'] = {};
+  const { data } = await props.apiClient.getProject(props.projectId);
+  const existingAllowedIps = data.project.settings?.allowed_ips;
+
+  project.settings = {
+    allowed_ips: {
+      ips:
+        existingAllowedIps?.ips.filter((ip) => !props.ips.includes(ip)) ?? [],
+      primary_branch_only: existingAllowedIps?.primary_branch_only ?? false,
     },
   };
 

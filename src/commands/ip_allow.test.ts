@@ -21,7 +21,7 @@ describe('ip-allow', () => {
   });
 
   testCliCommand({
-    name: 'Add IP allow - Error',
+    name: 'Add IP allow',
     args: [
       'ip-allow',
       'add',
@@ -31,6 +31,23 @@ describe('ip-allow', () => {
       '--projectId',
       'test',
     ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'Remove IP allow - Error',
+    args: ['ip-allow', 'remove', '--projectId', 'test'],
+    expected: {
+      stderr: `ERROR: Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --projectId <projectId>
+`,
+    },
+  });
+
+  testCliCommand({
+    name: 'Remove allow',
+    args: ['ip-allow', 'add', '192.168.1.1', '--projectId', 'test'],
     expected: {
       snapshot: true,
     },
