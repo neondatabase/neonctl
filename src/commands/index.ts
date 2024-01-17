@@ -1,5 +1,6 @@
 import * as auth from './auth.js';
 import * as projects from './projects.js';
+import * as ipAllow from './ip_allow.js';
 import * as users from './user.js';
 import * as branches from './branches.js';
 import * as databases from './databases.js';
@@ -12,6 +13,7 @@ export default [
   auth,
   users,
   projects,
+  ipAllow,
   branches,
   databases,
   roles,

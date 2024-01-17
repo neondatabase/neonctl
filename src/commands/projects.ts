@@ -85,6 +85,7 @@ export const builder = (argv: yargs.Argv) => {
                 .description,
             type: 'string',
             array: true,
+            deprecated: "Deprecated. Use 'ip-allow' command",
           },
           'ip-primary-only': {
             describe:
@@ -92,6 +93,7 @@ export const builder = (argv: yargs.Argv) => {
                 'project.settings.allowed_ips.primary_branch_only'
               ].description,
             type: 'boolean',
+            deprecated: "Deprecated. Use 'ip-allow' command",
           },
         }),
       async (args) => {
