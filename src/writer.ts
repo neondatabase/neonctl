@@ -4,16 +4,87 @@ import chalk from 'chalk';
 
 import { CommonProps } from './types.js';
 import { isCi } from './env.js';
-import { toSnakeCase } from './utils/string.js';
+import { isObject, toSnakeCase } from './utils/string.js';
 
 type ExtractFromArray<T> = T extends (infer R)[] ? R : T;
 type OnlyStrings<T> = T extends string ? T : never;
 
 type WriteOutConfig<T> = {
-  // Fields to output in human readable format
+  // Fields to output in human-readable format
   fields: Readonly<OnlyStrings<keyof ExtractFromArray<T>>[]>;
   // Title of the output
   title?: string;
+};
+
+const writeYaml = (chunks: { data: any; config: WriteOutConfig<any> }[]) => {
+  return YAML.stringify(
+    chunks.length === 1
+      ? chunks[0].data
+      : Object.fromEntries(
+          chunks.map(({ config, data }, idx) => [
+            config.title ? toSnakeCase(config.title) : idx,
+            data,
+          ]),
+        ),
+    null,
+    2,
+  );
+};
+
+const writeJson = (chunks: { data: any; config: WriteOutConfig<any> }[]) => {
+  return JSON.stringify(
+    chunks.length === 1
+      ? chunks[0].data
+      : Object.fromEntries(
+          chunks.map(({ config, data }, idx) => [
+            config.title ? toSnakeCase(config.title) : idx,
+            data,
+          ]),
+        ),
+    null,
+    2,
+  );
+};
+
+const writeTable = (
+  chunks: { data: any; config: WriteOutConfig<any> }[],
+  out: NodeJS.WritableStream,
+) => {
+  chunks.forEach(({ data, config }) => {
+    const arrayData = Array.isArray(data) ? data : [data];
+    const fields = config.fields.filter((field) =>
+      arrayData.some((item) => item[field] !== undefined && item[field] !== ''),
+    );
+    const table = new Table({
+      style: {
+        head: ['green'],
+      },
+      head: fields.map((field: string) =>
+        field
+          .split('_')
+          .map((word) => word[0].toUpperCase() + word.slice(1))
+          .join(' '),
+      ),
+    });
+    arrayData.forEach((item) => {
+      table.push(
+        fields.map((field: string | number) => {
+          const value = item[field];
+          return Array.isArray(value)
+            ? value.join('\n')
+            : isObject(value)
+              ? JSON.stringify(value, null, 2)
+              : value;
+        }),
+      );
+    });
+
+    if (config.title) {
+      out.write((isCi() ? config.title : chalk.bold(config.title)) + '\n');
+    }
+    out.write(table.toString());
+    out.write('\n');
+  });
 };
 
 /**
@@ -47,69 +118,14 @@ export const writer = (
       }
 
       if (props.output == 'yaml') {
-        out.write(
-          YAML.stringify(
-            chunks.length === 1
-              ? chunks[0].data
-              : Object.fromEntries(
-                  chunks.map(({ config, data }, idx) => [
-                    config.title ? toSnakeCase(config.title) : idx,
-                    data,
-                  ]),
-                ),
-            null,
-            2,
-          ),
-        );
-        return;
+        return out.write(writeYaml(chunks));
       }
 
       if (props.output == 'json') {
-        out.write(
-          JSON.stringify(
-            chunks.length === 1
-              ? chunks[0].data
-              : Object.fromEntries(
-                  chunks.map(({ config, data }, idx) => [
-                    config.title ? toSnakeCase(config.title) : idx,
-                    data,
-                  ]),
-                ),
-            null,
-            2,
-          ),
-        );
-        return;
+        return out.write(writeJson(chunks));
       }
 
-      chunks.forEach(({ data, config }) => {
-        const arrayData = Array.isArray(data) ? data : [data];
-        const fields = config.fields.filter((field) =>
-          arrayData.some(
-            (item) => item[field] !== undefined && item[field] !== '',
-          ),
-        );
-        const table = new Table({
-          style: {
-            head: ['green'],
-          },
-          head: fields.map((field: string) =>
-            field
-              .split('_')
-              .map((word) => word[0].toUpperCase() + word.slice(1))
-              .join(' '),
-          ),
-        });
-        arrayData.forEach((item) => {
-          table.push(fields.map((field: string | number) => item[field]));
-        });
-
-        if (config.title) {
-          out.write((isCi() ? config.title : chalk.bold(config.title)) + '\n');
-        }
-        out.write(table.toString());
-        out.write('\n');
-      });
+      return writeTable(chunks, out);
     },
   };
 };
