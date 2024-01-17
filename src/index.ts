@@ -134,6 +134,9 @@ builder = builder
   .alias('version', 'v')
   .completion()
   .scriptName(basename(process.argv[1]) === 'neon' ? 'neon' : 'neonctl')
+  .epilog(
+    'For more information, visit https://neon.tech/docs/reference/neon-cli',
+  )
   .fail(async (msg, err) => {
     if (process.argv.some((arg) => arg === '--help' || arg === '-h')) {
       await showHelp(builder);
