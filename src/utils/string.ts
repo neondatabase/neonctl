@@ -3,3 +3,6 @@ export const toSnakeCase = (str: string) =>
     .split(' ')
     .map((word) => word.toLowerCase())
     .join('_');
+
+export const isObject = (value: any) =>
+  value != null && value === Object(value);
