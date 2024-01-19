@@ -74,7 +74,7 @@ export const builder = (argv: yargs.Argv) => {
       'reset [ips...]',
       'Reset the IP allowlist',
       (yargs) =>
-        yargs.usage('$0 ip-allow remove [ips...]').positional('ips', {
+        yargs.usage('$0 ip-allow reset [ips...]').positional('ips', {
           describe: 'The list of IP addresses to reset',
           type: 'string',
           default: [],
