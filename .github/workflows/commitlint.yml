@@ -1,4 +1,4 @@
-name: "Commit Lint PR"
+name: 'Commit Lint PR'
 
 on:
   merge_group:
