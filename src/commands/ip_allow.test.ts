@@ -11,6 +11,15 @@ describe('ip-allow', () => {
   });
 
   testCliCommand({
+    name: 'list IP Allow with single-project',
+    args: ['ip-allow', 'list'],
+    mockDir: 'single_project',
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'Add IP allow - Error',
     args: ['ip-allow', 'add', '--projectId', 'test'],
     expected: {
