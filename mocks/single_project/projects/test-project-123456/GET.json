@@ -6,9 +6,7 @@
     "updated_at": "2019-01-01T00:00:00.000Z",
     "settings": {
       "allowed_ips": {
-        "ips": [
-          "192.168.1.1"
-        ],
+        "ips": ["192.168.1.1"],
         "primary_branch_only": false
       }
     }
