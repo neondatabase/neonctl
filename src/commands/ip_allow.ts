@@ -1,6 +1,7 @@
 import yargs from 'yargs';
 import { CommonProps, ProjectScopeProps } from '../types';
 import { writer } from '../writer.js';
+import { fillSingleProject } from '../utils/enrichers.js';
 import { Project, ProjectUpdateRequest } from '@neondatabase/api-client';
 import { projectUpdateRequest } from '../parameters.gen.js';
 import { log } from '../log.js';
@@ -23,6 +24,7 @@ export const builder = (argv: yargs.Argv) => {
         type: 'string',
       },
     })
+    .middleware(fillSingleProject as any)
     .command(
       'list',
       'List the IP allowlist',

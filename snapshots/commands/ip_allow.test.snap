@@ -36,6 +36,15 @@ primary_branch_only: false
 "
 `;
 
+exports[`ip-allow list IP Allow with single-project test 1`] = `
+"id: test-project-123456
+name: ""
+IP_addresses:
+  - 192.168.1.1
+primary_branch_only: false
+"
+`;
+
 exports[`ip-allow list IP allow test 1`] = `
 "id: test
 name: test_project
