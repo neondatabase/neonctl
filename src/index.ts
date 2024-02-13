@@ -155,6 +155,7 @@ builder = builder
           'Fail: %d | %s',
           err.response?.status,
           err.response?.statusText,
+          err.request?.path,
         );
         log.error(err.response?.data?.message);
         sendError(err, 'API_ERROR');

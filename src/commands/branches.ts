@@ -5,13 +5,19 @@ import { IdOrNameProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { branchCreateRequest } from '../parameters.gen.js';
 import { retryOnLock } from '../api.js';
-import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
+import {
+  branchIdFromProps,
+  branchIdResolve,
+  fillSingleProject,
+} from '../utils/enrichers.js';
 import {
   looksLikeBranchId,
   looksLikeLSN,
   looksLikeTimestamp,
 } from '../utils/formats.js';
 import { psql } from '../utils/psql.js';
+import { parsePointInTime } from '../utils/point_in_time.js';
+import { log } from '../log.js';
 
 const BRANCH_FIELDS = [
   'id',
@@ -102,6 +108,36 @@ export const builder = (argv: yargs.Argv) =>
           },
         }),
       async (args) => await reset(args as any),
+    )
+    .command(
+      'restore <id|name> <point-in-time>',
+      'Restore a branch to a point in time.\nPoint in time format is following ^self|^parent|source-branch-(id|name)[@(lsn|timestamp)]',
+      (yargs) =>
+        yargs
+          .options({
+            'preserve-under-name': {
+              describe: 'Name under which to preserve the old branch',
+            },
+          })
+          .example([
+            [
+              '$0 branches restore main br-source-branch-123456',
+              'Restore main to the head of the branch with id br-source-branch-123456',
+            ],
+            [
+              '$0 branches restore main source@2021-01-01T00:00:00Z',
+              'Restore main to the timestamp 2021-01-01T00:00:00Z of the source branch',
+            ],
+            [
+              '$0 branches restore my-branch ^self@0/123456',
+              'Restore my-branch to the LSN 0/123456 of the branch itself',
+            ],
+            [
+              '$0 branches restore my-branch ^parent',
+              'Restore my-branch to the head of the parent branch',
+            ],
+          ]),
+      async (args) => await restore(args as any),
     )
     .command(
       'rename <id|name> <new-name>',
@@ -348,4 +384,64 @@ const reset = async (
     // need to reset types until we expose reset api
     fields: BRANCH_FIELDS_RESET as any,
   });
+};
+
+const restore = async (
+  props: ProjectScopeProps &
+    IdOrNameProps & { pointInTime: string; preserveUnderName?: string },
+) => {
+  const targetBranchId = await branchIdResolve({
+    branch: props.id,
+    projectId: props.projectId,
+    apiClient: props.apiClient,
+  });
+
+  const pointInTime = await parsePointInTime({
+    pointInTime: props.pointInTime,
+    targetBranchId,
+    projectId: props.projectId,
+    api: props.apiClient,
+  });
+
+  log.info(
+    `Restoring branch ${targetBranchId} to the branch ${pointInTime.branchId} ${
+      (pointInTime.tag === 'lsn' && 'LSN ' + pointInTime.lsn) ||
+      (pointInTime.tag === 'timestamp' &&
+        'timestamp ' + pointInTime.timestamp) ||
+      'head'
+    }`,
+  );
+
+  const { data } = await retryOnLock(() =>
+    props.apiClient.request({
+      method: 'POST',
+      path: `/projects/${props.projectId}/branches/${targetBranchId}/reset`,
+      body: {
+        source_branch_id: pointInTime.branchId,
+        preserve_under_name: props.preserveUnderName || undefined,
+        ...(pointInTime.tag === 'lsn' && { source_lsn: pointInTime.lsn }),
+        ...(pointInTime.tag === 'timestamp' && {
+          source_timestamp: pointInTime.timestamp,
+        }),
+      },
+    }),
+  );
+
+  const branch = data.branch as Branch;
+
+  const writeInst = writer(props).write(branch as Branch, {
+    title: 'Restored branch',
+    fields: ['id', 'name', 'last_reset_at'],
+  });
+  if (props.preserveUnderName && branch.parent_id) {
+    const { data } = await props.apiClient.getProjectBranch(
+      props.projectId,
+      branch.parent_id,
+    );
+    writeInst.write(data.branch, {
+      title: 'Backup branch',
+      fields: ['id', 'name'],
+    });
+  }
+  writeInst.end();
 };
