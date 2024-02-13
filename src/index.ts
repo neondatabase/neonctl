@@ -137,6 +137,7 @@ builder = builder
   .epilog(
     'For more information, visit https://neon.tech/docs/reference/neon-cli',
   )
+  .wrap(null)
   .fail(async (msg, err) => {
     if (process.argv.some((arg) => arg === '--help' || arg === '-h')) {
       await showHelp(builder);
