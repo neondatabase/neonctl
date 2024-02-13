@@ -62,6 +62,7 @@ export const testCliCommand = ({
           'yaml',
           '--api-key',
           'test-key',
+          '--no-analytics',
           ...args,
         ],
         {
