@@ -3,6 +3,8 @@ import { describe } from '@jest/globals';
 import { testCliCommand } from '../test_utils/test_cli_command.js';
 
 describe('branches', () => {
+  /* list */
+
   testCliCommand({
     name: 'list',
     args: ['branches', 'list', '--project-id', 'test'],
@@ -10,6 +12,8 @@ describe('branches', () => {
       snapshot: true,
     },
   });
+
+  /* create */
 
   testCliCommand({
     name: 'create by default with r/w endpoint',
@@ -162,6 +166,8 @@ describe('branches', () => {
     },
   });
 
+  /* delete */
+
   testCliCommand({
     name: 'delete by id',
     args: [
@@ -176,19 +182,7 @@ describe('branches', () => {
     },
   });
 
-  testCliCommand({
-    name: 'delete by id',
-    args: [
-      'branches',
-      'delete',
-      'br-cloudy-branch-12345678',
-      '--project-id',
-      'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
-  });
+  /* rename */
 
   testCliCommand({
     name: 'rename',
@@ -205,6 +199,8 @@ describe('branches', () => {
     },
   });
 
+  /* set primary */
+
   testCliCommand({
     name: 'set primary by id',
     args: [
@@ -219,19 +215,7 @@ describe('branches', () => {
     },
   });
 
-  testCliCommand({
-    name: 'set primary by id',
-    args: [
-      'branches',
-      'set-primary',
-      'br-cloudy-branch-12345678',
-      '--project-id',
-      'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
-  });
+  /* get */
 
   testCliCommand({
     name: 'get by id',
@@ -271,6 +255,8 @@ describe('branches', () => {
     },
   });
 
+  /* add compute */
+
   testCliCommand({
     name: 'add compute',
     args: ['branches', 'add-compute', 'test_branch', '--project-id', 'test'],
@@ -278,6 +264,8 @@ describe('branches', () => {
       snapshot: true,
     },
   });
+
+  /* reset */
 
   testCliCommand({
     name: 'reset branch to parent',
@@ -289,6 +277,58 @@ describe('branches', () => {
       'test',
       '--parent',
     ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  /* restore */
+
+  testCliCommand({
+    name: 'restore branch to lsn',
+    args: [
+      'branches',
+      'restore',
+      'br-self-tolsn-123456',
+      '^self@0/123ABC',
+      '--project-id',
+      'test',
+      '--preserve-under-name',
+      'backup',
+    ],
+    mockDir: 'restore',
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'restore to parent branch timestamp by name',
+    args: [
+      'branches',
+      'restore',
+      'parent-tots',
+      '^parent@2021-01-01T00:00:00.000Z',
+      '--project-id',
+      'test',
+    ],
+    mockDir: 'restore',
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'restore to another branch head',
+    args: [
+      'branches',
+      'restore',
+      'br-another-branch-123456',
+      'br-any-branch-123456',
+      '--project-id',
+      'test',
+    ],
+    mockDir: 'restore',
     expected: {
       snapshot: true,
     },
