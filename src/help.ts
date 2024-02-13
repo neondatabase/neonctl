@@ -37,6 +37,18 @@ const formatHelp = (help: string) => {
       width: 0,
     });
     commandsBlock.forEach((line) => {
+      if (line.match(/^\s{3,}/)) {
+        ui.div(
+          {
+            text: '',
+            width: SPACE_WIDTH,
+            padding: [0, 0, 0, 0],
+          },
+          { text: line.trim(), padding: [0, 0, 0, 0] },
+        );
+        return;
+      }
+
       const [command, description] = splitColumns(line);
 
       // patch the previous command if it was multiline
@@ -90,7 +102,7 @@ const formatHelp = (help: string) => {
   // example command to see: neonctl projects list
   const descritpionBlock = consumeBlockIfMatches(lines, /^(?!.*options:)/i);
   if (descritpionBlock.length > 0) {
-    result.push(descritpionBlock.shift() as string);
+    result.push(...descritpionBlock);
     result.push('');
   }
 
@@ -140,6 +152,28 @@ const formatHelp = (help: string) => {
       result.push(ui.toString());
     });
     result.push('');
+  }
+
+  const exampleBlock = consumeBlockIfMatches(lines, /Examples:/);
+  if (exampleBlock.length > 0) {
+    result.push(exampleBlock.shift() as string);
+    const ui = cliui({
+      width: 0,
+    });
+    for (const line of exampleBlock) {
+      const [command, description] = splitColumns(line);
+      ui.div(
+        {
+          text: chalk.bold(command),
+          padding: [0, 0, 0, 0],
+        },
+        {
+          text: description,
+          padding: [0, 0, 0, 0],
+        },
+      );
+    }
+    result.push(ui.toString());
   }
 
   return [...result, ...lines];
