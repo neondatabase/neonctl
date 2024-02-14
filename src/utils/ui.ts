@@ -47,6 +47,9 @@ export const consumeBlockIfMatches = (lines: string[], matcher: RegExp) => {
 export const splitColumns = (line: string) => {
   const result = line.trim().split(/\s{2,}/);
   result[1] = result[1] ?? '';
+  if (result.length > 2) {
+    result[1] = result.slice(1).join(' ');
+  }
   return result;
 };
 
