@@ -333,4 +333,22 @@ describe('branches', () => {
       snapshot: true,
     },
   });
+
+  testCliCommand({
+    name: 'restore with unexisted branch outputs error',
+    args: [
+      'branches',
+      'restore',
+      'unexisting-branch',
+      '^parent',
+      '--project-id',
+      'test',
+    ],
+    mockDir: 'restore',
+    expected: {
+      code: 1,
+      stderr: `ERROR: Branch unexisting-branch not found.
+               Available branches: self-tolsn-123456, any-branch, parent-tots, another-branch`,
+    },
+  });
 });

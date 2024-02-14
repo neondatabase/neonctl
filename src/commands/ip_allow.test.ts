@@ -24,8 +24,7 @@ describe('ip-allow', () => {
     args: ['ip-allow', 'add', '--projectId', 'test'],
     expected: {
       stderr: `ERROR: Enter individual IP addresses, define ranges with a dash, or use CIDR notation for more flexibility.
-       Example: neonctl ip-allow add 192.168.1.1, 192.168.1.20-192.168.1.50, 192.168.1.0/24 --project-id <id>
-`,
+       Example: neonctl ip-allow add 192.168.1.1, 192.168.1.20-192.168.1.50, 192.168.1.0/24 --project-id <id>`,
     },
   });
 
@@ -49,8 +48,7 @@ describe('ip-allow', () => {
     name: 'Remove IP allow - Error',
     args: ['ip-allow', 'remove', '--project-id', 'test'],
     expected: {
-      stderr: `ERROR: Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --project-id <id>
-`,
+      stderr: `ERROR: Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --project-id <id>`,
     },
   });
 
@@ -72,8 +70,7 @@ name: test_project
 IP_addresses: []
 primary_branch_only: false
 `,
-      stderr: `INFO: The IP allowlist has been reset. All databases on project "test_project" are now exposed to the internet
-`,
+      stderr: `INFO: The IP allowlist has been reset. All databases on project "test_project" are now exposed to the internet`,
     },
   });
 
