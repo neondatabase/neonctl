@@ -9,7 +9,12 @@ export const runMockServer = async (mockDir: string) =>
   new Promise<Server>((resolve) => {
     const app = express();
     app.use(express.json());
-    app.use('/', emocks(join(process.cwd(), 'mocks', mockDir)));
+    app.use(
+      '/',
+      emocks(join(process.cwd(), 'mocks', mockDir), {
+        '404': (req, res) => res.status(404).send({ message: 'Not Found' }),
+      }),
+    );
 
     const server = app.listen(0);
     server.on('listening', () => {

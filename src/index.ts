@@ -151,13 +151,13 @@ builder = builder
         sendError(err, 'AUTH_FAILED');
         log.error('Authentication failed, please run `neonctl auth`');
       } else {
-        log.debug(
-          'Fail: %d | %s',
+        log.error(
+          'Fail: status: %d %s | path: %s | message: %s',
           err.response?.status,
           err.response?.statusText,
           err.request?.path,
+          err.response?.data?.message,
         );
-        log.error(err.response?.data?.message);
         sendError(err, 'API_ERROR');
       }
     } else {

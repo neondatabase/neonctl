@@ -18,6 +18,7 @@ export type TestCliCommandOptions = {
     snapshot?: true;
     stdout?: string | ReturnType<typeof expect.stringMatching>;
     stderr?: string | ReturnType<typeof expect.stringMatching>;
+    code?: number;
   };
 };
 
@@ -89,8 +90,8 @@ export const testCliCommand = ({
 
         cp.on('close', (code) => {
           try {
-            expect(code).toBe(0);
-            if (code === 0 && expected) {
+            expect(code).toBe(expected?.code ?? 0);
+            if (expected) {
               if (expected.snapshot) {
                 expect(output).toMatchSnapshot();
               }
@@ -98,7 +99,11 @@ export const testCliCommand = ({
                 expect(strip(output)).toEqual(expected.stdout);
               }
               if (expected.stderr !== undefined) {
-                expect(strip(error)).toEqual(expected.stderr);
+                expect(strip(error).replace(/\s+/g, ' ').trim()).toEqual(
+                  typeof expected.stderr === 'string'
+                    ? expected.stderr.toString().replace(/\s+/g, ' ')
+                    : expected.stderr,
+                );
               }
             }
             resolve();
