@@ -52,6 +52,11 @@ export const builder = (argv: yargs.Argv) => {
         describe: 'Connect to a database via psql using connection string',
         default: false,
       },
+      ssl: {
+        type: 'boolean',
+        describe: 'Add sslmode=require to the connection string',
+        default: true,
+      },
     })
     .middleware(fillSingleProject as any);
 };
@@ -66,6 +71,7 @@ export const handler = async (
     extended: boolean;
     endpointType?: EndpointType;
     psql: boolean;
+    ssl: boolean;
     '--'?: string[];
   },
 ) => {
@@ -146,6 +152,10 @@ export const handler = async (
       connectionString.searchParams.set('pool_timeout', '30');
       connectionString.searchParams.set('pgbouncer', 'true');
     }
+  }
+
+  if (props.ssl) {
+    connectionString.searchParams.set('sslmode', 'require');
   }
 
   if (props.psql) {

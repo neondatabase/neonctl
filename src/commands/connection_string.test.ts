@@ -175,4 +175,23 @@ describe('connection_string', () => {
       snapshot: true,
     },
   });
+
+  testCliCommand({
+    name: 'connection_string without ssl',
+    args: [
+      'connection-string',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--database-name',
+      'test_db',
+      '--role-name',
+      'test_role',
+      '--ssl',
+      'false',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
 });
