@@ -1,50 +1,55 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`connection_string connection_string branch id 8 digits test 1`] = `
-"postgres://test_role:test_pwd@ep-lame-king-930914.us-east-2.aws.neon.tech/test_db
+"postgres://test_role:test_pwd@ep-lame-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require
 "
 `;
 
 exports[`connection_string connection_string branch id test 1`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db
+"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require
 "
 `;
 
 exports[`connection_string connection_string pooled test 1`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db
+"postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?sslmode=require
 "
 `;
 
 exports[`connection_string connection_string prisma pooled extended test 1`] = `
-"connection_string: postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?connect_timeout=30&pool_timeout=30&pgbouncer=true
+"connection_string: postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?connect_timeout=30&pool_timeout=30&pgbouncer=true&sslmode=require
 host: ep-cool-king-930914-pooler.us-east-2.aws.neon.tech
 role: test_role
 password: test_pwd
 database: test_db
-options: connect_timeout=30&pool_timeout=30&pgbouncer=true
+options: connect_timeout=30&pool_timeout=30&pgbouncer=true&sslmode=require
 "
 `;
 
 exports[`connection_string connection_string prisma pooled test 1`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?connect_timeout=30&pool_timeout=30&pgbouncer=true
+"postgres://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?connect_timeout=30&pool_timeout=30&pgbouncer=true&sslmode=require
 "
 `;
 
 exports[`connection_string connection_string prisma test 1`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?connect_timeout=30
+"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?connect_timeout=30&sslmode=require
 "
 `;
 
 exports[`connection_string connection_string test 1`] = `
-"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db
+"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require
 "
 `;
 
-exports[`connection_string connection_string with psql and psql args test 1`] = `"{"psql-cli-args":["postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db","-c","SELECT 1"]}"`;
+exports[`connection_string connection_string with psql and psql args test 1`] = `"{"psql-cli-args":["postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require","-c","SELECT 1"]}"`;
 
-exports[`connection_string connection_string with psql test 1`] = `"{"psql-cli-args":["postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db"]}"`;
+exports[`connection_string connection_string with psql test 1`] = `"{"psql-cli-args":["postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require"]}"`;
 
 exports[`connection_string connection_string without any args should pass test 1`] = `
-"postgres://test_role:password@undefined/db1
+"postgres://test_role:password@undefined/db1?sslmode=require
+"
+`;
+
+exports[`connection_string connection_string without ssl test 1`] = `
+"postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db
 "
 `;
