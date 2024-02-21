@@ -111,7 +111,7 @@ export const builder = (argv: yargs.Argv) =>
     )
     .command(
       'restore <target-id|name> <source>[@(timestamp|lsn)]',
-      'Restores a branch to a state at a specific moment\n<source> can be: ^self, ^parent, or <source-branch-id|name>',
+      'Restores a branch to a specific point in time\n<source> can be: ^self, ^parent, or <source-branch-id|name>',
       (yargs) =>
         yargs
           // we want to show meaningful help for the command
