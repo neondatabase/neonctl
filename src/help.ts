@@ -162,16 +162,14 @@ const formatHelp = (help: string) => {
     });
     for (const line of exampleBlock) {
       const [command, description] = splitColumns(line);
-      ui.div(
-        {
-          text: chalk.bold(command),
-          padding: [0, 0, 0, 0],
-        },
-        {
-          text: description,
-          padding: [0, 0, 0, 0],
-        },
-      );
+      ui.div({
+        text: chalk.bold(command),
+        padding: [0, 0, 0, 0],
+      });
+      ui.div({
+        text: chalk.reset(description),
+        padding: [0, 0, 0, 2],
+      });
     }
     result.push(ui.toString());
   }
@@ -181,7 +179,7 @@ const formatHelp = (help: string) => {
 
 export const showHelp = async (argv: yargs.Argv) => {
   // add wrap to ensure that there are no line breaks
-  const help = await argv.wrap(500).getHelp();
+  const help = await argv.getHelp();
   process.stderr.write(formatHelp(help).join('\n') + '\n');
   process.exit(0);
 };
