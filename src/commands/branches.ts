@@ -132,19 +132,19 @@ export const builder = (argv: yargs.Argv) =>
           .example([
             [
               '$0 branches restore main br-source-branch-123456',
-              'Restore main to the head of the branch with id br-source-branch-123456',
+              'Restores main to the head of the branch with id br-source-branch-123456',
             ],
             [
               '$0 branches restore main source@2021-01-01T00:00:00Z',
-              'Restore main to the timestamp 2021-01-01T00:00:00Z of the source branch',
+              'Restores main to the timestamp 2021-01-01T00:00:00Z of the source branch',
             ],
             [
               '$0 branches restore my-branch ^self@0/123456',
-              'Restore my-branch to the LSN 0/123456 of the branch itself',
+              'Restores my-branch to the LSN 0/123456 from its own history',
             ],
             [
               '$0 branches restore my-branch ^parent',
-              'Restore my-branch to the head of the parent branch',
+              'Restore my-branch to the head of its parent branch',
             ],
           ]),
       async (args) => await restore(args as any),
