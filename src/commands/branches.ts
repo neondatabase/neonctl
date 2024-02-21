@@ -110,10 +110,20 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await reset(args as any),
     )
     .command(
-      'restore <id|name> <point-in-time>',
-      'Restore a branch to a point in time.\nPoint in time format is following ^self|^parent|source-branch-(id|name)[@(lsn|timestamp)]',
+      'restore <target-id|name> <source>[@(timestamp|lsn)]',
+      'Restores a branch to a state at a specific moment\n<source> can be: ^self, ^parent, or <source-branch-id|name>',
       (yargs) =>
         yargs
+          // we want to show meaningful help for the command
+          // but it makes yargs to fail on parsing the command
+          // so we need to fill in the missing args manually
+          .middleware((args: any) => {
+            args.id = args.targetId;
+            args.pointInTime = args['source@(timestamp'];
+          })
+          .usage(
+            '$0 branches restore <target-id|name> <source>[@(timestamp|lsn)]',
+          )
           .options({
             'preserve-under-name': {
               describe: 'Name under which to preserve the old branch',
