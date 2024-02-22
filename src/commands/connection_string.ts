@@ -5,6 +5,8 @@ import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
 
+const SSL_MODES = ['require', 'verify-ca', 'verify-full', 'omit'] as const;
+
 export const command = 'connection-string [branch]';
 export const aliases = ['cs'];
 export const describe = 'Get connection string';
@@ -53,9 +55,10 @@ export const builder = (argv: yargs.Argv) => {
         default: false,
       },
       ssl: {
-        type: 'boolean',
-        describe: 'Add sslmode=require to the connection string',
-        default: true,
+        type: 'string',
+        choices: SSL_MODES,
+        default: 'require',
+        describe: 'SSL mode',
       },
     })
     .middleware(fillSingleProject as any);
@@ -71,7 +74,7 @@ export const handler = async (
     extended: boolean;
     endpointType?: EndpointType;
     psql: boolean;
-    ssl: boolean;
+    ssl: (typeof SSL_MODES)[number];
     '--'?: string[];
   },
 ) => {
@@ -154,8 +157,8 @@ export const handler = async (
     }
   }
 
-  if (props.ssl) {
-    connectionString.searchParams.set('sslmode', 'require');
+  if (props.ssl !== 'omit') {
+    connectionString.searchParams.set('sslmode', props.ssl);
   }
 
   if (props.psql) {
