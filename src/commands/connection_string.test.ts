@@ -188,7 +188,26 @@ describe('connection_string', () => {
       '--role-name',
       'test_role',
       '--ssl',
-      'false',
+      'omit',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'connection_string with ssl verify full',
+    args: [
+      'connection-string',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--database-name',
+      'test_db',
+      '--role-name',
+      'test_role',
+      '--ssl',
+      'verify-full',
     ],
     expected: {
       snapshot: true,
