@@ -56,7 +56,7 @@ builder = builder
   .option('api-host', {
     describe: 'The API host',
     hidden: true,
-    default: 'https://console.neon.tech/api/v2',
+    default: process.env.NEON_API_HOST ?? 'https://console.neon.tech/api/v2',
   })
   // Setup config directory
   .option('config-dir', {
@@ -76,7 +76,7 @@ builder = builder
     'oauth-host': {
       description: 'URL to Neon OAuth host',
       hidden: true,
-      default: 'https://oauth2.neon.tech',
+      default: process.env.NEON_OAUTH_HOST ?? 'https://oauth2.neon.tech',
     },
     'client-id': {
       description: 'OAuth client id',
