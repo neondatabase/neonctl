@@ -13,7 +13,7 @@ export const getApiClient = ({ apiKey, apiHost }: ApiCallProps) =>
   createApiClient({
     apiKey,
     baseURL: apiHost,
-    timeout: 10000,
+    timeout: 60000,
     headers: {
       'User-Agent': `neonctl v${pkg.version}`,
     },
