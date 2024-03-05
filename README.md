@@ -73,10 +73,10 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 | [branches](https://neon.tech/docs/reference/cli-branches)              | `list`, `create`, `rename`, `add-compute`, `set-primary`, `delete`, `get` | Manage branches              |
 | [databases](https://neon.tech/docs/reference/cli-databases)            | `list`, `create`, `delete`                                                | Manage databases             |
 | [roles](https://neon.tech/docs/reference/cli-roles)                    | `list`, `create`, `delete`                                                | Manage roles                 |
-| [operations](https://neon.tech/reference/cli-operations)               | `list`                                                                    | Manage operations            |
-| [connection-string](https://neon.tech/reference/cli-connection-string) |                                                                           | Get connection string        |
-| [set-context](https://neon.tech/reference/cli-set-context)             |                                                                           | Set context for session      |
-| [completion](https://neon.tech/reference/cli-completion)               |                                                                           | Generate a completion script |
+| [operations](https://neon.tech/docs/reference/cli-operations)               | `list`                                                                    | Manage operations            |
+| [connection-string](https://neon.tech/docs/reference/cli-connection-string) |                                                                           | Get connection string        |
+| [set-context](https://neon.tech/docs/reference/cli-set-context)             |                                                                           | Set context for session      |
+| [completion](https://neon.tech/docs/reference/cli-completion)               |                                                                           | Generate a completion script |
 
 ## Global options
 
