@@ -23,6 +23,7 @@ describe('ip-allow', () => {
     name: 'Add IP allow - Error',
     args: ['ip-allow', 'add', '--projectId', 'test'],
     expected: {
+      code: 1,
       stderr: `ERROR: Enter individual IP addresses, define ranges with a dash, or use CIDR notation for more flexibility.
        Example: neonctl ip-allow add 192.168.1.1, 192.168.1.20-192.168.1.50, 192.168.1.0/24 --project-id <id>`,
     },
@@ -48,6 +49,7 @@ describe('ip-allow', () => {
     name: 'Remove IP allow - Error',
     args: ['ip-allow', 'remove', '--project-id', 'test'],
     expected: {
+      code: 1,
       stderr: `ERROR: Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --project-id <id>`,
     },
   });
