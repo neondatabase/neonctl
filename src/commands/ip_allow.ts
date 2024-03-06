@@ -107,9 +107,8 @@ const add = async (
     },
 ) => {
   if (props.ips.length <= 0) {
-    log.error(`Enter individual IP addresses, define ranges with a dash, or use CIDR notation for more flexibility.
+    throw new Error(`Enter individual IP addresses, define ranges with a dash, or use CIDR notation for more flexibility.
        Example: neonctl ip-allow add 192.168.1.1, 192.168.1.20-192.168.1.50, 192.168.1.0/24 --project-id <id>`);
-    return;
   }
 
   const project: ProjectUpdateRequest['project'] = {};
@@ -138,10 +137,9 @@ const add = async (
 
 const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
   if (props.ips.length <= 0) {
-    log.error(
+    throw new Error(
       `Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --project-id <id>`,
     );
-    return;
   }
 
   const project: ProjectUpdateRequest['project'] = {};
