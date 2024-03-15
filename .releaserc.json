@@ -21,18 +21,23 @@
       {
         "assets": [
           {
-            "path": "bundle/neonctl-linux",
-            "name": "neonctl-linux",
-            "label": "Linux version"
+            "path": "bundle/neonctl-linux-x64",
+            "name": "neonctl-linux-x64",
+            "label": "Linux x64 version"
           },
           {
-            "path": "bundle/neonctl-macos",
-            "name": "neonctl-macos",
+            "path": "bundle/neonctl-linux-arm64",
+            "name": "neonctl-linux-arm64",
+            "label": "Linux arm64 version"
+          },
+          {
+            "path": "bundle/neonctl-macos-x64",
+            "name": "neonctl-macos-x64",
             "label": "MacOS version"
           },
           {
-            "path": "bundle/neonctl-win.exe",
-            "name": "neonctl-win.exe",
+            "path": "bundle/neonctl-win-x64.exe",
+            "name": "neonctl-win-x64.exe",
             "label": "Windows version"
           }
         ]
