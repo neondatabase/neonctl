@@ -88,6 +88,18 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
         response.end();
         return;
       }
+
+      // process the CORS preflight OPTIONS request
+      if (request.method === 'OPTIONS') {
+        response.writeHead(200, {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        });
+        response.end();
+        return;
+      }
+
       log.debug(`Callback received: ${request.url}`);
       const params = neonOAuthClient.callbackParams(request);
       const tokenSet = await neonOAuthClient.callback(
