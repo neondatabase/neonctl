@@ -23,7 +23,6 @@ const REGIONS = [
   'aws-eu-central-1',
   'aws-us-east-2',
   'aws-us-east-1',
-  'aws-il-central-1',
 ];
 
 const PROJECTS_LIST_LIMIT = 100;
