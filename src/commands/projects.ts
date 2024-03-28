@@ -59,6 +59,16 @@ export const builder = (argv: yargs.Argv) => {
             describe: 'Connect to a new project via psql',
             default: false,
           },
+          database: {
+            describe:
+              projectCreateRequest['project.branch.database_name'].description,
+            type: 'string',
+          },
+          role: {
+            describe:
+              projectCreateRequest['project.branch.role_name'].description,
+            type: 'string',
+          },
           'set-context': {
             type: 'boolean',
             describe: 'Set the current context to the new project',
@@ -143,6 +153,8 @@ const create = async (
   props: CommonProps & {
     name?: string;
     regionId?: string;
+    database?: string;
+    role?: string;
     psql: boolean;
     setContext: boolean;
     '--'?: string[];
@@ -154,6 +166,13 @@ const create = async (
   }
   if (props.regionId) {
     project.region_id = props.regionId;
+  }
+  project.branch = {};
+  if (props.database) {
+    project.branch.database_name = props.database;
+  }
+  if (props.role) {
+    project.branch.role_name = props.role;
   }
   const { data } = await props.apiClient.createProject({
     project,

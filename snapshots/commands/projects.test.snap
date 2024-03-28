@@ -40,6 +40,16 @@ connection_uris:
 "
 `;
 
+exports[`projects create with database and role test 1`] = `
+"project:
+  id: new-project-123456
+  name: test_project
+  created_at: 2021-01-01T00:00:00.000Z
+connection_uris:
+  - connection_uri: postgres://localhost:5432/test_project
+"
+`;
+
 exports[`projects delete test 1`] = `
 "id: test
 name: test

@@ -24,6 +24,23 @@ describe('projects', () => {
   });
 
   testCliCommand({
+    name: 'create with database and role',
+    args: [
+      'projects',
+      'create',
+      '--name',
+      'test_project',
+      '--database',
+      'test_db',
+      '--role',
+      'test_role',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'create and connect with psql',
     args: ['projects', 'create', '--name', 'test_project', '--psql'],
     expected: {
