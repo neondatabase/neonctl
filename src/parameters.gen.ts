@@ -29,12 +29,17 @@ export const projectCreateRequest = {
   'project.settings.allowed_ips.ips': {
               type: "array",
               description: "A list of IP addresses that are allowed to connect to the endpoint.",
-              demandOption: true,
+              demandOption: false,
   },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
               description: "If true, the list will be applied only to the primary branch.",
               demandOption: true,
+  },
+  'project.settings.enable_logical_replication': {
+              type: "boolean",
+              description: "Sets wal_level=logical for all compute endpoints in this project.\nAll active endpoints will be suspended.\nOnce enabled, logical replication cannot be disabled.\n",
+              demandOption: false,
   },
   'project.name': {
               type: "string",
@@ -69,12 +74,12 @@ export const projectCreateRequest = {
   },
   'project.default_endpoint_settings.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
               demandOption: false,
   },
   'project.pg_version': {
               type: "number",
-              description: "The major PostgreSQL version number. Currently supported versions are `14`, `15` and `16`.",
+              description: "The major Postgres version number. Currently supported versions are `14`, `15`, and `16`.",
               demandOption: false,
   },
   'project.store_passwords': {
@@ -118,12 +123,17 @@ export const projectUpdateRequest = {
   'project.settings.allowed_ips.ips': {
               type: "array",
               description: "A list of IP addresses that are allowed to connect to the endpoint.",
-              demandOption: true,
+              demandOption: false,
   },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
               description: "If true, the list will be applied only to the primary branch.",
               demandOption: true,
+  },
+  'project.settings.enable_logical_replication': {
+              type: "boolean",
+              description: "Sets wal_level=logical for all compute endpoints in this project.\nAll active endpoints will be suspended.\nOnce enabled, logical replication cannot be disabled.\n",
+              demandOption: false,
   },
   'project.name': {
               type: "string",
@@ -132,7 +142,7 @@ export const projectUpdateRequest = {
   },
   'project.default_endpoint_settings.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
               demandOption: false,
   },
   'project.history_retention_seconds': {
@@ -165,7 +175,12 @@ export const branchCreateRequest = {
   },
   'branch.parent_timestamp': {
               type: "string",
-              description: "A timestamp identifying a point in time on the parent branch. The branch will be created with data starting from this point in time.\n",
+              description: "A timestamp identifying a point in time on the parent branch. The branch will be created with data starting from this point in time.\nThe timestamp must be provided in ISO 8601 format; for example: `2024-02-26T12:00:00Z`.\n",
+              demandOption: false,
+  },
+  'branch.protected': {
+              type: "boolean",
+              description: "Whether the branch is protected\n",
               demandOption: false,
   },
 } as const;
@@ -185,7 +200,7 @@ export const branchCreateRequestEndpointOptions = {
   },
   'suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
               demandOption: false,
   },
 } as const;
@@ -193,6 +208,11 @@ export const branchCreateRequestEndpointOptions = {
 export const branchUpdateRequest = {
   'branch.name': {
               type: "string",
+              description: undefined,
+              demandOption: false,
+  },
+  'branch.protected': {
+              type: "boolean",
               description: undefined,
               demandOption: false,
   },
@@ -244,7 +264,7 @@ export const endpointCreateRequest = {
   },
   'endpoint.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
               demandOption: false,
   },
 } as const;
@@ -284,7 +304,7 @@ export const endpointUpdateRequest = {
   },
   'endpoint.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
               demandOption: false,
   },
 } as const;
