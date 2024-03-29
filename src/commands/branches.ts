@@ -372,19 +372,17 @@ const reset = async (
   }
   const branchId = await branchIdFromProps(props);
   const {
-    data: { branch },
+    data: {
+      branch: { parent_id },
+    },
   } = await props.apiClient.getProjectBranch(props.projectId, branchId);
-  if (!branch.parent_id) {
+  if (!parent_id) {
     throw new Error('Branch has no parent');
   }
   const { data } = await retryOnLock(() =>
-    props.apiClient.request({
-      method: 'POST',
-      path: `/projects/${props.projectId}/branches/${branch.id}/reset`,
-      body: {
-        source_branch_id: branch.parent_id,
-        preserve_under_name: props.preserveUnderName || undefined,
-      },
+    props.apiClient.restoreProjectBranch(props.projectId, branchId, {
+      source_branch_id: parent_id,
+      preserve_under_name: props.preserveUnderName || undefined,
     }),
   );
 
@@ -423,17 +421,13 @@ const restore = async (
   );
 
   const { data } = await retryOnLock(() =>
-    props.apiClient.request({
-      method: 'POST',
-      path: `/projects/${props.projectId}/branches/${targetBranchId}/reset`,
-      body: {
-        source_branch_id: pointInTime.branchId,
-        preserve_under_name: props.preserveUnderName || undefined,
-        ...(pointInTime.tag === 'lsn' && { source_lsn: pointInTime.lsn }),
-        ...(pointInTime.tag === 'timestamp' && {
-          source_timestamp: pointInTime.timestamp,
-        }),
-      },
+    props.apiClient.restoreProjectBranch(props.projectId, targetBranchId, {
+      source_branch_id: pointInTime.branchId,
+      preserve_under_name: props.preserveUnderName || undefined,
+      ...(pointInTime.tag === 'lsn' && { source_lsn: pointInTime.lsn }),
+      ...(pointInTime.tag === 'timestamp' && {
+        source_timestamp: pointInTime.timestamp,
+      }),
     }),
   );
 
