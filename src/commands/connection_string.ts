@@ -4,6 +4,7 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
+import { parsePITBranch } from '../utils/point_in_time.js';
 
 const SSL_MODES = ['require', 'verify-ca', 'verify-full', 'omit'] as const;
 
@@ -13,8 +14,17 @@ export const describe = 'Get connection string';
 export const builder = (argv: yargs.Argv) => {
   return argv
     .usage('$0 connection-string [branch] [options]')
+    .example('$0 cs main', 'Get connection string for the main branch')
+    .example(
+      '$0 cs main@2024-01-01T00:00:00Z',
+      'Get connection string for the main branch at a specific point in time',
+    )
+    .example(
+      '$0 cs main@0/234235',
+      'Get connection string for the main branch at a specific LSN',
+    )
     .positional('branch', {
-      describe: 'Branch name or id. If ommited will use the primary branch',
+      describe: `Branch name or id. If ommited will use the primary branch. Can be written in the point-in-time format: "branch@timestamp" or "branch@lsn"`,
       type: 'string',
     })
     .options({
@@ -79,6 +89,12 @@ export const handler = async (
   },
 ) => {
   const projectId = props.projectId;
+  const parsedPIT = props.branch
+    ? parsePITBranch(props.branch)
+    : ({ tag: 'head', branch: '' } as const);
+  if (props.branch) {
+    props.branch = parsedPIT.branch;
+  }
   const branchId = await branchIdFromProps(props);
 
   const {
@@ -141,9 +157,12 @@ export const handler = async (
     role,
   );
 
-  const host = props.pooled
+  let host = props.pooled
     ? endpoint.host.replace(endpoint.id, `${endpoint.id}-pooler`)
     : endpoint.host;
+  if (parsedPIT.tag !== 'head') {
+    host = endpoint.host.replace(endpoint.id, endpoint.branch_id);
+  }
   const connectionString = new URL(`postgres://${host}`);
   connectionString.pathname = database;
   connectionString.username = role;
@@ -159,6 +178,15 @@ export const handler = async (
 
   if (props.ssl !== 'omit') {
     connectionString.searchParams.set('sslmode', props.ssl);
+  }
+
+  if (parsedPIT.tag === 'lsn') {
+    connectionString.searchParams.set('options', `neon_lsn:${parsedPIT.lsn}`);
+  } else if (parsedPIT.tag === 'timestamp') {
+    connectionString.searchParams.set(
+      'options',
+      `neon_timestamp:${parsedPIT.timestamp}`,
+    );
   }
 
   if (props.psql) {

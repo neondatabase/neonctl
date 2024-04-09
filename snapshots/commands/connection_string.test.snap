@@ -40,12 +40,22 @@ exports[`connection_string connection_string test 1`] = `
 "
 `;
 
+exports[`connection_string connection_string with lsn test 1`] = `
+"postgres://test_role:test_pwd@br-sunny-branch-123456.us-east-2.aws.neon.tech/test_db?sslmode=require&options=neon_lsn%3A0%2F123456
+"
+`;
+
 exports[`connection_string connection_string with psql and psql args test 1`] = `"{"psql-cli-args":["postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require","-c","SELECT 1"]}"`;
 
 exports[`connection_string connection_string with psql test 1`] = `"{"psql-cli-args":["postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require"]}"`;
 
 exports[`connection_string connection_string with ssl verify full test 1`] = `
 "postgres://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=verify-full
+"
+`;
+
+exports[`connection_string connection_string with timestamp test 1`] = `
+"postgres://test_role:test_pwd@br-sunny-branch-123456.us-east-2.aws.neon.tech/test_db?sslmode=require&options=neon_timestamp%3A2021-01-01T00%3A00%3A00Z
 "
 `;
 
