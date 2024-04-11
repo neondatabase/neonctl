@@ -131,13 +131,12 @@ export const handler = (args: yargs.Argv) => {
 };
 
 const list = async (props: CommonProps) => {
-  const result: ProjectListItem[] = [];
-
   const getList = async (
     fn:
       | typeof props.apiClient.listProjects
       | typeof props.apiClient.listSharedProjects,
   ) => {
+    const result: ProjectListItem[] = [];
     let cursor: string | undefined;
     let end = false;
     while (!end) {
@@ -156,12 +155,26 @@ const list = async (props: CommonProps) => {
         end = true;
       }
     }
+
+    return result;
   };
 
-  await getList(props.apiClient.listProjects);
-  await getList(props.apiClient.listSharedProjects);
+  const lists = await Promise.all([
+    getList(props.apiClient.listProjects),
+    getList(props.apiClient.listSharedProjects),
+  ]);
 
-  writer(props).end(result, { fields: PROJECT_FIELDS });
+  const out = writer(props);
+
+  out.write(lists[0], {
+    fields: PROJECT_FIELDS,
+    title: 'Projects',
+  });
+  out.write(lists[1], {
+    fields: PROJECT_FIELDS,
+    title: 'Shared with me',
+  });
+  out.end();
 };
 
 const create = async (
