@@ -5,11 +5,11 @@ export default function (req, res) {
   res.json({
     projects: [
       {
-        id: "adj-noun-12401747",
-        region_id: "aws-us-east-2",
-        name: "Shared Project",
-        created_at: "2024-04-03T04:45:46Z",
-        updated_at: "2024-04-11T16:13:43Z"
+        id: 'adj-noun-12401747',
+        region_id: 'aws-us-east-2',
+        name: 'Shared Project',
+        created_at: '2024-04-03T04:45:46Z',
+        updated_at: '2024-04-11T16:13:43Z',
       },
     ],
   });
