@@ -46,7 +46,7 @@
     "pkg": "^5.8.1",
     "prettier": "^3.1.0",
     "rollup": "^3.26.2",
-    "semantic-release": "^21.0.2",
+    "semantic-release": "^23.0.8",
     "strip-ansi": "^7.1.0",
     "ts-jest": "^29.1.0",
     "ts-node": "^10.9.1",
