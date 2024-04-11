@@ -132,20 +132,35 @@ export const handler = (args: yargs.Argv) => {
 
 const list = async (props: CommonProps) => {
   const result: ProjectListItem[] = [];
-  let cursor: string | undefined;
-  let end = false;
-  while (!end) {
-    const { data } = await props.apiClient.listProjects({
-      limit: PROJECTS_LIST_LIMIT,
-      cursor,
-    });
-    result.push(...data.projects);
-    cursor = data.pagination?.cursor;
-    log.debug('Got %d projects, with cursor: %s', data.projects.length, cursor);
-    if (data.projects.length < PROJECTS_LIST_LIMIT) {
-      end = true;
+
+  const getList = async (
+    fn:
+      | typeof props.apiClient.listProjects
+      | typeof props.apiClient.listSharedProjects,
+  ) => {
+    let cursor: string | undefined;
+    let end = false;
+    while (!end) {
+      const { data } = await fn({
+        limit: PROJECTS_LIST_LIMIT,
+        cursor,
+      });
+      result.push(...data.projects);
+      cursor = data.pagination?.cursor;
+      log.debug(
+        'Got %d projects, with cursor: %s',
+        data.projects.length,
+        cursor,
+      );
+      if (data.projects.length < PROJECTS_LIST_LIMIT) {
+        end = true;
+      }
     }
-  }
+  };
+
+  await getList(props.apiClient.listProjects);
+  await getList(props.apiClient.listSharedProjects);
+
   writer(props).end(result, { fields: PROJECT_FIELDS });
 };
 
