@@ -159,7 +159,7 @@ const list = async (props: CommonProps) => {
     return result;
   };
 
-  const lists = await Promise.all([
+  const [ownedProjects, sharedProjects] = await Promise.all([
     getList(props.apiClient.listProjects),
     getList(props.apiClient.listSharedProjects),
   ]);
