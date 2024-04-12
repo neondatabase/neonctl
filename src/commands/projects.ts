@@ -166,11 +166,11 @@ const list = async (props: CommonProps) => {
 
   const out = writer(props);
 
-  out.write(lists[0], {
+  out.write(ownedProjects, {
     fields: PROJECT_FIELDS,
     title: 'Projects',
   });
-  out.write(lists[1], {
+  out.write(sharedProjects, {
     fields: PROJECT_FIELDS,
     title: 'Shared with me',
   });
