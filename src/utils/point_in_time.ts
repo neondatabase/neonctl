@@ -2,9 +2,7 @@ import { Api } from '@neondatabase/api-client';
 import { looksLikeLSN, looksLikeTimestamp } from './formats.js';
 import { branchIdResolve } from './enrichers.js';
 
-export type PointInTime = {
-  branchId: string;
-} & (
+export type PointInTime =
   | {
       tag: 'head';
     }
@@ -15,8 +13,14 @@ export type PointInTime = {
   | {
       tag: 'timestamp';
       timestamp: string;
-    }
-);
+    };
+export type PointInTimeBranchId = {
+  branchId: string;
+} & PointInTime;
+
+export type PointInTimeBranch = {
+  branch: string;
+} & PointInTime;
 
 export interface PointInTimeProps {
   targetBranchId: string;
@@ -32,51 +36,51 @@ export class PointInTimeParseError extends Error {
   }
 }
 
+export const parsePITBranch = (input: string) => {
+  const splitIndex = input.lastIndexOf('@');
+  const sourceBranch = splitIndex === -1 ? input : input.slice(0, splitIndex);
+  const exactPIT = splitIndex === -1 ? null : input.slice(splitIndex + 1);
+  const result = {
+    branch: sourceBranch,
+    ...(exactPIT === null
+      ? { tag: 'head' }
+      : looksLikeLSN(exactPIT)
+        ? { tag: 'lsn', lsn: exactPIT }
+        : { tag: 'timestamp', timestamp: exactPIT }),
+  } satisfies PointInTimeBranch;
+  if (result.tag === 'timestamp' && !looksLikeTimestamp(result.timestamp)) {
+    throw new PointInTimeParseError('Invalid source branch format');
+  }
+  return result;
+};
+
 export const parsePointInTime = async ({
   pointInTime,
   targetBranchId,
   projectId,
   api,
 }: PointInTimeProps) => {
-  const splitIndex = pointInTime.lastIndexOf('@');
-  const sourceBranch =
-    splitIndex === -1 ? pointInTime : pointInTime.slice(0, splitIndex);
-  const exactPIT = splitIndex === -1 ? null : pointInTime.slice(splitIndex + 1);
+  const parsedPIT = parsePITBranch(pointInTime);
 
-  const result = {
-    branchId: '',
-    ...(exactPIT === null
-      ? { tag: 'head' }
-      : looksLikeLSN(exactPIT)
-        ? { tag: 'lsn', lsn: exactPIT }
-        : { tag: 'timestamp', timestamp: exactPIT }),
-  } satisfies PointInTime;
-
-  if (result.tag === 'timestamp' && !looksLikeTimestamp(result.timestamp)) {
-    throw new PointInTimeParseError('Invalid source branch format');
-  }
-
-  if (sourceBranch === '^self') {
-    return {
-      ...result,
-      branchId: targetBranchId,
-    };
-  }
-
-  if (sourceBranch === '^parent') {
+  let branchId = '';
+  if (parsedPIT.branch === '^self') {
+    branchId = targetBranchId;
+  } else if (parsedPIT.branch === '^parent') {
     const { data } = await api.getProjectBranch(projectId, targetBranchId);
     const { parent_id: parentId } = data.branch;
     if (parentId == null) {
       throw new PointInTimeParseError('Branch has no parent');
     }
-    return { ...result, branchId: parentId };
+    branchId = parentId;
+  } else {
+    branchId = await branchIdResolve({
+      branch: parsedPIT.branch,
+      projectId,
+      apiClient: api,
+    });
   }
 
-  const branchId = await branchIdResolve({
-    branch: sourceBranch,
-    projectId,
-    apiClient: api,
-  });
-
-  return { ...result, branchId };
+  // @ts-expect-error extracting pit from parsedPIT
+  delete parsedPIT.branch;
+  return { ...parsedPIT, branchId };
 };
