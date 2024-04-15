@@ -24,7 +24,7 @@ export const builder = (argv: yargs.Argv) => {
       'Get connection string for the main branch at a specific LSN',
     )
     .positional('branch', {
-      describe: `Branch name or id. If ommited will use the primary branch. Can be written in the point-in-time format: "branch@timestamp" or "branch@lsn"`,
+      describe: `Branch name or id. Defaults to the primary branch if omitted. Can be written in the point-in-time format: "branch@timestamp" or "branch@lsn"`,
       type: 'string',
     })
     .options({
