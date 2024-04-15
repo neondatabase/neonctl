@@ -213,4 +213,38 @@ describe('connection_string', () => {
       snapshot: true,
     },
   });
+
+  testCliCommand({
+    name: 'connection_string with lsn',
+    args: [
+      'connection-string',
+      'test_branch@0/123456',
+      '--project-id',
+      'test',
+      '--database-name',
+      'test_db',
+      '--role-name',
+      'test_role',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'connection_string with timestamp',
+    args: [
+      'connection-string',
+      'test_branch@2021-01-01T00:00:00Z',
+      '--project-id',
+      'test',
+      '--database-name',
+      'test_db',
+      '--role-name',
+      'test_role',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
 });
