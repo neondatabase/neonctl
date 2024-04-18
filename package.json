@@ -72,7 +72,8 @@
   },
   "pkg": {
     "assets": [
-      "callback.html"
+      "callback.html",
+      "package.json"
     ],
     "scripts": [
       "bundle/*.js"
