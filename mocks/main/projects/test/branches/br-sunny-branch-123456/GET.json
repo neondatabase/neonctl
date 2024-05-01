@@ -1,6 +1,6 @@
 {
   "branch": {
-    "name": "test-branch-sunny",
+    "name": "test_branch",
     "id": "br-sunny-branch-123456",
     "primary": true,
     "parent_id": "br-parent-branch-123456",
