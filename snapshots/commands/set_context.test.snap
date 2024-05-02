@@ -1,7 +1,7 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`set_context should set the context get branch id overrides context set branch test 1`] = `
-"name: test-branch-sunny
+"name: test_branch
 id: br-sunny-branch-123456
 primary: true
 parent_id: br-parent-branch-123456

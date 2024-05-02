@@ -1,4 +1,4 @@
-import { describe } from '@jest/globals';
+import { describe, expect } from '@jest/globals';
 import { testCliCommand } from '../test_utils/test_cli_command';
 
 describe('connection_string', () => {
@@ -245,6 +245,24 @@ describe('connection_string', () => {
     ],
     expected: {
       snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'connection_string fails for non-existing database',
+    args: [
+      'connection-string',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--database-name',
+      'non_existing_db',
+      '--role-name',
+      'test_role',
+    ],
+    expected: {
+      code: 1,
+      stderr: expect.stringMatching(/Database not found/),
     },
   });
 });

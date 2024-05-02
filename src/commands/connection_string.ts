@@ -131,23 +131,29 @@ export const handler = async (
         );
       }));
 
+  const {
+    data: { databases: branchDatabases },
+  } = await props.apiClient.listProjectBranchDatabases(projectId, branchId);
+
   const database =
     props.databaseName ||
-    (await props.apiClient
-      .listProjectBranchDatabases(projectId, branchId)
-      .then(({ data }) => {
-        if (data.databases.length === 0) {
-          throw new Error(`No databases found for the branch: ${branchId}`);
-        }
-        if (data.databases.length === 1) {
-          return data.databases[0].name;
-        }
-        throw new Error(
-          `Multiple databases found for the branch, please provide one with the --database-name option: ${data.databases
-            .map((d) => d.name)
-            .join(', ')}`,
-        );
-      }));
+    (() => {
+      if (branchDatabases.length === 0) {
+        throw new Error(`No databases found for the branch: ${branchId}`);
+      }
+      if (branchDatabases.length === 1) {
+        return branchDatabases[0].name;
+      }
+      throw new Error(
+        `Multiple databases found for the branch, please provide one with the --database-name option: ${branchDatabases
+          .map((d) => d.name)
+          .join(', ')}`,
+      );
+    })();
+
+  if (!branchDatabases.find((d) => d.name === database)) {
+    throw new Error(`Database not found: ${database}`);
+  }
 
   const {
     data: { password },
