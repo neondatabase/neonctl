@@ -16,5 +16,7 @@ exports[`databases list test 1`] = `
   owner_name: user1
 - name: db2
   owner_name: user2
+- name: test_db
+  owner_name: test_user
 "
 `;
