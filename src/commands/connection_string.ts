@@ -169,7 +169,7 @@ export const handler = async (
   if (parsedPIT.tag !== 'head') {
     host = endpoint.host.replace(endpoint.id, endpoint.branch_id);
   }
-  const connectionString = new URL(`postgres://${host}`);
+  const connectionString = new URL(`postgresql://${host}`);
   connectionString.pathname = database;
   connectionString.username = role;
   connectionString.password = password;
