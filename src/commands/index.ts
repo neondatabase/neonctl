@@ -8,6 +8,7 @@ import * as roles from './roles.js';
 import * as operations from './operations.js';
 import * as cs from './connection_string.js';
 import * as setContext from './set_context.js';
+import * as schemaDiff from './schema_diff.js';
 
 export default [
   auth,
@@ -20,4 +21,5 @@ export default [
   operations,
   cs,
   setContext,
+  schemaDiff,
 ];
