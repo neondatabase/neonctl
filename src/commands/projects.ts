@@ -42,7 +42,13 @@ export const builder = (argv: yargs.Argv) => {
     .command(
       'list',
       'List projects',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.options({
+          org: {
+            describe: 'List projects of a given organization',
+            type: 'string',
+          },
+        }),
       async (args) => {
         await list(args as any);
       },
@@ -146,7 +152,7 @@ export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-const list = async (props: CommonProps) => {
+const list = async (props: CommonProps & { org?: string }) => {
   const getList = async (
     fn:
       | typeof props.apiClient.listProjects
@@ -158,6 +164,7 @@ const list = async (props: CommonProps) => {
     while (!end) {
       const { data } = await fn({
         limit: PROJECTS_LIST_LIMIT,
+        org_id: props.org,
         cursor,
       });
       result.push(...data.projects);
