@@ -34,7 +34,6 @@ const NO_SUBCOMMANDS_VERBS = [
   'cs',
   'connection-string',
   'set-context',
-  'schema-diff',
 ];
 
 let builder = yargs(hideBin(process.argv));

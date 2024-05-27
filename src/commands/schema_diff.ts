@@ -1,5 +1,3 @@
-import yargs from 'yargs';
-import { fillSingleProject } from '../utils/enrichers.js';
 import { ProjectScopeProps } from '../types';
 import { createPatch } from 'diff';
 import { Database } from '@neondatabase/api-client';
@@ -20,34 +18,6 @@ const COLORS = {
 };
 
 type ColorId = keyof typeof COLORS;
-
-export const command = 'schema-diff';
-export const describe = 'Compare schemas of two branches';
-export const builder = (argv: yargs.Argv) =>
-  argv
-    .option({
-      'project-id': {
-        describe: 'Project Id',
-        type: 'string',
-      },
-      'base-branch': {
-        describe: 'Base Branch Id',
-        type: 'string',
-      },
-      'compare-branch': {
-        describe: 'Compare Branch Id',
-        type: 'string',
-      },
-      database: {
-        describe: 'Database name',
-        type: 'string',
-      },
-    })
-    .middleware(fillSingleProject as any);
-
-export const handler = (args: yargs.Argv) => {
-  return schemaDiff(args as any);
-};
 
 export const schemaDiff = async (props: SchemaDiffProps) => {
   const baseBranch = props.baseBranch;
