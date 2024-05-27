@@ -189,7 +189,7 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await get(args as any),
     )
     .command({
-      command: 'schema-diff [base-branch] <compare-branch>',
+      command: 'schema-diff [branch] <compare-branch>',
       aliases: ['sd'],
       describe: 'Compare schemas from two branches',
       builder: (yargs) => yargs,

@@ -1,11 +1,13 @@
-import { ProjectScopeProps } from '../types';
+import { BranchScopeProps } from '../types';
 import { createPatch } from 'diff';
 import { Database } from '@neondatabase/api-client';
 import chalk from 'chalk';
 import { writer } from '../writer.js';
+import { branchIdFromProps } from '../utils/enrichers.js';
 
-type SchemaDiffProps = ProjectScopeProps & {
-  baseBranch: string;
+type SchemaDiffProps = BranchScopeProps & {
+  branch?: string;
+  baseBranch?: string;
   compareBranch: string;
   database: string;
 };
@@ -20,7 +22,8 @@ const COLORS = {
 type ColorId = keyof typeof COLORS;
 
 export const schemaDiff = async (props: SchemaDiffProps) => {
-  const baseBranch = props.baseBranch;
+  props.branch = props.baseBranch || props.branch;
+  const baseBranch = await branchIdFromProps(props);
   const compareBranch = props.compareBranch;
 
   const [baseDatabase, compareDatabase] = await Promise.all([
