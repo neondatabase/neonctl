@@ -1,6 +1,7 @@
 export type ErrorCode =
   | 'REQUEST_TIMEOUT'
   | 'AUTH_FAILED'
+  | 'AUTH_BROWSER_FAILED'
   | 'API_ERROR'
   | 'UNKNOWN_COMMAND'
   | 'MISSING_ARGUMENT'
@@ -9,7 +10,7 @@ export type ErrorCode =
 const ERROR_MATCHERS = [
   [/^Unknown command: (.*)$/, 'UNKNOWN_COMMAND'],
   [/^Missing required argument: (.*)$/, 'MISSING_ARGUMENT'],
-  [/^Failed to open web browser. (.*)$/, 'AUTH_FAILED'],
+  [/^Failed to open web browser. (.*)$/, 'AUTH_BROWSER_FAILED'],
 ] as const;
 
 export const matchErrorCode = (message?: string): ErrorCode => {
