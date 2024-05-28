@@ -9,7 +9,9 @@ export type ErrorCode =
 const ERROR_MATCHERS = [
   [/^Unknown command: (.*)$/, 'UNKNOWN_COMMAND'],
   [/^Missing required argument: (.*)$/, 'MISSING_ARGUMENT'],
+  [/^Failed to open web browser. (.*)$/, 'AUTH_FAILED'],
 ] as const;
+
 export const matchErrorCode = (message?: string): ErrorCode => {
   if (!message) {
     return 'UNKNOWN_ERROR';
