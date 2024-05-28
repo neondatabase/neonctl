@@ -30,6 +30,12 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
     projectId: props.projectId,
   });
 
+  if (baseBranch === compareBranch) {
+    throw new Error(
+      'Can not compare the branch with itself. Please specify different branch to compare.',
+    );
+  }
+
   const [baseDatabase, compareDatabase] = await Promise.all([
     fetchDatabase(baseBranch, props),
     fetchDatabase(compareBranch, props),
