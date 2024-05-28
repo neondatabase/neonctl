@@ -25,6 +25,8 @@ const NEONCTL_SCOPES = [
   'urn:neoncloud:projects:delete',
 ] as const;
 
+const AUTH_TIMEOUT_SECONDS = 60;
+
 export const defaultClientID = 'neonctl';
 
 export type AuthProps = {
@@ -81,7 +83,15 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
 
   const codeChallenge = generators.codeChallenge(codeVerifier);
 
-  return new Promise<TokenSet>((resolve) => {
+  return new Promise<TokenSet>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new Error(
+          `Authentication timed out after ${AUTH_TIMEOUT_SECONDS} seconds`,
+        ),
+      );
+    }, AUTH_TIMEOUT_SECONDS * 1000);
+
     server.on('request', async (request, response) => {
       //
       // Wait for callback and follow oauth flow.
@@ -118,6 +128,8 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       createReadStream(
         join(fileURLToPath(new URL('.', import.meta.url)), './callback.html'),
       ).pipe(response);
+
+      clearTimeout(timer);
       resolve(tokenSet);
       server.close();
     });
