@@ -7,6 +7,8 @@ import open from 'open';
 import { log } from './log.js';
 import { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { sendError } from './analytics.js';
+import { matchErrorCode } from './errors.js';
 
 // oauth server timeouts
 const SERVER_TIMEOUT = 10_000;
@@ -22,6 +24,8 @@ const NEONCTL_SCOPES = [
   'urn:neoncloud:projects:update',
   'urn:neoncloud:projects:delete',
 ] as const;
+
+const AUTH_TIMEOUT_SECONDS = 60;
 
 export const defaultClientID = 'neonctl';
 
@@ -56,6 +60,7 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   //
   // Start HTTP server and wait till /callback is hit
   //
+  log.debug('Starting HTTP Server for callback');
   const server = createServer();
   server.listen(0, '127.0.0.1', function (this: typeof server) {
     log.debug(`Listening on port ${(this.address() as AddressInfo).port}`);
@@ -78,7 +83,15 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
 
   const codeChallenge = generators.codeChallenge(codeVerifier);
 
-  return new Promise<TokenSet>((resolve) => {
+  return new Promise<TokenSet>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new Error(
+          `Authentication timed out after ${AUTH_TIMEOUT_SECONDS} seconds`,
+        ),
+      );
+    }, AUTH_TIMEOUT_SECONDS * 1000);
+
     server.on('request', async (request, response) => {
       //
       // Wait for callback and follow oauth flow.
@@ -115,6 +128,8 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       createReadStream(
         join(fileURLToPath(new URL('.', import.meta.url)), './callback.html'),
       ).pipe(response);
+
+      clearTimeout(timer);
       resolve(tokenSet);
       server.close();
     });
@@ -132,6 +147,13 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       code_challenge_method: 'S256',
     });
 
-    open(authUrl);
+    log.info('Awaiting authentication in web browser.');
+    log.info(`Auth Url: ${authUrl}`);
+
+    open(authUrl).catch((err) => {
+      const msg = `Failed to open web browser. Please copy & paste auth url to authenticate in browser.`;
+      sendError(err || new Error(msg), matchErrorCode(msg || err?.message));
+      log.error(msg || err?.message);
+    });
   });
 };

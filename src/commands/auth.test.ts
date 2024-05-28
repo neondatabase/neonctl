@@ -18,7 +18,7 @@ import { runMockServer } from '../test_utils/mock_server';
 jest.unstable_mockModule('open', () => ({
   __esModule: true,
   default: jest.fn((url: string) => {
-    axios.get(url);
+    return axios.get(url);
   }),
 }));
 
