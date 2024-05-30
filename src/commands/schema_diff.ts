@@ -36,30 +36,62 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
     );
   }
 
-  const [baseDatabase, compareDatabase] = await Promise.all([
-    fetchDatabase(baseBranch, props),
-    fetchDatabase(compareBranch, props),
-  ]);
+  const baseDatabases = await fetchDatabases(baseBranch, props);
 
-  const [baseSchema, compareSchema] = await Promise.all([
-    fetchSchema(baseBranch, baseDatabase, props),
-    fetchSchema(compareBranch, compareDatabase, props),
-  ]);
+  if (props.database) {
+    const database = baseDatabases.find((db) => db.name === props.database);
 
-  const patch = createPatch(
-    props.database,
-    baseSchema,
-    compareSchema,
-    `Base Branch: ${baseBranch}`,
-    `Compare Branch: ${compareBranch}`,
-  );
-  writer(props).text(colorize(patch));
+    if (!database) {
+      throw new Error(
+        `Database ${props.database} does not exist in base branch ${baseBranch}`,
+      );
+    }
+
+    const patch = await createSchemaDiff(
+      baseBranch,
+      compareBranch,
+      database,
+      props,
+    );
+    writer(props).text(colorize(patch));
+    return;
+  }
+
+  baseDatabases.map(async (database) => {
+    const patch = await createSchemaDiff(
+      baseBranch,
+      compareBranch,
+      database,
+      props,
+    );
+    writer(props).text(colorize(patch));
+  });
 };
 
-const fetchDatabase = async (branch: string, props: SchemaDiffProps) => {
+const fetchDatabases = async (branch: string, props: SchemaDiffProps) => {
   return props.apiClient
-    .getProjectBranchDatabase(props.projectId, branch, props.database)
-    .then((response) => response.data.database);
+    .listProjectBranchDatabases(props.projectId, branch)
+    .then((response) => response.data.databases);
+};
+
+const createSchemaDiff = async (
+  baseBranch: string,
+  compareBranch: string,
+  database: Database,
+  props: SchemaDiffProps,
+) => {
+  const [baseSchema, compareSchema] = await Promise.all([
+    fetchSchema(baseBranch, database, props),
+    fetchSchema(compareBranch, database, props),
+  ]);
+
+  return createPatch(
+    `Database: ${database.name}`,
+    baseSchema,
+    compareSchema,
+    `(Branch: ${baseBranch})`,
+    `(Branch: ${compareBranch})`,
+  );
 };
 
 const fetchSchema = async (
