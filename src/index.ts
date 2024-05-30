@@ -22,7 +22,7 @@ import { defaultClientID } from './auth.js';
 import { fillInArgs } from './utils/middlewares.js';
 import pkg from './pkg.js';
 import commands from './commands/index.js';
-import { analyticsMiddleware, sendError } from './analytics.js';
+import { analyticsMiddleware, closeAnalytics, sendError } from './analytics.js';
 import { isAxiosError } from 'axios';
 import { matchErrorCode } from './errors.js';
 import { showHelp } from './help.js';
@@ -167,14 +167,20 @@ builder = builder
       sendError(err || new Error(msg), matchErrorCode(msg || err?.message));
       log.error(msg || err?.message);
     }
+    await closeAnalytics();
     err?.stack && log.debug('Stack: %s', err.stack);
     process.exit(1);
   });
 
 (async () => {
-  const args = await builder.argv;
-  if (args._.length === 0 || args.help) {
-    await showHelp(builder);
-    process.exit(0);
+  try {
+    const args = await builder.argv;
+    if (args._.length === 0 || args.help) {
+      await showHelp(builder);
+      process.exit(0);
+    }
+    await closeAnalytics();
+  } catch {
+    // noop
   }
 })();
