@@ -14,6 +14,7 @@ import { getApiClient } from './api.js';
 const WRITE_KEY = '3SQXn5ejjXWLEJ8xU2PRYhAotLtTaeeV';
 
 let client: Analytics | undefined;
+let clientInitialized = false;
 let userId = '';
 
 export const analyticsMiddleware = async (args: {
@@ -24,10 +25,11 @@ export const analyticsMiddleware = async (args: {
   _: (string | number)[];
   [key: string]: unknown;
 }) => {
-  if (!args.analytics) {
+  if (!args.analytics || clientInitialized) {
     return;
   }
 
+  clientInitialized = true;
   try {
     const credentialsPath = join(args.configDir, CREDENTIALS_FILE);
     const credentials = readFileSync(credentialsPath, { encoding: 'utf-8' });
@@ -54,6 +56,8 @@ export const analyticsMiddleware = async (args: {
     host: 'https://track.neon.tech',
   });
 
+  log.debug('Initialized CLI analytics');
+
   client.identify({
     userId: userId?.toString() ?? 'anonymous',
   });
@@ -70,9 +74,14 @@ export const analyticsMiddleware = async (args: {
       ci: isCi(),
     },
   });
-  log.debug('Flushing CLI started event with userId: %s', userId);
-  await client.closeAndFlush();
-  log.debug('Flushed CLI started event with userId: %s', userId);
+};
+
+export const closeAnalytics = async () => {
+  if (client) {
+    log.debug('Flushing CLI analytics');
+    await client.closeAndFlush();
+    log.debug('Flushed CLI analytics');
+  }
 };
 
 export const sendError = (err: Error, errCode: ErrorCode) => {
@@ -90,6 +99,5 @@ export const sendError = (err: Error, errCode: ErrorCode) => {
       statusCode: axiosError?.response?.status,
     },
   });
-  client.closeAndFlush();
   log.debug('Sent CLI error event: %s', errCode);
 };
