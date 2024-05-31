@@ -189,7 +189,7 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await get(args as any),
     )
     .command({
-      command: 'schema-diff [base-branch] [compare-branch]',
+      command: 'schema-diff [base-branch] [compare-source]',
       aliases: ['sd'],
       describe:
         'compare a branch schema to a specific point in time\n<compare-source> can be: ^self, ^parent, or <compare-branch-id|name>',

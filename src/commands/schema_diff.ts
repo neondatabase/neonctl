@@ -13,7 +13,7 @@ import {
 type SchemaDiffProps = BranchScopeProps & {
   branch?: string;
   baseBranch?: string;
-  compareBranch: string;
+  compareSource: string;
   database: string;
 };
 
@@ -30,7 +30,7 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
   props.branch = props.baseBranch || props.branch;
   const baseBranch = await branchIdFromProps(props);
   const pointInTime: PointInTimeBranchId = await parsePointInTime({
-    pointInTime: props.compareBranch,
+    pointInTime: props.compareSource,
     targetBranchId: baseBranch,
     projectId: props.projectId,
     api: props.apiClient,
@@ -159,9 +159,9 @@ const generateHeader = (pointInTime: PointInTimeBranchId) => {
     and `base-branch` will be either read from context or the primary branch of project.
 */
 export const parseSchemaDiffParams = (props: SchemaDiffProps) => {
-  if (!props.compareBranch) {
+  if (!props.compareSource) {
     if (props.baseBranch) {
-      props.compareBranch = props.baseBranch;
+      props.compareSource = props.baseBranch;
       props.baseBranch = props.branch;
     }
   }
