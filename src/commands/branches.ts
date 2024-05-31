@@ -18,6 +18,7 @@ import {
 import { psql } from '../utils/psql.js';
 import { parsePointInTime } from '../utils/point_in_time.js';
 import { log } from '../log.js';
+import { schemaDiff } from './schema_diff.js';
 
 const BRANCH_FIELDS = [
   'id',
@@ -186,7 +187,21 @@ export const builder = (argv: yargs.Argv) =>
       'Get a branch',
       (yargs) => yargs,
       async (args) => await get(args as any),
-    );
+    )
+    .command({
+      command: 'schema-diff [base-branch] <compare-branch>',
+      aliases: ['sd'],
+      describe: 'Compare schemas from two branches',
+      builder: (yargs) =>
+        yargs.options({
+          database: {
+            type: 'string',
+            description:
+              'Name of the database for which the schema is retrieved',
+          },
+        }),
+      handler: async (args) => schemaDiff(args as any),
+    });
 
 export const handler = (args: yargs.Argv) => {
   return args;

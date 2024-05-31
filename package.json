@@ -29,6 +29,7 @@
     "@semantic-release/exec": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
     "@types/cli-table": "^0.3.0",
+    "@types/diff": "^5.2.1",
     "@types/express": "^4.17.17",
     "@types/inquirer": "^9.0.3",
     "@types/node": "^18.7.13",
@@ -53,12 +54,13 @@
     "typescript": "^4.7.4"
   },
   "dependencies": {
-    "@neondatabase/api-client": "1.5.0",
+    "@neondatabase/api-client": "1.7.0",
     "@segment/analytics-node": "^1.0.0-beta.26",
     "axios": "^1.4.0",
     "axios-debug-log": "^1.0.0",
     "chalk": "^5.2.0",
     "cli-table": "^0.3.11",
+    "diff": "^5.2.0",
     "inquirer": "^9.2.6",
     "open": "^10.1.0",
     "openid-client": "^5.6.5",

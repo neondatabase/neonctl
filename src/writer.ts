@@ -112,6 +112,9 @@ export const writer = (
       chunks.push({ data, config });
       return this;
     },
+    text(data: string) {
+      return out.write(data);
+    },
     end: <T>(...args: [T, WriteOutConfig<T>] | []) => {
       if (args.length === 2) {
         chunks.push({ data: args[0], config: args[1] });

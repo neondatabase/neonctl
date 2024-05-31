@@ -31,10 +31,15 @@ export const projectCreateRequest = {
               description: "A list of IP addresses that are allowed to connect to the endpoint.",
               demandOption: false,
   },
+  'project.settings.allowed_ips.protected_branches_only': {
+              type: "boolean",
+              description: "If true, the list will be applied only to protected branches.",
+              demandOption: false,
+  },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
               description: "If true, the list will be applied only to the primary branch.",
-              demandOption: true,
+              demandOption: false,
   },
   'project.settings.enable_logical_replication': {
               type: "boolean",
@@ -92,6 +97,11 @@ export const projectCreateRequest = {
               description: "The number of seconds to retain the point-in-time restore (PITR) backup history for this project.\nThe default is 604800 seconds (7 days).\n",
               demandOption: false,
   },
+  'project.org_id': {
+              type: "string",
+              description: "Organization id in case the project created belongs to an organization.\nIf not present, project is owned by a user and not by org.\n",
+              demandOption: false,
+  },
 } as const;
 
 export const projectUpdateRequest = {
@@ -125,10 +135,15 @@ export const projectUpdateRequest = {
               description: "A list of IP addresses that are allowed to connect to the endpoint.",
               demandOption: false,
   },
+  'project.settings.allowed_ips.protected_branches_only': {
+              type: "boolean",
+              description: "If true, the list will be applied only to protected branches.",
+              demandOption: false,
+  },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
               description: "If true, the list will be applied only to the primary branch.",
-              demandOption: true,
+              demandOption: false,
   },
   'project.settings.enable_logical_replication': {
               type: "boolean",
