@@ -59,7 +59,7 @@ export const parsePointInTime = async ({
   targetBranchId,
   projectId,
   api,
-}: PointInTimeProps) => {
+}: PointInTimeProps): Promise<PointInTimeBranchId> => {
   const parsedPIT = parsePITBranch(pointInTime);
 
   let branchId = '';
