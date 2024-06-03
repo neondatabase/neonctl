@@ -192,13 +192,14 @@ export const builder = (argv: yargs.Argv) =>
       command: 'schema-diff [base-branch] [compare-source]',
       aliases: ['sd'],
       describe:
-        'compare a branch schema to a specific point in time\n<compare-source> can be: ^self, ^parent, or <compare-branch-id|name>',
+        'compare a branch schema to a specific point in time' +
+        '\n  [compare-source] can be: ^self, ^parent, or <compare-branch-id|name>',
       builder: (yargs) => {
         return yargs.middleware(parseSchemaDiffParams as any).options({
           database: {
             type: 'string',
             description:
-              'Name of the database for which the schema is retrieved',
+              'Name of the database for which the schema is compared',
           },
         });
       },
