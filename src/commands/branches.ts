@@ -189,19 +189,47 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await get(args as any),
     )
     .command({
-      command: 'schema-diff [base-branch] [compare-source]',
+      command: 'schema-diff [base-branch] [compare-source[@(timestamp|lsn)]]',
       aliases: ['sd'],
       describe:
         'compare a branch schema to a specific point in time' +
         '\n  [compare-source] can be: ^self, ^parent, or <compare-branch-id|name>',
       builder: (yargs) => {
-        return yargs.middleware(parseSchemaDiffParams as any).options({
-          database: {
-            type: 'string',
-            description:
-              'Name of the database for which the schema is compared',
-          },
-        });
+        return yargs
+          .middleware(
+            (args: any) =>
+              (args.compareSource = args['compare-source@(timestamp']),
+          )
+          .middleware(parseSchemaDiffParams as any)
+          .options({
+            database: {
+              type: 'string',
+              description:
+                'Name of the database for which the schema is compared',
+            },
+          })
+          .example([
+            [
+              '$0 branches schema-diff main br-compare-branch-123456',
+              'Compares main branch to the head of the branch with id br-compare-branch-123456',
+            ],
+            [
+              '$0 branches schema-diff main compare@2024-06-01T00:00:00Z',
+              'Compares main branch to the timestamp of 2024-06-01T00:00:00.000Z of the compare branch',
+            ],
+            [
+              '$0 branches schema-diff my-branch ^self@0/123456',
+              'Compares my-branch to the LSN of 0/123456 from its own history',
+            ],
+            [
+              '$0 branches schema-diff my-branch ^parent',
+              'Compares my-branch to the head of its parent branch',
+            ],
+            [
+              '$0 branches schema-diff',
+              'Compares the branch in context with its parent branch',
+            ],
+          ]);
       },
 
       handler: async (args) => schemaDiff(args as any),
