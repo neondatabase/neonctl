@@ -157,12 +157,15 @@ const generateHeader = (pointInTime: PointInTimeBranchId) => {
   The command has two positional optional arguments - [base-branch] and [compare-source]
   If only one argument is specified, we should consider it as `compare-source`
     and `base-branch` will be either read from context or the primary branch of project.
+  If no branches are specified, compare the context branch with its parent
 */
 export const parseSchemaDiffParams = (props: SchemaDiffProps) => {
   if (!props.compareSource) {
     if (props.baseBranch) {
       props.compareSource = props.baseBranch;
       props.baseBranch = props.branch;
+    } else {
+      props.compareSource = '^parent';
     }
   }
   return props;
