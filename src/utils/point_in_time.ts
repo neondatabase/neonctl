@@ -48,8 +48,18 @@ export const parsePITBranch = (input: string) => {
         ? { tag: 'lsn', lsn: exactPIT }
         : { tag: 'timestamp', timestamp: exactPIT }),
   } satisfies PointInTimeBranch;
-  if (result.tag === 'timestamp' && !looksLikeTimestamp(result.timestamp)) {
-    throw new PointInTimeParseError('Invalid source branch format');
+  if (result.tag === 'timestamp') {
+    const timestamp = result.timestamp;
+    if (!looksLikeTimestamp(timestamp)) {
+      throw new PointInTimeParseError(
+        `Invalid source branch format - ${input}`,
+      );
+    }
+    if (Date.parse(timestamp) > Date.now()) {
+      throw new PointInTimeParseError(
+        `Timestamp can not be in future - ${input}`,
+      );
+    }
   }
   return result;
 };
