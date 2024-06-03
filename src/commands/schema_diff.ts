@@ -9,6 +9,9 @@ import {
   PointInTime,
   PointInTimeBranchId,
 } from '../utils/point_in_time.js';
+import { isAxiosError } from 'axios';
+import { sendError } from '../analytics.js';
+import { log } from '../log.js';
 
 type SchemaDiffProps = BranchScopeProps & {
   branch?: string;
@@ -56,15 +59,17 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
     return;
   }
 
-  baseDatabases.map(async (database) => {
-    const patch = await createSchemaDiff(
-      baseBranch,
-      pointInTime,
-      database,
-      props,
-    );
-    writer(props).text(colorize(patch));
-  });
+  await Promise.all(
+    baseDatabases.map(async (database) => {
+      const patch = await createSchemaDiff(
+        baseBranch,
+        pointInTime,
+        database,
+        props,
+      );
+      writer(props).text(colorize(patch));
+    }),
+  );
 };
 
 const fetchDatabases = async (branch: string, props: SchemaDiffProps) => {
@@ -102,15 +107,27 @@ const fetchSchema = async (
   database: Database,
   props: SchemaDiffProps,
 ) => {
-  return props.apiClient
-    .getProjectBranchSchema({
-      projectId: props.projectId,
-      branchId: pointInTime.branchId,
-      db_name: database.name,
-      role: database.owner_name,
-      ...pointInTimeParams(pointInTime),
-    })
-    .then((response) => response.data.sql ?? '');
+  try {
+    return props.apiClient
+      .getProjectBranchSchema({
+        projectId: props.projectId,
+        branchId: pointInTime.branchId,
+        db_name: database.name,
+        role: database.owner_name,
+        ...pointInTimeParams(pointInTime),
+      })
+      .then((response) => response.data.sql ?? '');
+  } catch (error) {
+    if (isAxiosError(error)) {
+      const data = error.response?.data;
+      sendError(error, 'API_ERROR');
+      throw new Error(
+        data.message ??
+          `Error while fetching schema for branch ${pointInTime.branchId}`,
+      );
+    }
+    throw error;
+  }
 };
 
 const colorize = (patch: string) => {
@@ -164,7 +181,10 @@ export const parseSchemaDiffParams = (props: SchemaDiffProps) => {
     if (props.baseBranch) {
       props.compareSource = props.baseBranch;
       props.baseBranch = props.branch;
-    } else {
+    } else if (props.branch) {
+      log.info(
+        `No branches specified. Comparing branch '${props.branch}' with its parent`,
+      );
       props.compareSource = '^parent';
     }
   }
