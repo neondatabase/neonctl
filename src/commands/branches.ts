@@ -192,8 +192,7 @@ export const builder = (argv: yargs.Argv) =>
       command: 'schema-diff [base-branch] [compare-source[@(timestamp|lsn)]]',
       aliases: ['sd'],
       describe:
-        'compare a branch schema to a specific point in time' +
-        '\n  [compare-source] can be: ^self, ^parent, or <compare-branch-id|name>',
+        "Compare the latest schemas of any two branches, or compare a branch to its own or another branch's history.",
       builder: (yargs) => {
         return yargs
           .middleware(
@@ -205,21 +204,21 @@ export const builder = (argv: yargs.Argv) =>
             database: {
               type: 'string',
               description:
-                'Name of the database for which the schema is compared',
+                'Name of the database for which the schema comparison is performed',
             },
           })
           .example([
             [
               '$0 branches schema-diff main br-compare-branch-123456',
-              'Compares main branch to the head of the branch with id br-compare-branch-123456',
+              'Compares the main branch to the head of the branch with ID br-compare-branch-123456',
             ],
             [
               '$0 branches schema-diff main compare@2024-06-01T00:00:00Z',
-              'Compares main branch to the timestamp of 2024-06-01T00:00:00.000Z of the compare branch',
+              'Compares the main branch to the state of the compare branch at timestamp 2024-06-01T00:00:00.000Z',
             ],
             [
               '$0 branches schema-diff my-branch ^self@0/123456',
-              'Compares my-branch to the LSN of 0/123456 from its own history',
+              'Compares my-branch to LSN 0/123456 from its own history',
             ],
             [
               '$0 branches schema-diff my-branch ^parent',
@@ -227,7 +226,7 @@ export const builder = (argv: yargs.Argv) =>
             ],
             [
               '$0 branches schema-diff',
-              'Compares the branch in context with its parent branch',
+              "If a branch is specified in 'set-context', compares this branch to its parent. Otherwise, compares the primary branch to its parent.",
             ],
           ]);
       },
