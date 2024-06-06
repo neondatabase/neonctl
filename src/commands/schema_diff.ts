@@ -32,12 +32,22 @@ type ColorId = keyof typeof COLORS;
 export const schemaDiff = async (props: SchemaDiffProps) => {
   props.branch = props.baseBranch || props.branch;
   const baseBranch = await branchIdFromProps(props);
-  const pointInTime: PointInTimeBranchId = await parsePointInTime({
+  let pointInTime: PointInTimeBranchId = await parsePointInTime({
     pointInTime: props.compareSource,
     targetBranchId: baseBranch,
     projectId: props.projectId,
     api: props.apiClient,
   });
+
+  // Swap base and compare points if comparing with parent branch
+  const comparingWithParent = props.compareSource.startsWith('^parent');
+  let baseBranchPoint: PointInTimeBranchId = {
+    branchId: baseBranch,
+    tag: 'head',
+  };
+  [baseBranchPoint, pointInTime] = comparingWithParent
+    ? [pointInTime, baseBranchPoint]
+    : [baseBranchPoint, pointInTime];
 
   const baseDatabases = await fetchDatabases(baseBranch, props);
   if (props.database) {
@@ -50,7 +60,7 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
     }
 
     const patch = await createSchemaDiff(
-      baseBranch,
+      baseBranchPoint,
       pointInTime,
       database,
       props,
@@ -62,7 +72,7 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
   await Promise.all(
     baseDatabases.map(async (database) => {
       const patch = await createSchemaDiff(
-        baseBranch,
+        baseBranchPoint,
         pointInTime,
         database,
         props,
@@ -79,17 +89,13 @@ const fetchDatabases = async (branch: string, props: SchemaDiffProps) => {
 };
 
 const createSchemaDiff = async (
-  baseBranch: string,
+  baseBranch: PointInTimeBranchId,
   pointInTime: PointInTimeBranchId,
   database: Database,
   props: SchemaDiffProps,
 ) => {
-  const baseBranchPoint: PointInTimeBranchId = {
-    branchId: baseBranch,
-    tag: 'head',
-  };
   const [baseSchema, compareSchema] = await Promise.all([
-    fetchSchema(baseBranchPoint, database, props),
+    fetchSchema(baseBranch, database, props),
     fetchSchema(pointInTime, database, props),
   ]);
 
@@ -97,7 +103,7 @@ const createSchemaDiff = async (
     `Database: ${database.name}`,
     baseSchema,
     compareSchema,
-    generateHeader(baseBranchPoint),
+    generateHeader(baseBranch),
     generateHeader(pointInTime),
   );
 };
@@ -162,9 +168,9 @@ const generateHeader = (pointInTime: PointInTimeBranchId) => {
   const header = `(Branch: ${pointInTime.branchId}`;
   switch (pointInTime.tag) {
     case 'timestamp':
-      return `${header} at ${pointInTime.timestamp}`;
+      return `${header} at ${pointInTime.timestamp})`;
     case 'lsn':
-      return `${header} at ${pointInTime.lsn}`;
+      return `${header} at ${pointInTime.lsn})`;
     default:
       return `${header})`;
   }
