@@ -100,6 +100,11 @@ builder = builder
       type: 'string',
       default: currentContextFile,
     },
+    color: {
+      describe: 'Colorize the output. Example: --no-color, --color false',
+      type: 'boolean',
+      default: true,
+    },
   })
   .middleware((args) => fillInArgs(args), true)
   .help(false)
