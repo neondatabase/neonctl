@@ -202,6 +202,7 @@ export const builder = (argv: yargs.Argv) =>
           .middleware(parseSchemaDiffParams as any)
           .options({
             database: {
+              alias: 'db',
               type: 'string',
               description:
                 'Name of the database for which the schema comparison is performed',
