@@ -192,6 +192,11 @@ export const parseSchemaDiffParams = (props: SchemaDiffProps) => {
         `No branches specified. Comparing branch '${props.branch}' with its parent`,
       );
       props.compareSource = '^parent';
+    } else {
+      log.info(
+        `No branches specified. Comparing primary branch with its parent`,
+      );
+      props.compareSource = '^parent';
     }
   }
   return props;
