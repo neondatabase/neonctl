@@ -101,6 +101,7 @@ builder = builder
       default: currentContextFile,
     },
     color: {
+      group: 'Global options:',
       describe: 'Colorize the output. Example: --no-color, --color false',
       type: 'boolean',
       default: true,
