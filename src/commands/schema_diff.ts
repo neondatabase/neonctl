@@ -3,12 +3,20 @@ import { createPatch } from 'diff';
 import { Database } from '@neondatabase/api-client';
 import chalk from 'chalk';
 import { writer } from '../writer.js';
-import { branchIdFromProps, branchIdResolve } from '../utils/enrichers.js';
+import { branchIdFromProps } from '../utils/enrichers.js';
+import {
+  parsePointInTime,
+  PointInTime,
+  PointInTimeBranchId,
+} from '../utils/point_in_time.js';
+import { isAxiosError } from 'axios';
+import { sendError } from '../analytics.js';
+import { log } from '../log.js';
 
 type SchemaDiffProps = BranchScopeProps & {
   branch?: string;
   baseBranch?: string;
-  compareBranch: string;
+  compareSource: string;
   database: string;
 };
 
@@ -24,20 +32,24 @@ type ColorId = keyof typeof COLORS;
 export const schemaDiff = async (props: SchemaDiffProps) => {
   props.branch = props.baseBranch || props.branch;
   const baseBranch = await branchIdFromProps(props);
-  const compareBranch = await branchIdResolve({
-    branch: props.compareBranch,
-    apiClient: props.apiClient,
+  let pointInTime: PointInTimeBranchId = await parsePointInTime({
+    pointInTime: props.compareSource,
+    targetBranchId: baseBranch,
     projectId: props.projectId,
+    api: props.apiClient,
   });
 
-  if (baseBranch === compareBranch) {
-    throw new Error(
-      'Can not compare the branch with itself. Please specify different branch to compare.',
-    );
-  }
+  // Swap base and compare points if comparing with parent branch
+  const comparingWithParent = props.compareSource.startsWith('^parent');
+  let baseBranchPoint: PointInTimeBranchId = {
+    branchId: baseBranch,
+    tag: 'head',
+  };
+  [baseBranchPoint, pointInTime] = comparingWithParent
+    ? [pointInTime, baseBranchPoint]
+    : [baseBranchPoint, pointInTime];
 
   const baseDatabases = await fetchDatabases(baseBranch, props);
-
   if (props.database) {
     const database = baseDatabases.find((db) => db.name === props.database);
 
@@ -48,8 +60,8 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
     }
 
     const patch = await createSchemaDiff(
-      baseBranch,
-      compareBranch,
+      baseBranchPoint,
+      pointInTime,
       database,
       props,
     );
@@ -57,15 +69,17 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
     return;
   }
 
-  baseDatabases.map(async (database) => {
-    const patch = await createSchemaDiff(
-      baseBranch,
-      compareBranch,
-      database,
-      props,
-    );
-    writer(props).text(colorize(patch));
-  });
+  await Promise.all(
+    baseDatabases.map(async (database) => {
+      const patch = await createSchemaDiff(
+        baseBranchPoint,
+        pointInTime,
+        database,
+        props,
+      );
+      writer(props).text(colorize(patch));
+    }),
+  );
 };
 
 const fetchDatabases = async (branch: string, props: SchemaDiffProps) => {
@@ -75,38 +89,51 @@ const fetchDatabases = async (branch: string, props: SchemaDiffProps) => {
 };
 
 const createSchemaDiff = async (
-  baseBranch: string,
-  compareBranch: string,
+  baseBranch: PointInTimeBranchId,
+  pointInTime: PointInTimeBranchId,
   database: Database,
   props: SchemaDiffProps,
 ) => {
   const [baseSchema, compareSchema] = await Promise.all([
     fetchSchema(baseBranch, database, props),
-    fetchSchema(compareBranch, database, props),
+    fetchSchema(pointInTime, database, props),
   ]);
 
   return createPatch(
     `Database: ${database.name}`,
     baseSchema,
     compareSchema,
-    `(Branch: ${baseBranch})`,
-    `(Branch: ${compareBranch})`,
+    generateHeader(baseBranch),
+    generateHeader(pointInTime),
   );
 };
 
 const fetchSchema = async (
-  branch: string,
+  pointInTime: PointInTimeBranchId,
   database: Database,
   props: SchemaDiffProps,
 ) => {
-  return props.apiClient
-    .getProjectBranchSchema({
-      projectId: props.projectId,
-      branchId: branch,
-      db_name: database.name,
-      role: database.owner_name,
-    })
-    .then((response) => response.data.sql ?? '');
+  try {
+    return props.apiClient
+      .getProjectBranchSchema({
+        projectId: props.projectId,
+        branchId: pointInTime.branchId,
+        db_name: database.name,
+        role: database.owner_name,
+        ...pointInTimeParams(pointInTime),
+      })
+      .then((response) => response.data.sql ?? '');
+  } catch (error) {
+    if (isAxiosError(error)) {
+      const data = error.response?.data;
+      sendError(error, 'API_ERROR');
+      throw new Error(
+        data.message ??
+          `Error while fetching schema for branch ${pointInTime.branchId}`,
+      );
+    }
+    throw error;
+  }
 };
 
 const colorize = (patch: string) => {
@@ -120,4 +147,52 @@ const colorize = (patch: string) => {
 const colorizer = (colorId: ColorId) => {
   const color = COLORS[colorId];
   return (line: string) => color(line);
+};
+
+const pointInTimeParams = (pointInTime: PointInTime) => {
+  switch (pointInTime.tag) {
+    case 'timestamp':
+      return {
+        timestamp: pointInTime.timestamp,
+      };
+    case 'lsn':
+      return {
+        lsn: pointInTime.lsn ?? undefined,
+      };
+    default:
+      return {};
+  }
+};
+
+const generateHeader = (pointInTime: PointInTimeBranchId) => {
+  const header = `(Branch: ${pointInTime.branchId}`;
+  switch (pointInTime.tag) {
+    case 'timestamp':
+      return `${header} at ${pointInTime.timestamp})`;
+    case 'lsn':
+      return `${header} at ${pointInTime.lsn})`;
+    default:
+      return `${header})`;
+  }
+};
+
+/*
+  The command has two positional optional arguments - [base-branch] and [compare-source]
+  If only one argument is specified, we should consider it as `compare-source`
+    and `base-branch` will be either read from context or the primary branch of project.
+  If no branches are specified, compare the context branch with its parent
+*/
+export const parseSchemaDiffParams = (props: SchemaDiffProps) => {
+  if (!props.compareSource) {
+    if (props.baseBranch) {
+      props.compareSource = props.baseBranch;
+      props.baseBranch = props.branch;
+    } else if (props.branch) {
+      log.info(
+        `No branches specified. Comparing branch '${props.branch}' with its parent`,
+      );
+      props.compareSource = '^parent';
+    }
+  }
+  return props;
 };
