@@ -18,7 +18,7 @@ import {
 import { psql } from '../utils/psql.js';
 import { parsePointInTime } from '../utils/point_in_time.js';
 import { log } from '../log.js';
-import { schemaDiff } from './schema_diff.js';
+import { parseSchemaDiffParams, schemaDiff } from './schema_diff.js';
 
 const BRANCH_FIELDS = [
   'id',
@@ -189,17 +189,49 @@ export const builder = (argv: yargs.Argv) =>
       async (args) => await get(args as any),
     )
     .command({
-      command: 'schema-diff [base-branch] <compare-branch>',
+      command: 'schema-diff [base-branch] [compare-source[@(timestamp|lsn)]]',
       aliases: ['sd'],
-      describe: 'Compare schemas from two branches',
-      builder: (yargs) =>
-        yargs.options({
-          database: {
-            type: 'string',
-            description:
-              'Name of the database for which the schema is retrieved',
-          },
-        }),
+      describe:
+        "Compare the latest schemas of any two branches, or compare a branch to its own or another branch's history.",
+      builder: (yargs) => {
+        return yargs
+          .middleware(
+            (args: any) =>
+              (args.compareSource = args['compare-source@(timestamp']),
+          )
+          .middleware(parseSchemaDiffParams as any)
+          .options({
+            database: {
+              alias: 'db',
+              type: 'string',
+              description:
+                'Name of the database for which the schema comparison is performed',
+            },
+          })
+          .example([
+            [
+              '$0 branches schema-diff main br-compare-branch-123456',
+              'Compares the main branch to the head of the branch with ID br-compare-branch-123456',
+            ],
+            [
+              '$0 branches schema-diff main compare@2024-06-01T00:00:00Z',
+              'Compares the main branch to the state of the compare branch at timestamp 2024-06-01T00:00:00.000Z',
+            ],
+            [
+              '$0 branches schema-diff my-branch ^self@0/123456',
+              'Compares my-branch to LSN 0/123456 from its own history',
+            ],
+            [
+              '$0 branches schema-diff my-branch ^parent',
+              'Compares my-branch to the head of its parent branch',
+            ],
+            [
+              '$0 branches schema-diff',
+              "If a branch is specified in 'set-context', compares this branch to its parent. Otherwise, compares the primary branch to its parent.",
+            ],
+          ]);
+      },
+
       handler: async (args) => schemaDiff(args as any),
     });
 
