@@ -182,14 +182,43 @@ const generateHeader = (pointInTime: PointInTimeBranchId) => {
     and `base-branch` will be either read from context or the primary branch of project.
   If no branches are specified, compare the context branch with its parent
 */
-export const parseSchemaDiffParams = (props: SchemaDiffProps) => {
+export const parseSchemaDiffParams = async (props: SchemaDiffProps) => {
   if (!props.compareSource) {
     if (props.baseBranch) {
       props.compareSource = props.baseBranch;
       props.baseBranch = props.branch;
     } else if (props.branch) {
+      const { data } = await props.apiClient.listProjectBranches(
+        props.projectId,
+      );
+      const contextBranch = data.branches.find(
+        (b) => b.id === props.branch || b.name === props.branch,
+      );
+
+      if (contextBranch?.parent_id == undefined) {
+        throw new Error(
+          `No branch specified. Your context branch (${props.branch}) has no parent, so no comparison is possible.`,
+        );
+      }
+
       log.info(
-        `No branches specified. Comparing branch '${props.branch}' with its parent`,
+        `No branches specified. Comparing your context branch '${props.branch}' with its parent`,
+      );
+      props.compareSource = '^parent';
+    } else {
+      const { data } = await props.apiClient.listProjectBranches(
+        props.projectId,
+      );
+      const primaryBranch = data.branches.find((b) => b.primary);
+
+      if (primaryBranch?.parent_id == undefined) {
+        throw new Error(
+          'No branch specified. Include a base branch or add a set-context branch to continue. Your primary branch has no parent, so no comparison is possible.',
+        );
+      }
+
+      log.info(
+        `No branches specified. Comparing primary branch with its parent`,
       );
       props.compareSource = '^parent';
     }
