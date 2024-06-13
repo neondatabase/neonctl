@@ -16,8 +16,24 @@ describe('projects', () => {
   });
 
   testCliCommand({
+    name: 'list',
+    args: ['projects', 'list', '--org-id', 'org-2'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
     name: 'create',
     args: ['projects', 'create', '--name', 'test_project'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create',
+    args: ['projects', 'create', '--name', 'test_project', '--org-id', 'org-2'],
     expected: {
       snapshot: true,
     },
