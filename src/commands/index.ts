@@ -2,6 +2,7 @@ import * as auth from './auth.js';
 import * as projects from './projects.js';
 import * as ipAllow from './ip_allow.js';
 import * as users from './user.js';
+import * as orgs from './orgs.js';
 import * as branches from './branches.js';
 import * as databases from './databases.js';
 import * as roles from './roles.js';
@@ -12,6 +13,7 @@ import * as setContext from './set_context.js';
 export default [
   auth,
   users,
+  orgs,
   projects,
   ipAllow,
   branches,
