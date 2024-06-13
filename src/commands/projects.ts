@@ -66,6 +66,10 @@ export const builder = (argv: yargs.Argv) => {
             describe: `The region ID. Possible values: ${REGIONS.join(', ')}`,
             type: 'string',
           },
+          'org-id': {
+            describe: 'List projects of a given organization',
+            type: 'string',
+          },
           psql: {
             type: 'boolean',
             describe: 'Connect to a new project via psql',
@@ -196,9 +200,9 @@ const list = async (props: CommonProps & { orgId?: string }) => {
 
   if (sharedProjects) {
     out.write(await sharedProjects, {
-    fields: PROJECT_FIELDS,
-    title: 'Shared with me',
-  });
+      fields: PROJECT_FIELDS,
+      title: 'Shared with me',
+    });
   }
 
   out.end();
@@ -209,6 +213,7 @@ const create = async (
     name?: string;
     regionId?: string;
     cu?: string;
+    orgId?: string;
     database?: string;
     role?: string;
     psql: boolean;
@@ -222,6 +227,9 @@ const create = async (
   }
   if (props.regionId) {
     project.region_id = props.regionId;
+  }
+  if (props.orgId) {
+    project.org_id = props.orgId;
   }
   project.branch = {};
   if (props.database) {
