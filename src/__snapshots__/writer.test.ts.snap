@@ -1,0 +1,60 @@
+// Bun Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`writer outputs yaml outputs single data 1`] = `
+"foo: bar
+"
+`;
+
+exports[`writer outputs yaml outputs single data with title 1`] = `
+"foo: bar
+"
+`;
+
+exports[`writer outputs yaml outputs multiple data 1`] = `
+"t1:
+  foo: bar
+t2:
+  baz: xyz
+"
+`;
+
+exports[`writer outputs json outputs single data 1`] = `
+"{
+  "foo": "bar"
+}"
+`;
+
+exports[`writer outputs json outputs single data with title 1`] = `
+"{
+  "foo": "bar"
+}"
+`;
+
+exports[`writer outputs json outputs multiple data 1`] = `
+"{
+  "t1": {
+    "foo": "bar"
+  },
+  "t2": {
+    "baz": "xyz"
+  }
+}"
+`;
+
+exports[`writer outputs table outputs single data 1`] = `
+"[90m┌─────┐[39m
+[90m│[39m[32m Foo [39m[90m│[39m
+[90m├─────┤[39m
+[90m│[39m bar [90m│[39m
+[90m└─────┘[39m"
+`;
+
+exports[`writer outputs table outputs single data with title 1`] = `
+"[1mbaz[22m
+"
+`;
+
+exports[`writer outputs table outputs multiple data 1`] = `
+"[1mT1[22m
+"
+`;
