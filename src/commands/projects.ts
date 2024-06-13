@@ -152,7 +152,7 @@ export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-const list = async (props: CommonProps & { 'org-id'?: string }) => {
+const list = async (props: CommonProps & { orgId?: string }) => {
   const getList = async (
     fn:
       | typeof props.apiClient.listProjects
@@ -164,7 +164,7 @@ const list = async (props: CommonProps & { 'org-id'?: string }) => {
     while (!end) {
       const { data } = await fn({
         limit: PROJECTS_LIST_LIMIT,
-        org_id: props['org-id'],
+        org_id: props.orgId,
         cursor,
       });
       result.push(...data.projects);
@@ -183,7 +183,7 @@ const list = async (props: CommonProps & { 'org-id'?: string }) => {
   };
 
   const ownedProjects = getList(props.apiClient.listProjects);
-  const sharedProjects = props['org-id']
+  const sharedProjects = props.orgId
     ? getList(props.apiClient.listSharedProjects)
     : undefined;
 
