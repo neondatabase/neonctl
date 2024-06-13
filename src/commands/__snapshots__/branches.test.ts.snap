@@ -1,0 +1,221 @@
+// Bun Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`branches list test 1`] = `
+"- id: br-main-branch-123456
+  name: main
+  primary: true
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-sunny-branch-123456
+  name: test_branch
+  parent_id: br-parent-branch-123456
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-numbered-branch-123456
+  name: "123"
+  parent_id: br-parent-branch-123456
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches create by default with r/w endpoint test 1`] = `
+"branch:
+  id: br-new-branch-123456
+  name: test_branch
+  created_at: 2021-01-01T00:00:00.000Z
+endpoints:
+  - id: ep-undefined-123456
+    type: read_write
+    created_at: 2021-01-01T00:00:00.000Z
+    host: undefined.example.com
+connection_uris:
+  - connection_uri: postgres://ep-undefined-123456.example.com:5432/test_project
+"
+`;
+
+exports[`branches create branch and connect with psql test 1`] = `
+"branch:
+  id: br-new-branch-123456
+  name: test_branch
+  created_at: 2021-01-01T00:00:00.000Z
+endpoints:
+  - id: ep-undefined-123456
+    type: read_write
+    created_at: 2021-01-01T00:00:00.000Z
+    host: undefined.example.com
+connection_uris:
+  - connection_uri: postgres://ep-undefined-123456.example.com:5432/test_project
+{"psql-cli-args":["postgres://ep-undefined-123456.example.com:5432/test_project"]}"
+`;
+
+exports[`branches create branch and connect with psql and psql args test 1`] = `
+"branch:
+  id: br-new-branch-123456
+  name: test_branch
+  created_at: 2021-01-01T00:00:00.000Z
+endpoints:
+  - id: ep-undefined-123456
+    type: read_write
+    created_at: 2021-01-01T00:00:00.000Z
+    host: undefined.example.com
+connection_uris:
+  - connection_uri: postgres://ep-undefined-123456.example.com:5432/test_project
+{"psql-cli-args":["postgres://ep-undefined-123456.example.com:5432/test_project","-c","SELECT 1"]}"
+`;
+
+exports[`branches create with readonly endpoint test 1`] = `
+"branch:
+  id: br-new-branch-123456
+  name: test_branch
+  created_at: 2021-01-01T00:00:00.000Z
+endpoints:
+  - id: ep-undefined-123456
+    type: read_only
+    created_at: 2021-01-01T00:00:00.000Z
+    host: undefined.example.com
+connection_uris:
+  - connection_uri: postgres://ep-undefined-123456.example.com:5432/test_project
+"
+`;
+
+exports[`branches create without endpoint test 1`] = `
+"id: br-new-branch-123456
+name: test_branch
+created_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches create with parent by name test 1`] = `
+"id: br-new-branch-123456
+name: test_branch_with_parent_name
+parent_id: br-main-branch-123456
+created_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches create with parent by lsn test 1`] = `
+"id: br-new-branch-123456
+name: test_branch_with_parent_lsn
+parent_id: br-main-branch-123456
+created_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches create with parent by timestamp test 1`] = `
+"id: br-new-branch-123456
+name: test_branch_with_parent_timestamp
+parent_id: br-main-branch-123456
+created_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches create with suspend timeout test 1`] = `
+"id: br-new-branch-123456
+name: test_branch_with_suspend_timeout
+parent_id: br-main-branch-123456
+created_at: 2021-01-01T00:00:00.000Z
+suspend_timeout: 60
+"
+`;
+
+exports[`branches delete by id test 1`] = `
+"id: br-sunny-branch-123456
+name: sunny-branch
+created_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches rename test 1`] = `
+"name: new_test_branch
+created_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches set primary by id test 1`] = `
+"name: test-branch-sunny
+id: br-sunny-branch-123456
+primary: true
+created_at: 2019-01-01T00:00:00Z
+updated_at: 2019-01-01T00:00:00Z
+"
+`;
+
+exports[`branches get by id test 1`] = `
+"name: test_branch
+id: br-sunny-branch-123456
+primary: true
+parent_id: br-parent-branch-123456
+created_at: 2019-01-01T00:00:00Z
+updated_at: 2019-01-01T00:00:00Z
+"
+`;
+
+exports[`branches get by id test 2`] = `
+"name: test-branch-cloudy
+id: br-cloudy-branch-12345678
+primary: true
+created_at: 2019-01-01T00:00:00Z
+updated_at: 2019-01-01T00:00:00Z
+"
+`;
+
+exports[`branches get by name test 1`] = `
+"name: test_branch
+id: br-sunny-branch-123456
+primary: true
+parent_id: br-parent-branch-123456
+created_at: 2019-01-01T00:00:00Z
+updated_at: 2019-01-01T00:00:00Z
+"
+`;
+
+exports[`branches get by name with numeric name test 1`] = `
+"name: "123"
+id: br-numbered-branch-123456
+primary: false
+parent_id: br-parent-branch-123456
+created_at: 2019-01-01T00:00:00Z
+updated_at: 2019-01-01T00:00:00Z
+"
+`;
+
+exports[`branches add compute test 1`] = `
+"id: test_endpoint_id
+branch_id: br-sunny-branch-123456
+created_at: 2019-01-01T00:00:00Z
+type: read_only
+"
+`;
+
+exports[`branches reset branch to parent test 1`] = `
+"id: br-branch-123456
+name: test-branch
+source_branch_id: br-parent-branch-123456
+project_id: pr-project-123456
+created_at: 2020-01-01T00:00:00.000Z
+updated_at: 2020-01-01T00:00:00.000Z
+last_reset_at: 2020-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches restore branch to lsn test 1`] = `
+"id: br-self-tolsn-123456
+name: self-tolsn
+last_reset_at: 2021-01-01T00:00:00Z
+"
+`;
+
+exports[`branches restore to parent branch timestamp by name test 1`] = `
+"id: br-parent-tots-123456
+name: parent-tots
+last_reset_at: 2021-01-01T00:00:00Z
+"
+`;
+
+exports[`branches restore to another branch head test 1`] = `
+"id: br-another-branch-123456
+name: another-branch
+last_reset_at: 2021-01-01T00:00:00Z
+"
+`;

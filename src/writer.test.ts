@@ -1,5 +1,5 @@
 import { Writable } from 'node:stream';
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect } from 'bun:test';
 import { writer } from './writer.js';
 
 class MockWritable extends Writable {

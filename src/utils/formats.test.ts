@@ -1,4 +1,4 @@
-import { test, describe, expect } from '@jest/globals';
+import { test, describe, expect } from 'bun:test';
 
 import { looksLikeBranchId, looksLikeLSN, looksLikeTimestamp } from './formats';
 
