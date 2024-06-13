@@ -22,9 +22,6 @@
     "@apidevtools/swagger-parser": "^10.1.0",
     "@commitlint/cli": "^17.6.5",
     "@commitlint/config-conventional": "^17.6.5",
-    "@rollup/plugin-commonjs": "^25.0.2",
-    "@rollup/plugin-json": "^6.0.0",
-    "@rollup/plugin-node-resolve": "^15.1.0",
     "@semantic-release/exec": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
     "@types/bun": "^1.1.4",
@@ -42,9 +39,7 @@
     "husky": "^8.0.3",
     "lint-staged": "^13.0.3",
     "oauth2-mock-server": "^6.0.0",
-    "pkg": "^5.8.1",
     "prettier": "^3.1.0",
-    "rollup": "^3.26.2",
     "semantic-release": "^23.0.8",
     "strip-ansi": "^7.1.0",
   
@@ -69,21 +64,6 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
-  },
-  "pkg": {
-    "assets": [
-      "callback.html",
-      "package.json"
-    ],
-    "scripts": [
-      "bundle/*.js"
-    ],
-    "targets": [
-      "node18-linux-x64",
-      "node18-macos-x64",
-      "node18-win-x64",
-      "node18-linux-arm64"
-    ]
   },
   "scripts": {
     "watch": "tsc --watch",
