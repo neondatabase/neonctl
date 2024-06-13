@@ -150,8 +150,6 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
     log.info('Awaiting authentication in web browser.');
     log.info(`Auth Url: ${authUrl}`);
 
-    console.log(open('foo'));
-
     open(authUrl).catch((err) => {
       const msg = `Failed to open web browser. Please copy & paste auth url to authenticate in browser.`;
       sendError(err || new Error(msg), matchErrorCode(msg || err?.message));
