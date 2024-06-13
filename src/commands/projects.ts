@@ -182,21 +182,25 @@ const list = async (props: CommonProps & { 'org-id'?: string }) => {
     return result;
   };
 
-  const [ownedProjects, sharedProjects] = await Promise.all([
-    getList(props.apiClient.listProjects),
-    getList(props.apiClient.listSharedProjects),
-  ]);
+  const ownedProjects = getList(props.apiClient.listProjects);
+  const sharedProjects = props['org-id']
+    ? getList(props.apiClient.listSharedProjects)
+    : undefined;
 
   const out = writer(props);
 
-  out.write(ownedProjects, {
+  out.write(await ownedProjects, {
     fields: PROJECT_FIELDS,
     title: 'Projects',
   });
-  out.write(sharedProjects, {
+
+  if (sharedProjects) {
+    out.write(await sharedProjects, {
     fields: PROJECT_FIELDS,
     title: 'Shared with me',
   });
+  }
+
   out.end();
 };
 
