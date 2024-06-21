@@ -170,9 +170,9 @@ const bootstrap = async (props: CommonProps) => {
     name: 'orm',
     message: `What ORM would you like to use?`,
     choices: [
-      { title: 'Drizzle' },
-      { title: 'Prisma', disabled: true },
-      { title: 'None', disabled: true },
+      { title: 'Drizzle', value: 'drizzle' },
+      { title: 'Prisma', value: 'prisma', disabled: true },
+      { title: 'None', value: -1, disabled: true },
     ],
     initial: 0,
   });
@@ -260,21 +260,30 @@ const bootstrap = async (props: CommonProps) => {
     const {
       data: { branches },
     } = await props.apiClient.listProjectBranches(project.id);
-    const branchChoices = branches.map((branch) => {
-      return {
-        title: branch.name,
-        value: branch.id,
-      };
-    });
 
-    const { branchId } = await prompts({
-      onState: onPromptState,
-      type: 'select',
-      name: 'branchId',
-      message: `What branch would you like to use?`,
-      choices: branchChoices,
-      initial: 0,
-    });
+    let branchId;
+    if (branches.length === 0) {
+      throw new Error(`No branches found for the project ${project.name}.`);
+    } else if (branches.length === 1) {
+      branchId = branches[0].id;
+    } else {
+      const branchChoices = branches.map((branch) => {
+        return {
+          title: branch.name,
+          value: branch.id,
+        };
+      });
+
+      const { branchIdChoice } = await prompts({
+        onState: onPromptState,
+        type: 'select',
+        name: 'branchIdChoice',
+        message: `What branch would you like to use?`,
+        choices: branchChoices,
+        initial: 0,
+      });
+      branchId = branchIdChoice;
+    }
 
     const {
       data: { endpoints },
@@ -370,39 +379,56 @@ const bootstrap = async (props: CommonProps) => {
       eslint: finalOptions.eslint,
     };
 
-    exec(
-      `npx create-next-app \
-          ${options.eslint ? '--eslint' : ''} \
-          --use-npm \
-          --example ${options.template} \
-          ${options.name} \
-        `,
-      (error) => {
-        if (error) {
-          throw new Error(`Creating a Next.js project failed: ${error}.`);
-        } else {
-          // Generate AUTH_SECRET using openssl
-          const authSecret = execSync('openssl rand -base64 33')
-            .toString()
-            .trim();
+    try {
+      execSync(
+        `npx create-next-app \
+            ${options.eslint ? '--eslint' : ''} \
+            --use-npm \
+            --example ${options.template} \
+            ${options.name} \
+          `,
+        { stdio: 'inherit' },
+      );
+    } catch (error: unknown) {
+      throw new Error(`Creating a Next.js project failed: ${error}.`);
+    }
 
-          // Content for the .env.local file
-          const content = `DATABASE_URL=${connectionString}
+    // Generate AUTH_SECRET using openssl
+    const authSecret = execSync('openssl rand -base64 33').toString().trim();
+
+    // Content for the .env.local file
+    const content = `DATABASE_URL=${connectionString}
 AUTH_SECRET=${authSecret}
 `;
 
-          // Write the content to the .env.local file
-          writeFileSync(`${options.name}/.env.local`, content, 'utf8');
+    // Write the content to the .env.local file
+    writeFileSync(`${options.name}/.env.local`, content, 'utf8');
 
-          out.text(
-            `Created a Next.js project in ${picocolors.blue(
-              options.name,
-            )}.\n\nYou can now run ${picocolors.blue(
-              `cd ${options.name} && npm run dev`,
-            )}`,
-          );
-        }
-      },
+    out.text(
+      `Created a Next.js project in ${picocolors.blue(
+        options.name,
+      )}.\n\nYou can now run ${picocolors.blue(
+        `cd ${options.name} && npm run dev`,
+      )}`,
     );
+  }
+
+  if (finalOptions.orm === 'drizzle') {
+    try {
+      execSync('npm run db:generate -- --name init_db', {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(`Generating the database schema failed: ${error}.`);
+    }
+
+    try {
+      execSync('npm run db:migrate', { cwd: appName, stdio: 'inherit' });
+    } catch (error) {
+      throw new Error(`Applying the schema failed: ${error}.`);
+    }
+
+    out.text(`Database schema generated and applied.\n`);
   }
 };
