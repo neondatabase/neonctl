@@ -1,0 +1,34 @@
+{
+  "name": "barebones-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.9.3",
+    "crypto": "^1.0.1",
+    "dotenv": "^16.4.5",
+    "drizzle-kit": "^0.22.7",
+    "drizzle-orm": "^0.31.2",
+    "next": "14.2.4",
+    "next-auth": "^5.0.0-beta.19",
+    "react": "^18",
+    "react-dom": "^18",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/uuid": "^9.0.8",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^14.2.4",
+    "typescript": "^5"
+  }
+}
