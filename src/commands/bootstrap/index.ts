@@ -11,7 +11,7 @@ import { existsSync, writeFileSync } from 'fs';
 import { isFolderEmpty } from './is-folder-empty.js';
 import { EndpointType, ProjectListItem } from '@neondatabase/api-client';
 import { create } from '../projects.js';
-import { exec, execSync } from 'child_process';
+import { execSync } from 'child_process';
 
 export const command = 'create-app';
 export const aliases = ['bootstrap'];
@@ -99,24 +99,49 @@ const bootstrap = async (props: CommonProps) => {
   }
 
   type BootstrapOptions = {
-    eslint: boolean;
     auth?: 'auth.js';
     framework: 'Next.js' | 'SvelteKit' | 'Nuxt.js';
     deployment: 'vercel' | 'cloudflare';
     orm?: 'drizzle' | 'prisma';
+    packageManager: 'npm' | 'pnpm' | 'bun' | 'yarn';
   };
 
   const defaultOptions: BootstrapOptions = {
-    eslint: true,
     auth: 'auth.js',
     framework: 'Next.js',
     deployment: 'vercel',
     orm: 'drizzle',
+    packageManager: 'npm',
   };
 
   const finalOptions: BootstrapOptions = {
     ...defaultOptions,
   };
+
+  const packageManagerOptions: Array<Choice> = [
+    {
+      title: 'npm',
+    },
+    {
+      title: 'pnpm',
+    },
+    {
+      title: 'bun',
+    },
+    {
+      title: 'yarn',
+    },
+  ];
+  const { packageManagerOption } = await prompts({
+    onState: onPromptState,
+    type: 'select',
+    name: 'packageManagerOption',
+    message: `Which package manager would you like to use?`,
+    choices: packageManagerOptions,
+    initial: 0,
+  });
+  finalOptions.packageManager = packageManagerOptions[packageManagerOption]
+    .title as typeof finalOptions.packageManager;
 
   const frameworkOptions: Array<Choice> = [
     {
@@ -142,18 +167,6 @@ const bootstrap = async (props: CommonProps) => {
   finalOptions.framework = frameworkOptions[framework]
     .title as typeof finalOptions.framework;
 
-  const styledEslint = picocolors.blue('ESLint');
-  const { eslint } = await prompts({
-    onState: onPromptState,
-    type: 'toggle',
-    name: 'eslint',
-    message: `Would you like to use ${styledEslint}?`,
-    initial: defaultOptions.eslint,
-    active: 'Yes',
-    inactive: 'No',
-  });
-  finalOptions.eslint = eslint;
-
   const { deployment } = await prompts({
     onState: onPromptState,
     type: 'select',
@@ -172,7 +185,7 @@ const bootstrap = async (props: CommonProps) => {
     choices: [
       { title: 'Drizzle', value: 'drizzle' },
       { title: 'Prisma', value: 'prisma', disabled: true },
-      { title: 'None', value: -1, disabled: true },
+      { title: 'No ORM', value: -1, disabled: true },
     ],
     initial: 0,
   });
@@ -183,7 +196,7 @@ const bootstrap = async (props: CommonProps) => {
     type: 'select',
     name: 'auth',
     message: `What authentication framework do you want to use?`,
-    choices: [{ title: 'Auth.js' }, { title: 'No Auth' }],
+    choices: [{ title: 'Auth.js' }, { title: 'No Auth', disabled: true }],
     initial: 0,
   });
   finalOptions.auth = auth;
@@ -372,20 +385,24 @@ const bootstrap = async (props: CommonProps) => {
   }
 
   if (finalOptions.framework === 'Next.js') {
-    const options = {
-      name: appName,
-      template: 'https://github.com/davidgomes/barebones-app',
-      useNpm: true,
-      eslint: finalOptions.eslint,
-    };
+    const template =
+      'https://github.com/neondatabase/neonctl/tree/bootstrap-command/src/commands/bootstrap/next-drizzle-authjs';
+
+    let packageManager = '--use-npm';
+    if (finalOptions.packageManager === 'yarn') {
+      packageManager = '--use-yarn';
+    } else if (finalOptions.packageManager === 'bun') {
+      packageManager = '--use-bun';
+    } else if (finalOptions.packageManager === 'pnpm') {
+      packageManager = '--use-pnpm';
+    }
 
     try {
       execSync(
         `npx create-next-app \
-            ${options.eslint ? '--eslint' : ''} \
-            --use-npm \
-            --example ${options.template} \
-            ${options.name} \
+            ${packageManager} \
+            --example ${template} \
+            ${appName} \
           `,
         { stdio: 'inherit' },
       );
@@ -402,13 +419,13 @@ AUTH_SECRET=${authSecret}
 `;
 
     // Write the content to the .env.local file
-    writeFileSync(`${options.name}/.env.local`, content, 'utf8');
+    writeFileSync(`${appName}/.env.local`, content, 'utf8');
 
     out.text(
       `Created a Next.js project in ${picocolors.blue(
-        options.name,
+        appName,
       )}.\n\nYou can now run ${picocolors.blue(
-        `cd ${options.name} && npm run dev`,
+        `cd ${appName} && npm run dev`,
       )}`,
     );
   }
