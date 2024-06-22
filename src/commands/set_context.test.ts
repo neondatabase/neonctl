@@ -36,13 +36,12 @@ describe('set_context', () => {
       `neon_override_ctx_${Date.now()}`,
     );
     testCliCommand({
-      name: 'get branch id overrides context set branch',
+      name: 'get project id overrides context set project',
       before: async () => {
         writeFileSync(
           overrideContextFile,
           JSON.stringify({
-            projectId: 'test',
-            branchId: 'br-cloudy-branch-12345678',
+            projectId: 'new-project id',
           }),
         );
       },
@@ -50,9 +49,9 @@ describe('set_context', () => {
         rmSync(overrideContextFile);
       },
       args: [
-        'branches',
+        'project',
         'get',
-        'br-sunny-branch-123456',
+        'project-id-123',
         '--context-file',
         overrideContextFile,
       ],
