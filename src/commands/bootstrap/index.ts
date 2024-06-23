@@ -196,7 +196,7 @@ const bootstrap = async (props: CommonProps) => {
     type: 'select',
     name: 'auth',
     message: `What authentication framework do you want to use?`,
-    choices: [{ title: 'Auth.js' }, { title: 'No Auth', disabled: true }],
+    choices: [{ title: 'Auth.js' }, { title: 'No authentication' }],
     initial: 0,
   });
   finalOptions.auth = auth;
@@ -385,8 +385,30 @@ const bootstrap = async (props: CommonProps) => {
   }
 
   if (finalOptions.framework === 'Next.js') {
-    const template =
-      'https://github.com/neondatabase/neonctl/tree/bootstrap-command/src/commands/bootstrap/next-drizzle-authjs';
+    let template;
+    if (finalOptions.auth === 'auth.js') {
+      template =
+        'https://github.com/neondatabase/neonctl/tree/bootstrap-command/src/commands/bootstrap/next-drizzle-authjs';
+
+      // Generate AUTH_SECRET using openssl
+      const authSecret = execSync('openssl rand -base64 33').toString().trim();
+
+      // Content for the .env.local file
+      const content = `DATABASE_URL=${connectionString}
+AUTH_SECRET=${authSecret}`;
+
+      // Write the content to the .env.local file
+      writeFileSync(`${appName}/.env.local`, content, 'utf8');
+    } else {
+      template =
+        'https://github.com/neondatabase/neonctl/tree/bootstrap-command/src/commands/bootstrap/next-drizzle';
+
+      // Content for the .env.local file
+      const content = `DATABASE_URL=${connectionString}`;
+
+      // Write the content to the .env.local file
+      writeFileSync(`${appName}/.env.local`, content, 'utf8');
+    }
 
     let packageManager = '--use-npm';
     if (finalOptions.packageManager === 'yarn') {
@@ -409,17 +431,6 @@ const bootstrap = async (props: CommonProps) => {
     } catch (error: unknown) {
       throw new Error(`Creating a Next.js project failed: ${error}.`);
     }
-
-    // Generate AUTH_SECRET using openssl
-    const authSecret = execSync('openssl rand -base64 33').toString().trim();
-
-    // Content for the .env.local file
-    const content = `DATABASE_URL=${connectionString}
-AUTH_SECRET=${authSecret}
-`;
-
-    // Write the content to the .env.local file
-    writeFileSync(`${appName}/.env.local`, content, 'utf8');
 
     out.text(
       `Created a Next.js project in ${picocolors.blue(
