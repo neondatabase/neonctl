@@ -167,16 +167,6 @@ const bootstrap = async (props: CommonProps) => {
   finalOptions.framework = frameworkOptions[framework]
     .title as typeof finalOptions.framework;
 
-  const { deployment } = await prompts({
-    onState: onPromptState,
-    type: 'select',
-    name: 'deployment',
-    message: `Where would you like to deploy?`,
-    choices: [{ title: 'Vercel' }, { title: 'Cloudflare', disabled: true }],
-    initial: 0,
-  });
-  finalOptions.deployment = deployment;
-
   const { orm } = await prompts({
     onState: onPromptState,
     type: 'select',
@@ -387,6 +377,12 @@ const bootstrap = async (props: CommonProps) => {
     connectionString = connectionUrl.toString();
   }
 
+  const environmentVariables: Array<{
+    kind: 'build' | 'runtime';
+    key: string;
+    value: string;
+  }> = [];
+
   if (finalOptions.framework === 'Next.js') {
     let template;
     if (finalOptions.auth === 'auth.js') {
@@ -429,12 +425,42 @@ AUTH_SECRET=${authSecret}`;
 
       // Write the content to the .env.local file
       writeFileSync(`${appName}/.env.local`, content, 'utf8');
+      environmentVariables.push({
+        key: 'DATABASE_URL',
+        value: connectionString,
+        kind: 'build',
+      });
+      environmentVariables.push({
+        key: 'DATABASE_URL',
+        value: connectionString,
+        kind: 'runtime',
+      });
+      environmentVariables.push({
+        key: 'AUTH_SECRET',
+        value: authSecret,
+        kind: 'build',
+      });
+      environmentVariables.push({
+        key: 'AUTH_SECRET',
+        value: authSecret,
+        kind: 'runtime',
+      });
     } else {
       // Content for the .env.local file
       const content = `DATABASE_URL=${connectionString}`;
 
       // Write the content to the .env.local file
       writeFileSync(`${appName}/.env.local`, content, 'utf8');
+      environmentVariables.push({
+        key: 'DATABASE_URL',
+        value: connectionString,
+        kind: 'build',
+      });
+      environmentVariables.push({
+        key: 'DATABASE_URL',
+        value: connectionString,
+        kind: 'runtime',
+      });
     }
 
     out.text(
@@ -463,5 +489,38 @@ AUTH_SECRET=${authSecret}`;
     }
 
     out.text(`Database schema generated and applied.\n`);
+  }
+
+  const { deployment } = await prompts({
+    onState: onPromptState,
+    type: 'select',
+    name: 'deployment',
+    message: `Where would you like to deploy?`,
+    choices: [
+      { title: 'Vercel', value: 'vercel' },
+      { title: 'Cloudflare', disabled: true, value: 'cloudflare' },
+      { title: 'Nowhere', value: -1 },
+    ],
+    initial: 0,
+  });
+  finalOptions.deployment = deployment;
+
+  if (finalOptions.deployment === 'vercel') {
+    try {
+      let envVarsStr = '';
+      for (let i = 0; i < environmentVariables.length; i++) {
+        const envVar = environmentVariables[i];
+        envVarsStr += `${envVar.kind === 'build' ? '--build-env' : '--env'} ${
+          envVar.key
+        }=${envVar.value} `;
+      }
+
+      execSync(`vercel deploy ${envVarsStr}`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(`Applying the schema failed: ${error}.`);
+    }
   }
 };
