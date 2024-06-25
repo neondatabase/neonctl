@@ -14,5 +14,8 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/commands/bootstrap/next-drizzle-authjs"]
+  "exclude": [
+    "src/commands/bootstrap/next-drizzle-authjs",
+    "src/commands/bootstrap/next-drizzle"
+  ]
 }
