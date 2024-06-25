@@ -10,6 +10,7 @@ module.exports = {
     '**/*.js',
     '**/*.gen.ts',
     'src/commands/bootstrap/next-drizzle-authjs/*',
+    'src/commands/bootstrap/next-drizzle/*,',
   ],
   rules: {
     'no-console': 'error',
