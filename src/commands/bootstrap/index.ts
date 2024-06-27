@@ -497,7 +497,11 @@ AUTH_SECRET=${authSecret}`;
     name: 'deployment',
     message: `Where would you like to deploy?`,
     choices: [
-      { title: 'Vercel', value: 'vercel' },
+      {
+        title: 'Vercel',
+        value: 'vercel',
+        description: 'We will install the Vercel CLI globally.',
+      },
       { title: 'Cloudflare', disabled: true, value: 'cloudflare' },
       { title: 'Nowhere', value: -1 },
     ],
@@ -506,6 +510,15 @@ AUTH_SECRET=${authSecret}`;
   finalOptions.deployment = deployment;
 
   if (finalOptions.deployment === 'vercel') {
+    try {
+      execSync(`${finalOptions.packageManager} install -g vercel`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(`Failed to install the vercel CLI: ${error}.`);
+    }
+
     try {
       let envVarsStr = '';
       for (let i = 0; i < environmentVariables.length; i++) {
