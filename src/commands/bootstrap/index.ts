@@ -425,6 +425,7 @@ AUTH_SECRET=${authSecret}`;
 
       // Write the content to the .env.local file
       writeFileSync(`${appName}/.env.local`, content, 'utf8');
+      writeFileSync(`${appName}/.dev.vars`, content, 'utf8'); // cloudflare
       environmentVariables.push({
         key: 'DATABASE_URL',
         value: connectionString,
@@ -451,6 +452,7 @@ AUTH_SECRET=${authSecret}`;
 
       // Write the content to the .env.local file
       writeFileSync(`${appName}/.env.local`, content, 'utf8');
+      writeFileSync(`${appName}/.dev.vars`, content, 'utf8'); // cloudflare
       environmentVariables.push({
         key: 'DATABASE_URL',
         value: connectionString,
@@ -534,6 +536,49 @@ AUTH_SECRET=${authSecret}`;
       });
     } catch (error) {
       throw new Error(`Applying the schema failed: ${error}.`);
+    }
+  } else if (finalOptions.deployment === 'cloudflare') {
+    try {
+      execSync('npm install -g @cloudflare/wrangler', {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(`Failed to install the Cloudflare CLI: ${error}.`);
+    }
+
+    const wranglerToml = `name = "${appName}"
+compatibility_flags = [ "nodejs_compat" ]
+pages_build_output_dir = ".vercel/output/static"
+compatibility_date = "2022-11-30"
+`;
+    writeFileSync(`${appName}/wrangler.toml`, wranglerToml, 'utf8');
+
+    try {
+      for (let i = 0; i < environmentVariables.length; i++) {
+        const envVar = environmentVariables[i];
+
+        try {
+          execSync(`wrangler secret put ${envVar.key}`, {
+            cwd: appName,
+            stdio: 'inherit',
+            input: envVar.value,
+          });
+        } catch (error) {
+          throw new Error(`Failed to set the ${envVar.key} secret: ${error}.`);
+        }
+      }
+    } catch (error) {
+      throw new Error(`Failed to set up Cloudflare secrets: ${error}.`);
+    }
+
+    try {
+      execSync(`wrangler pages deploy`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(`Failed to deploy to Cloudflare Pages: ${error}.`);
     }
   }
 };
