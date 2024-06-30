@@ -4,6 +4,8 @@ import { SignOut } from "@/components/auth/signout-button";
 import { auth } from "@/lib/auth";
 import Link from "next/link";
 
+export const runtime = 'edge';
+
 export default async function Home() {
   const session = await auth();
 
