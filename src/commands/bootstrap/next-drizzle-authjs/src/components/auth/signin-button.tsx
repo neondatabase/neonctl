@@ -1,14 +1,14 @@
-import { signIn } from "@/lib/auth";
+import { signIn } from '@/lib/auth';
 
 export function SignIn() {
   return (
     <form
       action={async () => {
-        "use server";
+        'use server';
         await signIn();
       }}
     >
-      <button type="submit">Sign in</button>
+      <button type="submit">Sign In or Sign Up</button>
     </form>
   );
 }

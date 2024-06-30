@@ -535,7 +535,7 @@ AUTH_SECRET=${authSecret}`;
         stdio: 'inherit',
       });
     } catch (error) {
-      throw new Error(`Applying the schema failed: ${error}.`);
+      throw new Error(`Deploying to Vercel failed: ${error}.`);
     }
   } else if (finalOptions.deployment === 'cloudflare') {
     try {
