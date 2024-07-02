@@ -215,6 +215,22 @@ describe('branches', () => {
     },
   });
 
+  /* set default */
+
+  testCliCommand({
+    name: 'set default by id',
+    args: [
+      'branches',
+      'set-default',
+      'br-sunny-branch-123456',
+      '--project-id',
+      'test',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
   /* get */
 
   testCliCommand({

@@ -24,6 +24,7 @@ const BRANCH_FIELDS = [
   'id',
   'name',
   'primary',
+  'default',
   'created_at',
   'updated_at',
 ] as const;
@@ -32,6 +33,7 @@ const BRANCH_FIELDS_RESET = [
   'id',
   'name',
   'primary',
+  'default',
   'created_at',
   'last_reset_at',
 ] as const;
@@ -63,7 +65,7 @@ export const builder = (argv: yargs.Argv) =>
           name: branchCreateRequest['branch.name'],
           parent: {
             describe:
-              'Parent branch name or id or timestamp or LSN. Defaults to the primary branch',
+              'Parent branch name or id or timestamp or LSN. Defaults to the default branch',
             type: 'string',
           },
           compute: {
@@ -158,9 +160,15 @@ export const builder = (argv: yargs.Argv) =>
     )
     .command(
       'set-primary <id|name>',
-      'Set a branch as primary',
+      'DEPRECATED: Use set-default. Set a branch as primary',
       (yargs) => yargs,
-      async (args) => await setPrimary(args as any),
+      async (args) => await setDefault(args as any),
+    )
+    .command(
+      'set-default <id|name>',
+      'Set a branch as default',
+      (yargs) => yargs,
+      async (args) => await setDefault(args as any),
     )
     .command(
       'add-compute <id|name>',
@@ -227,7 +235,7 @@ export const builder = (argv: yargs.Argv) =>
             ],
             [
               '$0 branches schema-diff',
-              "If a branch is specified in 'set-context', compares this branch to its parent. Otherwise, compares the primary branch to its parent.",
+              "If a branch is specified in 'set-context', compares this branch to its parent. Otherwise, compares the default branch to its parent.",
             ],
           ]);
       },
@@ -262,9 +270,9 @@ const create = async (
       return props.apiClient
         .listProjectBranches(props.projectId)
         .then(({ data }) => {
-          const branch = data.branches.find((b) => b.primary);
+          const branch = data.branches.find((b) => b.default);
           if (!branch) {
-            throw new Error('No primary branch found');
+            throw new Error('No default branch found');
           }
           return { parent_id: branch.id };
         });
@@ -356,10 +364,10 @@ const rename = async (
   });
 };
 
-const setPrimary = async (props: ProjectScopeProps & IdOrNameProps) => {
+const setDefault = async (props: ProjectScopeProps & IdOrNameProps) => {
   const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.setPrimaryProjectBranch(props.projectId, branchId),
+    props.apiClient.setDefaultProjectBranch(props.projectId, branchId),
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
