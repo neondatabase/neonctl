@@ -14,6 +14,7 @@ import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
 import { updateContextFile } from '../context.js';
+import { getComputeUnits } from '../utils/compute_units.js';
 
 const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
 
@@ -181,6 +182,7 @@ const create = async (
   props: CommonProps & {
     name?: string;
     regionId?: string;
+    cu?: string;
     database?: string;
     role?: string;
     psql: boolean;
@@ -201,6 +203,11 @@ const create = async (
   }
   if (props.role) {
     project.branch.role_name = props.role;
+  }
+  if (props.cu) {
+    project.default_endpoint_settings = props.cu
+      ? getComputeUnits(props.cu)
+      : undefined;
   }
   const { data } = await props.apiClient.createProject({
     project,
@@ -239,6 +246,7 @@ const update = async (
   props: CommonProps &
     IdOrNameProps & {
       name?: string;
+      cu?: string;
       ipAllow?: string[];
       ipPrimaryOnly?: boolean;
     },
@@ -260,6 +268,11 @@ const update = async (
           false,
       },
     };
+  }
+  if (props.cu) {
+    project.default_endpoint_settings = props.cu
+      ? getComputeUnits(props.cu)
+      : undefined;
   }
 
   const { data } = await props.apiClient.updateProject(props.id, {

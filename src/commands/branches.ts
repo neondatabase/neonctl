@@ -19,6 +19,7 @@ import { psql } from '../utils/psql.js';
 import { parsePointInTime } from '../utils/point_in_time.js';
 import { log } from '../log.js';
 import { parseSchemaDiffParams, schemaDiff } from './schema_diff.js';
+import { getComputeUnits } from '../utils/compute_units.js';
 
 const BRANCH_FIELDS = [
   'id',
@@ -85,6 +86,12 @@ export const builder = (argv: yargs.Argv) =>
             type: 'number',
             implies: 'compute',
             default: 0,
+          },
+          cu: {
+            describe:
+              'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
+            type: 'string',
+            implies: 'compute',
           },
           psql: {
             type: 'boolean',
@@ -250,6 +257,7 @@ const create = async (
   props: ProjectScopeProps & {
     name: string;
     compute: boolean;
+    cu?: string;
     parent?: string;
     type: EndpointType;
     psql: boolean;
@@ -304,6 +312,7 @@ const create = async (
               type: props.type,
               suspend_timeout_seconds:
                 props.suspendTimeout === 0 ? undefined : props.suspendTimeout,
+              ...(props.cu ? getComputeUnits(props.cu) : undefined),
             },
           ]
         : [],
@@ -391,6 +400,7 @@ const addCompute = async (
   props: ProjectScopeProps &
     IdOrNameProps & {
       type: EndpointType;
+      cu?: string;
     },
 ) => {
   const branchId = await branchIdFromProps(props);
@@ -399,6 +409,7 @@ const addCompute = async (
       endpoint: {
         branch_id: branchId,
         type: props.type,
+        ...(props.cu ? getComputeUnits(props.cu) : undefined),
       },
     }),
   );

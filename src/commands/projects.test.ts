@@ -81,6 +81,36 @@ describe('projects', () => {
     },
   });
 
+  testCliCommand({
+    name: 'create project with default fixed size CU',
+    args: [
+      'projects',
+      'create',
+      '--name',
+      'test_project_with_fixed_cu',
+      '--cu',
+      '2',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create project with default autoscaled CU',
+    args: [
+      'projects',
+      'create',
+      '--name',
+      'test_project_with_autoscaling',
+      '--cu',
+      '0.5-2',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
   afterAll(() => {
     rmSync(CONTEXT_FILE);
   });
@@ -132,6 +162,28 @@ describe('projects', () => {
   testCliCommand({
     name: 'update ip allow remove',
     args: ['projects', 'update', 'test', '--ip-allow'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'update project with default fixed size CU',
+    args: ['projects', 'update', 'test_project_with_fixed_cu', '--cu', '2'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'update project with default autoscaled CU',
+    args: [
+      'projects',
+      'update',
+      'test_project_with_autoscaling',
+      '--cu',
+      '0.5-2',
+    ],
     expected: {
       snapshot: true,
     },

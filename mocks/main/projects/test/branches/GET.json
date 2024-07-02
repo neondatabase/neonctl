@@ -20,6 +20,20 @@
       "parent_id": "br-parent-branch-123456",
       "created_at": "2021-01-01T00:00:00.000Z",
       "updated_at": "2021-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "br-numbered-branch-123456",
+      "name": "test_branch_with_fixed_cu",
+      "parent_id": "br-parent-branch-123456",
+      "created_at": "2021-01-01T00:00:00.000Z",
+      "updated_at": "2021-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "br-numbered-branch-123456",
+      "name": "test_branch_with_autoscaling",
+      "parent_id": "br-parent-branch-123456",
+      "created_at": "2021-01-01T00:00:00.000Z",
+      "updated_at": "2021-01-01T00:00:00.000Z"
     }
   ]
 }
