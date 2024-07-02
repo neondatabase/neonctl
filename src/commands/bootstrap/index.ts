@@ -11,7 +11,7 @@ import { existsSync, writeFileSync } from 'fs';
 import { isFolderEmpty } from './is-folder-empty.js';
 import { EndpointType, ProjectListItem } from '@neondatabase/api-client';
 import { create } from '../projects.js';
-import { execSync } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 
 export const command = 'create-app';
 export const aliases = ['bootstrap'];
@@ -504,7 +504,7 @@ AUTH_SECRET=${authSecret}`;
         value: 'vercel',
         description: 'We will install the Vercel CLI globally.',
       },
-      { title: 'Cloudflare', disabled: true, value: 'cloudflare' },
+      { title: 'Cloudflare', value: 'cloudflare' },
       { title: 'Nowhere', value: -1 },
     ],
     initial: 0,
@@ -539,37 +539,49 @@ AUTH_SECRET=${authSecret}`;
     }
   } else if (finalOptions.deployment === 'cloudflare') {
     try {
-      execSync('npm install -g @cloudflare/wrangler', {
+      execSync('command -v wrangler', {
         cwd: appName,
-        stdio: 'inherit',
+        stdio: 'ignore',
       });
     } catch (error) {
-      throw new Error(`Failed to install the Cloudflare CLI: ${error}.`);
+      try {
+        execSync(
+          `${finalOptions.packageManager} install -g @cloudflare/wrangler`,
+          {
+            cwd: appName,
+            stdio: 'inherit',
+          },
+        );
+      } catch (error) {
+        throw new Error(`Failed to install the Cloudflare CLI: ${error}.`);
+      }
     }
 
     const wranglerToml = `name = "${appName}"
 compatibility_flags = [ "nodejs_compat" ]
 pages_build_output_dir = ".vercel/output/static"
 compatibility_date = "2022-11-30"
+
+[vars]
+${environmentVariables
+  .map((envVar) => {
+    if (envVar.kind === 'runtime') {
+      return `${envVar.key} = "${envVar.value}"`;
+    }
+  })
+  .join('\n')}
 `;
     writeFileSync(`${appName}/wrangler.toml`, wranglerToml, 'utf8');
 
     try {
-      for (let i = 0; i < environmentVariables.length; i++) {
-        const envVar = environmentVariables[i];
-
-        try {
-          execSync(`wrangler secret put ${envVar.key}`, {
-            cwd: appName,
-            stdio: 'inherit',
-            input: envVar.value,
-          });
-        } catch (error) {
-          throw new Error(`Failed to set the ${envVar.key} secret: ${error}.`);
-        }
-      }
+      execSync(`npx @cloudflare/next-on-pages`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
     } catch (error) {
-      throw new Error(`Failed to set up Cloudflare secrets: ${error}.`);
+      throw new Error(
+        `Failed to build Next.js app with next-on-pages: ${error}.`,
+      );
     }
 
     try {
