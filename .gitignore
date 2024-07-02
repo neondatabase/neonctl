@@ -9,3 +9,6 @@ bundle/
 .neon
 coverage
 tmp/
+
+src/commands/bootstrap/next-drizzle-authjs/package-lock.json
+src/commands/bootstrap/next-drizzle/package-lock.json
