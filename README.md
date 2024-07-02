@@ -70,7 +70,7 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 | [projects](https://neon.tech/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                               | Manage projects              |
 | [ip-allow](https://neon.tech/docs/reference/cli-ip-allow)                   | `list`, `add`, `remove`, `reset`                                          | Manage IP Allow              |
 | [me](https://neon.tech/docs/reference/cli-me)                               |                                                                           | Show current user            |
-| [branches](https://neon.tech/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-primary`, `delete`, `get` | Manage branches              |
+| [branches](https://neon.tech/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-default`, `delete`, `get` | Manage branches              |
 | [databases](https://neon.tech/docs/reference/cli-databases)                 | `list`, `create`, `delete`                                                | Manage databases             |
 | [roles](https://neon.tech/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                | Manage roles                 |
 | [operations](https://neon.tech/docs/reference/cli-operations)               | `list`                                                                    | Manage operations            |
