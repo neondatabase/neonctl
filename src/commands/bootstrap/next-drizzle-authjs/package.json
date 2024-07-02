@@ -11,9 +11,7 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
-    "@auth/drizzle-adapter": "^1.4.1",
     "@neondatabase/serverless": "^0.9.3",
-    "@simplewebauthn/server": "^9.0.3",
     "crypto": "^1.0.1",
     "dotenv": "^16.4.5",
     "drizzle-kit": "^0.22.7",
