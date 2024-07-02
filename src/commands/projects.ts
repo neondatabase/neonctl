@@ -36,7 +36,13 @@ export const builder = (argv: yargs.Argv) => {
     .command(
       'list',
       'List projects',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.options({
+          'org-id': {
+            describe: 'List projects of a given organization',
+            type: 'string',
+          },
+        }),
       async (args) => {
         await list(args as any);
       },
@@ -52,6 +58,10 @@ export const builder = (argv: yargs.Argv) => {
           },
           'region-id': {
             describe: `The region ID. Possible values: ${REGIONS.join(', ')}`,
+            type: 'string',
+          },
+          'org-id': {
+            describe: 'List projects of a given organization',
             type: 'string',
           },
           psql: {
@@ -130,7 +140,7 @@ export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-const list = async (props: CommonProps) => {
+const list = async (props: CommonProps & { orgId?: string }) => {
   const getList = async (
     fn:
       | typeof props.apiClient.listProjects
@@ -142,6 +152,7 @@ const list = async (props: CommonProps) => {
     while (!end) {
       const { data } = await fn({
         limit: PROJECTS_LIST_LIMIT,
+        org_id: props.orgId,
         cursor,
       });
       result.push(...data.projects);
@@ -159,21 +170,25 @@ const list = async (props: CommonProps) => {
     return result;
   };
 
-  const [ownedProjects, sharedProjects] = await Promise.all([
-    getList(props.apiClient.listProjects),
-    getList(props.apiClient.listSharedProjects),
-  ]);
+  const ownedProjects = getList(props.apiClient.listProjects);
+  const sharedProjects = props.orgId
+    ? undefined
+    : getList(props.apiClient.listSharedProjects);
 
   const out = writer(props);
 
-  out.write(ownedProjects, {
+  out.write(await ownedProjects, {
     fields: PROJECT_FIELDS,
     title: 'Projects',
   });
-  out.write(sharedProjects, {
-    fields: PROJECT_FIELDS,
-    title: 'Shared with me',
-  });
+
+  if (sharedProjects) {
+    out.write(await sharedProjects, {
+      fields: PROJECT_FIELDS,
+      title: 'Shared with me',
+    });
+  }
+
   out.end();
 };
 
@@ -181,6 +196,7 @@ const create = async (
   props: CommonProps & {
     name?: string;
     regionId?: string;
+    orgId?: string;
     database?: string;
     role?: string;
     psql: boolean;
@@ -194,6 +210,9 @@ const create = async (
   }
   if (props.regionId) {
     project.region_id = props.regionId;
+  }
+  if (props.orgId) {
+    project.org_id = props.orgId;
   }
   project.branch = {};
   if (props.database) {
