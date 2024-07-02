@@ -1,8 +1,8 @@
 {
   "branch": {
-    "name": "test-branch-cloudy",
-    "id": "br-cloudy-branch-12345678",
-    "primary": true,
+    "name": "test-branch-sunny",
+    "id": "br-sunny-branch-123456",
+    "default": true,
     "created_at": "2019-01-01T00:00:00Z",
     "updated_at": "2019-01-01T00:00:00Z"
   }

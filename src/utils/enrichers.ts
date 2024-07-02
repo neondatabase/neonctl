@@ -42,13 +42,13 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
   }
 
   const { data } = await props.apiClient.listProjectBranches(props.projectId);
-  const primaryBranch = data.branches.find((b) => b.primary);
+  const defaultBranch = data.branches.find((b) => b.default);
 
-  if (primaryBranch) {
-    return primaryBranch.id;
+  if (defaultBranch) {
+    return defaultBranch.id;
   }
 
-  throw new Error('No primary branch found');
+  throw new Error('No default branch found');
 };
 
 export const fillSingleProject = async (
