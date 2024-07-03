@@ -35,7 +35,6 @@ export async function POST(request: Request): Promise<Response> {
   await db.insert(schema.passwords).values({
     userId,
     password: saltAndHash.hash,
-    salt: saltAndHash.salt,
   });
 
   return NextResponse.redirect(new URL("/", request.url));
