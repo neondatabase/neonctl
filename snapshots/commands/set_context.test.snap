@@ -1,12 +1,14 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`set_context should set the context get branch id overrides context set branch test 1`] = `
-"name: test_branch
-id: br-sunny-branch-123456
-default: true
-parent_id: br-parent-branch-123456
+exports[`set_context should set the context get project id overrides context set project test 1`] = `
+"id: project-id-123
+name: project name 123
 created_at: 2019-01-01T00:00:00Z
-updated_at: 2019-01-01T00:00:00Z
+settings:
+  allowed_ips:
+    ips:
+      - 192.168.1.1
+    primary_branch_only: false
 "
 `;
 
@@ -28,3 +30,15 @@ exports[`set_context should set the context list branches selecting project from
   updated_at: 2021-01-01T00:00:00.000Z
 "
 `;
+
+exports[`set_context should set the context set the branchId and projectId is from context test 1`] = `
+"- name: db1
+  owner_name: user1
+- name: db2
+  owner_name: user2
+- name: test_db
+  owner_name: test_user
+"
+`;
+
+exports[`set_context should set the context should not set branchId from context for non-context projectId test 1`] = `""`;

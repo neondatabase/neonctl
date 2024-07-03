@@ -48,11 +48,16 @@ export const enrichFromContext = (
     return;
   }
   const context = readContextFile(args.contextFile);
-  if (!args.branch && !args.id && !args.name) {
-    args.branch = context.branchId;
-  }
   if (!args.projectId) {
     args.projectId = context.projectId;
+  }
+  if (
+    !args.branch &&
+    !args.id &&
+    !args.name &&
+    context.projectId === args.projectId
+  ) {
+    args.branch = context.branchId;
   }
 };
 

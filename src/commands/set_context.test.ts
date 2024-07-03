@@ -35,14 +35,14 @@ describe('set_context', () => {
       tmpdir(),
       `neon_override_ctx_${Date.now()}`,
     );
+
     testCliCommand({
-      name: 'get branch id overrides context set branch',
+      name: 'get project id overrides context set project',
       before: async () => {
         writeFileSync(
           overrideContextFile,
           JSON.stringify({
-            projectId: 'test',
-            branchId: 'br-cloudy-branch-12345678',
+            projectId: 'new-project id',
           }),
         );
       },
@@ -50,13 +50,62 @@ describe('set_context', () => {
         rmSync(overrideContextFile);
       },
       args: [
-        'branches',
+        'project',
         'get',
-        'br-sunny-branch-123456',
+        'project-id-123',
         '--context-file',
         overrideContextFile,
       ],
       expected: {
+        snapshot: true,
+      },
+    });
+
+    testCliCommand({
+      name: 'set the branchId and projectId is from context',
+      before: async () => {
+        writeFileSync(
+          overrideContextFile,
+          JSON.stringify({
+            projectId: 'test',
+            branchId: 'test_branch',
+          }),
+        );
+      },
+      after: async () => {
+        rmSync(overrideContextFile);
+      },
+      args: ['databases', 'list', '--context-file', overrideContextFile],
+      expected: {
+        snapshot: true,
+      },
+    });
+
+    testCliCommand({
+      name: 'should not set branchId from context for non-context projectId',
+      before: async () => {
+        writeFileSync(
+          overrideContextFile,
+          JSON.stringify({
+            projectId: 'project-id-123',
+            branchId: 'test_branch',
+          }),
+        );
+      },
+      after: async () => {
+        rmSync(overrideContextFile);
+      },
+      args: [
+        'databases',
+        'list',
+        '--project-id',
+        'test',
+        '--context-file',
+        overrideContextFile,
+      ],
+      expected: {
+        code: 1,
+        stderr: 'ERROR: Not Found',
         snapshot: true,
       },
     });
