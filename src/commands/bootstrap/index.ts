@@ -12,6 +12,7 @@ import { isFolderEmpty } from './is-folder-empty.js';
 import { EndpointType, ProjectListItem } from '@neondatabase/api-client';
 import { create } from '../projects.js';
 import { exec, execSync, spawn } from 'child_process';
+import { trackEvent } from '../../analytics.js';
 
 export const command = 'create-app';
 export const aliases = ['bootstrap'];
@@ -61,6 +62,7 @@ const bootstrap = async (props: CommonProps) => {
       return 'Invalid project name: ' + validation.problems[0];
     },
   });
+  trackEvent('create-app', { phase: 'start' });
 
   let projectPath;
   if (typeof res.path === 'string') {
@@ -142,6 +144,7 @@ const bootstrap = async (props: CommonProps) => {
   });
   finalOptions.packageManager = packageManagerOptions[packageManagerOption]
     .title as typeof finalOptions.packageManager;
+  trackEvent('create-app', { packageManager: finalOptions.packageManager });
 
   const frameworkOptions: Array<Choice> = [
     {
@@ -166,6 +169,7 @@ const bootstrap = async (props: CommonProps) => {
   });
   finalOptions.framework = frameworkOptions[framework]
     .title as typeof finalOptions.framework;
+  trackEvent('create-app', { framework: finalOptions.framework });
 
   const { orm } = await prompts({
     onState: onPromptState,
@@ -180,6 +184,7 @@ const bootstrap = async (props: CommonProps) => {
     initial: 0,
   });
   finalOptions.orm = orm;
+  trackEvent('create-app', { orm: finalOptions.orm });
 
   const { auth } = await prompts({
     onState: onPromptState,
@@ -193,6 +198,7 @@ const bootstrap = async (props: CommonProps) => {
     initial: 0,
   });
   finalOptions.auth = auth;
+  trackEvent('create-app', { auth: finalOptions.auth });
 
   const PROJECTS_LIST_LIMIT = 100;
   const getList = async (
@@ -248,6 +254,7 @@ const bootstrap = async (props: CommonProps) => {
     choices: projectChoices,
     initial: 0,
   });
+  trackEvent('create-app', { phase: 'neon-project' });
 
   let project;
   let connectionString: string;
@@ -289,6 +296,7 @@ const bootstrap = async (props: CommonProps) => {
         initial: 0,
       });
       branchId = branchIdChoice;
+      trackEvent('create-app', { phase: 'neon-branch' });
     }
 
     const {
@@ -329,6 +337,7 @@ const bootstrap = async (props: CommonProps) => {
       if (!role) {
         throw new Error(`No role found for the name: ${roleName}`);
       }
+      trackEvent('create-app', { phase: 'neon-role' });
     }
 
     const {
@@ -359,6 +368,7 @@ const bootstrap = async (props: CommonProps) => {
       if (!database) {
         throw new Error(`No database found with ID: ${databaseId}`);
       }
+      trackEvent('create-app', { phase: 'neon-database' });
     }
 
     const {
@@ -514,6 +524,7 @@ AUTH_SECRET=${authSecret}`;
     initial: 0,
   });
   finalOptions.deployment = deployment;
+  trackEvent('create-app', { deployment: finalOptions.deployment });
 
   if (finalOptions.deployment === 'vercel') {
     try {
@@ -597,4 +608,6 @@ ${environmentVariables
       throw new Error(`Failed to deploy to Cloudflare Pages: ${error}.`);
     }
   }
+
+  trackEvent('create-app', { phase: 'finish' });
 };

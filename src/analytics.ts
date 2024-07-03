@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { Analytics } from '@segment/analytics-node';
+import { Analytics, EventProperties } from '@segment/analytics-node';
 import { isAxiosError } from 'axios';
 
 import { CREDENTIALS_FILE } from './config.js';
@@ -100,4 +100,16 @@ export const sendError = (err: Error, errCode: ErrorCode) => {
     },
   });
   log.debug('Sent CLI error event: %s', errCode);
+};
+
+export const trackEvent = (event: string, properties: EventProperties) => {
+  if (!client) {
+    return;
+  }
+  client.track({
+    event,
+    userId: userId ?? 'anonymous',
+    properties,
+  });
+  log.debug('Sent CLI event: %s', event);
 };
