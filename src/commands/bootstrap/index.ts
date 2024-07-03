@@ -504,7 +504,11 @@ AUTH_SECRET=${authSecret}`;
         value: 'vercel',
         description: 'We will install the Vercel CLI globally.',
       },
-      { title: 'Cloudflare', value: 'cloudflare' },
+      {
+        title: 'Cloudflare',
+        value: 'cloudflare',
+        description: 'We will install the Wrangler CLI globally.',
+      },
       { title: 'Nowhere', value: -1 },
     ],
     initial: 0,
