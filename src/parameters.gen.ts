@@ -38,7 +38,7 @@ export const projectCreateRequest = {
   },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
-              description: "If true, the list will be applied only to the primary branch.",
+              description: "If true, the list will be applied only to the default branch.",
               demandOption: false,
   },
   'project.settings.enable_logical_replication': {
@@ -142,7 +142,7 @@ export const projectUpdateRequest = {
   },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
-              description: "If true, the list will be applied only to the primary branch.",
+              description: "If true, the list will be applied only to the default branch.",
               demandOption: false,
   },
   'project.settings.enable_logical_replication': {
@@ -175,7 +175,7 @@ export const branchCreateRequest = {
   },
   'branch.parent_id': {
               type: "string",
-              description: "The `branch_id` of the parent branch. If omitted or empty, the branch will be created from the project's primary branch.\n",
+              description: "The `branch_id` of the parent branch. If omitted or empty, the branch will be created from the project's default branch.\n",
               demandOption: false,
   },
   'branch.name': {
