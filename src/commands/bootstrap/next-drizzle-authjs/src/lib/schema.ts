@@ -57,6 +57,8 @@ export const passwords = pgTable("passwords", {
   // The salt is automatically stored with the password. Learn more here:
   // https://heynode.com/blog/2020-04/salt-and-hash-passwords-bcrypt/
   password: text("password").notNull(),
+  emailVerified: timestamp('email_verified', { mode: 'date' }),
+  image: text('image'),
 });
 
 // necessary for database session strategy, as opposed to the JWT session strategy
