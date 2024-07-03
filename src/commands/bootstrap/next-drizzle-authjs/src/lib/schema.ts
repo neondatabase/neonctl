@@ -56,7 +56,6 @@ export const passwords = pgTable("passwords", {
     .references(() => users.id, { onDelete: "cascade" }),
   password: text("password").notNull(),
   salt: text("salt").notNull(),
-  iterations: integer("iterations").notNull(),
 });
 
 // necessary for database session strategy, as opposed to the JWT session strategy

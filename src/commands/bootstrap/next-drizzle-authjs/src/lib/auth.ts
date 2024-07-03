@@ -1,54 +1,28 @@
-import NextAuth, { AuthError } from "next-auth";
-import Credentials from "next-auth/providers/credentials";
-import crypto from "crypto";
-import { db } from "@/lib/db";
-import * as schema from "@/lib/schema";
-import { eq } from "drizzle-orm";
-import { User } from "@/lib/schema";
+import NextAuth, { AuthError } from 'next-auth';
+import Credentials from 'next-auth/providers/credentials';
+import { db } from '@/lib/db';
+import * as schema from '@/lib/schema';
+import { eq } from 'drizzle-orm';
+import { User } from '@/lib/schema';
+import bcrypt from 'bcryptjs';
 
-export const PBKDF2_KEYLEN = 128;
-
-export function saltAndHashPassword(password: string) {
-  const salt = crypto.randomBytes(128).toString("base64");
-  const pbkdf2Iterations = 1000;
-  const hash = crypto.pbkdf2Sync(
-    password,
-    salt,
-    pbkdf2Iterations,
-    PBKDF2_KEYLEN,
-    "sha256"
-  );
+export async function saltAndHashPassword(password: string) {
+  const salt = await bcrypt.genSalt(10);
+  const hash = await bcrypt.hash(password, salt);
 
   return {
-    salt: salt,
-    hash: hash.toString("base64"),
-    iterations: pbkdf2Iterations,
+    salt,
+    hash,
   };
 }
 
-function isPasswordCorrect(
-  savedHash: string,
-  savedSalt: string,
-  savedIterations: number,
-  passwordAttempt: string
-) {
-  return (
-    savedHash ==
-    crypto
-      .pbkdf2Sync(
-        passwordAttempt,
-        savedSalt,
-        savedIterations,
-        PBKDF2_KEYLEN,
-        "sha256"
-      )
-      .toString("base64")
-  );
+async function isPasswordCorrect(savedHash: string, passwordAttempt: string) {
+  return await bcrypt.compare(passwordAttempt, savedHash);
 }
 
 async function getUserFromDb(
   email: string,
-  passwordAttempt: string
+  passwordAttempt: string,
 ): Promise<User> {
   const users = await db
     .select()
@@ -73,46 +47,39 @@ async function getUserFromDb(
   }
   const password = passwords[0];
 
-  if (
-    isPasswordCorrect(
-      password.password,
-      password.salt,
-      password.iterations,
-      passwordAttempt
-    )
-  ) {
+  if (await isPasswordCorrect(password.password, passwordAttempt)) {
     return user;
   } else {
-    throw new Error("Incorrect password");
+    throw new Error('Incorrect password');
   }
 }
 
 // See https://github.com/nextauthjs/next-auth/issues/9900.
 class InvalidCredentials extends AuthError {
-  public readonly kind = "signIn";
+  public readonly kind = 'signIn';
 
   constructor() {
-    super("Invalid credentials");
-    this.type = "CredentialsSignin";
+    super('Invalid credentials');
+    this.type = 'CredentialsSignin';
   }
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
-  basePath: "/auth",
+  basePath: '/auth',
   providers: [
     Credentials({
       // You can specify which fields should be submitted, by adding keys to the `credentials` object.
       // e.g. domain, username, password, 2FA token, etc.
       credentials: {
-        email: { label: "Email" },
-        password: { label: "Password", type: "password" },
+        email: { label: 'Email' },
+        password: { label: 'Password', type: 'password' },
       },
       authorize: async (credentials) => {
-        if (typeof credentials.email !== "string") {
+        if (typeof credentials.email !== 'string') {
           throw new InvalidCredentials();
         }
 
-        if (typeof credentials.password !== "string") {
+        if (typeof credentials.password !== 'string') {
           throw new InvalidCredentials();
         }
 
