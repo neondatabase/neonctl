@@ -30,3 +30,15 @@ exports[`set_context should set the context list branches selecting project from
   updated_at: 2021-01-01T00:00:00.000Z
 "
 `;
+
+exports[`set_context should set the context set the branchId and projectId is from context test 1`] = `
+"- name: db1
+  owner_name: user1
+- name: db2
+  owner_name: user2
+- name: test_db
+  owner_name: test_user
+"
+`;
+
+exports[`set_context should set the context should not set branchId from context for non-context projectId test 1`] = `""`;

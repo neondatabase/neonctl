@@ -35,6 +35,7 @@ describe('set_context', () => {
       tmpdir(),
       `neon_override_ctx_${Date.now()}`,
     );
+
     testCliCommand({
       name: 'get project id overrides context set project',
       before: async () => {
@@ -56,6 +57,55 @@ describe('set_context', () => {
         overrideContextFile,
       ],
       expected: {
+        snapshot: true,
+      },
+    });
+
+    testCliCommand({
+      name: 'set the branchId and projectId is from context',
+      before: async () => {
+        writeFileSync(
+          overrideContextFile,
+          JSON.stringify({
+            projectId: 'test',
+            branchId: 'test_branch',
+          }),
+        );
+      },
+      after: async () => {
+        rmSync(overrideContextFile);
+      },
+      args: ['databases', 'list', '--context-file', overrideContextFile],
+      expected: {
+        snapshot: true,
+      },
+    });
+
+    testCliCommand({
+      name: 'should not set branchId from context for non-context projectId',
+      before: async () => {
+        writeFileSync(
+          overrideContextFile,
+          JSON.stringify({
+            projectId: 'project-id-123',
+            branchId: 'test_branch',
+          }),
+        );
+      },
+      after: async () => {
+        rmSync(overrideContextFile);
+      },
+      args: [
+        'databases',
+        'list',
+        '--project-id',
+        'test',
+        '--context-file',
+        overrideContextFile,
+      ],
+      expected: {
+        code: 1,
+        stderr: 'ERROR: Not Found',
         snapshot: true,
       },
     });

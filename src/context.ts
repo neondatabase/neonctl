@@ -51,6 +51,14 @@ export const enrichFromContext = (
   if (!args.projectId) {
     args.projectId = context.projectId;
   }
+  if (
+    !args.branch &&
+    !args.id &&
+    !args.name &&
+    context.projectId === args.projectId
+  ) {
+    args.branch = context.branchId;
+  }
 };
 
 export const updateContextFile = (file: string, context: Context) => {
