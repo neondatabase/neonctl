@@ -7,11 +7,9 @@ import { Server } from 'node:http';
 import { startOauthServer } from '../test_utils/oauth_server';
 import { OAuth2Server } from 'oauth2-mock-server';
 import { runMockServer } from '../test_utils/mock_server';
+import { authFlow } from './auth';
 
 vi.mock('open', () => ({ default: vi.fn((url: string) => axios.get(url)) }));
-
-// "open" module should be imported after mocking
-const authModule = await import('./auth');
 
 describe('auth', () => {
   let configDir = '';
@@ -31,7 +29,7 @@ describe('auth', () => {
   });
 
   test('should auth', async () => {
-    await authModule.authFlow({
+    await authFlow({
       _: ['auth'],
       apiHost: `http://localhost:${(mockServer.address() as AddressInfo).port}`,
       clientId: 'test-client-id',
