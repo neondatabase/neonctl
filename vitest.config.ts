@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    setupFiles: ['./test-setup.ts'],
     resolveSnapshotPath(testPath, snapshotExtension) {
       const p = relative(__dirname, testPath);
       const parts = p.split(sep);
