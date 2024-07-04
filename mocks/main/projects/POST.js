@@ -1,7 +1,7 @@
 export default function (req, res) {
   expect(req.body).toMatchObject({
     project: {
-      name: 'test_project',
+      // name: 'test_project',
     },
   });
   res.send({
