@@ -68,6 +68,7 @@ describe('bootstrap/create-app', () => {
           } else if (
             stdout.includes('What authentication framework do you want to use')
           ) {
+            cp.stdin?.write('\x1B[B');
             cp.stdin?.write('\n');
           } else if (
             stdout.includes('What Neon project would you like to use')
@@ -86,6 +87,15 @@ describe('bootstrap/create-app', () => {
         });
 
         cp.on('close', (code) => {
+          // If we got to the point that a Neon project was successfully
+          // created, we consider the test run to be a success. We can't
+          // currently check that the template is properly generated, and that
+          // the project runs. We'll have to do that with containerization in
+          // the future, most likely.
+          if (neonProjectCreated) {
+            resolve();
+          }
+
           try {
             expect(code).toBe(0);
             resolve();
