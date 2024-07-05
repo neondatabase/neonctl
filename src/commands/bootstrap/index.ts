@@ -535,10 +535,13 @@ AUTH_SECRET=${authSecret}`;
       throw new Error(`Generating the database schema failed: ${error}.`);
     }
 
-    try {
-      execSync('npm run db:migrate', { cwd: appName, stdio: 'inherit' });
-    } catch (error) {
-      throw new Error(`Applying the schema failed: ${error}.`);
+    // If the user doesn't specify Auth.js, there is no schema to be applied.
+    if (finalOptions.auth === 'auth.js') {
+      try {
+        execSync('npm run db:migrate', { cwd: appName, stdio: 'inherit' });
+      } catch (error) {
+        throw new Error(`Applying the schema failed: ${error}.`);
+      }
     }
 
     out.text(`Database schema generated and applied.\n`);
