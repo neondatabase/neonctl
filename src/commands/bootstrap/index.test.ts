@@ -21,8 +21,12 @@ describe('bootstrap/create-app', () => {
     });
   });
 
+  // We create an app without a schema and without deploying it, as
+  // a very simple check that the CLI works. Eventually, we need
+  // to have a much more complete test suite that actually verifies
+  // that launching all different app combinations works.
   test(
-    'test',
+    'very simple CLI interaction test',
     async () => {
       // Most of this forking code is copied from `test_cli_command.ts`.
       const cp = fork(
@@ -55,6 +59,10 @@ describe('bootstrap/create-app', () => {
           const stdout = data.toString();
           log.info(stdout);
 
+          // For some unknown, weird reason, when we send TAB clicks (\t),
+          // they only affect the next question. So, we send TAB below
+          // in order to affect the answer to the following prompt, not the
+          // current one.
           if (stdout.includes('What is your project named')) {
             cp.stdin?.write('my-app\n');
           } else if (
