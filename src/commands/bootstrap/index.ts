@@ -11,7 +11,7 @@ import { existsSync, writeFileSync } from 'fs';
 import { isFolderEmpty } from './is-folder-empty.js';
 import { EndpointType, ProjectListItem } from '@neondatabase/api-client';
 import { create } from '../projects.js';
-import { exec, execSync, spawn } from 'child_process';
+import { execSync } from 'child_process';
 import { trackEvent } from '../../analytics.js';
 
 export const command = 'create-app';
