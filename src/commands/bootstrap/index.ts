@@ -41,6 +41,46 @@ export const handler = async (args: CommonProps) => {
   await bootstrap(args);
 };
 
+type BootstrapOptions = {
+  auth?: 'auth.js';
+  framework: 'Next.js' | 'SvelteKit' | 'Nuxt.js';
+  deployment: 'vercel' | 'cloudflare';
+  orm?: 'drizzle' | 'prisma';
+  packageManager: 'npm' | 'pnpm' | 'bun' | 'yarn';
+};
+
+// `getCreateNextAppCommand` returns the command for creating a Next app
+// with `create-next-app` for different package managers.
+function getCreateNextAppCommand(
+  packageManager: BootstrapOptions['packageManager'],
+) {
+  switch (packageManager) {
+    case 'npm':
+      return 'npx create-next-app';
+    case 'bun':
+      return 'bunx create-next-app';
+    case 'pnpm':
+      return 'pnpm create next-app';
+    case 'yarn':
+      return 'yarn create next-app';
+  }
+}
+
+function getExecutorProgram(
+  packageManager: BootstrapOptions['packageManager'],
+) {
+  switch (packageManager) {
+    case 'npm':
+      return 'npx';
+    case 'pnpm':
+      return 'pnpx';
+    case 'bun':
+      return 'bunx';
+    case 'yarn':
+      return 'yarn exec';
+  }
+}
+
 const bootstrap = async (props: CommonProps) => {
   const out = writer(props);
 
@@ -100,14 +140,6 @@ const bootstrap = async (props: CommonProps) => {
     );
   }
 
-  type BootstrapOptions = {
-    auth?: 'auth.js';
-    framework: 'Next.js' | 'SvelteKit' | 'Nuxt.js';
-    deployment: 'vercel' | 'cloudflare';
-    orm?: 'drizzle' | 'prisma';
-    packageManager: 'npm' | 'pnpm' | 'bun' | 'yarn';
-  };
-
   const defaultOptions: BootstrapOptions = {
     auth: 'auth.js',
     framework: 'Next.js',
@@ -144,7 +176,10 @@ const bootstrap = async (props: CommonProps) => {
   });
   finalOptions.packageManager = packageManagerOptions[packageManagerOption]
     .title as typeof finalOptions.packageManager;
-  trackEvent('create-app', { packageManager: finalOptions.packageManager });
+  trackEvent('create-app', {
+    phase: 'package-manager',
+    meta: { packageManager: finalOptions.packageManager },
+  });
 
   const frameworkOptions: Array<Choice> = [
     {
@@ -169,7 +204,10 @@ const bootstrap = async (props: CommonProps) => {
   });
   finalOptions.framework = frameworkOptions[framework]
     .title as typeof finalOptions.framework;
-  trackEvent('create-app', { framework: finalOptions.framework });
+  trackEvent('create-app', {
+    phase: 'framework',
+    meta: { framework: finalOptions.framework },
+  });
 
   const { orm } = await prompts({
     onState: onPromptState,
@@ -184,7 +222,7 @@ const bootstrap = async (props: CommonProps) => {
     initial: 0,
   });
   finalOptions.orm = orm;
-  trackEvent('create-app', { orm: finalOptions.orm });
+  trackEvent('create-app', { phase: 'orm', meta: { orm: finalOptions.orm } });
 
   const { auth } = await prompts({
     onState: onPromptState,
@@ -198,7 +236,10 @@ const bootstrap = async (props: CommonProps) => {
     initial: 0,
   });
   finalOptions.auth = auth;
-  trackEvent('create-app', { auth: finalOptions.auth });
+  trackEvent('create-app', {
+    phase: 'auth',
+    meta: { auth: finalOptions.auth },
+  });
 
   const PROJECTS_LIST_LIMIT = 100;
   const getList = async (
@@ -414,7 +455,7 @@ const bootstrap = async (props: CommonProps) => {
 
     try {
       execSync(
-        `npx create-next-app \
+        `${getCreateNextAppCommand(finalOptions.packageManager)} \
             ${packageManager} \
             --example ${template} \
             ${appName} \
@@ -524,7 +565,10 @@ AUTH_SECRET=${authSecret}`;
     initial: 0,
   });
   finalOptions.deployment = deployment;
-  trackEvent('create-app', { deployment: finalOptions.deployment });
+  trackEvent('create-app', {
+    phase: 'deployment',
+    meta: { deployment: finalOptions.deployment },
+  });
 
   if (finalOptions.deployment === 'vercel') {
     try {
@@ -589,10 +633,15 @@ ${environmentVariables
     writeFileSync(`${appName}/wrangler.toml`, wranglerToml, 'utf8');
 
     try {
-      execSync(`npx @cloudflare/next-on-pages`, {
-        cwd: appName,
-        stdio: 'inherit',
-      });
+      execSync(
+        `${getExecutorProgram(
+          finalOptions.packageManager,
+        )} @cloudflare/next-on-pages`,
+        {
+          cwd: appName,
+          stdio: 'inherit',
+        },
+      );
     } catch (error) {
       throw new Error(
         `Failed to build Next.js app with next-on-pages: ${error}.`,
@@ -609,5 +658,5 @@ ${environmentVariables
     }
   }
 
-  trackEvent('create-app', { phase: 'finish' });
+  trackEvent('create-app', { phase: 'success-finish' });
 };
