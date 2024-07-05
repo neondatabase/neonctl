@@ -438,10 +438,10 @@ const bootstrap = async (props: CommonProps) => {
     let template;
     if (finalOptions.auth === 'auth.js') {
       template =
-        'https://github.com/neondatabase/neonctl-create-app-templates/tree/update-templates/next-drizzle-authjs';
+        'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-drizzle-authjs';
     } else {
       template =
-        'https://github.com/neondatabase/neonctl-create-app-templates/tree/update-templates/next-drizzle';
+        'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-drizzle';
     }
 
     let packageManager = '--use-npm';
