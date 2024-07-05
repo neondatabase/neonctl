@@ -68,7 +68,7 @@ describe('bootstrap/create-app', () => {
           } else if (
             stdout.includes('What authentication framework do you want to use')
           ) {
-            cp.stdin?.write('\x1B\x5B\x42');
+            cp.stdin?.write('\t');
             cp.stdin?.write('\n');
           } else if (
             stdout.includes('What Neon project would you like to use')
