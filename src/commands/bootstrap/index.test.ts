@@ -64,11 +64,11 @@ describe('bootstrap/create-app', () => {
           } else if (stdout.includes('What framework would you like to use')) {
             cp.stdin?.write('\n');
           } else if (stdout.includes('What ORM would you like to use')) {
+            cp.stdin?.write('\t');
             cp.stdin?.write('\n');
           } else if (
             stdout.includes('What authentication framework do you want to use')
           ) {
-            cp.stdin?.write('\t');
             cp.stdin?.write('\n');
           } else if (
             stdout.includes('What Neon project would you like to use')
