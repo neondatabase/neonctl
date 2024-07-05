@@ -209,7 +209,6 @@ const create = async (
   if (props.setContext) {
     updateContextFile(props.contextFile, {
       projectId: data.project.id,
-      branchId: data.branch.id,
     });
   }
 
