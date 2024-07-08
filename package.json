@@ -75,6 +75,7 @@
     "start": "bun dist/index.js",
     "pretest": "bun run build",
     "test": "vitest run",
+    "bundle": "bun build --compile --minify --sourcemap src/index.ts --outfile neonctl",
     "prepare": "test -d .git && husky install || true"
   },
   "lint-staged": {
