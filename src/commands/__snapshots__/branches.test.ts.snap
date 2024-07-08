@@ -8,6 +8,22 @@ type: read_only
 "
 `;
 
+exports[`branches > add compute with autoscaled CU > test 1`] = `
+"id: test_endpoint_id
+branch_id: br-numbered-branch-123456
+created_at: 2019-01-01T00:00:00Z
+type: read_only
+"
+`;
+
+exports[`branches > add compute with fixed size CU > test 1`] = `
+"id: test_endpoint_id
+branch_id: br-numbered-branch-123456
+created_at: 2019-01-01T00:00:00Z
+type: read_only
+"
+`;
+
 exports[`branches > create branch and connect with psql > test 1`] = `
 "branch:
   id: br-new-branch-123456
@@ -50,6 +66,22 @@ endpoints:
     host: undefined.example.com
 connection_uris:
   - connection_uri: postgres://ep-undefined-123456.example.com:5432/test_project
+"
+`;
+
+exports[`branches > create with autoscaled CU > test 1`] = `
+"id: br-new-branch-123456
+name: test_branch_with_autoscaling
+parent_id: br-main-branch-123456
+created_at: 2021-01-01T00:00:00.000Z
+"
+`;
+
+exports[`branches > create with fixed size CU > test 1`] = `
+"id: br-new-branch-123456
+name: test_branch_with_fixed_cu
+parent_id: br-main-branch-123456
+created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
@@ -167,6 +199,16 @@ exports[`branches > list > test 1`] = `
   updated_at: 2021-01-01T00:00:00.000Z
 - id: br-numbered-branch-123456
   name: "123"
+  parent_id: br-parent-branch-123456
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-numbered-branch-123456
+  name: test_branch_with_fixed_cu
+  parent_id: br-parent-branch-123456
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-numbered-branch-123456
+  name: test_branch_with_autoscaling
   parent_id: br-parent-branch-123456
   created_at: 2021-01-01T00:00:00.000Z
   updated_at: 2021-01-01T00:00:00.000Z

@@ -166,6 +166,40 @@ describe('branches', () => {
     },
   });
 
+  testCliCommand({
+    name: 'create with fixed size CU',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_with_fixed_cu',
+      '--cu',
+      '2',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'create with autoscaled CU',
+    args: [
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_with_autoscaling',
+      '--cu',
+      '0.5-2',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
   /* delete */
 
   testCliCommand({
@@ -276,6 +310,38 @@ describe('branches', () => {
   testCliCommand({
     name: 'add compute',
     args: ['branches', 'add-compute', 'test_branch', '--project-id', 'test'],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'add compute with fixed size CU',
+    args: [
+      'branches',
+      'add-compute',
+      'test_branch_with_fixed_cu',
+      '--project-id',
+      'test',
+      '--cu',
+      '2',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'add compute with autoscaled CU',
+    args: [
+      'branches',
+      'add-compute',
+      'test_branch_with_autoscaling',
+      '--project-id',
+      'test',
+      '--cu',
+      '0.5-2',
+    ],
     expected: {
       snapshot: true,
     },
