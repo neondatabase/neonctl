@@ -1,0 +1,16 @@
+{
+  "organizations": [
+    {
+      "name": "Organization 1",
+      "id": 1
+    },
+    {
+      "name": "Organization 2",
+      "id": 2
+    },
+    {
+      "name": "Organization 3",
+      "id": 3
+    }
+  ]
+}
