@@ -1,4 +1,2 @@
 dist/
 *.gen.ts
-src/commands/bootstrap/next-drizzle-authjs/*
-src/commands/bootstrap/next-drizzle/*
