@@ -19,7 +19,7 @@ export const runMockServer = async (mockDir: string) =>
     const server = app.listen(0);
     server.on('listening', () => {
       resolve(server);
-      log.info(
+      log.debug(
         'Mock server listening at %d',
         (server.address() as AddressInfo).port,
       );

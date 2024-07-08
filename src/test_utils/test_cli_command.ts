@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeAll, afterAll } from '@jest/globals';
+import { test, expect, describe, beforeAll, afterAll } from 'vitest';
 import { fork } from 'node:child_process';
 import { Server } from 'node:http';
 import { AddressInfo } from 'node:net';

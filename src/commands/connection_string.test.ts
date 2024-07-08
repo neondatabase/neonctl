@@ -1,4 +1,4 @@
-import { describe, expect } from '@jest/globals';
+import { describe, expect } from 'vitest';
 import { testCliCommand } from '../test_utils/test_cli_command';
 
 describe('connection_string', () => {

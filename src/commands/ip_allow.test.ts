@@ -1,4 +1,4 @@
-import { describe } from '@jest/globals';
+import { describe } from 'vitest';
 import { testCliCommand } from '../test_utils/test_cli_command.js';
 
 describe('ip-allow', () => {
