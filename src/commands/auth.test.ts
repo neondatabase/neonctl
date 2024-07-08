@@ -10,6 +10,7 @@ import { runMockServer } from '../test_utils/mock_server';
 import { authFlow } from './auth';
 
 vi.mock('open', () => ({ default: vi.fn((url: string) => axios.get(url)) }));
+vi.mock('../pkg.ts', () => ({ default: { version: '0.0.0' } }));
 
 describe('auth', () => {
   let configDir = '';
