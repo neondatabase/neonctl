@@ -15,7 +15,23 @@ export default function (req, res) {
     }
   }
 
-  if (req.body.endpoint.branch_id === 'test_branch_id') {
+  if (req.body.endpoint.branch_id === 'test_branch_with_fixed_cu') {
+    expect(req.body).toMatchObject({
+      endpoint: {
+        autoscaling_limit_min_cu: 2,
+        autoscaling_limit_max_cu: 2,
+        type: 'read_only',
+      },
+    });
+  } else if (req.body.endpoint.branch_id === 'test_branch_with_autoscaling') {
+    expect(req.body).toMatchObject({
+      endpoint: {
+        autoscaling_limit_min_cu: 0.5,
+        autoscaling_limit_max_cu: 2,
+        type: 'read_only',
+      },
+    });
+  } else if (req.body.endpoint.branch_id === 'test_branch_id') {
     expect(req.body).toMatchObject({
       endpoint: {
         type: 'read_only',

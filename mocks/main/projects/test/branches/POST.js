@@ -46,6 +46,48 @@ export default function (req, res) {
         created_at: '2021-01-01T00:00:00.000Z',
       },
     });
+  } else if (req.body.branch?.name === 'test_branch_with_fixed_cu') {
+    expect(req.body).toMatchObject({
+      branch: {
+        name: 'test_branch_with_fixed_cu',
+      },
+      endpoints: [
+        {
+          autoscaling_limit_max_cu: 2,
+          autoscaling_limit_min_cu: 2,
+          type: 'read_write',
+        },
+      ],
+    });
+    res.send({
+      branch: {
+        id: 'br-new-branch-123456',
+        name: 'test_branch_with_fixed_cu',
+        parent_id: 'br-main-branch-123456',
+        created_at: '2021-01-01T00:00:00.000Z',
+      },
+    });
+  } else if (req.body.branch?.name === 'test_branch_with_autoscaling') {
+    expect(req.body).toMatchObject({
+      branch: {
+        name: 'test_branch_with_autoscaling',
+      },
+      endpoints: [
+        {
+          autoscaling_limit_max_cu: 2,
+          autoscaling_limit_min_cu: 0.5,
+          type: 'read_write',
+        },
+      ],
+    });
+    res.send({
+      branch: {
+        id: 'br-new-branch-123456',
+        name: 'test_branch_with_autoscaling',
+        parent_id: 'br-main-branch-123456',
+        created_at: '2021-01-01T00:00:00.000Z',
+      },
+    });
   } else if (req.body.branch?.name === 'test_branch_with_suspend_timeout') {
     res.send({
       branch: {
