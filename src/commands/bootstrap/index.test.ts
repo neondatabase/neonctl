@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeAll, afterAll } from '@jest/globals';
+import { test, expect, describe, beforeAll, afterAll } from 'vitest';
 import { runMockServer } from '../../test_utils/mock_server.js';
 import { Server } from 'node:http';
 import { fork } from 'node:child_process';

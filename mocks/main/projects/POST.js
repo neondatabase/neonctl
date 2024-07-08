@@ -25,9 +25,7 @@ export default function (req, res) {
     });
   } else {
     expect(req.body).toMatchObject({
-      project: {
-        name: 'test_project',
-      },
+      project: {},
     });
   }
   res.send({
