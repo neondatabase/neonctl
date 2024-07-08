@@ -54,8 +54,6 @@ export const testCliCommand = ({
       let output = '';
       let error = '';
 
-      // TODO: Maybe make this run source code? Bun supports that no problem
-      // Or maybe spawn the binary for better e2e?
       const cp = fork(
         join(process.cwd(), './dist/index.js'),
         [
