@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { Server } from 'node:http';
 
 import { startOauthServer } from '../test_utils/oauth_server';
-import type { OAuth2Server } from 'oauth2-mock-server';
+import { OAuth2Server } from 'oauth2-mock-server';
 import { runMockServer } from '../test_utils/mock_server';
 import { authFlow } from './auth';
 
