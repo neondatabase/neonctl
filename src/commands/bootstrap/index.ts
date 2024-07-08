@@ -81,6 +81,22 @@ function getExecutorProgram(
   }
 }
 
+function getGlobalInstallProgram(
+  packageManager: BootstrapOptions['packageManager'],
+  packageName: string,
+) {
+  switch (packageManager) {
+    case 'npm':
+      return `npm install -g ${packageName}`;
+    case 'pnpm':
+      return `pnpm install -g ${packageName}`;
+    case 'bun':
+      return `bun add -g ${packageName}`;
+    case 'yarn':
+      return `yarn global add ${packageName}`;
+  }
+}
+
 const bootstrap = async (props: CommonProps) => {
   const out = writer(props);
 
@@ -562,6 +578,10 @@ AUTH_SECRET=${authSecret}`;
         title: 'Cloudflare',
         value: 'cloudflare',
         description: 'We will install the Wrangler CLI globally.',
+
+        // If Yarn is chosen, Cloudflare doesn't work because I can't get `npx
+        // @cloudflare/next-on-pages` to work with the Yarn CLI.
+        disabled: finalOptions.packageManager === 'yarn',
       },
       { title: 'Nowhere', value: -1 },
     ],
@@ -575,7 +595,7 @@ AUTH_SECRET=${authSecret}`;
 
   if (finalOptions.deployment === 'vercel') {
     try {
-      execSync(`${finalOptions.packageManager} install -g vercel`, {
+      execSync(getGlobalInstallProgram(finalOptions.packageManager, 'vercel'), {
         cwd: appName,
         stdio: 'inherit',
       });
