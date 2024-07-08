@@ -70,7 +70,7 @@
     "lint:fix": "tsc --noEmit && eslint src --ext .ts --fix && prettier --w .",
     "build": "bun generateParams && bun clean && tsc && cp src/*.html package*.json README.md ./dist",
     "clean": "rm -rf dist",
-    "generateParams": "node --loader ts-node/esm ./generateOptionsFromSpec.ts",
+    "generateParams": "bun generateOptionsFromSpec.ts",
     "start": "bun dist/index.js",
     "pretest": "bun run build",
     "test": "vitest run",
