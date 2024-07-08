@@ -1,6 +1,6 @@
-// Jest Snapshot v1, https://goo.gl/fbAQLP
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`operations list test 1`] = `
+exports[`operations > list > test 1`] = `
 "- id: "1"
   action: suspend
   status: finished

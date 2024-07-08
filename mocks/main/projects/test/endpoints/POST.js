@@ -1,3 +1,5 @@
+import { expect } from 'vitest';
+
 let retries = 1;
 
 export default function (req, res) {

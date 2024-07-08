@@ -1,12 +1,5 @@
 import axios from 'axios';
-import {
-  beforeAll,
-  describe,
-  test,
-  jest,
-  afterAll,
-  expect,
-} from '@jest/globals';
+import { vi, beforeAll, describe, test, afterAll, expect } from 'vitest';
 import { AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { Server } from 'node:http';
@@ -14,16 +7,10 @@ import { Server } from 'node:http';
 import { startOauthServer } from '../test_utils/oauth_server';
 import { OAuth2Server } from 'oauth2-mock-server';
 import { runMockServer } from '../test_utils/mock_server';
+import { authFlow } from './auth';
 
-jest.unstable_mockModule('open', () => ({
-  __esModule: true,
-  default: jest.fn((url: string) => {
-    return axios.get(url);
-  }),
-}));
-
-// "open" module should be imported after mocking
-const authModule = await import('./auth');
+vi.mock('open', () => ({ default: vi.fn((url: string) => axios.get(url)) }));
+vi.mock('../pkg.ts', () => ({ default: { version: '0.0.0' } }));
 
 describe('auth', () => {
   let configDir = '';
@@ -43,7 +30,7 @@ describe('auth', () => {
   });
 
   test('should auth', async () => {
-    await authModule.authFlow({
+    await authFlow({
       _: ['auth'],
       apiHost: `http://localhost:${(mockServer.address() as AddressInfo).port}`,
       clientId: 'test-client-id',

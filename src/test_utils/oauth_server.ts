@@ -5,6 +5,6 @@ export const startOauthServer = async () => {
   const server = new OAuth2Server();
   await server.issuer.keys.generate('RS256');
   await server.start(0, 'localhost');
-  log.info('Started OAuth server');
+  log.debug('Started OAuth server');
   return server;
 };
