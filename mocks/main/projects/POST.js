@@ -12,21 +12,6 @@ export default function (req, res) {
         },
       },
     });
-    res.send({
-      project: {
-        id: 'new-project-123456',
-        name: 'test_project',
-        created_at: '2021-01-01T00:00:00.000Z',
-      },
-      connection_uris: [
-        { connection_uri: 'postgres://localhost:5432/test_project' },
-      ],
-      branch: {
-        id: 'br-test-branch-123456',
-        name: 'test_branch',
-        created_at: '2021-01-01T00:00:00.000Z',
-      },
-    });
   } else if (req.body.project?.name === 'test_project_with_autoscaling') {
     expect(req.body).toMatchObject({
       project: {
@@ -38,41 +23,26 @@ export default function (req, res) {
         },
       },
     });
-    res.send({
-      project: {
-        id: 'new-project-123456',
-        name: 'test_project',
-        created_at: '2021-01-01T00:00:00.000Z',
-      },
-      connection_uris: [
-        { connection_uri: 'postgres://localhost:5432/test_project' },
-      ],
-      branch: {
-        id: 'br-test-branch-123456',
-        name: 'test_branch',
-        created_at: '2021-01-01T00:00:00.000Z',
-      },
-    });
   } else {
     expect(req.body).toMatchObject({
       project: {
         name: 'test_project',
       },
     });
-    res.send({
-      project: {
-        id: 'new-project-123456',
-        name: 'test_project',
-        created_at: '2021-01-01T00:00:00.000Z',
-      },
-      connection_uris: [
-        { connection_uri: 'postgres://localhost:5432/test_project' },
-      ],
-      branch: {
-        id: 'br-test-branch-123456',
-        name: 'test_branch',
-        created_at: '2021-01-01T00:00:00.000Z',
-      },
-    });
   }
+  res.send({
+    project: {
+      id: 'new-project-123456',
+      name: 'test_project',
+      created_at: '2021-01-01T00:00:00.000Z',
+    },
+    connection_uris: [
+      { connection_uri: 'postgres://localhost:5432/test_project' },
+    ],
+    branch: {
+      id: 'br-test-branch-123456',
+      name: 'test_branch',
+      created_at: '2021-01-01T00:00:00.000Z',
+    },
+  });
 }
