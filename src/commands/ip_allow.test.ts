@@ -30,13 +30,29 @@ describe('ip-allow', () => {
   });
 
   testCliCommand({
-    name: 'Add IP allow',
+    name: 'Add IP allow - Primary',
     args: [
       'ip-allow',
       'add',
       '127.0.0.1',
       '192.168.10.1-192.168.10.15',
       '--primary-only',
+      '--project-id',
+      'test',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'Add IP allow - Protected',
+    args: [
+      'ip-allow',
+      'add',
+      '127.0.0.1',
+      '192.168.10.1-192.168.10.15',
+      '--protected-only',
       '--project-id',
       'test',
     ],

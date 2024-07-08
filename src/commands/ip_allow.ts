@@ -46,6 +46,15 @@ export const builder = (argv: yargs.Argv) => {
             array: true,
           })
           .options({
+            'protected-only': {
+              describe:
+                projectUpdateRequest[
+                  'project.settings.allowed_ips.protected_branches_only'
+                ].description,
+              type: 'boolean',
+            },
+          })
+          .options({
             'primary-only': {
               describe:
                 projectUpdateRequest[
@@ -104,6 +113,7 @@ const add = async (
     ProjectScopeProps & {
       ips: string[];
       primaryOnly?: boolean;
+      protectedOnly?: boolean;
     },
 ) => {
   if (props.ips.length <= 0) {
@@ -120,6 +130,10 @@ const add = async (
       ips: [...new Set(props.ips.concat(existingAllowedIps?.ips ?? []))],
       primary_branch_only:
         props.primaryOnly ?? existingAllowedIps?.primary_branch_only ?? false,
+      protected_branches_only:
+        props.protectedOnly ??
+        existingAllowedIps?.protected_branches_only ??
+        false,
     },
   };
 
@@ -133,6 +147,7 @@ const add = async (
   writer(props).end(parse(response.project), {
     fields: IP_ALLOW_FIELDS,
   });
+  // TODO: also modify this
 };
 
 const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
@@ -164,6 +179,7 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
   writer(props).end(parse(response.project), {
     fields: IP_ALLOW_FIELDS,
   });
+  // TODO: also modify this
 };
 
 const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
@@ -188,6 +204,7 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
       `The IP allowlist has been reset. All databases on project "${data.project.name}" are now exposed to the internet`,
     );
   }
+  // TODO: also modify this
 };
 
 const parse = (project: Project) => {
