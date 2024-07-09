@@ -87,6 +87,7 @@ describe('bootstrap/create-app', () => {
             cp.stdin?.write('\n');
           } else if (stdout.includes('Where would you like to deploy')) {
             cp.stdin?.write('\n');
+            cp.stdin?.write('\n');
           }
         });
 
