@@ -16,9 +16,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
       - run: bun install
       - run: bun run build
       - run: bun run test
