@@ -8,6 +8,7 @@ IP_addresses:
   - 192.168.10.1-192.168.10.15
   - 192.168.1.1
 primary_branch_only: true
+protected_branches_only: false
 "
 `;
 
@@ -18,6 +19,7 @@ IP_addresses:
   - 127.0.0.1
   - 192.168.10.1-192.168.10.15
   - 192.168.1.1
+primary_branch_only: false
 protected_branches_only: true
 "
 `;
@@ -27,6 +29,7 @@ exports[`ip-allow > Remove IP allow > test 1`] = `
 name: test_project
 IP_addresses: []
 primary_branch_only: false
+protected_branches_only: false
 "
 `;
 
@@ -35,6 +38,7 @@ exports[`ip-allow > Reset IP allow > test 1`] = `
 name: test_project
 IP_addresses: []
 primary_branch_only: false
+protected_branches_only: false
 "
 `;
 
@@ -44,15 +48,17 @@ name: test_project
 IP_addresses:
   - 192.168.2.2
 primary_branch_only: false
+protected_branches_only: false
 "
 `;
 
 exports[`ip-allow > list IP Allow with single-project > test 1`] = `
 "id: test-project-123456
-name: ""
+name: test-project-123456
 IP_addresses:
   - 192.168.1.1
 primary_branch_only: false
+protected_branches_only: false
 "
 `;
 
@@ -62,5 +68,6 @@ name: test_project
 IP_addresses:
   - 192.168.1.1
 primary_branch_only: false
+protected_branches_only: false
 "
 `;

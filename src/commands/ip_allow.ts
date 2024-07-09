@@ -10,7 +10,7 @@ const IP_ALLOW_FIELDS = [
   'id',
   'name',
   'IP_addresses',
-  'primary_branch_only',
+  'protected_branches_only',
 ] as const;
 
 export const command = 'ip-allow';
@@ -166,6 +166,8 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
       ips:
         existingAllowedIps?.ips?.filter((ip) => !props.ips.includes(ip)) ?? [],
       primary_branch_only: existingAllowedIps?.primary_branch_only ?? false,
+      protected_branches_only:
+        existingAllowedIps?.protected_branches_only ?? false,
     },
   };
 
@@ -188,6 +190,7 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
     allowed_ips: {
       ips: props.ips,
       primary_branch_only: false,
+      protected_branches_only: false,
     },
   };
 
@@ -215,5 +218,7 @@ const parse = (project: Project) => {
     IP_addresses: ips,
     primary_branch_only:
       project.settings?.allowed_ips?.primary_branch_only ?? false,
+    protected_branches_only:
+      project.settings?.allowed_ips?.protected_branches_only ?? false,
   };
 };

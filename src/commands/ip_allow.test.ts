@@ -87,6 +87,7 @@ describe('ip-allow', () => {
 name: test_project
 IP_addresses: []
 primary_branch_only: false
+protected_branches_only: false
 `,
       stderr: `INFO: The IP allowlist has been reset. All databases on project "test_project" are now exposed to the internet`,
     },
