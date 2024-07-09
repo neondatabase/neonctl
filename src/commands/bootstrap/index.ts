@@ -323,7 +323,18 @@ const bootstrap = async (props: CommonProps) => {
   let project;
   let connectionString: string;
   if (neonProject === -1) {
-    project = await create({ ...props, psql: false, setContext: false });
+    try {
+      project = await create({
+        ...props,
+        psql: false,
+        setContext: false,
+        name: `${appName}-db`,
+      });
+    } catch (error) {
+      throw new Error(
+        `An error occurred while creating a new Neon project: ${error}`,
+      );
+    }
     connectionString = project.connection_uris[0].connection_uri;
   } else {
     project = allProjects.find((p) => p.id === neonProject);
@@ -479,8 +490,7 @@ const bootstrap = async (props: CommonProps) => {
         `${getCreateNextAppCommand(finalOptions.packageManager)} \
             ${packageManager} \
             --example ${template} \
-            ${appName} \
-          `,
+            ${appName}`,
         { stdio: 'inherit' },
       );
     } catch (error: unknown) {
@@ -540,16 +550,21 @@ AUTH_SECRET=${authSecret}`;
     out.text(
       `Created a Next.js project in ${chalk.blue(
         appName,
-      )}.\n\nYou can now run ${chalk.blue(`cd ${appName} && npm run dev`)}`,
+      )}.\n\nYou can now run ${chalk.blue(
+        `cd ${appName} && ${finalOptions.packageManager} run dev`,
+      )}`,
     );
   }
 
   if (finalOptions.orm === 'drizzle') {
     try {
-      execSync('npm run db:generate -- --name init_db', {
-        cwd: appName,
-        stdio: 'inherit',
-      });
+      execSync(
+        `${finalOptions.packageManager} run db:generate -- --name init_db`,
+        {
+          cwd: appName,
+          stdio: 'inherit',
+        },
+      );
     } catch (error) {
       throw new Error(`Generating the database schema failed: ${error}.`);
     }
@@ -557,7 +572,10 @@ AUTH_SECRET=${authSecret}`;
     // If the user doesn't specify Auth.js, there is no schema to be applied.
     if (finalOptions.auth === 'auth.js') {
       try {
-        execSync('npm run db:migrate', { cwd: appName, stdio: 'inherit' });
+        execSync(`${finalOptions.packageManager} run db:migrate`, {
+          cwd: appName,
+          stdio: 'inherit',
+        });
       } catch (error) {
         throw new Error(`Applying the schema failed: ${error}.`);
       }
