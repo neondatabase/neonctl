@@ -46,6 +46,7 @@ type BootstrapOptions = {
   framework: 'Next.js' | 'SvelteKit' | 'Nuxt.js';
   deployment: 'vercel' | 'cloudflare';
   orm?: 'drizzle' | 'prisma';
+
   packageManager: 'npm' | 'pnpm' | 'bun' | 'yarn';
 };
 
@@ -54,15 +55,17 @@ type BootstrapOptions = {
 function getCreateNextAppCommand(
   packageManager: BootstrapOptions['packageManager'],
 ) {
+  const createNextAppVersion = '14.2.4';
+
   switch (packageManager) {
     case 'npm':
-      return 'npx create-next-app';
+      return `npx create-next-app@${createNextAppVersion}`;
     case 'bun':
-      return 'bunx create-next-app';
+      return `bunx create-next-app@${createNextAppVersion}`;
     case 'pnpm':
-      return 'pnpm create next-app';
+      return `pnpm create next-app@${createNextAppVersion}`;
     case 'yarn':
-      return 'yarn create next-app';
+      return `yarn dlx create-next-app@${createNextAppVersion}`;
   }
 }
 
@@ -77,7 +80,7 @@ function getExecutorProgram(
     case 'bun':
       return 'bunx';
     case 'yarn':
-      return 'yarn exec';
+      return 'yarn dlx';
   }
 }
 
@@ -110,7 +113,12 @@ const bootstrap = async (props: CommonProps) => {
     name: 'path',
     message: 'What is your project named?',
     initial: 'my-app',
-    validate: (name) => {
+    validate: (name: string) => {
+      // We resolve to normalize the path name first, so that if the user enters
+      // something like "/hello", we get back just "hello" and not "/hello".
+      // This avoids issues where relative paths might lead to different results
+      // depending on the current working directory. It also prevents issues
+      // related to invalid symlinks.
       const validation = validateNpmName(basename(resolve(name)));
       if (validation.valid) {
         return true;
@@ -120,13 +128,16 @@ const bootstrap = async (props: CommonProps) => {
   });
   trackEvent('create-app', { phase: 'start' });
 
-  let projectPath;
-  if (typeof res.path === 'string') {
-    projectPath = res.path.trim();
-  } else {
+  if (typeof res.path !== 'string') {
     throw new Error('Could not get project path');
   }
 
+  // We resolve to normalize the path name first, so that if the user enters
+  // something like "/hello", we get back just "hello" and not "/hello".
+  // This avoids issues where relative paths might lead to different results
+  // depending on the current working directory. It also prevents issues
+  // related to invalid symlinks.
+  const projectPath = res.path.trim();
   const resolvedProjectPath = resolve(projectPath);
   const projectName = basename(resolvedProjectPath);
 
@@ -135,7 +146,7 @@ const bootstrap = async (props: CommonProps) => {
     throw new Error(
       `Could not create a project called ${chalk.red(
         `"${projectName}"`,
-      )} because of npm naming restrictions:`,
+      )} because of npm package naming restrictions:`,
     );
   }
 
@@ -156,16 +167,12 @@ const bootstrap = async (props: CommonProps) => {
     );
   }
 
-  const defaultOptions: BootstrapOptions = {
+  const finalOptions: BootstrapOptions = {
     auth: 'auth.js',
     framework: 'Next.js',
     deployment: 'vercel',
     orm: 'drizzle',
     packageManager: 'npm',
-  };
-
-  const finalOptions: BootstrapOptions = {
-    ...defaultOptions,
   };
 
   const packageManagerOptions: Array<Choice> = [
@@ -191,7 +198,7 @@ const bootstrap = async (props: CommonProps) => {
     initial: 0,
   });
   finalOptions.packageManager = packageManagerOptions[packageManagerOption]
-    .title as typeof finalOptions.packageManager;
+    .title as BootstrapOptions['packageManager'];
   trackEvent('create-app', {
     phase: 'package-manager',
     meta: { packageManager: finalOptions.packageManager },
@@ -219,7 +226,7 @@ const bootstrap = async (props: CommonProps) => {
     initial: 0,
   });
   finalOptions.framework = frameworkOptions[framework]
-    .title as typeof finalOptions.framework;
+    .title as BootstrapOptions['framework'];
   trackEvent('create-app', {
     phase: 'framework',
     meta: { framework: finalOptions.framework },
@@ -461,9 +468,7 @@ const bootstrap = async (props: CommonProps) => {
     }
 
     let packageManager = '--use-npm';
-    if (finalOptions.packageManager === 'yarn') {
-      packageManager = '--use-yarn';
-    } else if (finalOptions.packageManager === 'bun') {
+    if (finalOptions.packageManager === 'bun') {
       packageManager = '--use-bun';
     } else if (finalOptions.packageManager === 'pnpm') {
       packageManager = '--use-pnpm';
@@ -576,10 +581,6 @@ AUTH_SECRET=${authSecret}`;
         title: 'Cloudflare',
         value: 'cloudflare',
         description: 'We will install the Wrangler CLI globally.',
-
-        // If Yarn is chosen, Cloudflare doesn't work because I can't get `npx
-        // @cloudflare/next-on-pages` to work with the Yarn CLI.
-        disabled: finalOptions.packageManager === 'yarn',
       },
       { title: 'Nowhere', value: -1 },
     ],
