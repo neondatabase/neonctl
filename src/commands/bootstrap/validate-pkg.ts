@@ -1,3 +1,5 @@
+// Code copied from `create-next-app`.
+
 import validateProjectName from 'validate-npm-package-name';
 
 type ValidateNpmNameResult =

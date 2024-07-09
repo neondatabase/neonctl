@@ -4,7 +4,7 @@ import { writer } from '../../writer.js';
 import prompts, { Choice, InitialReturnValue } from 'prompts';
 import { validateNpmName } from './validate-pkg.js';
 import { basename, resolve } from 'path';
-import picocolors from 'picocolors';
+import chalk from 'chalk';
 import { isCi } from '../../env.js';
 import { log } from '../../log.js';
 import { existsSync, writeFileSync } from 'fs';
@@ -133,7 +133,7 @@ const bootstrap = async (props: CommonProps) => {
   const validation = validateNpmName(projectName);
   if (!validation.valid) {
     throw new Error(
-      `Could not create a project called ${picocolors.red(
+      `Could not create a project called ${chalk.red(
         `"${projectName}"`,
       )} because of npm naming restrictions:`,
     );
@@ -148,9 +148,9 @@ const bootstrap = async (props: CommonProps) => {
 
   if (folderExists && !isFolderEmpty(root, appName, out.text)) {
     throw new Error(
-      `Could not create a project called ${picocolors.red(
+      `Could not create a project called ${chalk.red(
         `"${projectName}"`,
-      )} because the folder ${picocolors.red(
+      )} because the folder ${chalk.red(
         `"${resolvedProjectPath}"`,
       )} is not empty.`,
     );
@@ -533,11 +533,9 @@ AUTH_SECRET=${authSecret}`;
     }
 
     out.text(
-      `Created a Next.js project in ${picocolors.blue(
+      `Created a Next.js project in ${chalk.blue(
         appName,
-      )}.\n\nYou can now run ${picocolors.blue(
-        `cd ${appName} && npm run dev`,
-      )}`,
+      )}.\n\nYou can now run ${chalk.blue(`cd ${appName} && npm run dev`)}`,
     );
   }
 

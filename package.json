@@ -63,7 +63,6 @@
     "inquirer": "^9.2.6",
     "open": "^10.1.0",
     "openid-client": "^5.6.5",
-    "picocolors": "1.0.1",
     "prompts": "2.4.2",
     "validate-npm-package-name": "5.0.1",
     "which": "^3.0.1",
