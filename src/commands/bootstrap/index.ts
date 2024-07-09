@@ -483,6 +483,8 @@ const bootstrap = async (props: CommonProps) => {
       packageManager = '--use-bun';
     } else if (finalOptions.packageManager === 'pnpm') {
       packageManager = '--use-pnpm';
+    } else if (finalOptions.packageManager === 'yarn') {
+      packageManager = '--use-yarn';
     }
 
     try {
@@ -612,10 +614,13 @@ AUTH_SECRET=${authSecret}`;
 
   if (finalOptions.deployment === 'vercel') {
     try {
-      execSync(getGlobalInstallProgram(finalOptions.packageManager, 'vercel'), {
-        cwd: appName,
-        stdio: 'inherit',
-      });
+      execSync(
+        getGlobalInstallProgram(finalOptions.packageManager, 'vercel@34.3.0'),
+        {
+          cwd: appName,
+          stdio: 'inherit',
+        },
+      );
     } catch (error) {
       throw new Error(`Failed to install the vercel CLI: ${error}.`);
     }
@@ -676,7 +681,7 @@ ${environmentVariables
       execSync(
         `${getExecutorProgram(
           finalOptions.packageManager,
-        )} @cloudflare/next-on-pages`,
+        )} @cloudflare/next-on-pages@1.12.0`,
         {
           cwd: appName,
           stdio: 'inherit',
