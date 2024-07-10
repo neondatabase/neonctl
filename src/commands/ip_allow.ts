@@ -61,6 +61,7 @@ export const builder = (argv: yargs.Argv) => {
                   'project.settings.allowed_ips.primary_branch_only'
                 ].description,
               type: 'boolean',
+              deprecated: 'See --protected-only',
             },
           }),
       async (args) => {
@@ -147,7 +148,6 @@ const add = async (
   writer(props).end(parse(response.project), {
     fields: IP_ALLOW_FIELDS,
   });
-  // TODO: also modify this
 };
 
 const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
@@ -181,7 +181,6 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
   writer(props).end(parse(response.project), {
     fields: IP_ALLOW_FIELDS,
   });
-  // TODO: also modify this
 };
 
 const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
@@ -207,7 +206,6 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
       `The IP allowlist has been reset. All databases on project "${data.project.name}" are now exposed to the internet`,
     );
   }
-  // TODO: also modify this
 };
 
 const parse = (project: Project) => {
