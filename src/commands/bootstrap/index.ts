@@ -47,7 +47,7 @@ type BootstrapOptions = {
   deployment: 'vercel' | 'cloudflare';
   orm?: 'drizzle' | 'prisma';
 
-  packageManager: 'npm' | 'pnpm' | 'bun' | 'yarn';
+  packageManager: 'npm' | 'pnpm' | 'bun';
 };
 
 // `getCreateNextAppCommand` returns the command for creating a Next app
@@ -64,8 +64,6 @@ function getCreateNextAppCommand(
       return `bunx create-next-app@${createNextAppVersion}`;
     case 'pnpm':
       return `pnpm create next-app@${createNextAppVersion}`;
-    case 'yarn':
-      return `yarn dlx create-next-app@${createNextAppVersion}`;
   }
 }
 
@@ -79,24 +77,6 @@ function getExecutorProgram(
       return 'pnpx';
     case 'bun':
       return 'bunx';
-    case 'yarn':
-      return 'yarn dlx';
-  }
-}
-
-function getGlobalInstallProgram(
-  packageManager: BootstrapOptions['packageManager'],
-  packageName: string,
-) {
-  switch (packageManager) {
-    case 'npm':
-      return `npm install -g ${packageName}`;
-    case 'pnpm':
-      return `pnpm install -g ${packageName}`;
-    case 'bun':
-      return `bun add -g ${packageName}`;
-    case 'yarn':
-      return `yarn global add ${packageName}`;
   }
 }
 
@@ -184,9 +164,6 @@ const bootstrap = async (props: CommonProps) => {
     },
     {
       title: 'bun',
-    },
-    {
-      title: 'yarn',
     },
   ];
   const { packageManagerOption } = await prompts({
@@ -483,8 +460,6 @@ const bootstrap = async (props: CommonProps) => {
       packageManager = '--use-bun';
     } else if (finalOptions.packageManager === 'pnpm') {
       packageManager = '--use-pnpm';
-    } else if (finalOptions.packageManager === 'yarn') {
-      packageManager = '--use-yarn';
     }
 
     try {
@@ -614,18 +589,6 @@ AUTH_SECRET=${authSecret}`;
 
   if (finalOptions.deployment === 'vercel') {
     try {
-      execSync(
-        getGlobalInstallProgram(finalOptions.packageManager, 'vercel@34.3.0'),
-        {
-          cwd: appName,
-          stdio: 'inherit',
-        },
-      );
-    } catch (error) {
-      throw new Error(`Failed to install the vercel CLI: ${error}.`);
-    }
-
-    try {
       let envVarsStr = '';
       for (let i = 0; i < environmentVariables.length; i++) {
         const envVar = environmentVariables[i];
@@ -634,10 +597,15 @@ AUTH_SECRET=${authSecret}`;
         }=${envVar.value} `;
       }
 
-      execSync(`vercel deploy ${envVarsStr}`, {
-        cwd: appName,
-        stdio: 'inherit',
-      });
+      execSync(
+        `${getExecutorProgram(
+          finalOptions.packageManager,
+        )} vercel@34.3.1 deploy ${envVarsStr}`,
+        {
+          cwd: appName,
+          stdio: 'inherit',
+        },
+      );
     } catch (error) {
       throw new Error(`Deploying to Vercel failed: ${error}.`);
     }
@@ -678,22 +646,10 @@ ${environmentVariables
     writeFileSync(`${appName}/wrangler.toml`, wranglerToml, 'utf8');
 
     try {
-      try {
-        execSync(
-          getGlobalInstallProgram(finalOptions.packageManager, 'vercel@34.3.0'),
-          {
-            cwd: appName,
-            stdio: 'inherit',
-          },
-        );
-      } catch (error) {
-        throw new Error(`Failed to install the vercel CLI: ${error}.`);
-      }
-
       execSync(
         `${getExecutorProgram(
           finalOptions.packageManager,
-        )} @cloudflare/next-on-pages@1.12.0`,
+        )} @cloudflare/next-on-pages@1.12.1`,
         {
           cwd: appName,
           stdio: 'inherit',
