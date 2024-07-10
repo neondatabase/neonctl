@@ -205,6 +205,7 @@ const bootstrap = async (props: CommonProps) => {
     message: `What framework would you like to use?`,
     choices: frameworkOptions,
     initial: 0,
+    warn: 'Coming soon',
   });
   finalOptions.framework = frameworkOptions[framework]
     .title as BootstrapOptions['framework'];
@@ -224,6 +225,7 @@ const bootstrap = async (props: CommonProps) => {
       { title: 'No ORM', value: -1, disabled: true },
     ],
     initial: 0,
+    warn: 'Coming soon',
   });
   finalOptions.orm = orm;
   trackEvent('create-app', { phase: 'orm', meta: { orm: finalOptions.orm } });
