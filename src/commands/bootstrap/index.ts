@@ -9,8 +9,12 @@ import { isCi } from '../../env.js';
 import { log } from '../../log.js';
 import { existsSync, writeFileSync } from 'fs';
 import { isFolderEmpty } from './is-folder-empty.js';
-import { EndpointType, ProjectListItem } from '@neondatabase/api-client';
-import { create } from '../projects.js';
+import {
+  EndpointType,
+  ProjectListItem,
+  ProjectCreateRequest,
+} from '@neondatabase/api-client';
+import { PROJECT_FIELDS } from '../projects.js';
 import { execSync } from 'child_process';
 import { trackEvent } from '../../analytics.js';
 
@@ -297,22 +301,37 @@ const bootstrap = async (props: CommonProps) => {
   });
   trackEvent('create-app', { phase: 'neon-project' });
 
+  let projectCreateRequest: ProjectCreateRequest['project'];
   let project;
   let connectionString: string;
   if (neonProject === -1) {
     try {
-      project = await create({
-        ...props,
-        psql: false,
-        setContext: false,
+      // Call the API directly. This code is inspired from the `create` code in
+      // `projects.ts`.
+      projectCreateRequest = {
         name: `${appName}-db`,
+        branch: {},
+      };
+
+      const { data } = await props.apiClient.createProject({
+        project: projectCreateRequest,
       });
+      project = data.project;
+
+      const out = writer(props);
+      out.write(project, { fields: PROJECT_FIELDS, title: 'Project' });
+      out.write(data.connection_uris, {
+        fields: ['connection_uri'],
+        title: 'Connection URIs',
+      });
+      out.end();
+
+      connectionString = data.connection_uris[0].connection_uri;
     } catch (error) {
       throw new Error(
         `An error occurred while creating a new Neon project: ${error}`,
       );
     }
-    connectionString = project.connection_uris[0].connection_uri;
   } else {
     project = allProjects.find((p) => p.id === neonProject);
 

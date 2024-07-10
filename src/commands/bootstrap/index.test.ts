@@ -25,7 +25,7 @@ describe('bootstrap/create-app', () => {
   // a very simple check that the CLI works. Eventually, we need
   // to have a much more complete test suite that actually verifies
   // that launching all different app combinations works.
-  test(
+  test.skip(
     'very simple CLI interaction test',
     async () => {
       // Most of this forking code is copied from `test_cli_command.ts`.

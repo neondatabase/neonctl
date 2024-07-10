@@ -16,7 +16,12 @@ import { psql } from '../utils/psql.js';
 import { updateContextFile } from '../context.js';
 import { getComputeUnits } from '../utils/compute_units.js';
 
-const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
+export const PROJECT_FIELDS = [
+  'id',
+  'name',
+  'region_id',
+  'created_at',
+] as const;
 
 const REGIONS = [
   'aws-us-west-2',
@@ -188,7 +193,7 @@ const list = async (props: CommonProps) => {
   out.end();
 };
 
-export const create = async (
+const create = async (
   props: CommonProps & {
     name?: string;
     regionId?: string;
@@ -242,8 +247,6 @@ export const create = async (
     const psqlArgs = props['--'];
     await psql(connection_uri, psqlArgs);
   }
-
-  return data;
 };
 
 const deleteProject = async (props: CommonProps & IdOrNameProps) => {
