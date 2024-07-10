@@ -678,6 +678,18 @@ ${environmentVariables
     writeFileSync(`${appName}/wrangler.toml`, wranglerToml, 'utf8');
 
     try {
+      try {
+        execSync(
+          getGlobalInstallProgram(finalOptions.packageManager, 'vercel@34.3.0'),
+          {
+            cwd: appName,
+            stdio: 'inherit',
+          },
+        );
+      } catch (error) {
+        throw new Error(`Failed to install the vercel CLI: ${error}.`);
+      }
+
       execSync(
         `${getExecutorProgram(
           finalOptions.packageManager,
