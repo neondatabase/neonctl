@@ -30,13 +30,29 @@ describe('ip-allow', () => {
   });
 
   testCliCommand({
-    name: 'Add IP allow',
+    name: 'Add IP allow - Primary',
     args: [
       'ip-allow',
       'add',
       '127.0.0.1',
       '192.168.10.1-192.168.10.15',
       '--primary-only',
+      '--project-id',
+      'test',
+    ],
+    expected: {
+      snapshot: true,
+    },
+  });
+
+  testCliCommand({
+    name: 'Add IP allow - Protected',
+    args: [
+      'ip-allow',
+      'add',
+      '127.0.0.1',
+      '192.168.10.1-192.168.10.15',
+      '--protected-only',
       '--project-id',
       'test',
     ],
@@ -71,6 +87,7 @@ describe('ip-allow', () => {
 name: test_project
 IP_addresses: []
 primary_branch_only: false
+protected_branches_only: false
 `,
       stderr: `INFO: The IP allowlist has been reset. All databases on project "test_project" are now exposed to the internet`,
     },

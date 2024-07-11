@@ -2,7 +2,7 @@
   "projects": [
     {
       "id": "test-project-123456",
-      "name": "",
+      "name": "test-project-123456",
       "created_at": "2019-01-01T00:00:00.000Z",
       "updated_at": "2019-01-01T00:00:00.000Z"
     }
