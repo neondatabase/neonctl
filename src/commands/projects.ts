@@ -16,7 +16,12 @@ import { psql } from '../utils/psql.js';
 import { updateContextFile } from '../context.js';
 import { getComputeUnits } from '../utils/compute_units.js';
 
-const PROJECT_FIELDS = ['id', 'name', 'region_id', 'created_at'] as const;
+export const PROJECT_FIELDS = [
+  'id',
+  'name',
+  'region_id',
+  'created_at',
+] as const;
 
 const REGIONS = [
   'aws-us-west-2',
