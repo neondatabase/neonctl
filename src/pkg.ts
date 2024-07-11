@@ -1,9 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import packageJson from '../package.json' with { type: 'file' };
 
-export default JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL('./package.json', import.meta.url)),
-    'utf-8',
-  ),
-);
+export default JSON.parse(readFileSync(packageJson, 'utf-8'));
