@@ -84,6 +84,27 @@ function getExecutorProgram(
   }
 }
 
+type EnvironmentVariable = {
+  kind: 'build' | 'runtime';
+  key: string;
+  value: string;
+};
+
+function writeEnvFile({
+  fileName,
+  secrets,
+}: {
+  fileName: string;
+  secrets: Array<EnvironmentVariable>;
+}) {
+  let content = '';
+  for (const secret of secrets) {
+    content += `${secret.key}=${secret.value}\n`;
+  }
+
+  writeFileSync(fileName, content, 'utf8');
+}
+
 const bootstrap = async (props: CommonProps) => {
   const out = writer(props);
 
@@ -460,11 +481,7 @@ const bootstrap = async (props: CommonProps) => {
     connectionString = connectionUrl.toString();
   }
 
-  const environmentVariables: Array<{
-    kind: 'build' | 'runtime';
-    key: string;
-    value: string;
-  }> = [];
+  const environmentVariables: Array<EnvironmentVariable> = [];
 
   if (finalOptions.framework === 'Next.js') {
     let template;
@@ -499,40 +516,33 @@ const bootstrap = async (props: CommonProps) => {
       // Generate AUTH_SECRET using openssl
       const authSecret = execSync('openssl rand -base64 33').toString().trim();
 
-      // Content for the .env.local file
-      const content = `DATABASE_URL=${connectionString}
-AUTH_SECRET=${authSecret}`;
+      environmentVariables.push({
+        key: 'DATABASE_URL',
+        value: connectionString,
+        kind: 'build',
+      });
+      environmentVariables.push({
+        key: 'DATABASE_URL',
+        value: connectionString,
+        kind: 'runtime',
+      });
+      environmentVariables.push({
+        key: 'AUTH_SECRET',
+        value: authSecret,
+        kind: 'build',
+      });
+      environmentVariables.push({
+        key: 'AUTH_SECRET',
+        value: authSecret,
+        kind: 'runtime',
+      });
 
       // Write the content to the .env.local file
-      writeFileSync(`${appName}/.env.local`, content, 'utf8');
-      writeFileSync(`${appName}/.dev.vars`, content, 'utf8'); // cloudflare
-      environmentVariables.push({
-        key: 'DATABASE_URL',
-        value: connectionString,
-        kind: 'build',
-      });
-      environmentVariables.push({
-        key: 'DATABASE_URL',
-        value: connectionString,
-        kind: 'runtime',
-      });
-      environmentVariables.push({
-        key: 'AUTH_SECRET',
-        value: authSecret,
-        kind: 'build',
-      });
-      environmentVariables.push({
-        key: 'AUTH_SECRET',
-        value: authSecret,
-        kind: 'runtime',
+      writeEnvFile({
+        fileName: `${appName}/.env.local`,
+        secrets: environmentVariables.filter((e) => e.kind === 'runtime'),
       });
     } else {
-      // Content for the .env.local file
-      const content = `DATABASE_URL=${connectionString}`;
-
-      // Write the content to the .env.local file
-      writeFileSync(`${appName}/.env.local`, content, 'utf8');
-      writeFileSync(`${appName}/.dev.vars`, content, 'utf8'); // cloudflare
       environmentVariables.push({
         key: 'DATABASE_URL',
         value: connectionString,
@@ -542,6 +552,12 @@ AUTH_SECRET=${authSecret}`;
         key: 'DATABASE_URL',
         value: connectionString,
         kind: 'runtime',
+      });
+
+      // Write the content to the .env.local file
+      writeEnvFile({
+        fileName: `${appName}/.env.local`,
+        secrets: environmentVariables.filter((e) => e.kind === 'runtime'),
       });
     }
 
@@ -598,7 +614,7 @@ AUTH_SECRET=${authSecret}`;
         value: 'cloudflare',
         description: 'We will install the Wrangler CLI globally.',
       },
-      { title: 'Nowhere', value: -1 },
+      { title: 'Skip this step', value: -1 },
     ],
     initial: 0,
   });
@@ -693,4 +709,16 @@ ${environmentVariables
   }
 
   trackEvent('create-app', { phase: 'success-finish' });
+
+  if (finalOptions.framework === 'Next.js') {
+    log.info(
+      `
+
+You can now run:
+
+  cd ${appName} && ${finalOptions.packageManager} run dev
+
+to start the app locally.`,
+    );
+  }
 };
