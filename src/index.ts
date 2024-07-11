@@ -29,11 +29,19 @@ import { showHelp } from './help.js';
 import { currentContextFile, enrichFromContext } from './context.js';
 
 const NO_SUBCOMMANDS_VERBS = [
+  // aliases
   'auth',
   'me',
+
+  // aliases
   'cs',
   'connection-string',
+
   'set-context',
+
+  // aliases
+  'create-app',
+  'bootstrap',
 ];
 
 let builder = yargs(hideBin(process.argv));
