@@ -10,7 +10,7 @@ const IP_ALLOW_FIELDS = [
   'id',
   'name',
   'IP_addresses',
-  'primary_branch_only',
+  'protected_branches_only',
 ] as const;
 
 export const command = 'ip-allow';
@@ -46,12 +46,22 @@ export const builder = (argv: yargs.Argv) => {
             array: true,
           })
           .options({
+            'protected-only': {
+              describe:
+                projectUpdateRequest[
+                  'project.settings.allowed_ips.protected_branches_only'
+                ].description,
+              type: 'boolean',
+            },
+          })
+          .options({
             'primary-only': {
               describe:
                 projectUpdateRequest[
                   'project.settings.allowed_ips.primary_branch_only'
                 ].description,
               type: 'boolean',
+              deprecated: 'See --protected-only',
             },
           }),
       async (args) => {
@@ -104,6 +114,7 @@ const add = async (
     ProjectScopeProps & {
       ips: string[];
       primaryOnly?: boolean;
+      protectedOnly?: boolean;
     },
 ) => {
   if (props.ips.length <= 0) {
@@ -120,6 +131,10 @@ const add = async (
       ips: [...new Set(props.ips.concat(existingAllowedIps?.ips ?? []))],
       primary_branch_only:
         props.primaryOnly ?? existingAllowedIps?.primary_branch_only ?? false,
+      protected_branches_only:
+        props.protectedOnly ??
+        existingAllowedIps?.protected_branches_only ??
+        false,
     },
   };
 
@@ -151,6 +166,8 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
       ips:
         existingAllowedIps?.ips?.filter((ip) => !props.ips.includes(ip)) ?? [],
       primary_branch_only: existingAllowedIps?.primary_branch_only ?? false,
+      protected_branches_only:
+        existingAllowedIps?.protected_branches_only ?? false,
     },
   };
 
@@ -172,6 +189,7 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
     allowed_ips: {
       ips: props.ips,
       primary_branch_only: false,
+      protected_branches_only: false,
     },
   };
 
@@ -198,5 +216,7 @@ const parse = (project: Project) => {
     IP_addresses: ips,
     primary_branch_only:
       project.settings?.allowed_ips?.primary_branch_only ?? false,
+    protected_branches_only:
+      project.settings?.allowed_ips?.protected_branches_only ?? false,
   };
 };
