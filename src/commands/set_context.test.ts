@@ -38,7 +38,7 @@ describe('set_context', () => {
 
     testCliCommand({
       name: 'get project id overrides context set project',
-      before: async () => {
+      before: () => {
         writeFileSync(
           overrideContextFile,
           JSON.stringify({
@@ -46,7 +46,7 @@ describe('set_context', () => {
           }),
         );
       },
-      after: async () => {
+      after: () => {
         rmSync(overrideContextFile);
       },
       args: [
@@ -63,7 +63,7 @@ describe('set_context', () => {
 
     testCliCommand({
       name: 'set the branchId and projectId is from context',
-      before: async () => {
+      before: () => {
         writeFileSync(
           overrideContextFile,
           JSON.stringify({
@@ -72,7 +72,7 @@ describe('set_context', () => {
           }),
         );
       },
-      after: async () => {
+      after: () => {
         rmSync(overrideContextFile);
       },
       args: ['databases', 'list', '--context-file', overrideContextFile],
@@ -83,7 +83,7 @@ describe('set_context', () => {
 
     testCliCommand({
       name: 'should not set branchId from context for non-context projectId',
-      before: async () => {
+      before: () => {
         writeFileSync(
           overrideContextFile,
           JSON.stringify({
@@ -92,7 +92,7 @@ describe('set_context', () => {
           }),
         );
       },
-      after: async () => {
+      after: () => {
         rmSync(overrideContextFile);
       },
       args: [

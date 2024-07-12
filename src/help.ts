@@ -37,7 +37,7 @@ const formatHelp = (help: string) => {
       width: 0,
     });
     commandsBlock.forEach((line) => {
-      if (line.match(/^\s{3,}/)) {
+      if (/^\s{3,}/.exec(line)) {
         ui.div(
           {
             text: '',

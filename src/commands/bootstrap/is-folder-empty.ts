@@ -38,7 +38,7 @@ export function isFolderEmpty(
     (file) =>
       !validFiles.has(file) &&
       // Support IntelliJ IDEA-based editors
-      !/\.iml$/.test(file),
+      !file.endsWith('.iml'),
   );
 
   if (conflicts.length > 0) {

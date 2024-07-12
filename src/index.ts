@@ -182,19 +182,19 @@ builder = builder
       log.error(msg || err?.message);
     }
     await closeAnalytics();
-    err?.stack && log.debug('Stack: %s', err.stack);
+    if (err?.stack) {
+      log.debug('Stack: %s', err.stack);
+    }
     process.exit(1);
   });
 
-(async () => {
-  try {
-    const args = await builder.argv;
-    if (args._.length === 0 || args.help) {
-      await showHelp(builder);
-      process.exit(0);
-    }
-    await closeAnalytics();
-  } catch {
-    // noop
+try {
+  const args = await builder.argv;
+  if (args._.length === 0 || args.help) {
+    await showHelp(builder);
+    process.exit(0);
   }
-})();
+  await closeAnalytics();
+} catch {
+  // noop
+}

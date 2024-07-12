@@ -12,7 +12,7 @@ export const builder = (argv: yargs.Argv) =>
     },
   });
 
-export const handler = async (props: BranchScopeProps) => {
+export const handler = (props: BranchScopeProps) => {
   const context: Context = {
     projectId: props.projectId,
   };
