@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`set_context > should set the context > get project id overrides context set project > test 1`] = `
+exports[`set_context > should set the context > get project id overrides context set project 1`] = `
 "id: project-id-123
 name: project name 123
 created_at: 2019-01-01T00:00:00Z
@@ -12,7 +12,7 @@ settings:
 "
 `;
 
-exports[`set_context > should set the context > list branches selecting project from the context > test 1`] = `
+exports[`set_context > should set the context > list branches selecting project from the context 1`] = `
 "- id: br-main-branch-123456
   name: main
   default: true
@@ -41,7 +41,7 @@ exports[`set_context > should set the context > list branches selecting project 
 "
 `;
 
-exports[`set_context > should set the context > set the branchId and projectId is from context > test 1`] = `
+exports[`set_context > should set the context > set the branchId and projectId is from context 1`] = `
 "- name: db1
   owner_name: user1
 - name: db2
@@ -51,4 +51,10 @@ exports[`set_context > should set the context > set the branchId and projectId i
 "
 `;
 
-exports[`set_context > should set the context > should not set branchId from context for non-context projectId > test 1`] = `""`;
+exports[`set_context > should set the context > set-context 1`] = `""`;
+
+exports[`set_context > should set the context > set-context 2`] = `
+"{
+  "projectId": "test"
+}"
+`;

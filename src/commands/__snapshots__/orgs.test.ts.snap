@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`orgs > list > test 1`] = `
+exports[`orgs > list 1`] = `
 "- name: Organization 1
   id: 1
 - name: Organization 2

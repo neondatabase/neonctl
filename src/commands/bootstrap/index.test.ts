@@ -1,33 +1,19 @@
-import { test, expect, describe, beforeAll, afterAll } from 'vitest';
-import { runMockServer } from '../../test_utils/mock_server.js';
-import { Server } from 'node:http';
+import { expect, describe } from 'vitest';
 import { fork } from 'node:child_process';
 import { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { log } from '../../log';
+import { test } from '../../test_utils/fixtures';
 
 describe('bootstrap/create-app', () => {
-  let server: Server;
-  const mockDir = 'main';
-  beforeAll(async () => {
-    server = await runMockServer(mockDir);
-  });
-
-  afterAll(async () => {
-    return new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
-    });
-  });
-
   // We create an app without a schema and without deploying it, as
   // a very simple check that the CLI works. Eventually, we need
   // to have a much more complete test suite that actually verifies
   // that launching all different app combinations works.
   test.skip(
     'very simple CLI interaction test',
-    async () => {
+    async ({ runMockServer }) => {
+      const server = await runMockServer('main');
       // Most of this forking code is copied from `test_cli_command.ts`.
       const cp = fork(
         join(process.cwd(), './dist/index.js'),

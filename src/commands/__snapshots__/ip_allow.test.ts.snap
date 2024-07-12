@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`ip-allow > Add IP allow - Primary > test 1`] = `
+exports[`ip-allow > Add IP allow - Primary 1`] = `
 "id: test
 name: test_project
 IP_addresses:
@@ -12,7 +12,7 @@ protected_branches_only: false
 "
 `;
 
-exports[`ip-allow > Add IP allow - Protected > test 1`] = `
+exports[`ip-allow > Add IP allow - Protected 1`] = `
 "id: test
 name: test_project
 IP_addresses:
@@ -24,7 +24,7 @@ protected_branches_only: true
 "
 `;
 
-exports[`ip-allow > Remove IP allow > test 1`] = `
+exports[`ip-allow > Remove IP allow 1`] = `
 "id: test
 name: test_project
 IP_addresses: []
@@ -33,16 +33,7 @@ protected_branches_only: false
 "
 `;
 
-exports[`ip-allow > Reset IP allow > test 1`] = `
-"id: test
-name: test_project
-IP_addresses: []
-primary_branch_only: false
-protected_branches_only: false
-"
-`;
-
-exports[`ip-allow > Reset IP allow to new list > test 1`] = `
+exports[`ip-allow > Reset IP allow to new list 1`] = `
 "id: test
 name: test_project
 IP_addresses:
@@ -52,7 +43,7 @@ protected_branches_only: false
 "
 `;
 
-exports[`ip-allow > list IP Allow with single-project > test 1`] = `
+exports[`ip-allow > list IP Allow with single-project *mockDir:single_project* 1`] = `
 "id: test-project-123456
 name: test-project-123456
 IP_addresses:
@@ -62,7 +53,7 @@ protected_branches_only: false
 "
 `;
 
-exports[`ip-allow > list IP allow > test 1`] = `
+exports[`ip-allow > list IP allow 1`] = `
 "id: test
 name: test_project
 IP_addresses:

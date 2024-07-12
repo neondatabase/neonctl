@@ -1,19 +1,21 @@
 import { describe } from 'vitest';
 
-import { testCliCommand } from '../test_utils/test_cli_command.js';
+import { test } from '../test_utils/fixtures';
 
 describe('roles', () => {
-  testCliCommand({
-    name: 'list',
-    args: ['roles', 'list', '--project-id', 'test', '--branch', 'test_branch'],
-    expected: {
-      snapshot: true,
-    },
+  test('list', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'roles',
+      'list',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
   });
 
-  testCliCommand({
-    name: 'create',
-    args: [
+  test('create', async ({ testCliCommand }) => {
+    await testCliCommand([
       'roles',
       'create',
       '--project-id',
@@ -22,15 +24,11 @@ describe('roles', () => {
       'test_branch',
       '--name',
       'test_role',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'delete',
-    args: [
+  test('delete', async ({ testCliCommand }) => {
+    await testCliCommand([
       'roles',
       'delete',
       'test_role',
@@ -38,9 +36,6 @@ describe('roles', () => {
       'test',
       '--branch',
       'test_branch',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 });

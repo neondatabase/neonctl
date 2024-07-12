@@ -1,38 +1,29 @@
 import { describe } from 'vitest';
 
-import { testCliCommand } from '../test_utils/test_cli_command.js';
+import { test } from '../test_utils/fixtures';
 
 describe('branches', () => {
   /* list */
 
-  testCliCommand({
-    name: 'list',
-    args: ['branches', 'list', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('list', async ({ testCliCommand }) => {
+    await testCliCommand(['branches', 'list', '--project-id', 'test']);
   });
 
   /* create */
 
-  testCliCommand({
-    name: 'create by default with r/w endpoint',
-    args: [
+  test('create by default with r/w endpoint', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
       'test',
       '--name',
       'test_branch',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create branch and connect with psql',
-    args: [
+  test('create branch and connect with psql', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -40,15 +31,13 @@ describe('branches', () => {
       '--name',
       'test_branch',
       '--psql',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create branch and connect with psql and psql args',
-    args: [
+  test('create branch and connect with psql and psql args', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -59,15 +48,11 @@ describe('branches', () => {
       '--',
       '-c',
       'SELECT 1',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create with readonly endpoint',
-    args: [
+  test('create with readonly endpoint', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -76,15 +61,11 @@ describe('branches', () => {
       'test_branch',
       '--type',
       'read_only',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create without endpoint',
-    args: [
+  test('create without endpoint', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -92,15 +73,11 @@ describe('branches', () => {
       '--name',
       'test_branch',
       '--no-compute',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create with parent by name',
-    args: [
+  test('create with parent by name', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -109,15 +86,11 @@ describe('branches', () => {
       'test_branch_with_parent_name',
       '--parent',
       'main',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create with parent by lsn',
-    args: [
+  test('create with parent by lsn', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -126,15 +99,11 @@ describe('branches', () => {
       'test_branch_with_parent_lsn',
       '--parent',
       '0/123ABC',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create with parent by timestamp',
-    args: [
+  test('create with parent by timestamp', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -143,15 +112,11 @@ describe('branches', () => {
       'test_branch_with_parent_timestamp',
       '--parent',
       '2021-01-01T00:00:00.000Z',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create with suspend timeout',
-    args: [
+  test('create with suspend timeout', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -160,15 +125,11 @@ describe('branches', () => {
       'test_branch_with_suspend_timeout',
       '--suspend-timeout',
       '60',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create with fixed size CU',
-    args: [
+  test('create with fixed size CU', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -177,15 +138,11 @@ describe('branches', () => {
       'test_branch_with_fixed_cu',
       '--cu',
       '2',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create with autoscaled CU',
-    args: [
+  test('create with autoscaled CU', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'create',
       '--project-id',
@@ -194,130 +151,108 @@ describe('branches', () => {
       'test_branch_with_autoscaling',
       '--cu',
       '0.5-2',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
   /* delete */
 
-  testCliCommand({
-    name: 'delete by id',
-    args: [
+  test('delete by id', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'delete',
       'br-sunny-branch-123456',
       '--project-id',
       'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
   /* rename */
 
-  testCliCommand({
-    name: 'rename',
-    args: [
+  test('rename', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'rename',
       'test_branch',
       'new_test_branch',
       '--project-id',
       'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
   /* set primary */
 
-  testCliCommand({
-    name: 'set primary by id',
-    args: [
+  test('set primary by id', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'set-primary',
       'br-sunny-branch-123456',
       '--project-id',
       'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
   /* set default */
 
-  testCliCommand({
-    name: 'set default by id',
-    args: [
+  test('set default by id', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'set-default',
       'br-sunny-branch-123456',
       '--project-id',
       'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
   /* get */
 
-  testCliCommand({
-    name: 'get by id',
-    args: ['branches', 'get', 'br-sunny-branch-123456', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('get by id', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'get',
+      'br-sunny-branch-123456',
+      '--project-id',
+      'test',
+    ]);
   });
 
-  testCliCommand({
-    name: 'get by id',
-    args: [
+  test('get by id', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'get',
       'br-cloudy-branch-12345678',
       '--project-id',
       'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'get by name',
-    args: ['branches', 'get', 'test_branch', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('get by name', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'get',
+      'test_branch',
+      '--project-id',
+      'test',
+    ]);
   });
 
-  testCliCommand({
-    name: 'get by name with numeric name',
-    args: ['branches', 'get', '123', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('get by name with numeric name', async ({ testCliCommand }) => {
+    await testCliCommand(['branches', 'get', '123', '--project-id', 'test']);
   });
 
   /* add compute */
 
-  testCliCommand({
-    name: 'add compute',
-    args: ['branches', 'add-compute', 'test_branch', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('add compute', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'add-compute',
+      'test_branch',
+      '--project-id',
+      'test',
+    ]);
   });
 
-  testCliCommand({
-    name: 'add compute with fixed size CU',
-    args: [
+  test('add compute with fixed size CU', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'add-compute',
       'test_branch_with_fixed_cu',
@@ -325,15 +260,11 @@ describe('branches', () => {
       'test',
       '--cu',
       '2',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'add compute with autoscaled CU',
-    args: [
+  test('add compute with autoscaled CU', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'add-compute',
       'test_branch_with_autoscaling',
@@ -341,34 +272,28 @@ describe('branches', () => {
       'test',
       '--cu',
       '0.5-2',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
   /* reset */
 
-  testCliCommand({
-    name: 'reset branch to parent',
-    args: [
+  test('reset branch to parent', async ({ testCliCommand }) => {
+    await testCliCommand([
       'branches',
       'reset',
       'test_branch',
       '--project-id',
       'test',
       '--parent',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
   /* restore */
 
-  testCliCommand({
-    name: 'restore branch to lsn',
-    args: [
+  test('restore branch to lsn *mockDir:restore*', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'branches',
       'restore',
       'br-self-tolsn-123456',
@@ -377,60 +302,52 @@ describe('branches', () => {
       'test',
       '--preserve-under-name',
       'backup',
-    ],
-    mockDir: 'restore',
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'restore to parent branch timestamp by name',
-    args: [
+  test('restore to parent branch timestamp by name *mockDir:restore*', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'branches',
       'restore',
       'parent-tots',
       '^parent@2021-01-01T00:00:00.000Z',
       '--project-id',
       'test',
-    ],
-    mockDir: 'restore',
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'restore to another branch head',
-    args: [
+  test('restore to another branch head *mockDir:restore*', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'branches',
       'restore',
       'br-another-branch-123456',
       'br-any-branch-123456',
       '--project-id',
       'test',
-    ],
-    mockDir: 'restore',
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'restore with unexisted branch outputs error',
-    args: [
-      'branches',
-      'restore',
-      'unexisting-branch',
-      '^parent',
-      '--project-id',
-      'test',
-    ],
-    mockDir: 'restore',
-    expected: {
-      code: 1,
-      stderr: `ERROR: Branch unexisting-branch not found.
+  test('restore with unexisted branch outputs error *mockDir:restore*', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'restore',
+        'unexisting-branch',
+        '^parent',
+        '--project-id',
+        'test',
+      ],
+      {
+        code: 1,
+        stderr: `ERROR: Branch unexisting-branch not found.
                Available branches: self-tolsn-123456, any-branch, parent-tots, another-branch`,
-    },
+      },
+    );
   });
 });

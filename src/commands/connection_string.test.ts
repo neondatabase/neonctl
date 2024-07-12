@@ -1,10 +1,9 @@
 import { describe, expect } from 'vitest';
-import { testCliCommand } from '../test_utils/test_cli_command';
+import { test } from '../test_utils/fixtures';
 
 describe('connection_string', () => {
-  testCliCommand({
-    name: 'connection_string',
-    args: [
+  test('connection_string', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -13,15 +12,11 @@ describe('connection_string', () => {
       'test_db',
       '--role-name',
       'test_role',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string branch id',
-    args: [
+  test('connection_string branch id', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'br-sunny-branch-123456',
       '--project-id',
@@ -30,15 +25,11 @@ describe('connection_string', () => {
       'test_db',
       '--role-name',
       'test_role',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string branch id 8 digits',
-    args: [
+  test('connection_string branch id 8 digits', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'br-cloudy-branch-12345678',
       '--project-id',
@@ -47,15 +38,11 @@ describe('connection_string', () => {
       'test_db',
       '--role-name',
       'test_role',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string pooled',
-    args: [
+  test('connection_string pooled', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -65,15 +52,11 @@ describe('connection_string', () => {
       '--role-name',
       'test_role',
       '--pooled',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string prisma',
-    args: [
+  test('connection_string prisma', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -83,15 +66,11 @@ describe('connection_string', () => {
       '--role-name',
       'test_role',
       '--prisma',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string prisma pooled',
-    args: [
+  test('connection_string prisma pooled', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -102,15 +81,13 @@ describe('connection_string', () => {
       'test_role',
       '--prisma',
       '--pooled',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string prisma pooled extended',
-    args: [
+  test('connection_string prisma pooled extended', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -122,24 +99,17 @@ describe('connection_string', () => {
       '--prisma',
       '--pooled',
       '--extended',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string without any args should pass',
-    args: ['connection-string'],
-    mockDir: 'single_project',
-    expected: {
-      snapshot: true,
-    },
+  test('connection_string without any args should pass *mockDir:single_project*', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(['connection-string']);
   });
 
-  testCliCommand({
-    name: 'connection_string with psql',
-    args: [
+  test('connection_string with psql', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -149,15 +119,13 @@ describe('connection_string', () => {
       '--role-name',
       'test_role',
       '--psql',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string with psql and psql args',
-    args: [
+  test('connection_string with psql and psql args', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -170,15 +138,11 @@ describe('connection_string', () => {
       '--',
       '-c',
       'SELECT 1',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string without ssl',
-    args: [
+  test('connection_string without ssl', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -189,15 +153,11 @@ describe('connection_string', () => {
       'test_role',
       '--ssl',
       'omit',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string with ssl verify full',
-    args: [
+  test('connection_string with ssl verify full', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch',
       '--project-id',
@@ -208,15 +168,11 @@ describe('connection_string', () => {
       'test_role',
       '--ssl',
       'verify-full',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string with lsn',
-    args: [
+  test('connection_string with lsn', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch@0/123456',
       '--project-id',
@@ -225,15 +181,11 @@ describe('connection_string', () => {
       'test_db',
       '--role-name',
       'test_role',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string with timestamp',
-    args: [
+  test('connection_string with timestamp', async ({ testCliCommand }) => {
+    await testCliCommand([
       'connection-string',
       'test_branch@2021-01-01T00:00:00Z',
       '--project-id',
@@ -242,27 +194,27 @@ describe('connection_string', () => {
       'test_db',
       '--role-name',
       'test_role',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'connection_string fails for non-existing database',
-    args: [
-      'connection-string',
-      'test_branch',
-      '--project-id',
-      'test',
-      '--database-name',
-      'non_existing_db',
-      '--role-name',
-      'test_role',
-    ],
-    expected: {
-      code: 1,
-      stderr: expect.stringMatching(/Database not found/),
-    },
+  test('connection_string fails for non-existing database', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'connection-string',
+        'test_branch',
+        '--project-id',
+        'test',
+        '--database-name',
+        'non_existing_db',
+        '--role-name',
+        'test_role',
+      ],
+      {
+        code: 1,
+        stderr: expect.stringMatching(/Database not found/),
+      },
+    );
   });
 });

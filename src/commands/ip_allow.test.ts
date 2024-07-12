@@ -1,37 +1,27 @@
 import { describe } from 'vitest';
-import { testCliCommand } from '../test_utils/test_cli_command.js';
+import { test } from '../test_utils/fixtures';
 
 describe('ip-allow', () => {
-  testCliCommand({
-    name: 'list IP allow',
-    args: ['ip-allow', 'list', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('list IP allow', async ({ testCliCommand }) => {
+    await testCliCommand(['ip-allow', 'list', '--project-id', 'test']);
   });
 
-  testCliCommand({
-    name: 'list IP Allow with single-project',
-    args: ['ip-allow', 'list'],
-    mockDir: 'single_project',
-    expected: {
-      snapshot: true,
-    },
+  test('list IP Allow with single-project *mockDir:single_project*', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(['ip-allow', 'list']);
   });
 
-  testCliCommand({
-    name: 'Add IP allow - Error',
-    args: ['ip-allow', 'add', '--projectId', 'test'],
-    expected: {
+  test('Add IP allow - Error', async ({ testCliCommand }) => {
+    await testCliCommand(['ip-allow', 'add', '--projectId', 'test'], {
       code: 1,
       stderr: `ERROR: Enter individual IP addresses, define ranges with a dash, or use CIDR notation for more flexibility.
-       Example: neonctl ip-allow add 192.168.1.1, 192.168.1.20-192.168.1.50, 192.168.1.0/24 --project-id <id>`,
-    },
+         Example: neonctl ip-allow add 192.168.1.1, 192.168.1.20-192.168.1.50, 192.168.1.0/24 --project-id <id>`,
+    });
   });
 
-  testCliCommand({
-    name: 'Add IP allow - Primary',
-    args: [
+  test('Add IP allow - Primary', async ({ testCliCommand }) => {
+    await testCliCommand([
       'ip-allow',
       'add',
       '127.0.0.1',
@@ -39,15 +29,11 @@ describe('ip-allow', () => {
       '--primary-only',
       '--project-id',
       'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'Add IP allow - Protected',
-    args: [
+  test('Add IP allow - Protected', async ({ testCliCommand }) => {
+    await testCliCommand([
       'ip-allow',
       'add',
       '127.0.0.1',
@@ -55,49 +41,39 @@ describe('ip-allow', () => {
       '--protected-only',
       '--project-id',
       'test',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'Remove IP allow - Error',
-    args: ['ip-allow', 'remove', '--project-id', 'test'],
-    expected: {
+  test('Remove IP allow - Error', async ({ testCliCommand }) => {
+    await testCliCommand(['ip-allow', 'remove', '--project-id', 'test'], {
       code: 1,
       stderr: `ERROR: Remove individual IP addresses and ranges. Example: neonctl ip-allow remove 192.168.1.1 --project-id <id>`,
-    },
+    });
   });
 
-  testCliCommand({
-    name: 'Remove IP allow',
-    args: ['ip-allow', 'remove', '192.168.1.1', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('Remove IP allow', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'ip-allow',
+      'remove',
+      '192.168.1.1',
+      '--project-id',
+      'test',
+    ]);
   });
 
-  testCliCommand({
-    name: 'Reset IP allow',
-    args: ['ip-allow', 'reset', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-      stdout: `id: test
-name: test_project
-IP_addresses: []
-primary_branch_only: false
-protected_branches_only: false
-`,
+  test('Reset IP allow', async ({ testCliCommand }) => {
+    await testCliCommand(['ip-allow', 'reset', '--project-id', 'test'], {
       stderr: `INFO: The IP allowlist has been reset. All databases on project "test_project" are now exposed to the internet`,
-    },
+    });
   });
 
-  testCliCommand({
-    name: 'Reset IP allow to new list',
-    args: ['ip-allow', 'reset', '192.168.2.2', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('Reset IP allow to new list', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'ip-allow',
+      'reset',
+      '192.168.2.2',
+      '--project-id',
+      'test',
+    ]);
   });
 });

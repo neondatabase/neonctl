@@ -1,31 +1,21 @@
-import { afterAll, describe, expect, test } from 'vitest';
+import { describe, expect } from 'vitest';
 import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { testCliCommand } from '../test_utils/test_cli_command.js';
 
-const CONTEXT_FILE = join(tmpdir(), `neon_project_create_ctx_${Date.now()}`);
+import { test } from '../test_utils/fixtures';
 
 describe('projects', () => {
-  testCliCommand({
-    name: 'list',
-    args: ['projects', 'list'],
-    expected: {
-      snapshot: true,
-    },
+  test('list', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'list']);
   });
 
-  testCliCommand({
-    name: 'create',
-    args: ['projects', 'create', '--name', 'test_project'],
-    expected: {
-      snapshot: true,
-    },
+  test('create', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'create', '--name', 'test_project']);
   });
 
-  testCliCommand({
-    name: 'create with database and role',
-    args: [
+  test('create with database and role', async ({ testCliCommand }) => {
+    await testCliCommand([
       'projects',
       'create',
       '--name',
@@ -34,23 +24,23 @@ describe('projects', () => {
       'test_db',
       '--role',
       'test_role',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create and connect with psql',
-    args: ['projects', 'create', '--name', 'test_project', '--psql'],
-    expected: {
-      snapshot: true,
-    },
+  test('create and connect with psql', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'projects',
+      'create',
+      '--name',
+      'test_project',
+      '--psql',
+    ]);
   });
 
-  testCliCommand({
-    name: 'create and connect with psql and psql args',
-    args: [
+  test('create and connect with psql and psql args', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'projects',
       'create',
       '--name',
@@ -59,15 +49,17 @@ describe('projects', () => {
       '--',
       '-c',
       'SELECT 1',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create project with setting the context',
-    args: [
+  test('create project with setting the context', async ({
+    testCliCommand,
+  }) => {
+    const CONTEXT_FILE = join(
+      tmpdir(),
+      `neon_project_create_ctx_${Date.now()}`,
+    );
+    await testCliCommand([
       'projects',
       'create',
       '--name',
@@ -75,69 +67,53 @@ describe('projects', () => {
       '--context-file',
       CONTEXT_FILE,
       '--set-context',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
+    expect(readFileSync(CONTEXT_FILE, 'utf-8')).toContain('new-project-123456');
+    rmSync(CONTEXT_FILE);
   });
 
-  testCliCommand({
-    name: 'create project with default fixed size CU',
-    args: [
+  test('create project with default fixed size CU', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'projects',
       'create',
       '--name',
       'test_project_with_fixed_cu',
       '--cu',
       '2',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create project with default autoscaled CU',
-    args: [
+  test('create project with default autoscaled CU', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'projects',
       'create',
       '--name',
       'test_project_with_autoscaling',
       '--cu',
       '0.5-2',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  afterAll(() => {
-    rmSync(CONTEXT_FILE);
+  test('delete', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'delete', 'test']);
   });
 
-  test('context file should exist and contain the project id', () => {
-    expect(readFileSync(CONTEXT_FILE, 'utf-8')).toContain('new-project-123456');
+  test('update name', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'projects',
+      'update',
+      'test',
+      '--name',
+      'test_project_new_name',
+    ]);
   });
 
-  testCliCommand({
-    name: 'delete',
-    args: ['projects', 'delete', 'test'],
-    expected: {
-      snapshot: true,
-    },
-  });
-
-  testCliCommand({
-    name: 'update name',
-    args: ['projects', 'update', 'test', '--name', 'test_project_new_name'],
-    expected: {
-      snapshot: true,
-    },
-  });
-
-  testCliCommand({
-    name: 'update ip allow',
-    args: [
+  test('update ip allow', async ({ testCliCommand }) => {
+    await testCliCommand([
       'projects',
       'update',
       'test',
@@ -145,55 +121,48 @@ describe('projects', () => {
       '127.0.0.1',
       '192.168.1.2/22',
       '--ip-primary-only',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'update ip allow primary only flag',
-    args: ['projects', 'update', 'test', '--ip-primary-only', 'false'],
-    expected: {
-      snapshot: true,
-    },
+  test('update ip allow primary only flag', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'projects',
+      'update',
+      'test',
+      '--ip-primary-only',
+      'false',
+    ]);
   });
 
-  testCliCommand({
-    name: 'update ip allow remove',
-    args: ['projects', 'update', 'test', '--ip-allow'],
-    expected: {
-      snapshot: true,
-    },
+  test('update ip allow remove', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'update', 'test', '--ip-allow']);
   });
 
-  testCliCommand({
-    name: 'update project with default fixed size CU',
-    args: ['projects', 'update', 'test_project_with_fixed_cu', '--cu', '2'],
-    expected: {
-      snapshot: true,
-    },
+  test('update project with default fixed size CU', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
+      'projects',
+      'update',
+      'test_project_with_fixed_cu',
+      '--cu',
+      '2',
+    ]);
   });
 
-  testCliCommand({
-    name: 'update project with default autoscaled CU',
-    args: [
+  test('update project with default autoscaled CU', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand([
       'projects',
       'update',
       'test_project_with_autoscaling',
       '--cu',
       '0.5-2',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'get',
-    args: ['projects', 'get', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('get', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'get', 'test']);
   });
 });

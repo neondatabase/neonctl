@@ -1,13 +1,11 @@
 import { describe, expect } from 'vitest';
 
-import { testCliCommand } from '../test_utils/test_cli_command.js';
+import { test } from '../test_utils/fixtures';
 
 describe('help', () => {
-  testCliCommand({
-    name: 'without args',
-    args: [],
-    expected: {
+  test('without args', async ({ testCliCommand }) => {
+    await testCliCommand([], {
       stderr: expect.stringContaining(`neonctl <command> [options]`),
-    },
+    });
   });
 });
