@@ -11,13 +11,13 @@ import { runMockServer } from './mock_server.js';
 export type TestCliCommandOptions = {
   name: string;
   args: string[];
-  before?: () => Promise<void>;
-  after?: () => Promise<void>;
+  before?: () => void | Promise<void>;
+  after?: () => void | Promise<void>;
   mockDir?: string;
   expected?: {
     snapshot?: true;
-    stdout?: string | ReturnType<typeof expect.stringMatching>;
-    stderr?: string | ReturnType<typeof expect.stringMatching>;
+    stdout?: string;
+    stderr?: string;
     code?: number;
   };
 };
@@ -75,11 +75,11 @@ export const testCliCommand = ({
       );
 
       return new Promise<void>((resolve, reject) => {
-        cp.stdout?.on('data', (data) => {
+        cp.stdout?.on('data', (data: Buffer) => {
           output += data.toString();
         });
 
-        cp.stderr?.on('data', (data) => {
+        cp.stderr?.on('data', (data: Buffer) => {
           error += data.toString();
           log.error(data.toString());
         });

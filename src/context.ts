@@ -23,7 +23,7 @@ export const currentContextFile = () => {
       try {
         accessSync(resolve(currentDir, file));
         return wrapWithContextFile(currentDir);
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
@@ -36,7 +36,7 @@ export const currentContextFile = () => {
 export const readContextFile = (file: string): Context => {
   try {
     return JSON.parse(readFileSync(file, 'utf-8'));
-  } catch (e) {
+  } catch {
     return {};
   }
 };
