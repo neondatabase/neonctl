@@ -712,13 +712,13 @@ ${environmentVariables
 
   if (finalOptions.framework === 'Next.js') {
     log.info(
-      `
+      chalk.green(`
 
 You can now run:
 
   cd ${appName} && ${finalOptions.packageManager} run dev
 
-to start the app locally.`,
+to start the app locally.`),
     );
   }
 };
