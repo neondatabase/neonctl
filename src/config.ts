@@ -12,7 +12,7 @@ export const defaultDir = join(
   'neonctl',
 );
 
-export const ensureConfigDir = async ({
+export const ensureConfigDir = ({
   'config-dir': configDir,
   'force-auth': forceAuth,
 }: yargs.Arguments<{ 'config-dir': string }>) => {

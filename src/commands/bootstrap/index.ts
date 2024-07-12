@@ -652,7 +652,7 @@ const bootstrap = async (props: CommonProps) => {
         cwd: appName,
         stdio: 'ignore',
       });
-    } catch (error) {
+    } catch {
       try {
         execSync(
           `${finalOptions.packageManager} install -g @cloudflare/wrangler`,

@@ -22,12 +22,12 @@ export type PointInTimeBranch = {
   branch: string;
 } & PointInTime;
 
-export interface PointInTimeProps {
+export type PointInTimeProps = {
   targetBranchId: string;
   pointInTime: string;
   projectId: string;
   api: Api<unknown>;
-}
+};
 
 export class PointInTimeParseError extends Error {
   constructor(message: string) {
