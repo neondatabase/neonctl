@@ -1,34 +1,66 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rmSync, writeFileSync } from 'node:fs';
-import { afterAll, describe } from 'vitest';
-import { testCliCommand } from '../test_utils/test_cli_command';
+import { rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { describe, expect } from 'vitest';
+
+import { test as originalTest } from '../test_utils/fixtures';
 
 const CONTEXT_FILE = join(tmpdir(), `neon_${Date.now()}`);
 
-describe('set_context', () => {
-  afterAll(() => {
-    rmSync(CONTEXT_FILE);
-  });
+const test = originalTest.extend<{
+  cleanupFile: (name: string) => void;
+  writeFile: (name: string, content: unknown) => void;
+  readFile: (name: string) => string;
+}>({
+  // eslint-disable-next-line no-empty-pattern
+  cleanupFile: async ({}, use) => {
+    let writtenFilename: string | undefined;
+    await use((name) => (writtenFilename = name));
+    if (writtenFilename) {
+      rmSync(writtenFilename);
+    }
+  },
+  writeFile: async ({ cleanupFile }, use) => {
+    await use((name, content) => {
+      writeFileSync(name, JSON.stringify(content));
+      cleanupFile(name);
+    });
+  },
+  readFile: async ({ cleanupFile }, use) => {
+    await use((name) => {
+      const content = readFileSync(name, 'utf-8');
+      cleanupFile(name);
+      return content;
+    });
+  },
+});
 
+describe('set_context', () => {
   describe('should set the context', () => {
-    testCliCommand({
-      name: 'set-context',
-      args: [
+    test('set-context', async ({ testCliCommand, readFile }) => {
+      await testCliCommand([
         'set-context',
         '--project-id',
         'test',
         '--context-file',
         CONTEXT_FILE,
-      ],
+      ]);
+      expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
     });
 
-    testCliCommand({
-      name: 'list branches selecting project from the context',
-      args: ['branches', 'list', '--context-file', CONTEXT_FILE],
-      expected: {
-        snapshot: true,
-      },
+    test('list branches selecting project from the context', async ({
+      testCliCommand,
+      writeFile,
+    }) => {
+      writeFile(CONTEXT_FILE, {
+        projectId: 'test',
+      });
+      await testCliCommand([
+        'branches',
+        'list',
+        '--context-file',
+        CONTEXT_FILE,
+      ]);
     });
 
     const overrideContextFile = join(
@@ -36,78 +68,60 @@ describe('set_context', () => {
       `neon_override_ctx_${Date.now()}`,
     );
 
-    testCliCommand({
-      name: 'get project id overrides context set project',
-      before: () => {
-        writeFileSync(
-          overrideContextFile,
-          JSON.stringify({
-            projectId: 'new-project id',
-          }),
-        );
-      },
-      after: () => {
-        rmSync(overrideContextFile);
-      },
-      args: [
+    test('get project id overrides context set project', async ({
+      testCliCommand,
+      writeFile,
+    }) => {
+      writeFile(overrideContextFile, {
+        projectId: 'new-project id',
+      });
+      await testCliCommand([
         'project',
         'get',
         'project-id-123',
         '--context-file',
         overrideContextFile,
-      ],
-      expected: {
-        snapshot: true,
-      },
+      ]);
     });
 
-    testCliCommand({
-      name: 'set the branchId and projectId is from context',
-      before: () => {
-        writeFileSync(
-          overrideContextFile,
-          JSON.stringify({
-            projectId: 'test',
-            branchId: 'test_branch',
-          }),
-        );
-      },
-      after: () => {
-        rmSync(overrideContextFile);
-      },
-      args: ['databases', 'list', '--context-file', overrideContextFile],
-      expected: {
-        snapshot: true,
-      },
-    });
-
-    testCliCommand({
-      name: 'should not set branchId from context for non-context projectId',
-      before: () => {
-        writeFileSync(
-          overrideContextFile,
-          JSON.stringify({
-            projectId: 'project-id-123',
-            branchId: 'test_branch',
-          }),
-        );
-      },
-      after: () => {
-        rmSync(overrideContextFile);
-      },
-      args: [
+    test('set the branchId and projectId is from context', async ({
+      testCliCommand,
+      writeFile,
+    }) => {
+      writeFile(overrideContextFile, {
+        projectId: 'test',
+        branchId: 'test_branch',
+      });
+      await testCliCommand([
         'databases',
         'list',
-        '--project-id',
-        'test',
         '--context-file',
         overrideContextFile,
-      ],
-      expected: {
-        code: 1,
-        stderr: 'ERROR: Not Found',
-        snapshot: true,
-      },
+      ]);
+    });
+
+    test('set the branchId and projectId is from context', async ({
+      testCliCommand,
+      writeFile,
+    }) => {
+      writeFile(overrideContextFile, {
+        projectId: 'project-id-123',
+        branchId: 'test_branch',
+      });
+      await testCliCommand(
+        [
+          'databases',
+          'list',
+          '--project-id',
+          'test',
+          '--context-file',
+          overrideContextFile,
+        ],
+        {
+          code: 1,
+          stderr: 'ERROR: Not Found',
+        },
+      );
     });
   });
 });

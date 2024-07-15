@@ -1,13 +1,9 @@
 import { describe } from 'vitest';
 
-import { testCliCommand } from '../test_utils/test_cli_command.js';
+import { test } from '../test_utils/fixtures';
 
 describe('operations', () => {
-  testCliCommand({
-    name: 'list',
-    args: ['operations', 'list', '--project-id', 'test'],
-    expected: {
-      snapshot: true,
-    },
+  test('list', async ({ testCliCommand }) => {
+    await testCliCommand(['operations', 'list', '--project-id', 'test']);
   });
 });

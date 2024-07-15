@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`branches > add compute > test 1`] = `
+exports[`branches > add compute 1`] = `
 "id: test_endpoint_id
 branch_id: br-sunny-branch-123456
 created_at: 2019-01-01T00:00:00Z
@@ -8,7 +8,7 @@ type: read_only
 "
 `;
 
-exports[`branches > add compute with autoscaled CU > test 1`] = `
+exports[`branches > add compute with autoscaled CU 1`] = `
 "id: test_endpoint_id
 branch_id: br-numbered-branch-123456
 created_at: 2019-01-01T00:00:00Z
@@ -16,7 +16,7 @@ type: read_only
 "
 `;
 
-exports[`branches > add compute with fixed size CU > test 1`] = `
+exports[`branches > add compute with fixed size CU 1`] = `
 "id: test_endpoint_id
 branch_id: br-numbered-branch-123456
 created_at: 2019-01-01T00:00:00Z
@@ -24,7 +24,7 @@ type: read_only
 "
 `;
 
-exports[`branches > create branch and connect with psql > test 1`] = `
+exports[`branches > create branch and connect with psql 1`] = `
 "branch:
   id: br-new-branch-123456
   name: test_branch
@@ -39,7 +39,7 @@ connection_uris:
 {"psql-cli-args":["postgres://ep-undefined-123456.example.com:5432/test_project"]}"
 `;
 
-exports[`branches > create branch and connect with psql and psql args > test 1`] = `
+exports[`branches > create branch and connect with psql and psql args 1`] = `
 "branch:
   id: br-new-branch-123456
   name: test_branch
@@ -54,7 +54,7 @@ connection_uris:
 {"psql-cli-args":["postgres://ep-undefined-123456.example.com:5432/test_project","-c","SELECT 1"]}"
 `;
 
-exports[`branches > create by default with r/w endpoint > test 1`] = `
+exports[`branches > create by default with r/w endpoint 1`] = `
 "branch:
   id: br-new-branch-123456
   name: test_branch
@@ -69,7 +69,7 @@ connection_uris:
 "
 `;
 
-exports[`branches > create with autoscaled CU > test 1`] = `
+exports[`branches > create with autoscaled CU 1`] = `
 "id: br-new-branch-123456
 name: test_branch_with_autoscaling
 parent_id: br-main-branch-123456
@@ -77,7 +77,7 @@ created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > create with fixed size CU > test 1`] = `
+exports[`branches > create with fixed size CU 1`] = `
 "id: br-new-branch-123456
 name: test_branch_with_fixed_cu
 parent_id: br-main-branch-123456
@@ -85,7 +85,7 @@ created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > create with parent by lsn > test 1`] = `
+exports[`branches > create with parent by lsn 1`] = `
 "id: br-new-branch-123456
 name: test_branch_with_parent_lsn
 parent_id: br-main-branch-123456
@@ -93,7 +93,7 @@ created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > create with parent by name > test 1`] = `
+exports[`branches > create with parent by name 1`] = `
 "id: br-new-branch-123456
 name: test_branch_with_parent_name
 parent_id: br-main-branch-123456
@@ -101,7 +101,7 @@ created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > create with parent by timestamp > test 1`] = `
+exports[`branches > create with parent by timestamp 1`] = `
 "id: br-new-branch-123456
 name: test_branch_with_parent_timestamp
 parent_id: br-main-branch-123456
@@ -109,7 +109,7 @@ created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > create with readonly endpoint > test 1`] = `
+exports[`branches > create with readonly endpoint 1`] = `
 "branch:
   id: br-new-branch-123456
   name: test_branch
@@ -124,7 +124,7 @@ connection_uris:
 "
 `;
 
-exports[`branches > create with suspend timeout > test 1`] = `
+exports[`branches > create with suspend timeout 1`] = `
 "id: br-new-branch-123456
 name: test_branch_with_suspend_timeout
 parent_id: br-main-branch-123456
@@ -133,21 +133,21 @@ suspend_timeout: 60
 "
 `;
 
-exports[`branches > create without endpoint > test 1`] = `
+exports[`branches > create without endpoint 1`] = `
 "id: br-new-branch-123456
 name: test_branch
 created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > delete by id > test 1`] = `
+exports[`branches > delete by id 1`] = `
 "id: br-sunny-branch-123456
 name: sunny-branch
 created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > get by id > test 1`] = `
+exports[`branches > get by id 1`] = `
 "name: test_branch
 id: br-sunny-branch-123456
 default: true
@@ -157,7 +157,7 @@ updated_at: 2019-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > get by id > test 2`] = `
+exports[`branches > get by id 2`] = `
 "name: test-branch-cloudy
 id: br-cloudy-branch-12345678
 default: true
@@ -166,7 +166,7 @@ updated_at: 2019-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > get by name > test 1`] = `
+exports[`branches > get by name 1`] = `
 "name: test_branch
 id: br-sunny-branch-123456
 default: true
@@ -176,7 +176,7 @@ updated_at: 2019-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > get by name with numeric name > test 1`] = `
+exports[`branches > get by name with numeric name 1`] = `
 "name: "123"
 id: br-numbered-branch-123456
 default: false
@@ -186,7 +186,7 @@ updated_at: 2019-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > list > test 1`] = `
+exports[`branches > list 1`] = `
 "- id: br-main-branch-123456
   name: main
   default: true
@@ -215,13 +215,13 @@ exports[`branches > list > test 1`] = `
 "
 `;
 
-exports[`branches > rename > test 1`] = `
+exports[`branches > rename 1`] = `
 "name: new_test_branch
 created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > reset branch to parent > test 1`] = `
+exports[`branches > reset branch to parent 1`] = `
 "id: br-branch-123456
 name: test-branch
 source_branch_id: br-parent-branch-123456
@@ -232,28 +232,30 @@ last_reset_at: 2020-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > restore branch to lsn > test 1`] = `
+exports[`branches > restore branch to lsn 1`] = `
 "id: br-self-tolsn-123456
 name: self-tolsn
 last_reset_at: 2021-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > restore to another branch head > test 1`] = `
+exports[`branches > restore to another branch head 1`] = `
 "id: br-another-branch-123456
 name: another-branch
 last_reset_at: 2021-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > restore to parent branch timestamp by name > test 1`] = `
+exports[`branches > restore to parent branch timestamp by name 1`] = `
 "id: br-parent-tots-123456
 name: parent-tots
 last_reset_at: 2021-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > set default by id > test 1`] = `
+exports[`branches > restore with unexisted branch outputs error 1`] = `""`;
+
+exports[`branches > set default by id 1`] = `
 "name: test-branch-sunny
 id: br-sunny-branch-123456
 default: true
@@ -262,7 +264,7 @@ updated_at: 2019-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > set primary by id > test 1`] = `
+exports[`branches > set primary by id 1`] = `
 "name: test-branch-sunny
 id: br-sunny-branch-123456
 default: true
