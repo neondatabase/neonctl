@@ -28,7 +28,7 @@ export const builder = (argv: yargs.Argv) =>
       'list',
       'List databases',
       (yargs) => yargs,
-      async (args) => await list(args as any),
+      (args) => list(args as any),
     )
     .command(
       'create',
@@ -45,13 +45,13 @@ export const builder = (argv: yargs.Argv) =>
             type: 'string',
           },
         }),
-      async (args) => await create(args as any),
+      (args) => create(args as any),
     )
     .command(
       'delete <database>',
       'Delete a database',
       (yargs) => yargs,
-      async (args) => await deleteDb(args as any),
+      (args) => deleteDb(args as any),
     );
 
 export const handler = (args: yargs.Argv) => {

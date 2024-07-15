@@ -28,7 +28,7 @@ export const builder = (argv: yargs.Argv) =>
       'list',
       'List roles',
       (yargs) => yargs,
-      async (args) => await list(args as any),
+      (args) => list(args as any),
     )
     .command(
       'create',
@@ -41,13 +41,13 @@ export const builder = (argv: yargs.Argv) =>
             demandOption: true,
           },
         }),
-      async (args) => await create(args as any),
+      (args) => create(args as any),
     )
     .command(
       'delete <role>',
       'Delete a role',
       (yargs) => yargs,
-      async (args) => await deleteRole(args as any),
+      (args) => deleteRole(args as any),
     );
 
 export const handler = (args: yargs.Argv) => {
