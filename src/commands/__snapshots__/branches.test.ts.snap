@@ -232,26 +232,28 @@ last_reset_at: 2020-01-01T00:00:00.000Z
 "
 `;
 
-exports[`branches > restore branch to lsn *mockDir:restore* 1`] = `
+exports[`branches > restore branch to lsn 1`] = `
 "id: br-self-tolsn-123456
 name: self-tolsn
 last_reset_at: 2021-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > restore to another branch head *mockDir:restore* 1`] = `
+exports[`branches > restore to another branch head 1`] = `
 "id: br-another-branch-123456
 name: another-branch
 last_reset_at: 2021-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > restore to parent branch timestamp by name *mockDir:restore* 1`] = `
+exports[`branches > restore to parent branch timestamp by name 1`] = `
 "id: br-parent-tots-123456
 name: parent-tots
 last_reset_at: 2021-01-01T00:00:00Z
 "
 `;
+
+exports[`branches > restore with unexisted branch outputs error 1`] = `""`;
 
 exports[`branches > set default by id 1`] = `
 "name: test-branch-sunny

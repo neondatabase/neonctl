@@ -290,48 +290,59 @@ describe('branches', () => {
 
   /* restore */
 
-  test('restore branch to lsn *mockDir:restore*', async ({
-    testCliCommand,
-  }) => {
-    await testCliCommand([
-      'branches',
-      'restore',
-      'br-self-tolsn-123456',
-      '^self@0/123ABC',
-      '--project-id',
-      'test',
-      '--preserve-under-name',
-      'backup',
-    ]);
+  test('restore branch to lsn', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'restore',
+        'br-self-tolsn-123456',
+        '^self@0/123ABC',
+        '--project-id',
+        'test',
+        '--preserve-under-name',
+        'backup',
+      ],
+      {
+        mockDir: 'restore',
+      },
+    );
   });
 
-  test('restore to parent branch timestamp by name *mockDir:restore*', async ({
+  test('restore to parent branch timestamp by name', async ({
     testCliCommand,
   }) => {
-    await testCliCommand([
-      'branches',
-      'restore',
-      'parent-tots',
-      '^parent@2021-01-01T00:00:00.000Z',
-      '--project-id',
-      'test',
-    ]);
+    await testCliCommand(
+      [
+        'branches',
+        'restore',
+        'parent-tots',
+        '^parent@2021-01-01T00:00:00.000Z',
+        '--project-id',
+        'test',
+      ],
+      {
+        mockDir: 'restore',
+      },
+    );
   });
 
-  test('restore to another branch head *mockDir:restore*', async ({
-    testCliCommand,
-  }) => {
-    await testCliCommand([
-      'branches',
-      'restore',
-      'br-another-branch-123456',
-      'br-any-branch-123456',
-      '--project-id',
-      'test',
-    ]);
+  test('restore to another branch head', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'restore',
+        'br-another-branch-123456',
+        'br-any-branch-123456',
+        '--project-id',
+        'test',
+      ],
+      {
+        mockDir: 'restore',
+      },
+    );
   });
 
-  test('restore with unexisted branch outputs error *mockDir:restore*', async ({
+  test('restore with unexisted branch outputs error', async ({
     testCliCommand,
   }) => {
     await testCliCommand(
@@ -344,6 +355,7 @@ describe('branches', () => {
         'test',
       ],
       {
+        mockDir: 'restore',
         code: 1,
         stderr: `ERROR: Branch unexisting-branch not found.
                Available branches: self-tolsn-123456, any-branch, parent-tots, another-branch`,

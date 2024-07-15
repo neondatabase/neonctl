@@ -6,10 +6,10 @@ describe('ip-allow', () => {
     await testCliCommand(['ip-allow', 'list', '--project-id', 'test']);
   });
 
-  test('list IP Allow with single-project *mockDir:single_project*', async ({
-    testCliCommand,
-  }) => {
-    await testCliCommand(['ip-allow', 'list']);
+  test('list IP Allow with single-project', async ({ testCliCommand }) => {
+    await testCliCommand(['ip-allow', 'list'], {
+      mockDir: 'single_project',
+    });
   });
 
   test('Add IP allow - Error', async ({ testCliCommand }) => {

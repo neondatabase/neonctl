@@ -102,10 +102,12 @@ describe('connection_string', () => {
     ]);
   });
 
-  test('connection_string without any args should pass *mockDir:single_project*', async ({
+  test('connection_string without any args should pass', async ({
     testCliCommand,
   }) => {
-    await testCliCommand(['connection-string']);
+    await testCliCommand(['connection-string'], {
+      mockDir: 'single_project',
+    });
   });
 
   test('connection_string with psql', async ({ testCliCommand }) => {

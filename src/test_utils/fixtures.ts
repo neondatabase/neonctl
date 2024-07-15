@@ -13,8 +13,8 @@ type Fixtures = {
   runMockServer: (mockDir: string) => Promise<Server>;
   testCliCommand: (
     args: string[],
-    expected?: {
-      snapshot?: true;
+    options?: {
+      mockDir?: string;
       stderr?: string;
       code?: number;
     },
@@ -51,12 +51,9 @@ export const test = originalTest.extend<Fixtures>({
       server.close((err) => (err ? reject(err) : resolve())),
     );
   },
-  testCliCommand: async ({ runMockServer, task }, use) => {
-    const mockDirOverride = /\*mockDir:(.*?)\*/.exec(task.name);
-    const server = await runMockServer(
-      mockDirOverride ? mockDirOverride[1] : 'main',
-    );
-    await use(async (args, expected = { snapshot: true }) => {
+  testCliCommand: async ({ runMockServer }, use) => {
+    await use(async (args, options = {}) => {
+      const server = await runMockServer(options.mockDir || 'main');
       let output = '';
       let error = '';
 
@@ -96,15 +93,13 @@ export const test = originalTest.extend<Fixtures>({
 
         cp.on('close', (code) => {
           try {
-            expect(code).toBe(expected?.code ?? 0);
-            if (expected.snapshot) {
-              expect(output).toMatchSnapshot();
-            }
-            if (expected.stderr !== undefined) {
+            expect(code).toBe(options?.code ?? 0);
+            expect(output).toMatchSnapshot();
+            if (options.stderr !== undefined) {
               expect(strip(error).replace(/\s+/g, ' ').trim()).toEqual(
-                typeof expected.stderr === 'string'
-                  ? expected.stderr.toString().replace(/\s+/g, ' ')
-                  : expected.stderr,
+                typeof options.stderr === 'string'
+                  ? options.stderr.toString().replace(/\s+/g, ' ')
+                  : options.stderr,
               );
             }
             resolve();

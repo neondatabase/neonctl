@@ -51,6 +51,8 @@ exports[`set_context > should set the context > set the branchId and projectId i
 "
 `;
 
+exports[`set_context > should set the context > set the branchId and projectId is from context 2`] = `""`;
+
 exports[`set_context > should set the context > set-context 1`] = `""`;
 
 exports[`set_context > should set the context > set-context 2`] = `

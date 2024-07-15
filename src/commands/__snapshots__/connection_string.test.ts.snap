@@ -15,6 +15,8 @@ exports[`connection_string > connection_string branch id 8 digits 1`] = `
 "
 `;
 
+exports[`connection_string > connection_string fails for non-existing database 1`] = `""`;
+
 exports[`connection_string > connection_string pooled 1`] = `
 "postgresql://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?sslmode=require
 "
@@ -59,7 +61,7 @@ exports[`connection_string > connection_string with timestamp 1`] = `
 "
 `;
 
-exports[`connection_string > connection_string without any args should pass *mockDir:single_project* 1`] = `
+exports[`connection_string > connection_string without any args should pass 1`] = `
 "postgresql://test_role:password@undefined/db1?sslmode=require
 "
 `;
