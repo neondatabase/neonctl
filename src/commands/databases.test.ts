@@ -1,26 +1,21 @@
 import { describe } from 'vitest';
 
-import { testCliCommand } from '../test_utils/test_cli_command.js';
+import { test } from '../test_utils/fixtures';
 
 describe('databases', () => {
-  testCliCommand({
-    name: 'list',
-    args: [
+  test('list', async ({ testCliCommand }) => {
+    await testCliCommand([
       'databases',
       'list',
       '--project-id',
       'test',
       '--branch',
       'test_branch',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'create',
-    args: [
+  test('create', async ({ testCliCommand }) => {
+    await testCliCommand([
       'databases',
       'create',
       '--project-id',
@@ -31,15 +26,11 @@ describe('databases', () => {
       'test_db',
       '--owner-name',
       'test_owner',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 
-  testCliCommand({
-    name: 'delete',
-    args: [
+  test('delete', async ({ testCliCommand }) => {
+    await testCliCommand([
       'databases',
       'delete',
       'test_db',
@@ -47,9 +38,6 @@ describe('databases', () => {
       'test',
       '--branch',
       'test_branch',
-    ],
-    expected: {
-      snapshot: true,
-    },
+    ]);
   });
 });

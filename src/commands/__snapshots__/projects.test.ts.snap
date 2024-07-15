@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`projects > create > test 1`] = `
+exports[`projects > create 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -10,7 +10,7 @@ connection_uris:
 "
 `;
 
-exports[`projects > create and connect with psql > test 1`] = `
+exports[`projects > create and connect with psql 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -20,7 +20,7 @@ connection_uris:
 {"psql-cli-args":["postgres://localhost:5432/test_project"]}"
 `;
 
-exports[`projects > create and connect with psql and psql args > test 1`] = `
+exports[`projects > create and connect with psql and psql args 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -30,7 +30,7 @@ connection_uris:
 {"psql-cli-args":["postgres://localhost:5432/test_project","-c","SELECT 1"]}"
 `;
 
-exports[`projects > create project with default autoscaled CU > test 1`] = `
+exports[`projects > create project with default autoscaled CU 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -40,7 +40,7 @@ connection_uris:
 "
 `;
 
-exports[`projects > create project with default fixed size CU > test 1`] = `
+exports[`projects > create project with default fixed size CU 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -50,7 +50,7 @@ connection_uris:
 "
 `;
 
-exports[`projects > create project with setting the context > test 1`] = `
+exports[`projects > create project with setting the context 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -60,7 +60,7 @@ connection_uris:
 "
 `;
 
-exports[`projects > create with database and role > test 1`] = `
+exports[`projects > create with database and role 1`] = `
 "project:
   id: new-project-123456
   name: test_project
@@ -70,14 +70,14 @@ connection_uris:
 "
 `;
 
-exports[`projects > delete > test 1`] = `
+exports[`projects > delete 1`] = `
 "id: test
 name: test
 create_at: 2018-01-01T00:00:00.000Z
 "
 `;
 
-exports[`projects > get > test 1`] = `
+exports[`projects > get 1`] = `
 "id: test
 name: test_project
 created_at: 2019-01-01T00:00:00Z
@@ -89,7 +89,7 @@ settings:
 "
 `;
 
-exports[`projects > list > test 1`] = `
+exports[`projects > list 1`] = `
 "projects:
   - id: 1
     name: Project_1
@@ -112,7 +112,7 @@ shared_with_me:
 "
 `;
 
-exports[`projects > update ip allow > test 1`] = `
+exports[`projects > update ip allow 1`] = `
 "id: test
 name: test_project
 created_at: 2019-01-01T00:00:00Z
@@ -125,7 +125,7 @@ settings:
 "
 `;
 
-exports[`projects > update ip allow primary only flag > test 1`] = `
+exports[`projects > update ip allow primary only flag 1`] = `
 "id: test
 name: test_project
 created_at: 2019-01-01T00:00:00Z
@@ -137,7 +137,7 @@ settings:
 "
 `;
 
-exports[`projects > update ip allow remove > test 1`] = `
+exports[`projects > update ip allow remove 1`] = `
 "id: test
 name: test_project
 created_at: 2019-01-01T00:00:00Z
@@ -148,7 +148,7 @@ settings:
 "
 `;
 
-exports[`projects > update name > test 1`] = `
+exports[`projects > update name 1`] = `
 "id: test
 name: test_project_new_name
 created_at: 2019-01-01T00:00:00Z
@@ -160,7 +160,7 @@ settings:
 "
 `;
 
-exports[`projects > update project with default autoscaled CU > test 1`] = `
+exports[`projects > update project with default autoscaled CU 1`] = `
 "id: test
 name: test_project_with_autoscaling
 created_at: 2019-01-01T00:00:00Z
@@ -172,7 +172,7 @@ settings:
 "
 `;
 
-exports[`projects > update project with default fixed size CU > test 1`] = `
+exports[`projects > update project with default fixed size CU 1`] = `
 "id: test
 name: test_project_with_fixed_cu
 created_at: 2019-01-01T00:00:00Z
