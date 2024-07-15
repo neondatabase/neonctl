@@ -106,8 +106,9 @@ export const ensureAuth = async (
             clientId: props.clientId,
           },
           tokenSet,
-        ).catch((e) => {
-          log.error('failed to refresh token\n%s', e?.message);
+        ).catch((err: unknown) => {
+          const typedErr = err && err instanceof Error ? err : undefined;
+          log.error('failed to refresh token\n%s', typedErr?.message);
           process.exit(1);
         });
 

@@ -11,7 +11,7 @@ type OnlyStrings<T> = T extends string ? T : never;
 
 type WriteOutConfig<T> = {
   // Fields to output in human-readable format
-  fields: Readonly<OnlyStrings<keyof ExtractFromArray<T>>[]>;
+  fields: readonly OnlyStrings<keyof ExtractFromArray<T>>[];
   // Title of the output
   title?: string;
 };
@@ -128,7 +128,7 @@ export const writer = (
         return out.write(writeJson(chunks));
       }
 
-      return writeTable(chunks, out);
+      writeTable(chunks, out);
     },
   };
 };

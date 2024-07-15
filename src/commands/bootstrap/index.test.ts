@@ -99,7 +99,7 @@ describe('bootstrap/create-app', () => {
             expect(code).toBe(0);
             resolve();
           } catch (err) {
-            reject(err);
+            reject(err instanceof Error ? err : new Error(String(err)));
           }
         });
       });

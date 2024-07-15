@@ -1,4 +1,4 @@
-import { Branch, EndpointType } from '@neondatabase/api-client';
+import { EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
@@ -56,7 +56,7 @@ export const builder = (argv: yargs.Argv) =>
       'list',
       'List branches',
       (yargs) => yargs,
-      async (args) => await list(args as any),
+      (args) => list(args as any),
     )
     .command(
       'create',
@@ -101,7 +101,7 @@ export const builder = (argv: yargs.Argv) =>
             default: false,
           },
         }),
-      async (args) => await create(args as any),
+      (args) => create(args as any),
     )
     .command(
       'reset <id|name>',
@@ -117,7 +117,7 @@ export const builder = (argv: yargs.Argv) =>
             describe: 'Name under which to preserve the old branch',
           },
         }),
-      async (args) => await reset(args as any),
+      (args) => reset(args as any),
     )
     .command(
       'restore <target-id|name> <source>[@(timestamp|lsn)]',
@@ -157,25 +157,25 @@ export const builder = (argv: yargs.Argv) =>
               'Restore my-branch to the head of its parent branch',
             ],
           ]),
-      async (args) => await restore(args as any),
+      (args) => restore(args as any),
     )
     .command(
       'rename <id|name> <new-name>',
       'Rename a branch',
       (yargs) => yargs,
-      async (args) => await rename(args as any),
+      (args) => rename(args as any),
     )
     .command(
       'set-primary <id|name>',
       'DEPRECATED: Use set-default. Set a branch as primary',
       (yargs) => yargs,
-      async (args) => await setDefault(args as any),
+      (args) => setDefault(args as any),
     )
     .command(
       'set-default <id|name>',
       'Set a branch as default',
       (yargs) => yargs,
-      async (args) => await setDefault(args as any),
+      (args) => setDefault(args as any),
     )
     .command(
       'add-compute <id|name>',
@@ -194,19 +194,19 @@ export const builder = (argv: yargs.Argv) =>
             type: 'string',
           },
         }),
-      async (args) => await addCompute(args as any),
+      (args) => addCompute(args as any),
     )
     .command(
       'delete <id|name>',
       'Delete a branch',
       (yargs) => yargs,
-      async (args) => await deleteBranch(args as any),
+      (args) => deleteBranch(args as any),
     )
     .command(
       'get <id|name>',
       'Get a branch',
       (yargs) => yargs,
-      async (args) => await get(args as any),
+      (args) => get(args as any),
     )
     .command({
       command: 'schema-diff [base-branch] [compare-source[@(timestamp|lsn)]]',
@@ -252,7 +252,7 @@ export const builder = (argv: yargs.Argv) =>
           ]);
       },
 
-      handler: async (args) => schemaDiff(args as any),
+      handler: (args) => schemaDiff(args as any),
     });
 
 export const handler = (args: yargs.Argv) => {
@@ -344,7 +344,7 @@ const create = async (
       title: 'endpoints',
     });
   }
-  if (data.connection_uris && data.connection_uris?.length > 0) {
+  if (data.connection_uris?.length) {
     out.write(data.connection_uris, {
       fields: ['connection_uri'],
       title: 'connection_uris',
@@ -353,7 +353,7 @@ const create = async (
   out.end();
 
   if (props.psql) {
-    if (!data.connection_uris || !data.connection_uris?.length) {
+    if (!data.connection_uris?.length) {
       throw new Error(`Branch ${data.branch.id} doesn't have a connection uri`);
     }
     const connection_uri = data.connection_uris[0].connection_uri;
@@ -457,9 +457,7 @@ const reset = async (
     }),
   );
 
-  const resultBranch = data.branch as Branch;
-
-  writer(props).end(resultBranch, {
+  writer(props).end(data.branch, {
     // need to reset types until we expose reset api
     fields: BRANCH_FIELDS_RESET as any,
   });
@@ -502,16 +500,15 @@ const restore = async (
     }),
   );
 
-  const branch = data.branch as Branch;
-
-  const writeInst = writer(props).write(branch as Branch, {
+  const writeInst = writer(props).write(data.branch, {
     title: 'Restored branch',
     fields: ['id', 'name', 'last_reset_at'],
   });
-  if (props.preserveUnderName && branch.parent_id) {
+  const parentId = data.branch.parent_id;
+  if (props.preserveUnderName && parentId) {
     const { data } = await props.apiClient.getProjectBranch(
       props.projectId,
-      branch.parent_id,
+      parentId,
     );
     writeInst.write(data.branch, {
       title: 'Backup branch',

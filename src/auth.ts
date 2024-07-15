@@ -1,5 +1,5 @@
 import { custom, generators, Issuer, TokenSet } from 'openid-client';
-import { createServer } from 'node:http';
+import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import open from 'open';
@@ -92,7 +92,10 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       );
     }, AUTH_TIMEOUT_SECONDS * 1000);
 
-    server.on('request', async (request, response) => {
+    const onRequest = async (
+      request: IncomingMessage,
+      response: ServerResponse,
+    ) => {
       //
       // Wait for callback and follow oauth flow.
       //
@@ -132,6 +135,10 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       clearTimeout(timer);
       resolve(tokenSet);
       server.close();
+    };
+
+    server.on('request', (req, res) => {
+      void onRequest(req, res);
     });
 
     //
@@ -150,10 +157,11 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
     log.info('Awaiting authentication in web browser.');
     log.info(`Auth Url: ${authUrl}`);
 
-    open(authUrl).catch((err) => {
+    open(authUrl).catch((err: unknown) => {
       const msg = `Failed to open web browser. Please copy & paste auth url to authenticate in browser.`;
-      sendError(err || new Error(msg), matchErrorCode(msg || err?.message));
-      log.error(msg || err?.message);
+      const typedErr = err && err instanceof Error ? err : undefined;
+      sendError(typedErr || new Error(msg), matchErrorCode(msg));
+      log.error(msg);
     });
   });
 };

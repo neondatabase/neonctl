@@ -16,17 +16,17 @@ export default ts.config({
     '@typescript-eslint/no-unsafe-call': 'off',
     '@typescript-eslint/non-nullable-type-assertion-style': 'off',
     '@typescript-eslint/prefer-nullish-coalescing': 'off',
-    '@typescript-eslint/prefer-promise-reject-errors': 'off',
     '@typescript-eslint/no-unnecessary-condition': 'off',
-    '@typescript-eslint/restrict-template-expressions': 'off',
-    '@typescript-eslint/no-misused-promises': 'off',
-    '@typescript-eslint/use-unknown-in-catch-callback-variable': 'off',
-    '@typescript-eslint/array-type': 'off',
-    '@typescript-eslint/prefer-for-of': 'off',
-    '@typescript-eslint/unbound-method': 'off',
-    '@typescript-eslint/no-confusing-void-expression': 'off',
-    '@typescript-eslint/no-unnecessary-type-assertion': 'off',
-    '@typescript-eslint/prefer-optional-chain': 'off',
+    '@typescript-eslint/restrict-template-expressions': [
+      'error',
+      {
+        allowAny: true,
+        allowBoolean: true,
+        allowNullish: true,
+        allowNumber: true,
+        allowRegExp: true,
+      },
+    ],
   },
   languageOptions: {
     parserOptions: {

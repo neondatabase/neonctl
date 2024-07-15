@@ -95,7 +95,7 @@ function writeEnvFile({
   secrets,
 }: {
   fileName: string;
-  secrets: Array<EnvironmentVariable>;
+  secrets: EnvironmentVariable[];
 }) {
   let content = '';
   for (const secret of secrets) {
@@ -162,7 +162,7 @@ const bootstrap = async (props: CommonProps) => {
   const appName = basename(root);
   const folderExists = existsSync(root);
 
-  if (folderExists && !isFolderEmpty(root, appName, out.text)) {
+  if (folderExists && !isFolderEmpty(root, appName, (data) => out.text(data))) {
     throw new Error(
       `Could not create a project called ${chalk.red(
         `"${projectName}"`,
@@ -180,7 +180,7 @@ const bootstrap = async (props: CommonProps) => {
     packageManager: 'npm',
   };
 
-  const packageManagerOptions: Array<Choice> = [
+  const packageManagerOptions: Choice[] = [
     {
       title: 'npm',
     },
@@ -206,7 +206,7 @@ const bootstrap = async (props: CommonProps) => {
     meta: { packageManager: finalOptions.packageManager },
   });
 
-  const frameworkOptions: Array<Choice> = [
+  const frameworkOptions: Choice[] = [
     {
       title: 'Next.js',
     },
@@ -352,7 +352,7 @@ const bootstrap = async (props: CommonProps) => {
       connectionString = data.connection_uris[0].connection_uri;
     } catch (error) {
       throw new Error(
-        `An error occurred while creating a new Neon project: ${error}`,
+        `An error occurred while creating a new Neon project: ${String(error)}`,
       );
     }
   } else {
@@ -481,7 +481,7 @@ const bootstrap = async (props: CommonProps) => {
     connectionString = connectionUrl.toString();
   }
 
-  const environmentVariables: Array<EnvironmentVariable> = [];
+  const environmentVariables: EnvironmentVariable[] = [];
 
   if (finalOptions.framework === 'Next.js') {
     let template;
@@ -509,7 +509,7 @@ const bootstrap = async (props: CommonProps) => {
         { stdio: 'inherit' },
       );
     } catch (error: unknown) {
-      throw new Error(`Creating a Next.js project failed: ${error}.`);
+      throw new Error(`Creating a Next.js project failed: ${String(error)}.`);
     }
 
     if (finalOptions.auth === 'auth.js') {
@@ -580,7 +580,9 @@ const bootstrap = async (props: CommonProps) => {
         },
       );
     } catch (error) {
-      throw new Error(`Generating the database schema failed: ${error}.`);
+      throw new Error(
+        `Generating the database schema failed: ${String(error)}.`,
+      );
     }
 
     // If the user doesn't specify Auth.js, there is no schema to be applied.
@@ -591,7 +593,7 @@ const bootstrap = async (props: CommonProps) => {
           stdio: 'inherit',
         });
       } catch (error) {
-        throw new Error(`Applying the schema failed: ${error}.`);
+        throw new Error(`Applying the schema failed: ${String(error)}.`);
       }
     }
 
@@ -626,13 +628,13 @@ const bootstrap = async (props: CommonProps) => {
 
   if (finalOptions.deployment === 'vercel') {
     try {
-      let envVarsStr = '';
-      for (let i = 0; i < environmentVariables.length; i++) {
-        const envVar = environmentVariables[i];
-        envVarsStr += `${envVar.kind === 'build' ? '--build-env' : '--env'} ${
-          envVar.key
-        }=${envVar.value} `;
-      }
+      const envVarsStr = environmentVariables
+        .reduce<string[]>((acc, envVar) => {
+          acc.push(envVar.kind === 'build' ? '--build-env' : '--env');
+          acc.push(`${envVar.key}=${envVar.value}`);
+          return acc;
+        }, [])
+        .join(' ');
 
       execSync(
         `${getExecutorProgram(
@@ -644,7 +646,7 @@ const bootstrap = async (props: CommonProps) => {
         },
       );
     } catch (error) {
-      throw new Error(`Deploying to Vercel failed: ${error}.`);
+      throw new Error(`Deploying to Vercel failed: ${String(error)}.`);
     }
   } else if (finalOptions.deployment === 'cloudflare') {
     try {
@@ -662,7 +664,9 @@ const bootstrap = async (props: CommonProps) => {
           },
         );
       } catch (error) {
-        throw new Error(`Failed to install the Cloudflare CLI: ${error}.`);
+        throw new Error(
+          `Failed to install the Cloudflare CLI: ${String(error)}.`,
+        );
       }
     }
 
@@ -694,7 +698,7 @@ ${environmentVariables
       );
     } catch (error) {
       throw new Error(
-        `Failed to build Next.js app with next-on-pages: ${error}.`,
+        `Failed to build Next.js app with next-on-pages: ${String(error)}.`,
       );
     }
 
@@ -704,7 +708,9 @@ ${environmentVariables
         stdio: 'inherit',
       });
     } catch (error) {
-      throw new Error(`Failed to deploy to Cloudflare Pages: ${error}.`);
+      throw new Error(
+        `Failed to deploy to Cloudflare Pages: ${String(error)}.`,
+      );
     }
   }
 

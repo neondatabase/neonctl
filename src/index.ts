@@ -115,7 +115,9 @@ builder = builder
       default: true,
     },
   })
-  .middleware((args) => fillInArgs(args), true)
+  .middleware((args) => {
+    fillInArgs(args);
+  }, true)
   .help(false)
   .group('help', 'Global options:')
   .option('help', {

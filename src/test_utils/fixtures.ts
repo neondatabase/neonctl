@@ -48,7 +48,13 @@ export const test = originalTest.extend<Fixtures>({
       return server;
     });
     await new Promise<void>((resolve, reject) =>
-      server.close((err) => (err ? reject(err) : resolve())),
+      server.close((err) => {
+        if (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        } else {
+          resolve();
+        }
+      }),
     );
   },
   testCliCommand: async ({ runMockServer }, use) => {
@@ -104,7 +110,7 @@ export const test = originalTest.extend<Fixtures>({
             }
             resolve();
           } catch (err) {
-            reject(err);
+            reject(err instanceof Error ? err : new Error(String(err)));
           }
         });
       });
