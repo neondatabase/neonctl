@@ -6,9 +6,11 @@ import open from 'open';
 
 import { log } from './log.js';
 import { AddressInfo } from 'node:net';
-import { fileURLToPath } from 'node:url';
 import { sendError } from './analytics.js';
 import { matchErrorCode } from './errors.js';
+
+// @ts-expect-error TS2307
+import callbackHtml from './callback.html' with { type: 'file' };
 
 // oauth server timeouts
 const SERVER_TIMEOUT = 10_000;
@@ -126,7 +128,8 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
 
       response.writeHead(200, { 'Content-Type': 'text/html' });
       createReadStream(
-        join(fileURLToPath(new URL('.', import.meta.url)), './callback.html'),
+        // join(fileURLToPath(new URL('.', import.meta.url)), './callback.html'),
+        join(callbackHtml),
       ).pipe(response);
 
       clearTimeout(timer);
