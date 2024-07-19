@@ -242,7 +242,7 @@ const bootstrap = async (props: CommonProps) => {
     message: `What ORM would you like to use?`,
     choices: [
       { title: 'Drizzle', value: 'drizzle' },
-      { title: 'Prisma', value: 'prisma', disabled: true },
+      { title: 'Prisma', value: 'prisma' },
       { title: 'No ORM', value: -1, disabled: true },
     ],
     initial: 0,
@@ -262,7 +262,7 @@ const bootstrap = async (props: CommonProps) => {
     ],
     initial: 0,
   });
-  finalOptions.auth = auth;
+  finalOptions.auth = auth === -1 ? undefined : auth;
   trackEvent('create-app', {
     phase: 'auth',
     meta: { auth: finalOptions.auth },
@@ -485,12 +485,27 @@ const bootstrap = async (props: CommonProps) => {
 
   if (finalOptions.framework === 'Next.js') {
     let template;
-    if (finalOptions.auth === 'auth.js') {
+    if (finalOptions.auth === 'auth.js' && finalOptions.orm === 'drizzle') {
       template =
         'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-drizzle-authjs';
-    } else {
+    } else if (
+      finalOptions.auth === undefined &&
+      finalOptions.orm === 'drizzle'
+    ) {
       template =
         'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-drizzle';
+    } else if (
+      finalOptions.auth === 'auth.js' &&
+      finalOptions.orm === 'prisma'
+    ) {
+      template =
+        'https://github.com/neondatabase/neonctl-create-app-templates/tree/add-prisma-templates/next-prisma-authjs';
+    } else if (
+      finalOptions.auth === undefined &&
+      finalOptions.orm === 'prisma'
+    ) {
+      template =
+        'https://github.com/neondatabase/neonctl-create-app-templates/tree/add-prisma-templates/next-prisma';
     }
 
     let packageManager = '--use-npm';
@@ -585,7 +600,8 @@ const bootstrap = async (props: CommonProps) => {
       );
     }
 
-    // If the user doesn't specify Auth.js, there is no schema to be applied.
+    // If the user doesn't specify Auth.js, there is no schema to be applied
+    // with Drizzle.
     if (finalOptions.auth === 'auth.js') {
       try {
         execSync(`${finalOptions.packageManager} run db:migrate`, {
@@ -595,6 +611,26 @@ const bootstrap = async (props: CommonProps) => {
       } catch (error) {
         throw new Error(`Applying the schema failed: ${String(error)}.`);
       }
+    }
+
+    out.text(`Database schema generated and applied.\n`);
+  } else if (finalOptions.orm === 'prisma') {
+    try {
+      execSync(`${finalOptions.packageManager} run prisma:generate`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(`Generating the Prisma client failed: ${String(error)}.`);
+    }
+
+    try {
+      execSync(`${finalOptions.packageManager} run prisma:migrate`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(`Applying the schema failed: ${String(error)}.`);
     }
 
     out.text(`Database schema generated and applied.\n`);
@@ -615,9 +651,17 @@ const bootstrap = async (props: CommonProps) => {
         title: 'Cloudflare',
         value: 'cloudflare',
         description: 'We will install the Wrangler CLI globally.',
+
+        // Making Prisma work on Cloudflare is a bit tricky.
+        disabled: finalOptions.orm === 'prisma',
       },
       { title: 'Skip this step', value: -1 },
     ],
+    // Making Prisma work on Cloudflare is a bit tricky.
+    warn:
+      finalOptions.orm === 'prisma'
+        ? 'We do not yet support Cloudflare deployments with Prisma.'
+        : undefined,
     initial: 0,
   });
   finalOptions.deployment = deployment;
