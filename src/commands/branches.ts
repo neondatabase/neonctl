@@ -21,7 +21,7 @@ import { log } from '../log.js';
 import { parseSchemaDiffParams, schemaDiff } from './schema_diff.js';
 import { getComputeUnits } from '../utils/compute_units.js';
 
-const BRANCH_FIELDS = [
+export const BRANCH_FIELDS = [
   'id',
   'name',
   'primary',
