@@ -13,10 +13,18 @@ import {
   EndpointType,
   ProjectListItem,
   ProjectCreateRequest,
+  Project,
+  Database,
+  Api,
 } from '@neondatabase/api-client';
 import { PROJECT_FIELDS } from '../projects.js';
 import { execSync } from 'child_process';
 import { trackEvent } from '../../analytics.js';
+import { BRANCH_FIELDS } from '../branches.js';
+import cryptoRandomString from 'crypto-random-string';
+import { retryOnLock } from '../../api.js';
+import { DATABASE_FIELDS } from '../databases.js';
+import { getAuthjsSecret } from './authjs-secret.js';
 
 export const command = 'create-app';
 export const aliases = ['bootstrap'];
@@ -48,11 +56,13 @@ export const handler = async (args: CommonProps) => {
 type BootstrapOptions = {
   auth?: 'auth.js';
   framework: 'Next.js' | 'SvelteKit' | 'Nuxt.js';
-  deployment: 'vercel' | 'cloudflare';
+  deployment: 'vercel' | 'cloudflare' | 'no-deployment';
   orm?: 'drizzle' | 'prisma';
 
   packageManager: 'npm' | 'pnpm' | 'bun';
 };
+
+export const DEFAULT_NEON_ROLE_NAME = 'neondb_owner';
 
 // `getCreateNextAppCommand` returns the command for creating a Next app
 // with `create-next-app` for different package managers.
@@ -85,6 +95,7 @@ function getExecutorProgram(
 }
 
 type EnvironmentVariable = {
+  environment: 'development' | 'production';
   kind: 'build' | 'runtime';
   key: string;
   value: string;
@@ -105,6 +116,320 @@ function writeEnvFile({
   writeFileSync(fileName, content, 'utf8');
 }
 
+async function createBranch({
+  projectId,
+  apiClient,
+  name,
+}: {
+  appName: string;
+  projectId: string;
+  apiClient: Api<unknown>;
+  name: string;
+}) {
+  const {
+    data: { branch },
+  } = await retryOnLock(() =>
+    apiClient.createProjectBranch(projectId, {
+      branch: {
+        name,
+      },
+      endpoints: [
+        {
+          type: EndpointType.ReadWrite,
+        },
+      ],
+    }),
+  );
+
+  return branch;
+}
+
+async function createDatabase({
+  appName,
+  projectId,
+  branchId,
+  apiClient,
+  ownerRole,
+}: {
+  appName: string;
+  projectId: string;
+  branchId: string;
+  apiClient: Api<unknown>;
+  ownerRole?: string;
+}): Promise<Database> {
+  const {
+    data: { database },
+  } = await retryOnLock(() =>
+    apiClient.createProjectBranchDatabase(projectId, branchId, {
+      database: {
+        name: `${appName}-${cryptoRandomString({
+          length: 5,
+          type: 'url-safe',
+        })}-db`,
+        owner_name: ownerRole || DEFAULT_NEON_ROLE_NAME,
+      },
+    }),
+  );
+
+  return database;
+}
+
+function applyMigrations({
+  options,
+  appName,
+  connectionString,
+}: {
+  options: BootstrapOptions;
+  appName: string;
+  connectionString?: string;
+}) {
+  try {
+    // We have to seed `env` with all of `process.env` so that things like
+    // `NODE_ENV` and `PATH` are available to the child process.
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+    };
+    if (connectionString) {
+      env.DATABASE_URL = connectionString;
+    }
+
+    execSync(`${options.packageManager} run db:migrate`, {
+      cwd: appName,
+      stdio: 'inherit',
+      env,
+    });
+  } catch (error) {
+    throw new Error(
+      `Applying the schema to the dev branch failed: ${String(error)}.`,
+    );
+  }
+}
+
+async function deployApp({
+  props,
+  options,
+  devBranchName,
+  project,
+  appName,
+  environmentVariables,
+}: {
+  props: CommonProps;
+  options: BootstrapOptions;
+  devBranchName: string;
+  project: ProjectListItem | Project;
+  environmentVariables: EnvironmentVariable[];
+  appName: string;
+}) {
+  let {
+    data: { branches },
+  } = await props.apiClient.listProjectBranches(project.id);
+
+  branches = branches.filter((branch) => branch.name !== devBranchName);
+
+  let branchId: string;
+  if (branches.length === 0) {
+    throw new Error(`No branches found for the project ${project.name}.`);
+  } else if (branches.length === 1) {
+    branchId = branches[0].id;
+  } else {
+    // Excludes dev branch we created above.
+    const branchChoices = branches.map((branch) => {
+      return {
+        title: branch.name,
+        value: branch.id,
+      };
+    });
+
+    const { branchIdChoice } = await prompts({
+      onState: onPromptState,
+      type: 'select',
+      name: 'branchIdChoice',
+      message: `What branch would you like to use for your deployment? (We have created a branch just for local development, which is not on this list)`,
+      choices: branchChoices,
+      initial: 0,
+    });
+    branchId = branchIdChoice;
+    trackEvent('create-app', { phase: 'neon-branch-deploy' });
+  }
+
+  const {
+    data: { endpoints },
+  } = await props.apiClient.listProjectBranchEndpoints(project.id, branchId);
+  const endpoint = endpoints.find((e) => e.type === EndpointType.ReadWrite);
+  if (!endpoint) {
+    throw new Error(
+      `No read-write endpoint found for the project ${project.name}.`,
+    );
+  }
+
+  const {
+    data: { roles },
+  } = await props.apiClient.listProjectBranchRoles(project.id, branchId);
+  let role;
+  if (roles.length === 0) {
+    throw new Error(`No roles found for the branch: ${branchId}`);
+  } else if (roles.length === 1) {
+    role = roles[0];
+  } else {
+    const roleChoices = roles.map((r) => {
+      return {
+        title: r.name,
+        value: r.name,
+      };
+    });
+
+    const { roleName } = await prompts({
+      onState: onPromptState,
+      type: 'select',
+      name: 'roleName',
+      message: `What role would you like to use?`,
+      choices: roleChoices,
+      initial: 0,
+    });
+    role = roles.find((r) => r.name === roleName);
+    if (!role) {
+      throw new Error(`No role found for the name: ${roleName}`);
+    }
+    trackEvent('create-app', { phase: 'neon-role-deploy' });
+  }
+
+  const database = await createDatabase({
+    appName,
+    apiClient: props.apiClient,
+    branchId,
+    projectId: project.id,
+  });
+
+  writer(props).end(database, {
+    fields: DATABASE_FIELDS,
+    title: 'Database',
+  });
+
+  const {
+    data: { password },
+  } = await props.apiClient.getProjectBranchRolePassword(
+    project.id,
+    endpoint.branch_id,
+    role.name,
+  );
+
+  const host = endpoint.host;
+  const connectionUrl = new URL(`postgresql://${host}`);
+  connectionUrl.pathname = database.name;
+  connectionUrl.username = role.name;
+  connectionUrl.password = password;
+  const deployConnectionString = connectionUrl.toString();
+
+  environmentVariables.push({
+    key: 'DATABASE_URL',
+    value: deployConnectionString,
+    kind: 'build',
+    environment: 'production',
+  });
+  environmentVariables.push({
+    key: 'DATABASE_URL',
+    value: deployConnectionString,
+    kind: 'runtime',
+    environment: 'production',
+  });
+
+  // If the user doesn't specify Auth.js, there is no schema to be applied.
+  if (options.auth === 'auth.js') {
+    applyMigrations({
+      options,
+      appName,
+      connectionString: deployConnectionString,
+    });
+  }
+
+  if (options.deployment === 'vercel') {
+    try {
+      const envVarsStr = environmentVariables
+        .filter((envVar) => envVar.environment === 'production')
+        .reduce<string[]>((acc, envVar) => {
+          acc.push(envVar.kind === 'build' ? '--build-env' : '--env');
+          acc.push(`${envVar.key}=${envVar.value}`);
+          return acc;
+        }, [])
+        .join(' ');
+
+      execSync(
+        `${getExecutorProgram(
+          options.packageManager,
+        )} vercel@34.3.1 deploy ${envVarsStr}`,
+        {
+          cwd: appName,
+          stdio: 'inherit',
+        },
+      );
+    } catch (error) {
+      throw new Error(`Deploying to Vercel failed: ${String(error)}.`);
+    }
+  } else if (options.deployment === 'cloudflare') {
+    try {
+      execSync('command -v wrangler', {
+        cwd: appName,
+        stdio: 'ignore',
+      });
+    } catch {
+      try {
+        execSync(`${options.packageManager} install -g @cloudflare/wrangler`, {
+          cwd: appName,
+          stdio: 'inherit',
+        });
+      } catch (error) {
+        throw new Error(
+          `Failed to install the Cloudflare CLI: ${String(error)}.`,
+        );
+      }
+    }
+
+    const wranglerToml = `name = "${appName}"
+compatibility_flags = [ "nodejs_compat" ]
+pages_build_output_dir = ".vercel/output/static"
+compatibility_date = "2022-11-30"
+
+[vars]
+${environmentVariables
+  .filter((envVar) => envVar.environment === 'production')
+  .map((envVar) => {
+    if (envVar.kind === 'runtime') {
+      return `${envVar.key} = "${envVar.value}"`;
+    }
+  })
+  .join('\n')}
+`;
+    writeFileSync(`${appName}/wrangler.toml`, wranglerToml, 'utf8');
+
+    try {
+      execSync(
+        `${getExecutorProgram(
+          options.packageManager,
+        )} @cloudflare/next-on-pages@1.12.1`,
+        {
+          cwd: appName,
+          stdio: 'inherit',
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        `Failed to build Next.js app with next-on-pages: ${String(error)}.`,
+      );
+    }
+
+    try {
+      execSync(`wrangler pages deploy`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to deploy to Cloudflare Pages: ${String(error)}.`,
+      );
+    }
+  }
+}
+
 const bootstrap = async (props: CommonProps) => {
   const out = writer(props);
 
@@ -118,6 +443,7 @@ const bootstrap = async (props: CommonProps) => {
     name: 'path',
     message: 'What is your project named?',
     initial: 'my-app',
+    max: 10,
     validate: (name: string) => {
       // We resolve to normalize the path name first, so that if the user enters
       // something like "/hello", we get back just "hello" and not "/hello".
@@ -172,7 +498,7 @@ const bootstrap = async (props: CommonProps) => {
     );
   }
 
-  const finalOptions: BootstrapOptions = {
+  const options: BootstrapOptions = {
     auth: 'auth.js',
     framework: 'Next.js',
     deployment: 'vercel',
@@ -199,11 +525,11 @@ const bootstrap = async (props: CommonProps) => {
     choices: packageManagerOptions,
     initial: 0,
   });
-  finalOptions.packageManager = packageManagerOptions[packageManagerOption]
+  options.packageManager = packageManagerOptions[packageManagerOption]
     .title as BootstrapOptions['packageManager'];
   trackEvent('create-app', {
     phase: 'package-manager',
-    meta: { packageManager: finalOptions.packageManager },
+    meta: { packageManager: options.packageManager },
   });
 
   const frameworkOptions: Choice[] = [
@@ -228,11 +554,11 @@ const bootstrap = async (props: CommonProps) => {
     initial: 0,
     warn: 'Coming soon',
   });
-  finalOptions.framework = frameworkOptions[framework]
+  options.framework = frameworkOptions[framework]
     .title as BootstrapOptions['framework'];
   trackEvent('create-app', {
     phase: 'framework',
-    meta: { framework: finalOptions.framework },
+    meta: { framework: options.framework },
   });
 
   const { orm } = await prompts({
@@ -248,8 +574,8 @@ const bootstrap = async (props: CommonProps) => {
     initial: 0,
     warn: 'Coming soon',
   });
-  finalOptions.orm = orm;
-  trackEvent('create-app', { phase: 'orm', meta: { orm: finalOptions.orm } });
+  options.orm = orm;
+  trackEvent('create-app', { phase: 'orm', meta: { orm: options.orm } });
 
   const { auth } = await prompts({
     onState: onPromptState,
@@ -262,10 +588,10 @@ const bootstrap = async (props: CommonProps) => {
     ],
     initial: 0,
   });
-  finalOptions.auth = auth;
+  options.auth = auth;
   trackEvent('create-app', {
     phase: 'auth',
-    meta: { auth: finalOptions.auth },
+    meta: { auth: options.auth },
   });
 
   const PROJECTS_LIST_LIMIT = 100;
@@ -326,30 +652,110 @@ const bootstrap = async (props: CommonProps) => {
 
   let projectCreateRequest: ProjectCreateRequest['project'];
   let project;
-  let connectionString: string;
+  let devConnectionString: string;
+  const devBranchName = `dev-${cryptoRandomString({
+    length: 10,
+    type: 'url-safe',
+  })}`;
   if (neonProject === -1) {
     try {
       // Call the API directly. This code is inspired from the `create` code in
       // `projects.ts`.
       projectCreateRequest = {
-        name: `${appName}-db`,
+        name: `${appName}-project`,
         branch: {},
       };
 
-      const { data } = await props.apiClient.createProject({
-        project: projectCreateRequest,
-      });
-      project = data.project;
+      const { data: createProjectData } = await retryOnLock(() =>
+        props.apiClient.createProject({
+          project: projectCreateRequest,
+        }),
+      );
 
-      const out = writer(props);
-      out.write(project, { fields: PROJECT_FIELDS, title: 'Project' });
-      out.write(data.connection_uris, {
-        fields: ['connection_uri'],
-        title: 'Connection URIs',
-      });
-      out.end();
+      project = createProjectData.project;
 
-      connectionString = data.connection_uris[0].connection_uri;
+      writer(props).end(project, {
+        fields: PROJECT_FIELDS,
+        title: 'Project',
+      });
+
+      const branch = await createBranch({
+        appName,
+        apiClient: props.apiClient,
+        projectId: project.id,
+        name: devBranchName,
+      });
+
+      const database = await createDatabase({
+        appName,
+        apiClient: props.apiClient,
+        branchId: branch.id,
+        projectId: project.id,
+      });
+
+      writer(props).end(branch, {
+        fields: BRANCH_FIELDS,
+        title: 'Branch',
+      });
+
+      const {
+        data: { endpoints },
+      } = await props.apiClient.listProjectBranchEndpoints(
+        project.id,
+        branch.id,
+      );
+      const endpoint = endpoints.find((e) => e.type === EndpointType.ReadWrite);
+      if (!endpoint) {
+        throw new Error(
+          `No read-write endpoint found for the project ${project.name}.`,
+        );
+      }
+
+      const {
+        data: { roles },
+      } = await props.apiClient.listProjectBranchRoles(project.id, branch.id);
+      let role;
+      if (roles.length === 0) {
+        throw new Error(`No roles found for the branch: ${branch.id}`);
+      } else if (roles.length === 1) {
+        role = roles[0];
+      } else {
+        const roleChoices = roles.map((r) => {
+          return {
+            title: r.name,
+            value: r.name,
+          };
+        });
+
+        const { roleName } = await prompts({
+          onState: onPromptState,
+          type: 'select',
+          name: 'roleName',
+          message: `What role would you like to use?`,
+          choices: roleChoices,
+          initial: 0,
+        });
+        role = roles.find((r) => r.name === roleName);
+        if (!role) {
+          throw new Error(`No role found for the name: ${roleName}`);
+        }
+        trackEvent('create-app', { phase: 'neon-role-dev' });
+      }
+
+      const {
+        data: { password },
+      } = await props.apiClient.getProjectBranchRolePassword(
+        project.id,
+        endpoint.branch_id,
+        role.name,
+      );
+
+      const host = endpoint.host;
+      const connectionUrl = new URL(`postgresql://${host}`);
+      connectionUrl.pathname = database.name;
+      connectionUrl.username = role.name;
+      connectionUrl.password = password;
+      devConnectionString = connectionUrl.toString();
     } catch (error) {
       throw new Error(
         `An error occurred while creating a new Neon project: ${String(error)}`,
@@ -364,51 +770,36 @@ const bootstrap = async (props: CommonProps) => {
       );
     }
 
-    const {
-      data: { branches },
-    } = await props.apiClient.listProjectBranches(project.id);
+    const branch = await createBranch({
+      appName,
+      apiClient: props.apiClient,
+      projectId: project.id,
+      name: devBranchName,
+    });
 
-    let branchId;
-    if (branches.length === 0) {
-      throw new Error(`No branches found for the project ${project.name}.`);
-    } else if (branches.length === 1) {
-      branchId = branches[0].id;
-    } else {
-      const branchChoices = branches.map((branch) => {
-        return {
-          title: branch.name,
-          value: branch.id,
-        };
-      });
+    writer(props).end(branch, {
+      fields: BRANCH_FIELDS,
+      title: 'Branch',
+    });
 
-      const { branchIdChoice } = await prompts({
-        onState: onPromptState,
-        type: 'select',
-        name: 'branchIdChoice',
-        message: `What branch would you like to use?`,
-        choices: branchChoices,
-        initial: 0,
-      });
-      branchId = branchIdChoice;
-      trackEvent('create-app', { phase: 'neon-branch' });
-    }
+    const database = await createDatabase({
+      appName,
+      apiClient: props.apiClient,
+      branchId: branch.id,
+      projectId: project.id,
+    });
 
-    const {
-      data: { endpoints },
-    } = await props.apiClient.listProjectBranchEndpoints(project.id, branchId);
-    const endpoint = endpoints.find((e) => e.type === EndpointType.ReadWrite);
-    if (!endpoint) {
-      throw new Error(
-        `No read-write endpoint found for the project ${project.name}.`,
-      );
-    }
+    writer(props).end(database, {
+      fields: DATABASE_FIELDS,
+      title: 'Database',
+    });
 
     const {
       data: { roles },
-    } = await props.apiClient.listProjectBranchRoles(project.id, branchId);
+    } = await props.apiClient.listProjectBranchRoles(project.id, branch.id);
     let role;
     if (roles.length === 0) {
-      throw new Error(`No roles found for the branch: ${branchId}`);
+      throw new Error(`No roles found for the branch: ${branch.id}`);
     } else if (roles.length === 1) {
       role = roles[0];
     } else {
@@ -431,38 +822,17 @@ const bootstrap = async (props: CommonProps) => {
       if (!role) {
         throw new Error(`No role found for the name: ${roleName}`);
       }
-      trackEvent('create-app', { phase: 'neon-role' });
+      trackEvent('create-app', { phase: 'neon-role-dev' });
     }
 
     const {
-      data: { databases: branchDatabases },
-    } = await props.apiClient.listProjectBranchDatabases(project.id, branchId);
-    let database;
-    if (branchDatabases.length === 0) {
-      throw new Error(`No databases found for the branch: ${branchId}`);
-    } else if (branchDatabases.length === 1) {
-      database = branchDatabases[0];
-    } else {
-      const databaseChoices = branchDatabases.map((db) => {
-        return {
-          title: db.name,
-          value: db.id,
-        };
-      });
-
-      const { databaseId } = await prompts({
-        onState: onPromptState,
-        type: 'select',
-        name: 'databaseId',
-        message: `What database would you like to use?`,
-        choices: databaseChoices,
-        initial: 0,
-      });
-      database = branchDatabases.find((d) => d.id === databaseId);
-      if (!database) {
-        throw new Error(`No database found with ID: ${databaseId}`);
-      }
-      trackEvent('create-app', { phase: 'neon-database' });
+      data: { endpoints },
+    } = await props.apiClient.listProjectBranchEndpoints(project.id, branch.id);
+    const endpoint = endpoints.find((e) => e.type === EndpointType.ReadWrite);
+    if (!endpoint) {
+      throw new Error(
+        `No read-write endpoint found for the project ${project.name}.`,
+      );
     }
 
     const {
@@ -478,14 +848,14 @@ const bootstrap = async (props: CommonProps) => {
     connectionUrl.pathname = database.name;
     connectionUrl.username = role.name;
     connectionUrl.password = password;
-    connectionString = connectionUrl.toString();
+    devConnectionString = connectionUrl.toString();
   }
 
   const environmentVariables: EnvironmentVariable[] = [];
 
-  if (finalOptions.framework === 'Next.js') {
+  if (options.framework === 'Next.js') {
     let template;
-    if (finalOptions.auth === 'auth.js') {
+    if (options.auth === 'auth.js') {
       template =
         'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-drizzle-authjs';
     } else {
@@ -494,15 +864,15 @@ const bootstrap = async (props: CommonProps) => {
     }
 
     let packageManager = '--use-npm';
-    if (finalOptions.packageManager === 'bun') {
+    if (options.packageManager === 'bun') {
       packageManager = '--use-bun';
-    } else if (finalOptions.packageManager === 'pnpm') {
+    } else if (options.packageManager === 'pnpm') {
       packageManager = '--use-pnpm';
     }
 
     try {
       execSync(
-        `${getCreateNextAppCommand(finalOptions.packageManager)} \
+        `${getCreateNextAppCommand(options.packageManager)} \
             ${packageManager} \
             --example ${template} \
             ${appName}`,
@@ -512,52 +882,76 @@ const bootstrap = async (props: CommonProps) => {
       throw new Error(`Creating a Next.js project failed: ${String(error)}.`);
     }
 
-    if (finalOptions.auth === 'auth.js') {
-      // Generate AUTH_SECRET using openssl
-      const authSecret = execSync('openssl rand -base64 33').toString().trim();
+    if (options.auth === 'auth.js') {
+      const devAuthSecret = getAuthjsSecret();
+      const prodAuthSecret = getAuthjsSecret();
 
       environmentVariables.push({
         key: 'DATABASE_URL',
-        value: connectionString,
+        value: devConnectionString,
         kind: 'build',
+        environment: 'development',
       });
       environmentVariables.push({
         key: 'DATABASE_URL',
-        value: connectionString,
+        value: devConnectionString,
         kind: 'runtime',
+        environment: 'development',
       });
+
       environmentVariables.push({
         key: 'AUTH_SECRET',
-        value: authSecret,
+        value: devAuthSecret,
         kind: 'build',
+        environment: 'development',
       });
       environmentVariables.push({
         key: 'AUTH_SECRET',
-        value: authSecret,
+        value: devAuthSecret,
         kind: 'runtime',
+        environment: 'development',
+      });
+
+      environmentVariables.push({
+        key: 'AUTH_SECRET',
+        value: prodAuthSecret,
+        kind: 'build',
+        environment: 'production',
+      });
+      environmentVariables.push({
+        key: 'AUTH_SECRET',
+        value: prodAuthSecret,
+        kind: 'runtime',
+        environment: 'production',
       });
 
       // Write the content to the .env.local file
       writeEnvFile({
         fileName: `${appName}/.env.local`,
-        secrets: environmentVariables.filter((e) => e.kind === 'runtime'),
+        secrets: environmentVariables.filter(
+          (e) => e.kind === 'runtime' && e.environment === 'development',
+        ),
       });
     } else {
       environmentVariables.push({
         key: 'DATABASE_URL',
-        value: connectionString,
+        value: devConnectionString,
         kind: 'build',
+        environment: 'development',
       });
       environmentVariables.push({
         key: 'DATABASE_URL',
-        value: connectionString,
+        value: devConnectionString,
         kind: 'runtime',
+        environment: 'development',
       });
 
       // Write the content to the .env.local file
       writeEnvFile({
         fileName: `${appName}/.env.local`,
-        secrets: environmentVariables.filter((e) => e.kind === 'runtime'),
+        secrets: environmentVariables.filter(
+          (e) => e.kind === 'runtime' && e.environment === 'development',
+        ),
       });
     }
 
@@ -565,20 +959,17 @@ const bootstrap = async (props: CommonProps) => {
       `Created a Next.js project in ${chalk.blue(
         appName,
       )}.\n\nYou can now run ${chalk.blue(
-        `cd ${appName} && ${finalOptions.packageManager} run dev`,
+        `cd ${appName} && ${options.packageManager} run dev`,
       )}`,
     );
   }
 
-  if (finalOptions.orm === 'drizzle') {
+  if (options.orm === 'drizzle') {
     try {
-      execSync(
-        `${finalOptions.packageManager} run db:generate -- --name init_db`,
-        {
-          cwd: appName,
-          stdio: 'inherit',
-        },
-      );
+      execSync(`${options.packageManager} run db:generate -- --name init_db`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
     } catch (error) {
       throw new Error(
         `Generating the database schema failed: ${String(error)}.`,
@@ -586,15 +977,11 @@ const bootstrap = async (props: CommonProps) => {
     }
 
     // If the user doesn't specify Auth.js, there is no schema to be applied.
-    if (finalOptions.auth === 'auth.js') {
-      try {
-        execSync(`${finalOptions.packageManager} run db:migrate`, {
-          cwd: appName,
-          stdio: 'inherit',
-        });
-      } catch (error) {
-        throw new Error(`Applying the schema failed: ${String(error)}.`);
-      }
+    if (options.auth === 'auth.js') {
+      applyMigrations({
+        options,
+        appName,
+      });
     }
 
     out.text(`Database schema generated and applied.\n`);
@@ -616,113 +1003,36 @@ const bootstrap = async (props: CommonProps) => {
         value: 'cloudflare',
         description: 'We will install the Wrangler CLI globally.',
       },
-      { title: 'Skip this step', value: -1 },
+      { title: 'Skip this step', value: 'no-deployment' },
     ],
     initial: 0,
   });
-  finalOptions.deployment = deployment;
+  options.deployment = deployment;
   trackEvent('create-app', {
     phase: 'deployment',
-    meta: { deployment: finalOptions.deployment },
+    meta: { deployment: options.deployment },
   });
 
-  if (finalOptions.deployment === 'vercel') {
-    try {
-      const envVarsStr = environmentVariables
-        .reduce<string[]>((acc, envVar) => {
-          acc.push(envVar.kind === 'build' ? '--build-env' : '--env');
-          acc.push(`${envVar.key}=${envVar.value}`);
-          return acc;
-        }, [])
-        .join(' ');
-
-      execSync(
-        `${getExecutorProgram(
-          finalOptions.packageManager,
-        )} vercel@34.3.1 deploy ${envVarsStr}`,
-        {
-          cwd: appName,
-          stdio: 'inherit',
-        },
-      );
-    } catch (error) {
-      throw new Error(`Deploying to Vercel failed: ${String(error)}.`);
-    }
-  } else if (finalOptions.deployment === 'cloudflare') {
-    try {
-      execSync('command -v wrangler', {
-        cwd: appName,
-        stdio: 'ignore',
-      });
-    } catch {
-      try {
-        execSync(
-          `${finalOptions.packageManager} install -g @cloudflare/wrangler`,
-          {
-            cwd: appName,
-            stdio: 'inherit',
-          },
-        );
-      } catch (error) {
-        throw new Error(
-          `Failed to install the Cloudflare CLI: ${String(error)}.`,
-        );
-      }
-    }
-
-    const wranglerToml = `name = "${appName}"
-compatibility_flags = [ "nodejs_compat" ]
-pages_build_output_dir = ".vercel/output/static"
-compatibility_date = "2022-11-30"
-
-[vars]
-${environmentVariables
-  .map((envVar) => {
-    if (envVar.kind === 'runtime') {
-      return `${envVar.key} = "${envVar.value}"`;
-    }
-  })
-  .join('\n')}
-`;
-    writeFileSync(`${appName}/wrangler.toml`, wranglerToml, 'utf8');
-
-    try {
-      execSync(
-        `${getExecutorProgram(
-          finalOptions.packageManager,
-        )} @cloudflare/next-on-pages@1.12.1`,
-        {
-          cwd: appName,
-          stdio: 'inherit',
-        },
-      );
-    } catch (error) {
-      throw new Error(
-        `Failed to build Next.js app with next-on-pages: ${String(error)}.`,
-      );
-    }
-
-    try {
-      execSync(`wrangler pages deploy`, {
-        cwd: appName,
-        stdio: 'inherit',
-      });
-    } catch (error) {
-      throw new Error(
-        `Failed to deploy to Cloudflare Pages: ${String(error)}.`,
-      );
-    }
+  if (options.deployment !== 'no-deployment') {
+    await deployApp({
+      options,
+      props,
+      devBranchName,
+      project,
+      appName,
+      environmentVariables,
+    });
   }
 
   trackEvent('create-app', { phase: 'success-finish' });
 
-  if (finalOptions.framework === 'Next.js') {
+  if (options.framework === 'Next.js') {
     log.info(
       chalk.green(`
 
 You can now run:
 
-  cd ${appName} && ${finalOptions.packageManager} run dev
+  cd ${appName} && ${options.packageManager} run dev
 
 to start the app locally.`),
     );

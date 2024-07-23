@@ -5,7 +5,7 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 
-const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
+export const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
 
 export const command = 'databases';
 export const describe = 'Manage databases';
