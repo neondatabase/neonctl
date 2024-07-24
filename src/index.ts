@@ -190,13 +190,15 @@ builder = builder
     process.exit(1);
   });
 
-try {
-  const args = await builder.argv;
-  if (args._.length === 0 || args.help) {
-    await showHelp(builder);
-    process.exit(0);
+void (async () => {
+  try {
+    const args = await builder.argv;
+    if (args._.length === 0 || args.help) {
+      await showHelp(builder);
+      process.exit(0);
+    }
+    await closeAnalytics();
+  } catch {
+    // noop
   }
-  await closeAnalytics();
-} catch {
-  // noop
-}
+})();
