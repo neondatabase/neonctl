@@ -54,7 +54,7 @@ export const handler = async (args: CommonProps) => {
 };
 
 type BootstrapOptions = {
-  auth?: 'auth.js';
+  auth?: 'auth.js' | 'no-auth';
   framework: 'Next.js' | 'SvelteKit' | 'Nuxt.js';
   deployment: 'vercel' | 'cloudflare' | 'no-deployment';
   orm?: 'drizzle' | 'prisma';
@@ -183,25 +183,47 @@ function applyMigrations({
   appName: string;
   connectionString?: string;
 }) {
-  try {
-    // We have to seed `env` with all of `process.env` so that things like
-    // `NODE_ENV` and `PATH` are available to the child process.
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-    };
-    if (connectionString) {
-      env.DATABASE_URL = connectionString;
+  // We have to seed `env` with all of `process.env` so that things like
+  // `NODE_ENV` and `PATH` are available to the child process.
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+  };
+  if (connectionString) {
+    env.DATABASE_URL = connectionString;
+  }
+
+  if (options.orm === 'drizzle') {
+    try {
+      execSync(`${options.packageManager} run db:migrate`, {
+        cwd: appName,
+        stdio: 'inherit',
+        env,
+      });
+    } catch (error) {
+      throw new Error(
+        `Applying the schema to the dev branch failed: ${String(error)}.`,
+      );
+    }
+  } else if (options.orm === 'prisma') {
+    try {
+      execSync(`${options.packageManager} run db:generate`, {
+        cwd: appName,
+        stdio: 'inherit',
+        env,
+      });
+    } catch (error) {
+      throw new Error(`Generating the Prisma client failed: ${String(error)}.`);
     }
 
-    execSync(`${options.packageManager} run db:migrate`, {
-      cwd: appName,
-      stdio: 'inherit',
-      env,
-    });
-  } catch (error) {
-    throw new Error(
-      `Applying the schema to the dev branch failed: ${String(error)}.`,
-    );
+    try {
+      execSync(`${options.packageManager} run db:migrate -- --skip-generate`, {
+        cwd: appName,
+        stdio: 'inherit',
+        env,
+      });
+    } catch (error) {
+      throw new Error(`Applying the schema failed: ${String(error)}.`);
+    }
   }
 }
 
@@ -333,8 +355,9 @@ async function deployApp({
     environment: 'production',
   });
 
-  // If the user doesn't specify Auth.js, there is no schema to be applied.
-  if (options.auth === 'auth.js') {
+  // If the user doesn't specify Auth.js, there is no schema to be applied
+  // in Drizzle.
+  if (options.auth === 'auth.js' || options.orm === 'prisma') {
     applyMigrations({
       options,
       appName,
@@ -568,7 +591,7 @@ const bootstrap = async (props: CommonProps) => {
     message: `What ORM would you like to use?`,
     choices: [
       { title: 'Drizzle', value: 'drizzle' },
-      { title: 'Prisma', value: 'prisma', disabled: true },
+      { title: 'Prisma', value: 'prisma' },
       { title: 'No ORM', value: -1, disabled: true },
     ],
     initial: 0,
@@ -584,7 +607,7 @@ const bootstrap = async (props: CommonProps) => {
     message: `What authentication framework do you want to use?`,
     choices: [
       { title: 'Auth.js', value: 'auth.js' },
-      { title: 'No Authentication', value: -1 },
+      { title: 'No Authentication', value: 'no-auth' },
     ],
     initial: 0,
   });
@@ -855,12 +878,18 @@ const bootstrap = async (props: CommonProps) => {
 
   if (options.framework === 'Next.js') {
     let template;
-    if (options.auth === 'auth.js') {
+    if (options.auth === 'auth.js' && options.orm === 'drizzle') {
       template =
         'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-drizzle-authjs';
-    } else {
+    } else if (options.auth === 'no-auth' && options.orm === 'drizzle') {
       template =
         'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-drizzle';
+    } else if (options.auth === 'auth.js' && options.orm === 'prisma') {
+      template =
+        'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-prisma-authjs';
+    } else if (options.auth === 'no-auth' && options.orm === 'prisma') {
+      template =
+        'https://github.com/neondatabase/neonctl-create-app-templates/tree/main/next-prisma';
     }
 
     let packageManager = '--use-npm';
@@ -925,9 +954,9 @@ const bootstrap = async (props: CommonProps) => {
         environment: 'production',
       });
 
-      // Write the content to the .env.local file
+      // Write the content to the .env file
       writeEnvFile({
-        fileName: `${appName}/.env.local`,
+        fileName: `${appName}/.env`,
         secrets: environmentVariables.filter(
           (e) => e.kind === 'runtime' && e.environment === 'development',
         ),
@@ -946,9 +975,9 @@ const bootstrap = async (props: CommonProps) => {
         environment: 'development',
       });
 
-      // Write the content to the .env.local file
+      // Write the content to the .env file
       writeEnvFile({
-        fileName: `${appName}/.env.local`,
+        fileName: `${appName}/.env`,
         secrets: environmentVariables.filter(
           (e) => e.kind === 'runtime' && e.environment === 'development',
         ),
@@ -976,12 +1005,36 @@ const bootstrap = async (props: CommonProps) => {
       );
     }
 
-    // If the user doesn't specify Auth.js, there is no schema to be applied.
+    // If the user doesn't specify Auth.js, there is no schema to be applied
+    // with Drizzle.
     if (options.auth === 'auth.js') {
       applyMigrations({
         options,
         appName,
       });
+    }
+
+    out.text(`Database schema generated and applied.\n`);
+  } else if (options.orm === 'prisma') {
+    try {
+      execSync(`${options.packageManager} run db:generate`, {
+        cwd: appName,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      throw new Error(`Generating the Prisma client failed: ${String(error)}.`);
+    }
+
+    try {
+      execSync(
+        `${options.packageManager} run db:migrate -- --name init --skip-generate`,
+        {
+          cwd: appName,
+          stdio: 'inherit',
+        },
+      );
+    } catch (error) {
+      throw new Error(`Applying the schema failed: ${String(error)}.`);
     }
 
     out.text(`Database schema generated and applied.\n`);
@@ -1002,9 +1055,19 @@ const bootstrap = async (props: CommonProps) => {
         title: 'Cloudflare',
         value: 'cloudflare',
         description: 'We will install the Wrangler CLI globally.',
+
+        // Making Prisma work on Cloudflare is a bit tricky.
+        disabled: options.orm === 'prisma',
       },
       { title: 'Skip this step', value: 'no-deployment' },
     ],
+
+    // Making Prisma work on Cloudflare is a bit tricky.
+    warn:
+      options.orm === 'prisma'
+        ? 'We do not yet support Cloudflare deployments with Prisma.'
+        : undefined,
+
     initial: 0,
   });
   options.deployment = deployment;
