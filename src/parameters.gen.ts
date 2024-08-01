@@ -38,7 +38,7 @@ export const projectCreateRequest = {
   },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
-              description: "If true, the list will be applied only to the default branch.",
+              description: "DEPRECATED: Use `protected_branches_only`.\nIf true, the list will be applied only to the default branch.\n",
               demandOption: false,
   },
   'project.settings.enable_logical_replication': {
@@ -142,7 +142,7 @@ export const projectUpdateRequest = {
   },
   'project.settings.allowed_ips.primary_branch_only': {
               type: "boolean",
-              description: "If true, the list will be applied only to the default branch.",
+              description: "DEPRECATED: Use `protected_branches_only`.\nIf true, the list will be applied only to the default branch.\n",
               demandOption: false,
   },
   'project.settings.enable_logical_replication': {
@@ -203,7 +203,7 @@ export const branchCreateRequest = {
 export const branchCreateRequestEndpointOptions = {
   'type': {
               type: "string",
-              description: "The compute endpoint type. Either `read_write` or `read_only`.\nThe `read_only` compute endpoint type is not yet supported.\n",
+              description: "The compute endpoint type. Either `read_write` or `read_only`.\n",
               demandOption: true,
  choices: ["read_only","read_write"],
   },
@@ -246,7 +246,7 @@ export const endpointCreateRequest = {
   },
   'endpoint.type': {
               type: "string",
-              description: "The compute endpoint type. Either `read_write` or `read_only`.\nThe `read_only` compute endpoint type is not yet supported.\n",
+              description: "The compute endpoint type. Either `read_write` or `read_only`.\n",
               demandOption: true,
  choices: ["read_only","read_write"],
   },

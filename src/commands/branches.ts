@@ -102,7 +102,6 @@ export const builder = (argv: yargs.Argv) =>
           },
           annotation: {
             type: 'string',
-            describe: '',
             default: '{}',
           },
         }),
@@ -280,6 +279,7 @@ const create = async (
     type: EndpointType;
     psql: boolean;
     suspendTimeout: number;
+    annotation?: string;
     '--'?: string[];
   },
 ) => {
@@ -334,7 +334,7 @@ const create = async (
             },
           ]
         : [],
-      annotation: {},
+      annotation_value: JSON.parse(props.annotation || '{}'),
     }),
   );
 
