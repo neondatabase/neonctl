@@ -319,11 +319,6 @@ const create = async (
       });
   })();
 
-  // const annotationMapStringString = Object.entries(props.annotation).reduce((acc, [key, value]) => {
-  //   acc[key] = value.toString();
-  //   return acc;
-  // }, {});
-
   const { data } = await retryOnLock(() =>
     props.apiClient.createProjectBranch(props.projectId, {
       branch: {
