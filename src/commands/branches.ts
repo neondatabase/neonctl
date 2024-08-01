@@ -101,9 +101,9 @@ export const builder = (argv: yargs.Argv) =>
             default: false,
           },
           annotation: {
-            type: 'array',
+            type: 'string',
             hidden: true,
-            default: {},
+            default: '{}',
           },
         }),
       (args) => create(args as any),
@@ -280,7 +280,7 @@ const create = async (
     type: EndpointType;
     psql: boolean;
     suspendTimeout: number;
-    annotation?: Record<string, string>;
+    annotation?: string;
     '--'?: string[];
   },
 ) => {
@@ -319,6 +319,11 @@ const create = async (
       });
   })();
 
+  // const annotationMapStringString = Object.entries(props.annotation).reduce((acc, [key, value]) => {
+  //   acc[key] = value.toString();
+  //   return acc;
+  // }, {});
+
   const { data } = await retryOnLock(() =>
     props.apiClient.createProjectBranch(props.projectId, {
       branch: {
@@ -335,7 +340,9 @@ const create = async (
             },
           ]
         : [],
-      annotation_value: props.annotation ? props.annotation : undefined,
+      annotation_value: props.annotation
+        ? JSON.parse(props.annotation)
+        : undefined,
     }),
   );
 
