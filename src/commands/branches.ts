@@ -100,6 +100,11 @@ export const builder = (argv: yargs.Argv) =>
             describe: 'Connect to a new branch via psql',
             default: false,
           },
+          annotation: {
+            type: 'string',
+            hidden: true,
+            default: '{}',
+          },
         }),
       (args) => create(args as any),
     )
@@ -275,6 +280,7 @@ const create = async (
     type: EndpointType;
     psql: boolean;
     suspendTimeout: number;
+    annotation?: string;
     '--'?: string[];
   },
 ) => {
@@ -329,6 +335,9 @@ const create = async (
             },
           ]
         : [],
+      annotation_value: props.annotation
+        ? JSON.parse(props.annotation)
+        : undefined,
     }),
   );
 
