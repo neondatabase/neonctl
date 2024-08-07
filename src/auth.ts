@@ -23,6 +23,11 @@ const NEONCTL_SCOPES = [
   'urn:neoncloud:projects:read',
   'urn:neoncloud:projects:update',
   'urn:neoncloud:projects:delete',
+  'urn:neoncloud:orgs:create',
+  'urn:neoncloud:orgs:read',
+  'urn:neoncloud:orgs:update',
+  'urn:neoncloud:orgs:delete',
+  'urn:neoncloud:orgs:permission',
 ] as const;
 
 const AUTH_TIMEOUT_SECONDS = 60;
