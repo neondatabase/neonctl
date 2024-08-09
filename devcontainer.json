@@ -1,5 +1,0 @@
-{
-  "onCreateCommand": "npm install -g bun",
-  "postStartCommand": "bun install && bun run build",
-  "waitFor": "postStartCommand"
-}
