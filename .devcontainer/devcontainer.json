@@ -1,11 +1,4 @@
 {
   "name": "Neon CLI",
-  "postCreateCommand": "npm install -g bun",
-  "postStartCommand": "bun install && bun run build",
-  "waitFor": "postStartCommand",
-  "customizations": {
-    "vscode": {
-      "extensions": ["dbaeumer.vscode-eslint"]
-    }
-  }
+  "postCreateCommand": "npm install -g bun && bun install"
 }
