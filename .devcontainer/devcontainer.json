@@ -1,4 +1,5 @@
 {
   "name": "Neon CLI",
-  "postCreateCommand": "npm install -g bun && bun install"
+  "postCreateCommand": "npm install -g bun && bun install",
+  "waitFor": "postCreateCommand"
 }
