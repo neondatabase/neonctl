@@ -67,7 +67,7 @@ export const builder = (argv: yargs.Argv) => {
             type: 'string',
           },
           'org-id': {
-            describe: 'List projects of a given organization',
+            describe: "The project's organization ID",
             type: 'string',
           },
           psql: {
