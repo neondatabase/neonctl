@@ -70,6 +70,17 @@ connection_uris:
 "
 `;
 
+exports[`projects > create with org id 1`] = `
+"project:
+  id: new-project-789012
+  name: test_project
+  created_at: 2022-01-01T00:00:00.000Z
+  org_id: org-2
+connection_uris:
+  - connection_uri: postgres://localhost:5432/test_project
+"
+`;
+
 exports[`projects > delete 1`] = `
 "id: test
 name: test
@@ -109,6 +120,25 @@ shared_with_me:
     name: Shared Project
     created_at: 2024-04-03T04:45:46Z
     updated_at: 2024-04-11T16:13:43Z
+"
+`;
+
+exports[`projects > list with org id 1`] = `
+"- id: 4
+  name: Project_4
+  created_at: 2019-01-01T00:00:00.000Z
+  updated_at: 2019-01-01T00:00:00.000Z
+  org_id: org-2
+- id: 5
+  name: Project_5
+  created_at: 2019-01-01T00:00:00.000Z
+  updated_at: 2019-01-01T00:00:00.000Z
+  org_id: org-2
+- id: 6
+  name: Project_6
+  created_at: 2019-01-01T00:00:00.000Z
+  updated_at: 2019-01-01T00:00:00.000Z
+  org_id: org-2
 "
 `;
 

@@ -10,8 +10,23 @@ describe('projects', () => {
     await testCliCommand(['projects', 'list']);
   });
 
+  test('list with org id', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'list', '--org-id', 'org-2']);
+  });
+
   test('create', async ({ testCliCommand }) => {
     await testCliCommand(['projects', 'create', '--name', 'test_project']);
+  });
+
+  test('create with org id', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'projects',
+      'create',
+      '--name',
+      'test_project',
+      '--org-id',
+      'org-2',
+    ]);
   });
 
   test('create with database and role', async ({ testCliCommand }) => {
