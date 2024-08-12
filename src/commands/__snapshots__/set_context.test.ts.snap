@@ -1,6 +1,53 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`set_context > should set the context > get project id overrides context set project 1`] = `
+exports[`set_context > should set the context to organization > create projects selecting organization from the context 1`] = `
+"project:
+  id: new-project-789012
+  name: test_project
+  created_at: 2022-01-01T00:00:00.000Z
+  org_id: org-2
+connection_uris:
+  - connection_uri: postgres://localhost:5432/test_project
+"
+`;
+
+exports[`set_context > should set the context to organization > list projects selecting organization from the context 1`] = `
+"- id: 4
+  name: Project_4
+  created_at: 2019-01-01T00:00:00.000Z
+  updated_at: 2019-01-01T00:00:00.000Z
+  org_id: org-2
+- id: 5
+  name: Project_5
+  created_at: 2019-01-01T00:00:00.000Z
+  updated_at: 2019-01-01T00:00:00.000Z
+  org_id: org-2
+- id: 6
+  name: Project_6
+  created_at: 2019-01-01T00:00:00.000Z
+  updated_at: 2019-01-01T00:00:00.000Z
+  org_id: org-2
+"
+`;
+
+exports[`set_context > should set the context to organization > list projects with explicit org id overrides context 1`] = `
+"- id: 7
+  name: Project_7
+  created_at: 2019-01-01T00:00:00.000Z
+  updated_at: 2019-01-01T00:00:00.000Z
+  org_id: org-3
+"
+`;
+
+exports[`set_context > should set the context to organization > set-context 1`] = `""`;
+
+exports[`set_context > should set the context to organization > set-context 2`] = `
+"{
+  "orgId": "org-2"
+}"
+`;
+
+exports[`set_context > should set the context to project > get project id overrides context set project 1`] = `
 "id: project-id-123
 name: project name 123
 created_at: 2019-01-01T00:00:00Z
@@ -12,7 +59,7 @@ settings:
 "
 `;
 
-exports[`set_context > should set the context > list branches selecting project from the context 1`] = `
+exports[`set_context > should set the context to project > list branches selecting project from the context 1`] = `
 "- id: br-main-branch-123456
   name: main
   default: true
@@ -41,7 +88,7 @@ exports[`set_context > should set the context > list branches selecting project 
 "
 `;
 
-exports[`set_context > should set the context > set the branchId and projectId is from context 1`] = `
+exports[`set_context > should set the context to project > set the branchId and projectId is from context 1`] = `
 "- name: db1
   owner_name: user1
 - name: db2
@@ -51,11 +98,11 @@ exports[`set_context > should set the context > set the branchId and projectId i
 "
 `;
 
-exports[`set_context > should set the context > set the branchId and projectId is from context 2`] = `""`;
+exports[`set_context > should set the context to project > set the branchId and projectId is from context 2`] = `""`;
 
-exports[`set_context > should set the context > set-context 1`] = `""`;
+exports[`set_context > should set the context to project > set-context 1`] = `""`;
 
-exports[`set_context > should set the context > set-context 2`] = `
+exports[`set_context > should set the context to project > set-context 2`] = `
 "{
   "projectId": "test"
 }"
