@@ -4,6 +4,7 @@ import { normalize, resolve } from 'node:path';
 import yargs from 'yargs';
 
 export type Context = {
+  orgId?: string;
   projectId?: string;
   branchId?: string;
 };
@@ -48,6 +49,9 @@ export const enrichFromContext = (
     return;
   }
   const context = readContextFile(args.contextFile);
+  if (!args.orgId) {
+    args.orgId = context.orgId;
+  }
   if (!args.projectId) {
     args.projectId = context.projectId;
   }

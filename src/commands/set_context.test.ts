@@ -36,7 +36,7 @@ const test = originalTest.extend<{
 });
 
 describe('set_context', () => {
-  describe('should set the context', () => {
+  describe('should set the context to project', () => {
     test('set-context', async ({ testCliCommand, readFile }) => {
       await testCliCommand([
         'set-context',
@@ -122,6 +122,83 @@ describe('set_context', () => {
           stderr: 'ERROR: Not Found',
         },
       );
+    });
+  });
+
+  describe('should set the context to organization', () => {
+    test('set-context', async ({ testCliCommand, readFile }) => {
+      await testCliCommand([
+        'set-context',
+        '--org-id',
+        'org-2',
+        '--context-file',
+        CONTEXT_FILE,
+      ]);
+      expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
+    });
+
+    test('list projects selecting organization from the context', async ({
+      testCliCommand,
+      writeFile,
+    }) => {
+      writeFile(CONTEXT_FILE, {
+        orgId: 'org-2',
+      });
+      await testCliCommand([
+        'projects',
+        'list',
+        '--context-file',
+        CONTEXT_FILE,
+      ]);
+    });
+
+    test('list projects with explicit org id overrides context', async ({
+      testCliCommand,
+      writeFile,
+    }) => {
+      writeFile(CONTEXT_FILE, {
+        orgId: 'org-2',
+      });
+      await testCliCommand([
+        'project',
+        'list',
+        '--org-id',
+        'org-3',
+        '--context-file',
+        CONTEXT_FILE,
+      ]);
+    });
+
+    test('create projects selecting organization from the context', async ({
+      testCliCommand,
+      writeFile,
+    }) => {
+      writeFile(CONTEXT_FILE, {
+        orgId: 'org-2',
+      });
+      await testCliCommand([
+        'projects',
+        'create',
+        '--name',
+        'test_project',
+        '--context-file',
+        CONTEXT_FILE,
+      ]);
+    });
+  });
+
+  describe('can set the context to project and organization at the same time', () => {
+    test('set-context', async ({ testCliCommand, readFile }) => {
+      await testCliCommand([
+        'set-context',
+        '--project-id',
+        'test_project',
+        '--org-id',
+        'org-2',
+        '--context-file',
+        CONTEXT_FILE,
+      ]);
+      expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
     });
   });
 });
