@@ -186,4 +186,19 @@ describe('set_context', () => {
       ]);
     });
   });
+
+  describe('can set the context to project and organization at the same time', () => {
+    test('set-context', async ({ testCliCommand, readFile }) => {
+      await testCliCommand([
+        'set-context',
+        '--project-id',
+        'test_project',
+        '--org-id',
+        'org-2',
+        '--context-file',
+        CONTEXT_FILE,
+      ]);
+      expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
+    });
+  });
 });

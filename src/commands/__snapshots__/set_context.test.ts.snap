@@ -1,5 +1,14 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`set_context > can set the context to project and organization at the same time > set-context 1`] = `""`;
+
+exports[`set_context > can set the context to project and organization at the same time > set-context 2`] = `
+"{
+  "projectId": "test_project",
+  "orgId": "org-2"
+}"
+`;
+
 exports[`set_context > should set the context to organization > create projects selecting organization from the context 1`] = `
 "project:
   id: new-project-789012
