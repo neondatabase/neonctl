@@ -182,6 +182,7 @@ builder = builder
     } else {
       sendError(err || new Error(msg), matchErrorCode(msg || err?.message));
       log.error(msg || err?.message);
+      process.exit(1);
     }
     await closeAnalytics();
     if (err?.stack) {
