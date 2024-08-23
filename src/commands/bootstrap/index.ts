@@ -676,7 +676,7 @@ const bootstrap = async (props: CommonProps) => {
   let projectCreateRequest: ProjectCreateRequest['project'];
   let project;
   let devConnectionString: string;
-  const devBranchName = `dev-${cryptoRandomString({
+  const devBranchName = `dev/${cryptoRandomString({
     length: 10,
     type: 'url-safe',
   })}`;
