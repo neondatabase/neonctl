@@ -201,7 +201,7 @@ const list = async (props: CommonProps & { orgId?: string }) => {
   if (sharedProjects) {
     out.write(await sharedProjects, {
       fields: PROJECT_FIELDS,
-      title: 'Shared with me',
+      title: 'Shared with you',
     });
   }
 
