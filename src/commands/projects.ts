@@ -26,6 +26,7 @@ export const PROJECT_FIELDS = [
 const REGIONS = [
   'aws-us-west-2',
   'aws-ap-southeast-1',
+  'aws-ap-southeast-2',
   'aws-eu-central-1',
   'aws-us-east-2',
   'aws-us-east-1',
