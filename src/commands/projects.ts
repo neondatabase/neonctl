@@ -29,6 +29,7 @@ const REGIONS = [
   'aws-eu-central-1',
   'aws-us-east-2',
   'aws-us-east-1',
+  'azure-eastus2',
 ];
 
 const PROJECTS_LIST_LIMIT = 100;
