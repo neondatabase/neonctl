@@ -293,20 +293,48 @@ const create = async (
           if (!branch) {
             throw new Error('No default branch found');
           }
-          return { parent_id: branch.id };
+          return { parent_id: branch.id, protected: branch.protected };
         });
     }
 
     if (looksLikeLSN(props.parent)) {
-      return { parent_lsn: props.parent };
+      return props.apiClient
+        .listProjectBranches(props.projectId)
+        .then(({ data }) => {
+          const branch = data.branches.find(
+            (b) => b.parent_lsn === props.parent,
+          );
+          if (!branch) {
+            throw new Error(`Branch ${props.parent} not found`);
+          }
+          return { parent_id: branch.id, protected: branch.protected };
+        });
     }
 
     if (looksLikeTimestamp(props.parent)) {
-      return { parent_timestamp: props.parent };
+      return props.apiClient
+        .listProjectBranches(props.projectId)
+        .then(({ data }) => {
+          const branch = data.branches.find(
+            (b) => b.parent_timestamp === props.parent,
+          );
+          if (!branch) {
+            throw new Error(`Branch ${props.parent} not found`);
+          }
+          return { parent_id: branch.id, protected: branch.protected };
+        });
     }
 
     if (looksLikeBranchId(props.parent)) {
-      return { parent_id: props.parent };
+      return props.apiClient
+        .listProjectBranches(props.projectId)
+        .then(({ data }) => {
+          const branch = data.branches.find((b) => b.id === props.parent);
+          if (!branch) {
+            throw new Error(`Branch ${props.parent} not found`);
+          }
+          return { parent_id: branch.id, protected: branch.protected };
+        });
     }
     return props.apiClient
       .listProjectBranches(props.projectId)
@@ -315,9 +343,23 @@ const create = async (
         if (!branch) {
           throw new Error(`Branch ${props.parent} not found`);
         }
-        return { parent_id: branch.id };
+        return { parent_id: branch.id, protected: branch.protected };
       });
   })();
+
+  const out = writer(props);
+  if (parentProps.protected) {
+    out.write(
+      {
+        warning:
+          'The parent branch is protected, the new branch role password will be changed.',
+      },
+      {
+        fields: ['warning'],
+        title: 'warning',
+      },
+    );
+  }
 
   const { data } = await retryOnLock(() =>
     props.apiClient.createProjectBranch(props.projectId, {
@@ -341,7 +383,6 @@ const create = async (
     }),
   );
 
-  const out = writer(props);
   out.write(data.branch, {
     fields: BRANCH_FIELDS,
     title: 'branch',
