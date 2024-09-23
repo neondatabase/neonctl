@@ -347,17 +347,9 @@ const create = async (
       });
   })();
 
-  const out = writer(props);
   if (parentProps.protected) {
-    out.write(
-      {
-        warning:
-          'The parent branch is protected, the new branch role password will be changed.',
-      },
-      {
-        fields: ['warning'],
-        title: 'warning',
-      },
+    process.stderr.write(
+      'The parent branch is protected, the new branch role password will be changed.',
     );
   }
 
@@ -382,6 +374,8 @@ const create = async (
         : undefined,
     }),
   );
+
+  const out = writer(props);
 
   out.write(data.branch, {
     fields: BRANCH_FIELDS,
