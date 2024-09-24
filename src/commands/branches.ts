@@ -341,7 +341,7 @@ const create = async (
   const parent = branches.find((b) => b.id === data.branch.parent_id);
   if (parent?.protected) {
     log.warning(
-      'The parent branch is protected, the new branch role password is changed.',
+      'The parent branch is protected; a unique role password has been generated for the new branch.',
     );
   }
 
