@@ -286,9 +286,7 @@ const create = async (
 ) => {
   const branches = await props.apiClient
     .listProjectBranches(props.projectId)
-    .then(({ data }) => {
-      return data.branches;
-    });
+    .then(({ data }) => data.branches);
 
   const parentProps = (() => {
     if (!props.parent) {
