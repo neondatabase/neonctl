@@ -284,17 +284,17 @@ const create = async (
     '--'?: string[];
   },
 ) => {
-  const parentProps = await (() => {
+  const branches = await props.apiClient
+    .listProjectBranches(props.projectId)
+    .then(({ data }) => data.branches);
+
+  const parentProps = (() => {
     if (!props.parent) {
-      return props.apiClient
-        .listProjectBranches(props.projectId)
-        .then(({ data }) => {
-          const branch = data.branches.find((b) => b.default);
-          if (!branch) {
-            throw new Error('No default branch found');
-          }
-          return { parent_id: branch.id };
-        });
+      const branch = branches.find((b) => b.default);
+      if (!branch) {
+        throw new Error('No default branch found');
+      }
+      return { parent_id: branch.id };
     }
 
     if (looksLikeLSN(props.parent)) {
@@ -308,15 +308,12 @@ const create = async (
     if (looksLikeBranchId(props.parent)) {
       return { parent_id: props.parent };
     }
-    return props.apiClient
-      .listProjectBranches(props.projectId)
-      .then(({ data }) => {
-        const branch = data.branches.find((b) => b.name === props.parent);
-        if (!branch) {
-          throw new Error(`Branch ${props.parent} not found`);
-        }
-        return { parent_id: branch.id };
-      });
+
+    const branch = branches.find((b) => b.name === props.parent);
+    if (!branch) {
+      throw new Error(`Branch ${props.parent} not found`);
+    }
+    return { parent_id: branch.id };
   })();
 
   const { data } = await retryOnLock(() =>
@@ -341,7 +338,15 @@ const create = async (
     }),
   );
 
+  const parent = branches.find((b) => b.id === data.branch.parent_id);
+  if (parent?.protected) {
+    log.warning(
+      'The parent branch is protected; a unique role password has been generated for the new branch.',
+    );
+  }
+
   const out = writer(props);
+
   out.write(data.branch, {
     fields: BRANCH_FIELDS,
     title: 'branch',
