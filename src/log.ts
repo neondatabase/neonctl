@@ -7,6 +7,9 @@ export const log = {
       process.stderr.write(`DEBUG: ${format(...args)}\n`);
     }
   },
+  warning: (...args: unknown[]) => {
+    process.stderr.write(`WARNING: ${format(...args)}\n`);
+  },
   info: (...args: unknown[]) => {
     process.stderr.write(`INFO: ${format(...args)}\n`);
   },

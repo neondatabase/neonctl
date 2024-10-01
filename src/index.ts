@@ -146,6 +146,7 @@ builder = builder
     default: true,
   })
   .middleware(analyticsMiddleware, true)
+  .version(pkg.version)
   .group('version', 'Global options:')
   .alias('version', 'v')
   .completion()

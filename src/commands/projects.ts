@@ -26,9 +26,11 @@ export const PROJECT_FIELDS = [
 const REGIONS = [
   'aws-us-west-2',
   'aws-ap-southeast-1',
+  'aws-ap-southeast-2',
   'aws-eu-central-1',
   'aws-us-east-2',
   'aws-us-east-1',
+  'azure-eastus2',
 ];
 
 const PROJECTS_LIST_LIMIT = 100;
@@ -201,7 +203,7 @@ const list = async (props: CommonProps & { orgId?: string }) => {
   if (sharedProjects) {
     out.write(await sharedProjects, {
       fields: PROJECT_FIELDS,
-      title: 'Shared with me',
+      title: 'Shared with you',
     });
   }
 
