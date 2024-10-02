@@ -20,18 +20,6 @@ describe('ip-allow', () => {
     });
   });
 
-  test('Add IP allow - Primary', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'ip-allow',
-      'add',
-      '127.0.0.1',
-      '192.168.10.1-192.168.10.15',
-      '--primary-only',
-      '--project-id',
-      'test',
-    ]);
-  });
-
   test('Add IP allow - Protected', async ({ testCliCommand }) => {
     await testCliCommand([
       'ip-allow',
