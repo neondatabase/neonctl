@@ -171,12 +171,6 @@ export const builder = (argv: yargs.Argv) =>
       (args) => rename(args as any),
     )
     .command(
-      'set-primary <id|name>',
-      'DEPRECATED: Use set-default. Set a branch as primary',
-      (yargs) => yargs,
-      (args) => setDefault(args as any),
-    )
-    .command(
       'set-default <id|name>',
       'Set a branch as default',
       (yargs) => yargs,
