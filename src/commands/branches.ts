@@ -24,7 +24,6 @@ import { getComputeUnits } from '../utils/compute_units.js';
 export const BRANCH_FIELDS = [
   'id',
   'name',
-  'primary',
   'default',
   'created_at',
   'updated_at',
@@ -33,7 +32,6 @@ export const BRANCH_FIELDS = [
 const BRANCH_FIELDS_RESET = [
   'id',
   'name',
-  'primary',
   'default',
   'created_at',
   'last_reset_at',
