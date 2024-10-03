@@ -179,18 +179,6 @@ describe('branches', () => {
     ]);
   });
 
-  /* set primary */
-
-  test('set primary by id', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'branches',
-      'set-primary',
-      'br-sunny-branch-123456',
-      '--project-id',
-      'test',
-    ]);
-  });
-
   /* set default */
 
   test('set default by id', async ({ testCliCommand }) => {
