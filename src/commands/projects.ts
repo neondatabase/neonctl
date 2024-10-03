@@ -6,10 +6,7 @@ import {
 import yargs from 'yargs';
 
 import { log } from '../log.js';
-import {
-  projectCreateRequest,
-  projectUpdateRequest,
-} from '../parameters.gen.js';
+import { projectCreateRequest } from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
@@ -110,22 +107,6 @@ export const builder = (argv: yargs.Argv) => {
           name: {
             describe: projectCreateRequest['project.name'].description,
             type: 'string',
-          },
-          'ip-allow': {
-            describe:
-              projectUpdateRequest['project.settings.allowed_ips.ips']
-                .description,
-            type: 'string',
-            array: true,
-            deprecated: "Deprecated. Use 'ip-allow' command",
-          },
-          'ip-primary-only': {
-            describe:
-              projectUpdateRequest[
-                'project.settings.allowed_ips.primary_branch_only'
-              ].description,
-            type: 'boolean',
-            deprecated: "Deprecated. Use 'ip-allow' command",
           },
           cu: {
             describe:
@@ -282,27 +263,11 @@ const update = async (
     IdOrNameProps & {
       name?: string;
       cu?: string;
-      ipAllow?: string[];
-      ipPrimaryOnly?: boolean;
     },
 ) => {
   const project: ProjectUpdateRequest['project'] = {};
   if (props.name) {
     project.name = props.name;
-  }
-  if (props.ipAllow || props.ipPrimaryOnly != undefined) {
-    const { data } = await props.apiClient.getProject(props.id);
-    const existingAllowedIps = data.project.settings?.allowed_ips;
-
-    project.settings = {
-      allowed_ips: {
-        ips: props.ipAllow ?? existingAllowedIps?.ips ?? [],
-        primary_branch_only:
-          props.ipPrimaryOnly ??
-          existingAllowedIps?.primary_branch_only ??
-          false,
-      },
-    };
   }
   if (props.cu) {
     project.default_endpoint_settings = props.cu

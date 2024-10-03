@@ -24,7 +24,6 @@ import { getComputeUnits } from '../utils/compute_units.js';
 export const BRANCH_FIELDS = [
   'id',
   'name',
-  'primary',
   'default',
   'created_at',
   'updated_at',
@@ -33,7 +32,6 @@ export const BRANCH_FIELDS = [
 const BRANCH_FIELDS_RESET = [
   'id',
   'name',
-  'primary',
   'default',
   'created_at',
   'last_reset_at',
@@ -169,12 +167,6 @@ export const builder = (argv: yargs.Argv) =>
       'Rename a branch',
       (yargs) => yargs,
       (args) => rename(args as any),
-    )
-    .command(
-      'set-primary <id|name>',
-      'DEPRECATED: Use set-default. Set a branch as primary',
-      (yargs) => yargs,
-      (args) => setDefault(args as any),
     )
     .command(
       'set-default <id|name>',

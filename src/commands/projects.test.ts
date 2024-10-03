@@ -127,32 +127,6 @@ describe('projects', () => {
     ]);
   });
 
-  test('update ip allow', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'projects',
-      'update',
-      'test',
-      '--ip-allow',
-      '127.0.0.1',
-      '192.168.1.2/22',
-      '--ip-primary-only',
-    ]);
-  });
-
-  test('update ip allow primary only flag', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'projects',
-      'update',
-      'test',
-      '--ip-primary-only',
-      'false',
-    ]);
-  });
-
-  test('update ip allow remove', async ({ testCliCommand }) => {
-    await testCliCommand(['projects', 'update', 'test', '--ip-allow']);
-  });
-
   test('update project with default fixed size CU', async ({
     testCliCommand,
   }) => {

@@ -1,7 +1,7 @@
 const defaultSettings = {
   allowed_ips: {
     ips: ['192.168.1.1'],
-    primary_branch_only: false,
+    protected_branches_only: false,
   },
 };
 
