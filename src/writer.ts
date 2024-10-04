@@ -14,9 +14,14 @@ type WriteOutConfig<T> = {
   fields: readonly OnlyStrings<keyof ExtractFromArray<T>>[];
   // Title of the output
   title?: string;
+  // Display message if data is empty
+  // does not apply to json and yaml output
+  emptyMessage?: string;
 };
 
-const writeYaml = (chunks: { data: any; config: WriteOutConfig<any> }[]) => {
+type Chunk = { data: any; config: WriteOutConfig<any> };
+
+const writeYaml = (chunks: Chunk[]) => {
   return YAML.stringify(
     chunks.length === 1
       ? chunks[0].data
@@ -31,7 +36,7 @@ const writeYaml = (chunks: { data: any; config: WriteOutConfig<any> }[]) => {
   );
 };
 
-const writeJson = (chunks: { data: any; config: WriteOutConfig<any> }[]) => {
+const writeJson = (chunks: Chunk[]) => {
   return JSON.stringify(
     chunks.length === 1
       ? chunks[0].data
@@ -52,6 +57,11 @@ const writeTable = (
 ) => {
   chunks.forEach(({ data, config }) => {
     const arrayData = Array.isArray(data) ? data : [data];
+    if (!arrayData.length && config.emptyMessage) {
+      out.write('\n' + config.emptyMessage + '\n');
+      return;
+    }
+
     const fields = config.fields.filter((field) =>
       arrayData.some((item) => item[field] !== undefined && item[field] !== ''),
     );
