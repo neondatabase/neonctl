@@ -8,15 +8,12 @@ export const isDebug = () => {
 
 export const getGithubEnvironmentVars = () => {
   const vars = [
+    // github action info
     'GITHUB_ACTION',
     'GITHUB_ACTION_PATH',
     'GITHUB_ACTION_REPOSITORY',
-    'GITHUB_TRIGGERING_ACTOR',
-    'GITHUB_ACTOR',
-    'GITHUB_ACTOR_ID',
-    'GITHUB_EVENT_NAME',
-    'GITHUB_RUN_NUMBER',
 
+    // source github repository and actor info
     'GITHUB_REF_TYPE',
     'GITHUB_REF',
     'GITHUB_REF_NAME',
@@ -28,7 +25,13 @@ export const getGithubEnvironmentVars = () => {
     'GITHUB_REPOSITORY_ID',
     'GITHUB_REPOSITORY_OWNER',
     'GITHUB_REPOSITORY_OWNER_ID',
+    'GITHUB_TRIGGERING_ACTOR',
+    'GITHUB_ACTOR',
+    'GITHUB_ACTOR_ID',
+    'GITHUB_EVENT_NAME',
+    'GITHUB_RUN_NUMBER',
 
+    // reusable workflow info
     'GITHUB_WORKFLOW',
     'GITHUB_WORKFLOW_REF',
     'GITHUB_WORKFLOW_SHA',
