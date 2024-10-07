@@ -36,7 +36,13 @@ export const getGithubEnvironmentVars = () => {
     'GITHUB_WORKFLOW_REF',
     'GITHUB_WORKFLOW_SHA',
   ];
-  return vars.map((item) => {
-    return { item: process.env[item] };
+
+  const map = new Map();
+  vars.forEach((v) => {
+    if (process.env[v]) {
+      map.set(v, process.env[v]);
+    }
   });
+
+  return map;
 };
