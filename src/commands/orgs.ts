@@ -33,6 +33,7 @@ const list = async (props: CommonProps) => {
   out.write(organizations, {
     fields: ORG_FIELDS,
     title: 'Organizations',
+    emptyMessage: 'You are not a member of any organization.',
   });
   out.end();
 };
