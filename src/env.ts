@@ -6,7 +6,7 @@ export const isDebug = () => {
   return Boolean(process.env.DEBUG);
 };
 
-export const getGithubEnvironmentVars = () => {
+export const getGithubEnvVars = () => {
   const vars = [
     // github action info
     'GITHUB_ACTION',
