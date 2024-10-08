@@ -72,7 +72,7 @@ export const analyticsMiddleware = async (args: {
         output: args.output,
       },
       ci: isCi(),
-      githubEnvVars: getGithubEnvVars(),
+      githubEnvVars: getGithubEnvVars(process.env),
     },
   });
 };

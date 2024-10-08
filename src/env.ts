@@ -6,7 +6,7 @@ export const isDebug = () => {
   return Boolean(process.env.DEBUG);
 };
 
-export const getGithubEnvVars = () => {
+export const getGithubEnvVars = (env: Dict<string>) => {
   const vars = [
     // github action info
     'GITHUB_ACTION',
@@ -39,10 +39,10 @@ export const getGithubEnvVars = () => {
 
   const map = new Map();
   vars.forEach((v) => {
-    if (process.env[v]) {
-      map.set(v, process.env[v]);
+    if (env[v]) {
+      map.set(v, env[v]);
     }
   });
 
-  return map;
+  return Object.fromEntries(map);
 };
