@@ -31,6 +31,7 @@ import { currentContextFile, enrichFromContext } from './context.js';
 const NO_SUBCOMMANDS_VERBS = [
   // aliases
   'auth',
+  'login',
   'me',
 
   // aliases
