@@ -9,34 +9,39 @@ export const isDebug = () => {
 export const getGithubEnvVars = (env: Dict<string>) => {
   const vars = [
     // github action info
+    'GITHUB_ACTION',
     'GITHUB_ACTION_PATH',
+    'GITHUB_ACTION_REPOSITORY',
 
-    // source github repository
+    // source github repository and actor info
+    'GITHUB_REF_TYPE',
+    'GITHUB_REF',
+    'GITHUB_REF_NAME',
+    'GITHUB_BASE_REF',
+    'GITHUB_HEAD_REF',
+    'GITHUB_JOB',
+    'GITHUB_SHA',
     'GITHUB_REPOSITORY',
-
-    // environment info
-    'GITHUB_RUN_ID',
+    'GITHUB_REPOSITORY_ID',
+    'GITHUB_REPOSITORY_OWNER',
+    'GITHUB_REPOSITORY_OWNER_ID',
+    'GITHUB_TRIGGERING_ACTOR',
+    'GITHUB_ACTOR',
+    'GITHUB_ACTOR_ID',
+    'GITHUB_EVENT_NAME',
     'GITHUB_RUN_NUMBER',
-    'GITHUB_SERVER_URL',
+
+    // reusable workflow info
+    'GITHUB_WORKFLOW',
     'GITHUB_WORKFLOW_REF',
-    'RUNNER_ARCH',
-    'RUNNER_ENVIRONMENT',
-    'RUNNER_OS',
+    'GITHUB_WORKFLOW_SHA',
   ];
 
   const map = new Map();
   vars.forEach((v) => {
-    let value = env[v];
-    if (value === undefined || value === '') {
-      return;
+    if (env[v]) {
+      map.set(v, env[v]);
     }
-    if (v === 'GITHUB_ACTION_PATH') {
-      value = value.includes('actions/')
-        ? value.replace(/^.*actions\/(.+)$/, '$1')
-        : value;
-    }
-
-    map.set(v, value);
   });
 
   return Object.fromEntries(map);

@@ -4,73 +4,56 @@ import { getGithubEnvVars } from './env';
 describe('getGithubEnvVars', () => {
   it('success all keys', () => {
     const env = {
-      GITHUB_ACTION_PATH: '1',
-      GITHUB_REPOSITORY: '2',
-      GITHUB_RUN_ID: '3',
-      GITHUB_RUN_NUMBER: '4',
-      GITHUB_SERVER_URL: '5',
-      GITHUB_WORKFLOW_REF: '6',
-      RUNNER_ARCH: '7',
-      RUNNER_ENVIRONMENT: '8',
-      RUNNER_OS: '9',
+      GITHUB_ACTION: '1',
+      GITHUB_ACTION_PATH: '2',
+      GITHUB_ACTION_REPOSITORY: '3',
+      GITHUB_REF_TYPE: '4',
+      GITHUB_REF: '5',
+      GITHUB_REF_NAME: '6',
+      GITHUB_BASE_REF: '7',
+      GITHUB_HEAD_REF: '8',
+      GITHUB_JOB: '9',
+      GITHUB_SHA: '10',
+      GITHUB_REPOSITORY: '11',
+      GITHUB_REPOSITORY_ID: '12',
+      GITHUB_REPOSITORY_OWNER: '13',
+      GITHUB_REPOSITORY_OWNER_ID: '14',
+      GITHUB_TRIGGERING_ACTOR: '15',
+      GITHUB_ACTOR: '16',
+      GITHUB_ACTOR_ID: '17',
+      GITHUB_EVENT_NAME: '18',
+      GITHUB_RUN_NUMBER: '19',
+      GITHUB_WORKFLOW: '20',
+      GITHUB_WORKFLOW_REF: '21',
+      GITHUB_WORKFLOW_SHA: '22',
       unrelated: 'unrelated',
     };
 
     const ret = {
-      GITHUB_ACTION_PATH: '1',
-      GITHUB_REPOSITORY: '2',
-      GITHUB_RUN_ID: '3',
-      GITHUB_RUN_NUMBER: '4',
-      GITHUB_SERVER_URL: '5',
-      GITHUB_WORKFLOW_REF: '6',
-      RUNNER_ARCH: '7',
-      RUNNER_ENVIRONMENT: '8',
-      RUNNER_OS: '9',
+      GITHUB_ACTION: '1',
+      GITHUB_ACTION_PATH: '2',
+      GITHUB_ACTION_REPOSITORY: '3',
+      GITHUB_REF_TYPE: '4',
+      GITHUB_REF: '5',
+      GITHUB_REF_NAME: '6',
+      GITHUB_BASE_REF: '7',
+      GITHUB_HEAD_REF: '8',
+      GITHUB_JOB: '9',
+      GITHUB_SHA: '10',
+      GITHUB_REPOSITORY: '11',
+      GITHUB_REPOSITORY_ID: '12',
+      GITHUB_REPOSITORY_OWNER: '13',
+      GITHUB_REPOSITORY_OWNER_ID: '14',
+      GITHUB_TRIGGERING_ACTOR: '15',
+      GITHUB_ACTOR: '16',
+      GITHUB_ACTOR_ID: '17',
+      GITHUB_EVENT_NAME: '18',
+      GITHUB_RUN_NUMBER: '19',
+      GITHUB_WORKFLOW: '20',
+      GITHUB_WORKFLOW_REF: '21',
+      GITHUB_WORKFLOW_SHA: '22',
     };
 
     expect(getGithubEnvVars(env)).toEqual(ret);
-  });
-
-  it('empty all keys', () => {
-    expect(getGithubEnvVars({})).toEqual({});
-  });
-
-  it('action path', () => {
-    expect(
-      getGithubEnvVars({
-        GITHUB_ACTION_PATH:
-          '/home/runner/work/_actions/neondatabase/create-branch-action/v5',
-      }),
-    ).toEqual({
-      GITHUB_ACTION_PATH: 'neondatabase/create-branch-action/v5',
-    });
-
-    expect(
-      getGithubEnvVars({
-        GITHUB_ACTION_PATH:
-          '/home/runner/actions-runner/_work/actions/neondatabase/create-branch-action/v5',
-      }),
-    ).toEqual({
-      GITHUB_ACTION_PATH: 'neondatabase/create-branch-action/v5',
-    });
-
-    expect(
-      getGithubEnvVars({
-        GITHUB_ACTION_PATH:
-          'C:\\b\\_actions\\neondatabase\\create-branch-action\\v5',
-      }),
-    ).toEqual({
-      GITHUB_ACTION_PATH:
-        'C:\\b\\_actions\\neondatabase\\create-branch-action\\v5',
-    });
-
-    expect(
-      getGithubEnvVars({
-        GITHUB_ACTION_PATH:
-          '/home/runner/work/app/app/./.github/actions/custom-action',
-      }),
-    ).toEqual({
-      GITHUB_ACTION_PATH: 'custom-action',
-    });
   });
 });
