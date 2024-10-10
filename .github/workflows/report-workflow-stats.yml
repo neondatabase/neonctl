@@ -3,9 +3,9 @@ name: Report Workflow Stats
 on:
   workflow_run:
     workflows:
-    - Commitlint
-    - PR to main branch
-    - Publish to npm
+      - Commitlint
+      - PR to main branch
+      - Publish to npm
     types: [completed]
 
 jobs:
@@ -15,10 +15,10 @@ jobs:
     permissions:
       actions: read
     steps:
-    - name: Export GH Workflow Stats
-      uses: fedordikarev/gh-workflow-stats-action@v0.1.3
-      with:
-        DB_URI: ${{ secrets.GH_REPORT_STATS_DB_RW_CONNSTR }}
-        DB_TABLE: "gh_workflow_stats_neonctl"
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GH_RUN_ID: ${{ github.event.workflow_run.id }}
+      - name: Export GH Workflow Stats
+        uses: fedordikarev/gh-workflow-stats-action@v0.1.3
+        with:
+          DB_URI: ${{ secrets.GH_REPORT_STATS_DB_RW_CONNSTR }}
+          DB_TABLE: 'gh_workflow_stats_neonctl'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_RUN_ID: ${{ github.event.workflow_run.id }}
