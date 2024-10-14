@@ -263,12 +263,3 @@ created_at: 2019-01-01T00:00:00Z
 updated_at: 2019-01-01T00:00:00Z
 "
 `;
-
-exports[`branches > set primary by id 1`] = `
-"name: test-branch-sunny
-id: br-sunny-branch-123456
-default: true
-created_at: 2019-01-01T00:00:00Z
-updated_at: 2019-01-01T00:00:00Z
-"
-`;

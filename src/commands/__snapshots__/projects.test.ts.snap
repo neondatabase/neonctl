@@ -96,7 +96,7 @@ settings:
   allowed_ips:
     ips:
       - 192.168.1.1
-    primary_branch_only: false
+    protected_branches_only: false
 "
 `;
 
@@ -114,7 +114,7 @@ exports[`projects > list 1`] = `
     name: Project_3
     created_at: 2019-01-01T00:00:00.000Z
     updated_at: 2019-01-01T00:00:00.000Z
-shared_with_me:
+shared_with_you:
   - id: adj-noun-12401747
     region_id: aws-us-east-2
     name: Shared Project
@@ -142,42 +142,6 @@ exports[`projects > list with org id 1`] = `
 "
 `;
 
-exports[`projects > update ip allow 1`] = `
-"id: test
-name: test_project
-created_at: 2019-01-01T00:00:00Z
-settings:
-  allowed_ips:
-    ips:
-      - 127.0.0.1
-      - 192.168.1.2/22
-    primary_branch_only: true
-"
-`;
-
-exports[`projects > update ip allow primary only flag 1`] = `
-"id: test
-name: test_project
-created_at: 2019-01-01T00:00:00Z
-settings:
-  allowed_ips:
-    ips:
-      - 192.168.1.1
-    primary_branch_only: false
-"
-`;
-
-exports[`projects > update ip allow remove 1`] = `
-"id: test
-name: test_project
-created_at: 2019-01-01T00:00:00Z
-settings:
-  allowed_ips:
-    ips: []
-    primary_branch_only: false
-"
-`;
-
 exports[`projects > update name 1`] = `
 "id: test
 name: test_project_new_name
@@ -186,7 +150,7 @@ settings:
   allowed_ips:
     ips:
       - 192.168.1.1
-    primary_branch_only: false
+    protected_branches_only: false
 "
 `;
 
@@ -198,7 +162,7 @@ settings:
   allowed_ips:
     ips:
       - 192.168.1.1
-    primary_branch_only: false
+    protected_branches_only: false
 "
 `;
 
@@ -210,6 +174,6 @@ settings:
   allowed_ips:
     ips:
       - 192.168.1.1
-    primary_branch_only: false
+    protected_branches_only: false
 "
 `;

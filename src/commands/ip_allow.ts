@@ -53,16 +53,6 @@ export const builder = (argv: yargs.Argv) => {
                 ].description,
               type: 'boolean',
             },
-          })
-          .options({
-            'primary-only': {
-              describe:
-                projectUpdateRequest[
-                  'project.settings.allowed_ips.primary_branch_only'
-                ].description,
-              type: 'boolean',
-              deprecated: 'See --protected-only',
-            },
           }),
       async (args) => {
         await add(args as any);
@@ -113,7 +103,6 @@ const add = async (
   props: CommonProps &
     ProjectScopeProps & {
       ips: string[];
-      primaryOnly?: boolean;
       protectedOnly?: boolean;
     },
 ) => {
@@ -129,8 +118,6 @@ const add = async (
   project.settings = {
     allowed_ips: {
       ips: [...new Set(props.ips.concat(existingAllowedIps?.ips ?? []))],
-      primary_branch_only:
-        props.primaryOnly ?? existingAllowedIps?.primary_branch_only ?? false,
       protected_branches_only:
         props.protectedOnly ??
         existingAllowedIps?.protected_branches_only ??
@@ -165,7 +152,6 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
     allowed_ips: {
       ips:
         existingAllowedIps?.ips?.filter((ip) => !props.ips.includes(ip)) ?? [],
-      primary_branch_only: existingAllowedIps?.primary_branch_only ?? false,
       protected_branches_only:
         existingAllowedIps?.protected_branches_only ?? false,
     },
@@ -188,7 +174,6 @@ const reset = async (props: ProjectScopeProps & { ips: string[] }) => {
   project.settings = {
     allowed_ips: {
       ips: props.ips,
-      primary_branch_only: false,
       protected_branches_only: false,
     },
   };
@@ -214,8 +199,6 @@ const parse = (project: Project) => {
     id: project.id,
     name: project.name,
     IP_addresses: ips,
-    primary_branch_only:
-      project.settings?.allowed_ips?.primary_branch_only ?? false,
     protected_branches_only:
       project.settings?.allowed_ips?.protected_branches_only ?? false,
   };

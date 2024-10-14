@@ -5,7 +5,7 @@ import { Analytics, TrackParams } from '@segment/analytics-node';
 import { isAxiosError } from 'axios';
 
 import { CREDENTIALS_FILE } from './config.js';
-import { isCi } from './env.js';
+import { getGithubEnvVars, isCi } from './env.js';
 import { ErrorCode } from './errors.js';
 import { log } from './log.js';
 import pkg from './pkg.js';
@@ -72,6 +72,7 @@ export const analyticsMiddleware = async (args: {
         output: args.output,
       },
       ci: isCi(),
+      githubEnvVars: getGithubEnvVars(process.env),
     },
   });
 };

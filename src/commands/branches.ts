@@ -24,7 +24,6 @@ import { getComputeUnits } from '../utils/compute_units.js';
 export const BRANCH_FIELDS = [
   'id',
   'name',
-  'primary',
   'default',
   'created_at',
   'updated_at',
@@ -33,7 +32,6 @@ export const BRANCH_FIELDS = [
 const BRANCH_FIELDS_RESET = [
   'id',
   'name',
-  'primary',
   'default',
   'created_at',
   'last_reset_at',
@@ -171,12 +169,6 @@ export const builder = (argv: yargs.Argv) =>
       (args) => rename(args as any),
     )
     .command(
-      'set-primary <id|name>',
-      'DEPRECATED: Use set-default. Set a branch as primary',
-      (yargs) => yargs,
-      (args) => setDefault(args as any),
-    )
-    .command(
       'set-default <id|name>',
       'Set a branch as default',
       (yargs) => yargs,
@@ -284,17 +276,17 @@ const create = async (
     '--'?: string[];
   },
 ) => {
-  const parentProps = await (() => {
+  const branches = await props.apiClient
+    .listProjectBranches(props.projectId)
+    .then(({ data }) => data.branches);
+
+  const parentProps = (() => {
     if (!props.parent) {
-      return props.apiClient
-        .listProjectBranches(props.projectId)
-        .then(({ data }) => {
-          const branch = data.branches.find((b) => b.default);
-          if (!branch) {
-            throw new Error('No default branch found');
-          }
-          return { parent_id: branch.id };
-        });
+      const branch = branches.find((b) => b.default);
+      if (!branch) {
+        throw new Error('No default branch found');
+      }
+      return { parent_id: branch.id };
     }
 
     if (looksLikeLSN(props.parent)) {
@@ -308,15 +300,12 @@ const create = async (
     if (looksLikeBranchId(props.parent)) {
       return { parent_id: props.parent };
     }
-    return props.apiClient
-      .listProjectBranches(props.projectId)
-      .then(({ data }) => {
-        const branch = data.branches.find((b) => b.name === props.parent);
-        if (!branch) {
-          throw new Error(`Branch ${props.parent} not found`);
-        }
-        return { parent_id: branch.id };
-      });
+
+    const branch = branches.find((b) => b.name === props.parent);
+    if (!branch) {
+      throw new Error(`Branch ${props.parent} not found`);
+    }
+    return { parent_id: branch.id };
   })();
 
   const { data } = await retryOnLock(() =>
@@ -341,22 +330,33 @@ const create = async (
     }),
   );
 
+  const parent = branches.find((b) => b.id === data.branch.parent_id);
+  if (parent?.protected) {
+    log.warning(
+      'The parent branch is protected; a unique role password has been generated for the new branch.',
+    );
+  }
+
   const out = writer(props);
+
   out.write(data.branch, {
     fields: BRANCH_FIELDS,
     title: 'branch',
+    emptyMessage: 'No branches have been found.',
   });
 
   if (data.endpoints?.length > 0) {
     out.write(data.endpoints, {
       fields: ['id', 'created_at'],
       title: 'endpoints',
+      emptyMessage: 'No endpoints have been found.',
     });
   }
   if (data.connection_uris?.length) {
     out.write(data.connection_uris, {
       fields: ['connection_uri'],
       title: 'connection_uris',
+      emptyMessage: 'No connection uris have been found',
     });
   }
   out.end();
@@ -512,6 +512,7 @@ const restore = async (
   const writeInst = writer(props).write(data.branch, {
     title: 'Restored branch',
     fields: ['id', 'name', 'last_reset_at'],
+    emptyMessage: 'No branches have been restored.',
   });
   const parentId = data.branch.parent_id;
   if (props.preserveUnderName && parentId) {
@@ -522,6 +523,7 @@ const restore = async (
     writeInst.write(data.branch, {
       title: 'Backup branch',
       fields: ['id', 'name'],
+      emptyMessage: 'Backup branch has not been found.',
     });
   }
   writeInst.end();
