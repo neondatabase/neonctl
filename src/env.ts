@@ -1,3 +1,5 @@
+import { networkInterfaces } from 'node:os';
+
 export const isCi = () => {
   return process.env.CI !== 'false' && Boolean(process.env.CI);
 };
@@ -40,4 +42,25 @@ export const getGithubEnvVars = (env: Dict<string>) => {
   });
 
   return Object.fromEntries(map);
+};
+
+export const getIPv4s = () => {
+  const nets = networkInterfaces();
+  const results = []; // Or just '{}', an empty object
+  if (nets === undefined) {
+    return [];
+  }
+
+  for (const netIPs of Object.entries(nets)) {
+    if (netIPs[1] === undefined) {
+      continue;
+    }
+
+    for (const ip of netIPs[1]) {
+      if (ip.family == 'IPv4') {
+        results.push(ip.address);
+      }
+    }
+  }
+  return results;
 };
