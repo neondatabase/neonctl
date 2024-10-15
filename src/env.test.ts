@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getGithubEnvVars } from './env';
+import { getGithubEnvVars, getIPv4s } from './env';
 
 describe('getGithubEnvVars', () => {
   it('success all keys', () => {
@@ -72,5 +72,11 @@ describe('getGithubEnvVars', () => {
     ).toEqual({
       GITHUB_ACTION_PATH: 'custom-action',
     });
+  });
+});
+
+describe('getIPv4s', () => {
+  it('at least 1 IP', () => {
+    expect(getIPv4s().length).toBeGreaterThan(0);
   });
 });
