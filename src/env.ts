@@ -46,11 +46,11 @@ export const getGithubEnvVars = (env: Dict<string>) => {
 
 export const getIPv4s = () => {
   const nets = networkInterfaces();
-  const results = []; // Or just '{}', an empty object
   if (nets === undefined) {
     return [];
   }
 
+  const results = [];
   for (const netIPs of Object.entries(nets)) {
     if (netIPs[1] === undefined) {
       continue;
