@@ -194,7 +194,7 @@ const list = async (props: CommonProps & { orgId?: string }) => {
   out.end();
 };
 
-const create = async (
+export const create = async (
   props: CommonProps & {
     name?: string;
     regionId?: string;
@@ -252,6 +252,8 @@ const create = async (
     const psqlArgs = props['--'];
     await psql(connection_uri, psqlArgs);
   }
+
+  return data;
 };
 
 const deleteProject = async (props: CommonProps & IdOrNameProps) => {

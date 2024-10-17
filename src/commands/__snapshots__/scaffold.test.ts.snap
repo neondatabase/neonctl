@@ -1,0 +1,13 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`scaffold > list 1`] = `
+"- name: astro
+- name: laravel-11
+"
+`;
+
+exports[`scaffold > start validate template is set 1`] = `""`;
+
+exports[`scaffold > start with project id 1`] = `""`;
+
+exports[`scaffold > start without project id 1`] = `""`;
