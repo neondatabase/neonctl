@@ -5,6 +5,7 @@ import { writer } from '../writer.js';
 import { log } from '../log.js';
 import path from 'path';
 import fs from 'fs';
+import prompts from 'prompts';
 
 import Mustache from 'mustache';
 
@@ -50,13 +51,17 @@ export const builder = (argv: yargs.Argv) => {
       },
     )
     .command(
-      'start <id>',
+      'start',
       'Create new project from selected template',
       (yargs) =>
         yargs.options({
           'project-id': {
             describe:
               'ID of existing project. If not set, new project will be created',
+            type: 'string',
+          },
+          'template-id': {
+            describe: 'ID (name) of the template',
             type: 'string',
           },
           name: {
@@ -132,7 +137,7 @@ const list = async (props: CommonProps) => {
 const start = async (
   props: CommonProps &
     IdOrNameProps & {
-      id: string;
+      templateId?: string;
       projectId?: string;
       outputDir?: string;
       name?: string;
@@ -149,47 +154,83 @@ const start = async (
   const availableTemplates = (await getTemplateList()).map(
     (el: any) => el.name,
   );
-  if (!availableTemplates.includes(props.id)) {
+
+  let projectData: any;
+
+  if (!props.projectId) {
+    const userProjects = await props.apiClient.listProjects({
+      limit: 10,
+    });
+    const selectedProject = await prompts({
+      type: 'select',
+      name: 'value',
+      message: 'Select your Neon project',
+      choices: [
+        { title: 'New', description: 'Create new project', value: false },
+        ...userProjects.data.projects.map((project: any) => ({
+          title: project.name,
+          description: project.id,
+          value: project.id,
+        })),
+      ],
+      initial: false,
+    });
+
+    let projectId = selectedProject.value;
+    if (selectedProject.value === false) {
+      projectData = await createProject(props);
+      projectId = projectData.project.id;
+    } else {
+      projectData = (await props.apiClient.getProject(projectId)).data;
+      const branches: any = (
+        await props.apiClient.listProjectBranches(projectId)
+      ).data.branches;
+      const roles: any = (
+        await props.apiClient.listProjectBranchRoles(projectId, branches[0].id)
+      ).data.roles;
+
+      const connectionString: any = (
+        await props.apiClient.getConnectionUri({
+          projectId: projectId,
+          database_name: branches[0].name,
+          role_name: roles[0].name,
+        })
+      ).data.uri;
+      const connectionUrl = new URL(connectionString);
+
+      projectData.connection_uris = [
+        {
+          connection_uri: connectionString,
+          connection_parameters: {
+            database: connectionUrl.pathname.slice(1),
+            role: connectionUrl.username,
+            password: connectionUrl.password,
+            host: connectionUrl.host,
+          },
+        },
+      ];
+    }
+  }
+
+  if (!props.templateId) {
+    const selectedTemplate = await prompts({
+      type: 'select',
+      name: 'value',
+      message: 'Select your Neon template',
+      choices: availableTemplates.map((template: any) => ({
+        title: template,
+        value: template,
+      })),
+    });
+
+    props.templateId = selectedTemplate.value;
+  }
+
+  if (!availableTemplates.includes(props.templateId)) {
     log.error(
       'Template not found. Please make sure the template exists and is public.',
     );
     return;
-  }
-  let projectData: any;
-  if (!props.projectId) {
-    projectData = await createProject(props);
-  } else {
-    projectData = (await props.apiClient.getProject(props.projectId)).data;
-    const branches: any = (
-      await props.apiClient.listProjectBranches(props.projectId)
-    ).data.branches;
-    const roles: any = (
-      await props.apiClient.listProjectBranchRoles(
-        props.projectId,
-        branches[0].id,
-      )
-    ).data.roles;
-
-    const connectionString: any = (
-      await props.apiClient.getConnectionUri({
-        projectId: props.projectId,
-        database_name: branches[0].name,
-        role_name: roles[0].name,
-      })
-    ).data.uri;
-    const connectionUrl = new URL(connectionString);
-
-    projectData.connection_uris = [
-      {
-        connection_uri: connectionString,
-        connection_parameters: {
-          database: projectData.project.name,
-          role: roles[0].name,
-          password: connectionUrl.password,
-          host: connectionUrl.host,
-        },
-      },
-    ];
   }
 
   let config = null;
@@ -198,7 +239,7 @@ const start = async (
       await getFileContent(
         REPOSITORY_OWNER,
         REPOSITORY,
-        props.id + '/config.neon.json',
+        (props.templateId as string) + '/config.neon.json',
       )
     ).json();
   } catch (e) {
@@ -215,13 +256,18 @@ const start = async (
       ? props.outputDir
       : GENERATED_FOLDER_PREFIX + (projectData.project.name as string),
   );
-  await downloadFolderFromTree(
-    REPOSITORY_OWNER,
-    REPOSITORY,
-    'main',
-    props.id,
-    dir,
-  );
+  if (props.templateId) {
+    await downloadFolderFromTree(
+      REPOSITORY_OWNER,
+      REPOSITORY,
+      'main',
+      props.templateId,
+      dir,
+    );
+  } else {
+    log.error('Template ID is undefined.');
+    return;
+  }
 
   for (const [key, value] of Object.entries(config.copy_files)) {
     copyFiles(dir, key, value);
@@ -236,10 +282,12 @@ const start = async (
     fs.writeFileSync(path.join(dir, file), output);
   }
 
+  deleteFiles(dir, config.delete_files);
+
   const out = writer(props);
 
   out.write(
-    [{ name: projectData.project.name, template: props.id, path: dir }],
+    [{ name: projectData.project.name, template: props.templateId, path: dir }],
     {
       fields: ['name', 'template', 'path'],
       title: 'Created projects',
@@ -253,5 +301,12 @@ function copyFiles(prefix: string, sourceFile: string, targetFiles: any) {
     const sourcePath = path.join(prefix, sourceFile);
     const targetPath = path.join(prefix, targetFile);
     fs.copyFileSync(sourcePath, targetPath);
+  }
+}
+
+function deleteFiles(prefix: string, files: any) {
+  for (const file of files) {
+    const filePath = path.join(prefix, file);
+    fs.unlinkSync(filePath);
   }
 }
