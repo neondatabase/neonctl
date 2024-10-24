@@ -74,6 +74,9 @@ export const analyticsMiddleware = async (args: {
       ci: isCi(),
       githubEnvVars: getGithubEnvVars(process.env),
     },
+    context: {
+      direct: true,
+    },
   });
 };
 
