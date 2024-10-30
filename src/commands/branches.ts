@@ -1,4 +1,4 @@
-import { EndpointType } from '@neondatabase/api-client';
+import { Branch, EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
@@ -21,18 +21,20 @@ import { log } from '../log.js';
 import { parseSchemaDiffParams, schemaDiff } from './schema_diff.js';
 import { getComputeUnits } from '../utils/compute_units.js';
 
-export const BRANCH_FIELDS = [
+export const BRANCH_FIELDS: readonly (keyof Branch)[] = [
   'id',
   'name',
   'default',
+  'current_state',
   'created_at',
   'updated_at',
 ] as const;
 
-const BRANCH_FIELDS_RESET = [
+const BRANCH_FIELDS_RESET: readonly (keyof Branch)[] = [
   'id',
   'name',
   'default',
+  'current_state',
   'created_at',
   'last_reset_at',
 ] as const;
