@@ -27,7 +27,6 @@ export const BRANCH_FIELDS: readonly (keyof Branch)[] = [
   'default',
   'current_state',
   'created_at',
-  'updated_at',
 ];
 
 const BRANCH_FIELDS_RESET: readonly (keyof Branch)[] = [
