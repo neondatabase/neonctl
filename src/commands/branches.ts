@@ -28,7 +28,7 @@ export const BRANCH_FIELDS: readonly (keyof Branch)[] = [
   'current_state',
   'created_at',
   'updated_at',
-] as const;
+];
 
 const BRANCH_FIELDS_RESET: readonly (keyof Branch)[] = [
   'id',
@@ -37,7 +37,7 @@ const BRANCH_FIELDS_RESET: readonly (keyof Branch)[] = [
   'current_state',
   'created_at',
   'last_reset_at',
-] as const;
+];
 
 export const command = 'branches';
 export const describe = 'Manage branches';
