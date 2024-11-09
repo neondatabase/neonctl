@@ -165,7 +165,27 @@ const start = async (
     (el: any) => el.name,
   );
 
-  let projectData: any;
+  let projectData: {
+    project: {
+      id: string;
+      name: string;
+    };
+    connection_uris?: {
+      connection_uri: string;
+      connection_parameters: {
+        database: string;
+        role: string;
+        password: string;
+        host: string;
+      };
+    }[];
+  } = {
+    project: {
+      id: '',
+      name: '',
+    },
+    connection_uris: [],
+  };
 
   if (!props.projectId) {
     const userProjects = await props.apiClient.listProjects({
@@ -252,7 +272,7 @@ const start = async (
     return;
   }
 
-  let config = null;
+  let config;
   try {
     config = await (
       await getFileContent(
@@ -273,7 +293,7 @@ const start = async (
     process.cwd(),
     props.outputDir
       ? props.outputDir
-      : GENERATED_FOLDER_PREFIX + (projectData.project.name as string),
+      : GENERATED_FOLDER_PREFIX + projectData.project.name,
   );
   await downloadFolderFromTree(
     REPOSITORY_OWNER,
