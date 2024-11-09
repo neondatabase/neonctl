@@ -7,9 +7,15 @@ import { log } from '../log.js';
 import path from 'path';
 import fs from 'fs';
 
-const MULTITHREADING_LIMIT = 10;
+const CONCURRENT_OPERATIONS_LIMIT = 10;
 
-export async function getContent(owner: string, repository: string) {
+export async function getContent({
+  owner,
+  repository,
+}: {
+  owner: string;
+  repository: string;
+}) {
   const octokit = new Octokit({});
   return (
     await octokit.rest.repos.getContent({
@@ -19,18 +25,28 @@ export async function getContent(owner: string, repository: string) {
   ).data;
 }
 
-export async function getFileContent(
+export function getFileContentUrl(
   owner: string,
   repository: string,
   path: string,
 ) {
-  const url =
+  return (
     'https://raw.githubusercontent.com/' +
     owner +
     '/' +
     repository +
     '/main/' +
-    path;
+    path
+  );
+}
+
+export async function getFileContent(
+  owner: string,
+  repository: string,
+  path: string,
+) {
+  const url = getFileContentUrl(owner, repository, path);
+
   return await fetch(url, { method: 'Get' });
 }
 
@@ -81,7 +97,7 @@ export async function downloadFolderFromTree(
       }
     }
 
-    const limit = pLimit(MULTITHREADING_LIMIT);
+    const limit = pLimit(CONCURRENT_OPERATIONS_LIMIT);
 
     const downloadPromises = folderTree.map((file: any) => {
       const filePath = file.path;

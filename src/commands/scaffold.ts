@@ -18,6 +18,7 @@ import {
   getContent,
   getFileContent,
 } from '../utils/github.js';
+import { Branch, Database, Role } from '@neondatabase/api-client';
 
 const TEMPLATE_LIST_FIELDS = ['name'] as const;
 
@@ -26,7 +27,6 @@ const REPOSITORY = 'templates';
 
 const GENERATED_FOLDER_PREFIX = 'neon-';
 
-// TODO: Maybe move to constants file?
 const REGIONS = [
   'aws-us-west-2',
   'aws-ap-southeast-1',
@@ -38,7 +38,7 @@ const REGIONS = [
 export const command = 'scaffold';
 export const describe = 'Create new project from selected template';
 export const aliases = ['scaffold'];
-export const builder = (argv: yargs.Argv) => {
+export const builder = (argv: yargs.Argv<CommonProps>) => {
   return argv
     .usage('$0 scaffold [options]')
     .command(
@@ -46,7 +46,6 @@ export const builder = (argv: yargs.Argv) => {
       'List available templates',
       (yargs) => yargs,
       async (args) => {
-        // @ts-expect-error: TODO - Assert `args` is `CommonProps`
         await list(args);
       },
     )
@@ -117,8 +116,19 @@ export const handler = (args: yargs.Argv) => {
 };
 
 async function getTemplateList() {
-  const content = await getContent(REPOSITORY_OWNER, REPOSITORY);
+  const content = await getContent({
+    owner: REPOSITORY_OWNER,
+    repository: REPOSITORY,
+  });
 
+  if (!content) {
+    log.error('No templates found.');
+    return [];
+  }
+  if (!Array.isArray(content)) {
+    log.error('Invalid content received from GitHub API.');
+    return [];
+  }
   return content
     .filter((el: any) => el.type === 'dir')
     .map((el: any) => ({ name: el.name }));
@@ -159,6 +169,8 @@ const start = async (
 
   if (!props.projectId) {
     const userProjects = await props.apiClient.listProjects({
+      org_id: props.orgId,
+      search: props.name,
       limit: 10,
     });
     const selectedProject = await prompts({
@@ -182,17 +194,24 @@ const start = async (
       projectId = projectData.project.id;
     } else {
       projectData = (await props.apiClient.getProject(projectId)).data;
-      const branches: any = (
+      const branches: Branch[] = (
         await props.apiClient.listProjectBranches(projectId)
       ).data.branches;
-      const roles: any = (
+      const roles: Role[] = (
         await props.apiClient.listProjectBranchRoles(projectId, branches[0].id)
       ).data.roles;
 
-      const connectionString: any = (
+      const databases: Database[] = (
+        await props.apiClient.listProjectBranchDatabases(
+          projectId,
+          branches[0].id,
+        )
+      ).data.databases;
+
+      const connectionString: string = (
         await props.apiClient.getConnectionUri({
           projectId: projectId,
-          database_name: branches[0].name,
+          database_name: databases[0].name,
           role_name: roles[0].name,
         })
       ).data.uri;
@@ -228,7 +247,7 @@ const start = async (
 
   if (!availableTemplates.includes(props.templateId)) {
     log.error(
-      'Template not found. Please make sure the template exists and is public.',
+      `Template ${props.templateId} not found. Please make sure the template exists and is public.`,
     );
     return;
   }
@@ -256,21 +275,16 @@ const start = async (
       ? props.outputDir
       : GENERATED_FOLDER_PREFIX + (projectData.project.name as string),
   );
-  if (props.templateId) {
-    await downloadFolderFromTree(
-      REPOSITORY_OWNER,
-      REPOSITORY,
-      'main',
-      props.templateId,
-      dir,
-    );
-  } else {
-    log.error('Template ID is undefined.');
-    return;
-  }
+  await downloadFolderFromTree(
+    REPOSITORY_OWNER,
+    REPOSITORY,
+    'main',
+    props.templateId as string,
+    dir,
+  );
 
   for (const [key, value] of Object.entries(config.copy_files)) {
-    copyFiles(dir, key, value);
+    copyFiles(dir, key, value as string[]);
   }
 
   for (const file of config.templated_files) {
@@ -296,7 +310,7 @@ const start = async (
   out.end();
 };
 
-function copyFiles(prefix: string, sourceFile: string, targetFiles: any) {
+function copyFiles(prefix: string, sourceFile: string, targetFiles: string[]) {
   for (const targetFile of targetFiles) {
     const sourcePath = path.join(prefix, sourceFile);
     const targetPath = path.join(prefix, targetFile);
@@ -304,7 +318,7 @@ function copyFiles(prefix: string, sourceFile: string, targetFiles: any) {
   }
 }
 
-function deleteFiles(prefix: string, files: any) {
+function deleteFiles(prefix: string, files: string[]) {
   for (const file of files) {
     const filePath = path.join(prefix, file);
     fs.unlinkSync(filePath);
