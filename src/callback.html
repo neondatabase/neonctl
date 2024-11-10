@@ -4,13 +4,27 @@
     <meta charset="UTF-8" />
     <title>Neon</title>
     <style>
+      @import 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap';
+      @import 'https://rsms.me/inter/inter.css';
+      :root {
+        font-family: inter, sans-serif;
+        font-feature-settings:
+          'lifa' 1,
+          'calt' 1;
+      }
+
+      /* Should mostly be all the browsers we support */
+      @supports (font-variation-settings: normal) {
+        :root {
+          font-family: intervariable, sans-serif;
+        }
+      }
       body,
       html {
         width: 100%;
         height: 100%;
         margin: 0;
         text-align: center;
-        font-family: 'Open Sans', sans-serif;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -25,6 +39,13 @@
           color: #bfbfbf;
         }
       }
+      h1 {
+        color: white;
+        margin-top: 48px;
+        margin-bottom: 8px;
+        font-size: 36px;
+        font-weight: 700;
+      }
       .logo {
         display: inline-block;
         width: 100px;
@@ -38,102 +59,24 @@
   </head>
   <body>
     <div class="logo">
-      <svg
-        id="eBsErktH1941"
-        xmlns="http://www.w3.org/2000/svg"
-        xmlns:xlink="http://www.w3.org/1999/xlink"
-        viewBox="0 0 42 42"
-        shape-rendering="geometricPrecision"
-        text-rendering="geometricPrecision"
-      >
-        <style>
-          <![CDATA[#eBsErktH1945 {animation: eBsErktH1945__fl 3000ms linear infinite normal forwards}@keyframes eBsErktH1945__fl { 0% {filter: drop-shadow(0px 0px 0px #5cff61)} 13.666667% {filter: drop-shadow(0px 0px 0px #5cff61)} 15% {filter: drop-shadow(0px 0px 4.242641px #5cff61)} 34% {filter: drop-shadow(0px 0px 4.242641px #5cff61)} 34.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 37.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 37.666667% {filter: drop-shadow(0px 0px 4.242641px #5cff61)} 43.666667% {filter: drop-shadow(0px 0px 4.242641px #5cff61)} 44% {filter: drop-shadow(0px 0px 0px #5cff61)} 47% {filter: drop-shadow(0px 0px 0px #5cff61)} 47.333333% {filter: drop-shadow(0px 0px 4.242641px #5cff61)} 51% {filter: drop-shadow(0px 0px 4.242641px #5cff61)} 51.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 53.666667% {filter: drop-shadow(0px 0px 0px #5cff61)} 54% {filter: drop-shadow(0px 0px 4.242641px #5cff61)} 100% {filter: drop-shadow(0px 0px 4.242641px #5cff61)}} #eBsErktH1946 {animation: eBsErktH1946__fl 3000ms linear infinite normal forwards}@keyframes eBsErktH1946__fl { 0% {filter: drop-shadow(0px 0px 0px #5cff61)} 13.666667% {filter: drop-shadow(0px 0px 0px #5cff61)} 15% {filter: drop-shadow(0px 0px 2.828427px #5cff61)} 34% {filter: drop-shadow(0px 0px 2.828427px #5cff61)} 34.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 37.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 37.666667% {filter: drop-shadow(0px 0px 2.828427px #5cff61)} 43.666667% {filter: drop-shadow(0px 0px 2.828427px #5cff61)} 44% {filter: drop-shadow(0px 0px 0px #5cff61)} 47% {filter: drop-shadow(0px 0px 0px #5cff61)} 47.333333% {filter: drop-shadow(0px 0px 2.828427px #5cff61)} 51% {filter: drop-shadow(0px 0px 2.828427px #5cff61)} 51.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 53.666667% {filter: drop-shadow(0px 0px 0px #5cff61)} 54% {filter: drop-shadow(0px 0px 2.828427px #5cff61)} 100% {filter: drop-shadow(0px 0px 2.828427px #5cff61)}} #eBsErktH1947 {animation: eBsErktH1947__fl 3000ms linear infinite normal forwards}@keyframes eBsErktH1947__fl { 0% {filter: drop-shadow(0px 0px 0px #5cff61)} 13.666667% {filter: drop-shadow(0px 0px 0px #5cff61)} 15% {filter: drop-shadow(0px 0px 1.414214px #5cff61)} 34% {filter: drop-shadow(0px 0px 1.414214px #5cff61)} 34.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 37.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 37.666667% {filter: drop-shadow(0px 0px 1.414214px #5cff61)} 43.666667% {filter: drop-shadow(0px 0px 1px #5cff61)} 44% {filter: drop-shadow(0px 0px 0px #5cff61)} 47% {filter: drop-shadow(0px 0px 0px #5cff61)} 47.333333% {filter: drop-shadow(0px 0px 1.414214px #5cff61)} 51% {filter: drop-shadow(0px 0px 1.414214px #5cff61)} 51.333333% {filter: drop-shadow(0px 0px 0px #5cff61)} 53.666667% {filter: drop-shadow(0px 0px 0px #5cff61)} 54% {filter: drop-shadow(0px 0px 1.414214px #5cff61)} 100% {filter: drop-shadow(0px 0px 1.414214px #5cff61)}}]]>
-        </style>
+      <svg viewBox="0 0 58 58" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M23.3288 20.3467L47.2994 43.6703C47.951 44.3043 49.0211 43.8272 49.0211 42.9028V25.4974C49.0211 25.3672 49.0718 25.2422 49.1625 25.1489L54.8008 19.3469C55.1136 19.0249 55.6594 19.2464 55.6594 19.6953V53.8666C55.6594 56.1494 53.8672 58 51.6564 58C50.6209 58 49.6257 57.5856 48.8798 56.844L22.6244 30.7374C22.5245 30.638 22.468 30.5009 22.468 30.3576V20.7304C22.468 20.2682 23.003 20.0297 23.3288 20.3467Z" fill="url(#paint0_radial_8050_1486)"/>
+        <path d="M55.5185 9.41663C55.6089 9.32336 55.6594 9.19862 55.6594 9.06878V5.27273C55.6594 2.36068 53.3732 0 50.553 0H5.10636C2.2862 0 0 2.36068 0 5.27273V52.7273C0 55.6393 2.2862 58 5.10636 58H27.5744C28.7024 58 29.6169 57.0557 29.6169 55.8909V47.3654C29.6169 47.2255 29.5631 47.0914 29.4673 46.9925L23.3397 40.6653C23.018 40.3331 22.468 40.5683 22.468 41.0381V48.5091C22.468 49.6739 21.5535 50.6182 20.4255 50.6182H8.68082C7.55275 50.6182 6.63827 49.6739 6.63827 48.5091V9.49091C6.63827 8.32609 7.55275 7.38182 8.68082 7.38182H46.9785C48.1066 7.38182 49.0211 8.32609 49.0211 9.49091V14.8907C49.0211 15.3401 49.5677 15.5614 49.8803 15.2386L55.5185 9.41663Z" fill="url(#paint1_radial_8050_1486)"/>
         <defs>
-          <linearGradient
-            id="eBsErktH1943-fill"
-            x1="36"
-            y1="36"
-            x2="4.345"
-            y2="0"
-            spreadMethod="pad"
-            gradientUnits="userSpaceOnUse"
-            gradientTransform="translate(0 0)"
-          >
-            <stop id="eBsErktH1943-fill-0" offset="0%" stop-color="#b9ffb3" />
-            <stop
-              id="eBsErktH1943-fill-1"
-              offset="100%"
-              stop-color="rgba(185,255,179,0)"
-            />
-          </linearGradient>
-          <linearGradient
-            id="eBsErktH1944-fill"
-            x1="36"
-            y1="36"
-            x2="14.617"
-            y2="27.683"
-            spreadMethod="pad"
-            gradientUnits="userSpaceOnUse"
-            gradientTransform="translate(0 0)"
-          >
-            <stop
-              id="eBsErktH1944-fill-0"
-              offset="0%"
-              stop-color="rgba(26,26,26,0.9)"
-            />
-            <stop
-              id="eBsErktH1944-fill-1"
-              offset="100%"
-              stop-color="rgba(26,26,26,0)"
-            />
-          </linearGradient>
+        <radialGradient id="paint0_radial_8050_1486" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(51.0211 3.19347) rotate(133.82) scale(82.5374 125.502)">
+        <stop stop-color="#00DB9A"/>
+        <stop offset="0.25" stop-color="#00DB9A"/>
+        <stop offset="1" stop-color="#3395FF"/>
+        </radialGradient>
+        <radialGradient id="paint1_radial_8050_1486" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(51.0211 3.19347) rotate(133.82) scale(82.5374 125.502)">
+        <stop stop-color="#00DB9A"/>
+        <stop offset="0.25" stop-color="#00DB9A"/>
+        <stop offset="1" stop-color="#3395FF"/>
+        </radialGradient>
         </defs>
-        <path
-          d="M0,6.207c0-1.646199.65395-3.224973,1.817988-4.389012C2.982026,0.65395,4.560801,0,6.207,0h23.586c1.646199,0,3.224973.65395,4.389012,1.817988s1.817988,2.742813,1.817988,4.389012v20.06c0,3.546-4.488,5.085-6.664,2.286l-6.805-8.754v10.615c0,3.085063-2.500937,5.586-5.586,5.586h-10.738c-1.646199,0-3.224973-.65395-4.389012-1.817988s-1.817988-2.742813-1.817988-4.389012L0,6.207ZM6.207,4.966c-.686,0-1.241.555-1.241,1.24v23.587c0,.686.555,1.242,1.24,1.242h10.925c.343,0,.434-.278.434-.621v-14.234c0-3.547,4.488-5.086,6.665-2.286l6.805,8.753v-16.44c0-.686.064-1.241-.621-1.241h-24.207Z"
-          transform="translate(3 3)"
-          clip-rule="evenodd"
-          fill="#12fff7"
-          fill-rule="evenodd"
-        />
-        <path
-          d="M0,6.207c0-1.646199.65395-3.224973,1.817988-4.389012C2.982026,0.65395,4.560801,0,6.207,0h23.586c1.646199,0,3.224973.65395,4.389012,1.817988s1.817988,2.742813,1.817988,4.389012v20.06c0,3.546-4.488,5.085-6.664,2.286l-6.805-8.754v10.615c0,3.085063-2.500937,5.586-5.586,5.586h-10.738c-1.646199,0-3.224973-.65395-4.389012-1.817988s-1.817988-2.742813-1.817988-4.389012L0,6.207ZM6.207,4.966c-.686,0-1.241.555-1.241,1.24v23.587c0,.686.555,1.242,1.24,1.242h10.925c.343,0,.434-.278.434-.621v-14.234c0-3.547,4.488-5.086,6.665-2.286l6.805,8.753v-16.44c0-.686.064-1.241-.621-1.241h-24.207Z"
-          transform="translate(3 3)"
-          clip-rule="evenodd"
-          fill="url(#eBsErktH1943-fill)"
-          fill-rule="evenodd"
-        />
-        <path
-          d="M0,6.207c0-1.646199.65395-3.224973,1.817988-4.389012C2.982026,0.65395,4.560801,0,6.207,0h23.586c1.646199,0,3.224973.65395,4.389012,1.817988s1.817988,2.742813,1.817988,4.389012v20.06c0,3.546-4.488,5.085-6.664,2.286l-6.805-8.754v10.615c0,3.085063-2.500937,5.586-5.586,5.586h-10.738c-1.646199,0-3.224973-.65395-4.389012-1.817988s-1.817988-2.742813-1.817988-4.389012L0,6.207ZM6.207,4.966c-.686,0-1.241.555-1.241,1.24v23.587c0,.686.555,1.242,1.24,1.242h10.925c.343,0,.434-.278.434-.621v-14.234c0-3.547,4.488-5.086,6.665-2.286l6.805,8.753v-16.44c0-.686.064-1.241-.621-1.241h-24.207Z"
-          transform="translate(3 3)"
-          clip-rule="evenodd"
-          fill="url(#eBsErktH1944-fill)"
-          fill-rule="evenodd"
-        />
-        <path
-          id="eBsErktH1945"
-          style="filter: drop-shadow(0px 0px 0px #5cff61)"
-          d="M29.793,0c1.646199,0,3.224973.65395,4.389012,1.817988s1.817988,2.742813,1.817988,4.389012v20.06c0,3.546-4.488,5.085-6.664,2.286l-6.805-8.754v10.615c0,3.085063-2.500937,5.586-5.586,5.586.342417,0,.62-.277583.62-.62v-19.2c0-3.547,4.488-5.086,6.665-2.286l6.805,8.753v-21.406c0-.685-.556-1.241-1.242-1.241Z"
-          transform="translate(3 3)"
-          fill="#b9ffb3"
-        />
-        <path
-          id="eBsErktH1946"
-          style="filter: drop-shadow(0px 0px 0px #5cff61)"
-          d="M29.793,0c1.646199,0,3.224973.65395,4.389012,1.817988s1.817988,2.742813,1.817988,4.389012v20.06c0,3.546-4.488,5.085-6.664,2.286l-6.805-8.754v10.615c0,3.085063-2.500937,5.586-5.586,5.586.342417,0,.62-.277583.62-.62v-19.2c0-3.547,4.488-5.086,6.665-2.286l6.805,8.753v-21.406c0-.685-.556-1.241-1.242-1.241Z"
-          transform="translate(3 3)"
-          fill="#b9ffb3"
-        />
-        <path
-          id="eBsErktH1947"
-          style="filter: drop-shadow(0px 0px 0px #5cff61)"
-          d="M29.793,0c1.646199,0,3.224973.65395,4.389012,1.817988s1.817988,2.742813,1.817988,4.389012v20.06c0,3.546-4.488,5.085-6.664,2.286l-6.805-8.754v10.615c0,3.085063-2.500937,5.586-5.586,5.586.342417,0,.62-.277583.62-.62v-19.2c0-3.547,4.488-5.086,6.665-2.286l6.805,8.753v-21.406c0-.685-.556-1.241-1.242-1.241Z"
-          transform="translate(3 3)"
-          fill="#b9ffb3"
-        />
       </svg>
     </div>
     <h1>Thank you for using Neon</h1>
-    <p>You may close this page now</p>
+    <p>You may close this window now</p>
   </body>
 </html>
