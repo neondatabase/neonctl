@@ -94,6 +94,14 @@ type CreateMigrationProps = CommonProps & {
   migrationsDir: string;
 };
 
+async function readStdin(): Promise<string> {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString().trim();
+}
+
 async function createNewMigration(props: CreateMigrationProps) {
   try {
     // Ensure migrations directory exists
@@ -105,8 +113,14 @@ async function createNewMigration(props: CreateMigrationProps) {
     const upFilepath = path.join(props.migrationsDir, upFilename);
     const downFilepath = path.join(props.migrationsDir, downFilename);
 
+    // Check if there's piped input
+    let upContent = '-- Write your migration SQL here\n';
+    if (!process.stdin.isTTY) {
+      upContent = await readStdin();
+    }
+
     // Create empty migration file
-    await fs.writeFile(upFilepath, '-- Write your migration SQL here\n');
+    await fs.writeFile(upFilepath, upContent);
     await fs.writeFile(downFilepath, '-- Write your down migration SQL here\n');
 
     writer(props).end(
