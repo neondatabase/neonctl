@@ -1,25 +1,3 @@
-/*
-		const migrationsTable = typeof config === 'string'
-			? '__drizzle_migrations'
-			: config.migrationsTable ?? '__drizzle_migrations';
-		const migrationsSchema = typeof config === 'string' ? 'drizzle' : config.migrationsSchema ?? 'drizzle';
-		const migrationTableCreate = sql`
-			CREATE TABLE IF NOT EXISTS ${sql.identifier(migrationsSchema)}.${sql.identifier(migrationsTable)} (
-				id SERIAL PRIMARY KEY,
-				hash text NOT NULL,
-				created_at bigint
-			)
-		`;
-		await session.execute(sql`CREATE SCHEMA IF NOT EXISTS ${sql.identifier(migrationsSchema)}`);
-		await session.execute(migrationTableCreate);
-
-		const dbMigrations = await session.all<{ id: number; hash: string; created_at: string }>(
-			sql`select id, hash, created_at from ${sql.identifier(migrationsSchema)}.${
-				sql.identifier(migrationsTable)
-			} order by created_at desc limit 1`,
-		);
-*/
-
 import yargs from 'yargs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -83,6 +61,24 @@ export const builder = (
           },
         }),
       (args) => applyMigrations(args),
+    )
+    .command(
+      'list',
+      'List all migrations and their status',
+      (yargs) =>
+        yargs.options({
+          'migrations-dir': {
+            describe: 'Migrations directory',
+            type: 'string',
+            default: './neon-migrations',
+          },
+          'db-url': {
+            describe: 'Database connection URL',
+            type: 'string',
+            demandOption: true,
+          },
+        }),
+      (args) => listMigrations(args),
     );
 
 export const handler = (args: yargs.Argv) => {
@@ -267,6 +263,97 @@ async function applyMigrations(props: ApplyMigrationsProps) {
       writer(props).end(
         {
           message: `Failed to apply migrations due to unexpected error.`,
+        },
+        { fields: ['message'] },
+      );
+    }
+  }
+}
+
+type ListMigrationsProps = CommonProps & {
+  migrationsDir: string;
+  dbUrl: string;
+};
+
+// Add this helper function
+function truncateHash(hash: string): string {
+  return `${hash.slice(0, 5)}...`;
+}
+
+async function listMigrations(props: ListMigrationsProps) {
+  try {
+    const sql = neon(props.dbUrl);
+
+    // Get local migrations
+    const files = await fs.readdir(props.migrationsDir);
+    const migrationFiles = files.filter((f) => f.endsWith('.up.sql')).sort();
+
+    // Get remote migrations
+    const [tableExists] = await sql`
+		SELECT EXISTS (
+		  SELECT 1 
+		  FROM pg_tables 
+		  WHERE schemaname = 'neon_migrations' 
+		  AND tablename = 'migrations'
+		);`;
+
+    let remoteMigrations: { hash: string; created_at: string }[] = [];
+    if (tableExists.exists) {
+      remoteMigrations = (await sql`
+		  SELECT hash, created_at 
+		  FROM neon_migrations.migrations 
+		  ORDER BY created_at ASC`) as { hash: string; created_at: string }[];
+    }
+
+    // Track all migrations (both local and remote)
+    const allMigrations = new Set<string>();
+
+    // Add local migration hashes
+    const localMigrationMap = new Map<string, string>(); // hash -> filename
+    for (const filename of migrationFiles) {
+      const content = await fs.readFile(
+        path.join(props.migrationsDir, filename),
+        'utf-8',
+      );
+      const hash = createHash('sha256').update(content).digest('hex');
+      localMigrationMap.set(hash, filename);
+      allMigrations.add(hash);
+    }
+
+    // Add remote migration hashes
+    remoteMigrations.forEach((m) => allMigrations.add(m.hash));
+
+    // Build results combining both local and remote information
+    const results = Array.from(allMigrations).map((hash) => {
+      const filename = localMigrationMap.get(hash);
+      const remoteMigration = remoteMigrations.find((m) => m.hash === hash);
+
+      return {
+        filename,
+        hash: truncateHash(hash),
+        status: remoteMigration
+          ? `Applied at ${new Date(Number(remoteMigration.created_at)).toLocaleString()}`
+          : 'Not applied',
+      };
+    });
+
+    writer(props).end(results, {
+      fields: ['filename', 'hash', 'status'],
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      writer(props).end(
+        {
+          message: `Failed to list migrations: ${error.message}`,
+        },
+        { fields: ['message'] },
+      );
+    } else {
+      // eslint-disable-next-line no-console
+      console.error(error);
+      writer(props).end(
+        {
+          message: `Failed to list migrations due to unexpected error.`,
         },
         { fields: ['message'] },
       );
