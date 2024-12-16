@@ -1,0 +1,8 @@
+{
+  "endpoints": [
+    {
+      "vpc_endpoint_id": "vpc-test",
+      "label": "test-label-project"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+{
+  "databases": [{ "name": "db1", "owner_name": "user1" }]
+}

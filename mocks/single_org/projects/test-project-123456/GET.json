@@ -1,0 +1,14 @@
+{
+  "project": {
+    "id": "test-project-123456",
+    "name": "test-project-123456",
+    "created_at": "2019-01-01T00:00:00.000Z",
+    "updated_at": "2019-01-01T00:00:00.000Z",
+    "settings": {
+      "allowed_ips": {
+        "ips": ["192.168.1.1"],
+        "protected_branches_only": false
+      }
+    }
+  }
+}
