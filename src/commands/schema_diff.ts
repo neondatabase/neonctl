@@ -119,7 +119,6 @@ const fetchSchema = async (
         projectId: props.projectId,
         branchId: pointInTime.branchId,
         db_name: database.name,
-        role: database.owner_name,
         ...pointInTimeParams(pointInTime),
       })
       .then((response) => response.data.sql ?? '');
@@ -188,9 +187,9 @@ export const parseSchemaDiffParams = async (props: SchemaDiffProps) => {
       props.compareSource = props.baseBranch;
       props.baseBranch = props.branch;
     } else if (props.branch) {
-      const { data } = await props.apiClient.listProjectBranches(
-        props.projectId,
-      );
+      const { data } = await props.apiClient.listProjectBranches({
+        projectId: props.projectId,
+      });
       const contextBranch = data.branches.find(
         (b) => b.id === props.branch || b.name === props.branch,
       );
@@ -206,9 +205,9 @@ export const parseSchemaDiffParams = async (props: SchemaDiffProps) => {
       );
       props.compareSource = '^parent';
     } else {
-      const { data } = await props.apiClient.listProjectBranches(
-        props.projectId,
-      );
+      const { data } = await props.apiClient.listProjectBranches({
+        projectId: props.projectId,
+      });
       const defaultBranch = data.branches.find((b) => b.default);
 
       if (defaultBranch?.parent_id == undefined) {

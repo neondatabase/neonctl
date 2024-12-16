@@ -258,7 +258,9 @@ export const handler = (args: yargs.Argv) => {
 };
 
 const list = async (props: ProjectScopeProps) => {
-  const { data } = await props.apiClient.listProjectBranches(props.projectId);
+  const { data } = await props.apiClient.listProjectBranches({
+    projectId: props.projectId,
+  });
   writer(props).end(data.branches, {
     fields: BRANCH_FIELDS,
   });
@@ -278,7 +280,7 @@ const create = async (
   },
 ) => {
   const branches = await props.apiClient
-    .listProjectBranches(props.projectId)
+    .listProjectBranches({ projectId: props.projectId })
     .then(({ data }) => data.branches);
 
   const parentProps = (() => {
