@@ -20,7 +20,7 @@ export const PROJECT_FIELDS = [
   'created_at',
 ] as const;
 
-const REGIONS = [
+export const REGIONS = [
   'aws-us-west-2',
   'aws-ap-southeast-1',
   'aws-ap-southeast-2',

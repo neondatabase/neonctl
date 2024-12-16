@@ -1,4 +1,4 @@
-import { BranchScopeProps, CommonProps, ProjectScopeProps } from '../types.js';
+import { BranchScopeProps, CommonProps, ProjectScopeProps, OrgScopeProps } from '../types.js';
 import { looksLikeBranchId } from './formats.js';
 
 export const branchIdResolve = async ({
@@ -74,4 +74,15 @@ export const fillSingleProject = async (
     ...props,
     projectId: data.projects[0].id,
   };
+};
+
+export const fillSingleOrg = async (props: CommonProps & Partial<Pick<OrgScopeProps, 'orgId'>>) => {
+  if (props.orgId) {
+    return props;
+  }
+  const { data } = await props.apiClient.getCurrentUserOrganizations();
+  if (data.organizations.length === 0) {
+    throw new Error('No organizations found');
+  }
+  return { ...props, orgId: data.organizations[0].id };
 };
