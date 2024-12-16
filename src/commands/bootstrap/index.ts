@@ -244,7 +244,9 @@ async function deployApp({
 }) {
   let {
     data: { branches },
-  } = await props.apiClient.listProjectBranches(project.id);
+  } = await props.apiClient.listProjectBranches({
+    projectId: project.id,
+  });
 
   branches = branches.filter((branch) => branch.name !== devBranchName);
 
