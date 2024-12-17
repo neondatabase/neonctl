@@ -36,14 +36,34 @@ export const projectCreateRequest = {
               description: "If true, the list will be applied only to protected branches.",
               demandOption: false,
   },
-  'project.settings.allowed_ips.primary_branch_only': {
-              type: "boolean",
-              description: "DEPRECATED: Use `protected_branches_only`.\nIf true, the list will be applied only to the default branch.\n",
-              demandOption: false,
-  },
   'project.settings.enable_logical_replication': {
               type: "boolean",
               description: "Sets wal_level=logical for all compute endpoints in this project.\nAll active endpoints will be suspended.\nOnce enabled, logical replication cannot be disabled.\n",
+              demandOption: false,
+  },
+  'project.settings.maintenance_window.weekdays': {
+              type: "array",
+              description: "A list of weekdays when the maintenance window is active.\nEncoded as ints, where 1 - Monday, and 7 - Sunday.\n",
+              demandOption: true,
+  },
+  'project.settings.maintenance_window.start_time': {
+              type: "string",
+              description: "Start time of the maintenance window, in the format of \"HH:MM\". Uses UTC.\n",
+              demandOption: true,
+  },
+  'project.settings.maintenance_window.end_time': {
+              type: "string",
+              description: "End time of the maintenance window, in the format of \"HH:MM\". Uses UTC.\n",
+              demandOption: true,
+  },
+  'project.settings.block_public_connections': {
+              type: "boolean",
+              description: "When set, connections from the public internet\nare disallowed. This supersedes the AllowedIPs list.\n(IN DEVELOPMENT - NOT AVAILABLE YET)\n",
+              demandOption: false,
+  },
+  'project.settings.block_vpc_connections': {
+              type: "boolean",
+              description: "When set, connections using VPC endpoints\nare disallowed.\n(IN DEVELOPMENT - NOT AVAILABLE YET)\n",
               demandOption: false,
   },
   'project.name': {
@@ -53,24 +73,23 @@ export const projectCreateRequest = {
   },
   'project.branch.name': {
               type: "string",
-              description: "The branch name. If not specified, the default branch name will be used.\n",
+              description: "The default branch name. If not specified, the default branch name, `main`, will be used.\n",
               demandOption: false,
   },
   'project.branch.role_name': {
               type: "string",
-              description: "The role name. If not specified, the default role name will be used.\n",
+              description: "The role name. If not specified, the default role name, `{database_name}_owner`, will be used.\n",
               demandOption: false,
   },
   'project.branch.database_name': {
               type: "string",
-              description: "The database name. If not specified, the default database name will be used.\n",
+              description: "The database name. If not specified, the default database name, `neondb`, will be used.\n",
               demandOption: false,
   },
   'project.provisioner': {
               type: "string",
-              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n",
+              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n\nProvisioner can be one of the following values:\n* k8s-pod\n* k8s-neonvm\n\nClients must expect, that any string value that is not documented in the description above should be treated as a error. UNKNOWN value if safe to treat as an error too.\n",
               demandOption: false,
- choices: ["k8s-pod","k8s-neonvm"],
   },
   'project.region_id': {
               type: "string",
@@ -84,7 +103,7 @@ export const projectCreateRequest = {
   },
   'project.pg_version': {
               type: "number",
-              description: "The major Postgres version number. Currently supported versions are `14`, `15`, and `16`.",
+              description: "The major Postgres version number. Currently supported versions are `14`, `15`, `16`, and `17`.",
               demandOption: false,
   },
   'project.store_passwords': {
@@ -94,7 +113,7 @@ export const projectCreateRequest = {
   },
   'project.history_retention_seconds': {
               type: "number",
-              description: "The number of seconds to retain the point-in-time restore (PITR) backup history for this project.\nThe default is 604800 seconds (7 days).\n",
+              description: "The number of seconds to retain the shared history for all branches in this project.\nThe default is 1 day (86400 seconds).\n",
               demandOption: false,
   },
   'project.org_id': {
@@ -140,14 +159,34 @@ export const projectUpdateRequest = {
               description: "If true, the list will be applied only to protected branches.",
               demandOption: false,
   },
-  'project.settings.allowed_ips.primary_branch_only': {
-              type: "boolean",
-              description: "DEPRECATED: Use `protected_branches_only`.\nIf true, the list will be applied only to the default branch.\n",
-              demandOption: false,
-  },
   'project.settings.enable_logical_replication': {
               type: "boolean",
               description: "Sets wal_level=logical for all compute endpoints in this project.\nAll active endpoints will be suspended.\nOnce enabled, logical replication cannot be disabled.\n",
+              demandOption: false,
+  },
+  'project.settings.maintenance_window.weekdays': {
+              type: "array",
+              description: "A list of weekdays when the maintenance window is active.\nEncoded as ints, where 1 - Monday, and 7 - Sunday.\n",
+              demandOption: true,
+  },
+  'project.settings.maintenance_window.start_time': {
+              type: "string",
+              description: "Start time of the maintenance window, in the format of \"HH:MM\". Uses UTC.\n",
+              demandOption: true,
+  },
+  'project.settings.maintenance_window.end_time': {
+              type: "string",
+              description: "End time of the maintenance window, in the format of \"HH:MM\". Uses UTC.\n",
+              demandOption: true,
+  },
+  'project.settings.block_public_connections': {
+              type: "boolean",
+              description: "When set, connections from the public internet\nare disallowed. This supersedes the AllowedIPs list.\n(IN DEVELOPMENT - NOT AVAILABLE YET)\n",
+              demandOption: false,
+  },
+  'project.settings.block_vpc_connections': {
+              type: "boolean",
+              description: "When set, connections using VPC endpoints\nare disallowed.\n(IN DEVELOPMENT - NOT AVAILABLE YET)\n",
               demandOption: false,
   },
   'project.name': {
@@ -162,7 +201,7 @@ export const projectUpdateRequest = {
   },
   'project.history_retention_seconds': {
               type: "number",
-              description: "The number of seconds to retain the point-in-time restore (PITR) backup history for this project.\nThe default is 604800 seconds (7 days).\n",
+              description: "The number of seconds to retain the shared history for all branches in this project.\nThe default is 1 day (604800 seconds).\n",
               demandOption: false,
   },
 } as const;
@@ -198,6 +237,17 @@ export const branchCreateRequest = {
               description: "Whether the branch is protected\n",
               demandOption: false,
   },
+  'branch.archived': {
+              type: "boolean",
+              description: "Whether to create the branch as archived\n",
+              demandOption: false,
+  },
+  'branch.schema_initialization_type': {
+              type: "string",
+              description: "The type of schema initialization. Defines how the schema is initialized, currently only empty is supported. This parameter is under\nactive development and may change its semantics in the future.\n",
+              demandOption: false,
+ choices: ["empty"],
+  },
 } as const;
 
 export const branchCreateRequestEndpointOptions = {
@@ -209,9 +259,8 @@ export const branchCreateRequestEndpointOptions = {
   },
   'provisioner': {
               type: "string",
-              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n",
+              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n\nProvisioner can be one of the following values:\n* k8s-pod\n* k8s-neonvm\n\nClients must expect, that any string value that is not documented in the description above should be treated as a error. UNKNOWN value if safe to treat as an error too.\n",
               demandOption: false,
- choices: ["k8s-pod","k8s-neonvm"],
   },
   'suspend_timeout_seconds': {
               type: "number",
@@ -252,9 +301,8 @@ export const endpointCreateRequest = {
   },
   'endpoint.provisioner': {
               type: "string",
-              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n",
+              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n\nProvisioner can be one of the following values:\n* k8s-pod\n* k8s-neonvm\n\nClients must expect, that any string value that is not documented in the description above should be treated as a error. UNKNOWN value if safe to treat as an error too.\n",
               demandOption: false,
- choices: ["k8s-pod","k8s-neonvm"],
   },
   'endpoint.pooler_enabled': {
               type: "boolean",
@@ -287,14 +335,13 @@ export const endpointCreateRequest = {
 export const endpointUpdateRequest = {
   'endpoint.branch_id': {
               type: "string",
-              description: "The destination branch ID. The destination branch must not have an exsiting read-write endpoint.\n",
+              description: "DEPRECATED: This field will be removed in a future release.\nThe destination branch ID. The destination branch must not have an exsiting read-write endpoint.\n",
               demandOption: false,
   },
   'endpoint.provisioner': {
               type: "string",
-              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n",
+              description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n\nProvisioner can be one of the following values:\n* k8s-pod\n* k8s-neonvm\n\nClients must expect, that any string value that is not documented in the description above should be treated as a error. UNKNOWN value if safe to treat as an error too.\n",
               demandOption: false,
- choices: ["k8s-pod","k8s-neonvm"],
   },
   'endpoint.pooler_enabled': {
               type: "boolean",
