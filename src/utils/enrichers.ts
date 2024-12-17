@@ -60,9 +60,7 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
   throw new Error('No default branch found');
 };
 
-export const fillSingleProject = async (
-  props: CommonProps & Partial<Pick<ProjectScopeProps, 'projectId'>>,
-) => {
+export const fillSingleProject = async (props: ProjectScopeProps) => {
   if (props.projectId) {
     return props;
   }
@@ -81,9 +79,7 @@ export const fillSingleProject = async (
   };
 };
 
-export const fillSingleOrg = async (
-  props: CommonProps & Partial<Pick<OrgScopeProps, 'orgId'>>,
-) => {
+export const fillSingleOrg = async (props: OrgScopeProps) => {
   if (props.orgId) {
     return props;
   }
