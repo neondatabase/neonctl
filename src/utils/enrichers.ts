@@ -15,7 +15,9 @@ export const branchIdResolve = async ({
     return branch;
   }
 
-  const { data } = await apiClient.listProjectBranches(projectId);
+  const { data } = await apiClient.listProjectBranches({
+    projectId,
+  });
   const branchData = data.branches.find((b) => b.name === branch);
   if (!branchData) {
     throw new Error(
@@ -41,7 +43,9 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
     });
   }
 
-  const { data } = await props.apiClient.listProjectBranches(props.projectId);
+  const { data } = await props.apiClient.listProjectBranches({
+    projectId: props.projectId,
+  });
   const defaultBranch = data.branches.find((b) => b.default);
 
   if (defaultBranch) {
