@@ -10,9 +10,7 @@ export const command = 'migrations';
 export const describe = 'Manage database migrations';
 export const aliases = ['migration', 'migrate'];
 
-export const builder = (
-  argv: yargs.Argv<CreateMigrationProps | ApplyMigrationsProps>,
-) =>
+export const builder = (argv: yargs.Argv<CreateMigrationProps>) =>
   argv
     .usage('$0 migrations <sub-command> [options]')
     .command(
@@ -42,7 +40,7 @@ export const builder = (
             }
             return true;
           }),
-      (args) => createNewMigration(args),
+      (args) => createNewMigrationCommand(args),
     )
     .command(
       ['up', 'apply'],
@@ -60,7 +58,7 @@ export const builder = (
             demandOption: true,
           },
         }),
-      (args) => applyMigrations(args),
+      (args) => applyMigrationsCommand(args),
     )
     .command(
       'list',
@@ -78,16 +76,10 @@ export const builder = (
             demandOption: true,
           },
         }),
-      (args) => listMigrations(args),
+      (args) => listMigrationsCommand(args),
     );
-
 export const handler = (args: yargs.Argv) => {
   return args;
-};
-
-type CreateMigrationProps = CommonProps & {
-  name: string;
-  migrationsDir: string;
 };
 
 async function readStdin(): Promise<string> {
@@ -98,65 +90,54 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString().trim();
 }
 
-async function createNewMigration(props: CreateMigrationProps) {
+async function createNewMigration({
+  name,
+  migrationsDir,
+  log,
+}: CreateMigrationOptions) {
   try {
-    // Ensure migrations directory exists
-    await fs.mkdir(props.migrationsDir, { recursive: true });
+    await fs.mkdir(migrationsDir, { recursive: true });
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const upFilename = `${timestamp}-${props.name}.up.sql`;
-    const downFilename = `${timestamp}-${props.name}.down.sql`;
-    const upFilepath = path.join(props.migrationsDir, upFilename);
-    const downFilepath = path.join(props.migrationsDir, downFilename);
+    const upFilename = `${timestamp}-${name}.up.sql`;
+    const downFilename = `${timestamp}-${name}.down.sql`;
+    const upFilepath = path.join(migrationsDir, upFilename);
+    const downFilepath = path.join(migrationsDir, downFilename);
 
-    // Check if there's piped input
     let upContent = '-- Write your migration SQL here\n';
     if (!process.stdin.isTTY) {
       upContent = await readStdin();
     }
 
-    // Create empty migration file
     await fs.writeFile(upFilepath, upContent);
     await fs.writeFile(downFilepath, '-- Write your down migration SQL here\n');
 
-    writer(props).end(
-      {
-        message: `Created two new migration files: ${upFilepath} and ${downFilepath}`,
-        upFilepath,
-      },
-      {
-        fields: ['message', 'upFilepath'],
-      },
-    );
+    log({
+      'Forward migration file': upFilepath,
+      'Backward Migration File': downFilepath,
+    });
   } catch (error: unknown) {
     if (error instanceof Error) {
-      writer(props).end(
-        {
-          message: `Failed to create migration files: ${error.message}`,
-        },
-        { fields: ['message'] },
-      );
+      log({
+        message: `Failed to create migration files: ${error.message}`,
+      });
     } else {
       // eslint-disable-next-line no-console
       console.error(error);
-      writer(props).end(
-        {
-          message: `Failed to create migration files due to unexpected error.`,
-        },
-        { fields: ['message'] },
-      );
+      log({
+        message: 'Failed to create migration files due to unexpected error.',
+      });
     }
   }
 }
 
-type ApplyMigrationsProps = CommonProps & {
-  migrationsDir: string;
-  dbUrl: string;
-};
-
-async function applyMigrations(props: ApplyMigrationsProps) {
+async function applyMigrations({
+  migrationsDir,
+  dbUrl,
+  log,
+}: ApplyMigrationsOptions) {
   try {
-    const sql = neon(props.dbUrl);
+    const sql = neon(dbUrl);
 
     // Check if migrations table exists
     const [tableExists] = await sql`
@@ -168,7 +149,7 @@ async function applyMigrations(props: ApplyMigrationsProps) {
         );`;
 
     // Read and sort migration files
-    const files = await fs.readdir(props.migrationsDir);
+    const files = await fs.readdir(migrationsDir);
     const migrationFiles = files.filter((f) => f.endsWith('.up.sql')).sort(); // Ensures timestamp order
 
     let appliedMigrations: { hash: string }[] = [];
@@ -199,7 +180,7 @@ async function applyMigrations(props: ApplyMigrationsProps) {
 
       // Compare hashes
       const content = await fs.readFile(
-        path.join(props.migrationsDir, migrationFiles[i]),
+        path.join(migrationsDir, migrationFiles[i]),
         'utf-8',
       );
       const hash = createHash('sha256').update(content).digest('hex');
@@ -224,7 +205,7 @@ async function applyMigrations(props: ApplyMigrationsProps) {
     const results = [];
     for (const file of migrationsToBeApplied) {
       const content = await fs.readFile(
-        path.join(props.migrationsDir, file),
+        path.join(migrationsDir, file),
         'utf-8',
       );
       const hash = createHash('sha256').update(content).digest('hex');
@@ -243,49 +224,38 @@ async function applyMigrations(props: ApplyMigrationsProps) {
       });
     }
 
-    writer(props).end(
-      {
-        message: `Ran ${results.length} migrations`,
-      },
-      { fields: ['message'] },
-    );
+    log({
+      message: `Ran ${results.length} migrations`,
+    });
   } catch (error: unknown) {
     if (error instanceof Error) {
-      writer(props).end(
-        {
-          message: `Failed to apply migrations: ${error.message}`,
-        },
-        { fields: ['message'] },
-      );
+      log({
+        message: `Failed to apply migrations: ${error.message}`,
+      });
     } else {
       // eslint-disable-next-line no-console
       console.error(error);
-      writer(props).end(
-        {
-          message: `Failed to apply migrations due to unexpected error.`,
-        },
-        { fields: ['message'] },
-      );
+      log({
+        message: 'Failed to apply migrations due to unexpected error.',
+      });
     }
   }
 }
-
-type ListMigrationsProps = CommonProps & {
-  migrationsDir: string;
-  dbUrl: string;
-};
-
 // Add this helper function
 function truncateHash(hash: string): string {
   return `${hash.slice(0, 5)}...`;
 }
 
-async function listMigrations(props: ListMigrationsProps) {
+async function listMigrations({
+  migrationsDir,
+  dbUrl,
+  log,
+}: ListMigrationsOptions) {
   try {
-    const sql = neon(props.dbUrl);
+    const sql = neon(dbUrl);
 
     // Get local migrations
-    const files = await fs.readdir(props.migrationsDir);
+    const files = await fs.readdir(migrationsDir);
     const migrationFiles = files.filter((f) => f.endsWith('.up.sql')).sort();
 
     // Get remote migrations
@@ -312,7 +282,7 @@ async function listMigrations(props: ListMigrationsProps) {
     const localMigrationMap = new Map<string, string>(); // hash -> filename
     for (const filename of migrationFiles) {
       const content = await fs.readFile(
-        path.join(props.migrationsDir, filename),
+        path.join(migrationsDir, filename),
         'utf-8',
       );
       const hash = createHash('sha256').update(content).digest('hex');
@@ -337,26 +307,97 @@ async function listMigrations(props: ListMigrationsProps) {
       };
     });
 
-    writer(props).end(results, {
-      fields: ['filename', 'hash', 'status'],
-    });
+    log(results);
   } catch (error: unknown) {
     if (error instanceof Error) {
-      writer(props).end(
-        {
-          message: `Failed to list migrations: ${error.message}`,
-        },
-        { fields: ['message'] },
-      );
+      log({
+        message: `Failed to list migrations: ${error.message}`,
+      });
     } else {
       // eslint-disable-next-line no-console
       console.error(error);
-      writer(props).end(
-        {
-          message: `Failed to list migrations due to unexpected error.`,
-        },
-        { fields: ['message'] },
-      );
+      log({
+        message: 'Failed to list migrations due to unexpected error.',
+      });
     }
   }
+}
+
+type MigrationLogger = (
+  obj: Record<string, unknown> | Record<string, unknown>[],
+) => void;
+
+function cliLogger(props: CommonProps) {
+  return (input: Record<string, unknown> | Record<string, unknown>[]) => {
+    if (Array.isArray(input)) {
+      writer(props).end(input, { fields: Object.keys(input[0]) });
+    } else {
+      writer(props).end(input, { fields: Object.keys(input) });
+    }
+  };
+}
+
+type CreateMigrationOptions = {
+  name: string;
+  migrationsDir: string;
+  log: MigrationLogger;
+};
+
+type ApplyMigrationsOptions = {
+  migrationsDir: string;
+  dbUrl: string;
+  log: MigrationLogger;
+};
+
+type ListMigrationsOptions = {
+  migrationsDir: string;
+  dbUrl: string;
+  log: MigrationLogger;
+};
+
+type CreateMigrationProps = CommonProps & {
+  name: string;
+  migrationsDir: string;
+};
+
+function createNewMigrationCommand(props: CreateMigrationProps) {
+  return createNewMigration({
+    name: props.name,
+    migrationsDir: props.migrationsDir,
+    log: (obj) => {
+      cliLogger(props)(obj);
+    },
+  });
+}
+
+type ApplyMigrationsProps = CommonProps & {
+  name: string;
+  dbUrl: string;
+  migrationsDir: string;
+};
+
+function applyMigrationsCommand(props: ApplyMigrationsProps) {
+  return applyMigrations({
+    migrationsDir: props.migrationsDir,
+    dbUrl: props.dbUrl,
+    log: (obj) => {
+      cliLogger(props)(obj);
+    },
+  });
+}
+
+type ListMigrationsProps = CommonProps & {
+  name: string;
+  dbUrl: string;
+  migrationsDir: string;
+};
+
+function listMigrationsCommand(props: ListMigrationsProps) {
+  return listMigrations({
+    migrationsDir: props.migrationsDir,
+    dbUrl: props.dbUrl,
+    log: (obj) => {
+      cliLogger(props)(obj);
+    },
+  });
 }
