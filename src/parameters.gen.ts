@@ -58,12 +58,12 @@ export const projectCreateRequest = {
   },
   'project.settings.block_public_connections': {
               type: "boolean",
-              description: "When set, connections from the public internet\nare disallowed. This supersedes the AllowedIPs list.\n(IN DEVELOPMENT - NOT AVAILABLE YET)\n",
+              description: "When set, connections from the public internet\nare disallowed. This supersedes the AllowedIPs list.\nThis parameter is under active development and its semantics may change in the future.\n",
               demandOption: false,
   },
   'project.settings.block_vpc_connections': {
               type: "boolean",
-              description: "When set, connections using VPC endpoints\nare disallowed.\n(IN DEVELOPMENT - NOT AVAILABLE YET)\n",
+              description: "When set, connections using VPC endpoints are disallowed.\nThis parameter is under active development and its semantics may change in the future.\n",
               demandOption: false,
   },
   'project.name': {
@@ -181,12 +181,12 @@ export const projectUpdateRequest = {
   },
   'project.settings.block_public_connections': {
               type: "boolean",
-              description: "When set, connections from the public internet\nare disallowed. This supersedes the AllowedIPs list.\n(IN DEVELOPMENT - NOT AVAILABLE YET)\n",
+              description: "When set, connections from the public internet\nare disallowed. This supersedes the AllowedIPs list.\nThis parameter is under active development and its semantics may change in the future.\n",
               demandOption: false,
   },
   'project.settings.block_vpc_connections': {
               type: "boolean",
-              description: "When set, connections using VPC endpoints\nare disallowed.\n(IN DEVELOPMENT - NOT AVAILABLE YET)\n",
+              description: "When set, connections using VPC endpoints are disallowed.\nThis parameter is under active development and its semantics may change in the future.\n",
               demandOption: false,
   },
   'project.name': {
