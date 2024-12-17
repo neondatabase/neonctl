@@ -1,4 +1,9 @@
-import { BranchScopeProps, CommonProps, ProjectScopeProps } from '../types.js';
+import {
+  BranchScopeProps,
+  CommonProps,
+  ProjectScopeProps,
+  OrgScopeProps,
+} from '../types.js';
 import { looksLikeBranchId } from './formats.js';
 
 export const branchIdResolve = async ({
@@ -55,9 +60,7 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
   throw new Error('No default branch found');
 };
 
-export const fillSingleProject = async (
-  props: CommonProps & Partial<Pick<ProjectScopeProps, 'projectId'>>,
-) => {
+export const fillSingleProject = async (props: ProjectScopeProps) => {
   if (props.projectId) {
     return props;
   }
@@ -74,4 +77,20 @@ export const fillSingleProject = async (
     ...props,
     projectId: data.projects[0].id,
   };
+};
+
+export const fillSingleOrg = async (props: OrgScopeProps) => {
+  if (props.orgId) {
+    return props;
+  }
+  const { data } = await props.apiClient.getCurrentUserOrganizations();
+  if (data.organizations.length === 0) {
+    throw new Error('No organizations found');
+  }
+  if (data.organizations.length > 1) {
+    throw new Error(
+      `Multiple organizations found, please provide one with the --org-id option`,
+    );
+  }
+  return { ...props, orgId: data.organizations[0].id };
 };

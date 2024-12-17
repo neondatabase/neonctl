@@ -1,0 +1,56 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`vpc-endpoints > delete org VPC endpoint 1`] = `
+"{}
+"
+`;
+
+exports[`vpc-endpoints > delete project VPC endpoint restrictions 1`] = `
+"{}
+"
+`;
+
+exports[`vpc-endpoints > get org VPC endpoint status 1`] = `
+"vpc_endpoint_id: vpc-test
+state: new
+"
+`;
+
+exports[`vpc-endpoints > list org VPC endpoints 1`] = `
+"- vpc_endpoint_id: vpc-test
+  label: test-label
+"
+`;
+
+exports[`vpc-endpoints > list org VPC endpoints implicit org 1`] = `
+"- vpc_endpoint_id: vpc-test
+  label: test-label
+"
+`;
+
+exports[`vpc-endpoints > list project VPC endpoint restrictions 1`] = `
+"- vpc_endpoint_id: vpc-test
+  label: test-label-project
+"
+`;
+
+exports[`vpc-endpoints > list project VPC endpoint restrictions with implicit project 1`] = `
+"- vpc_endpoint_id: vpc-test
+  label: test-label-project
+"
+`;
+
+exports[`vpc-endpoints > set org VPC endpoint in azure 1`] = `
+"{}
+"
+`;
+
+exports[`vpc-endpoints > set project VPC endpoint restrictions 1`] = `
+"{}
+"
+`;
+
+exports[`vpc-endpoints > update org VPC endpoint 1`] = `
+"{}
+"
+`;
