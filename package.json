@@ -54,7 +54,7 @@
     "vitest": "^1.6.0"
   },
   "dependencies": {
-    "@neondatabase/api-client": "1.11.1",
+    "@neondatabase/api-client": "1.11.2",
     "@segment/analytics-node": "^1.0.0-beta.26",
     "axios": "^1.4.0",
     "axios-debug-log": "^1.0.0",
