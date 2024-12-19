@@ -38,6 +38,10 @@ export const aliases = ['project'];
 export const builder = (argv: yargs.Argv) => {
   return argv
     .usage('$0 projects <sub-command> [options]')
+    .middleware((args: any) => {
+      // Provide alias for analytics
+      args.projectId = args.id;
+    })
     .command(
       'list',
       'List projects',

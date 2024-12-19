@@ -22,7 +22,13 @@ import { defaultClientID } from './auth.js';
 import { fillInArgs } from './utils/middlewares.js';
 import pkg from './pkg.js';
 import commands from './commands/index.js';
-import { analyticsMiddleware, closeAnalytics, sendError } from './analytics.js';
+import {
+  analyticsMiddleware,
+  closeAnalytics,
+  getAnalyticsEventProperties,
+  sendError,
+  trackEvent,
+} from './analytics.js';
 import { isAxiosError } from 'axios';
 import { matchErrorCode } from './errors.js';
 import { showHelp } from './help.js';
@@ -195,6 +201,11 @@ builder = builder
 void (async () => {
   try {
     const args = await builder.argv;
+    trackEvent('cli_command_success', {
+      ...getAnalyticsEventProperties(args),
+      projectId: args.projectId,
+      branchId: args.branchId,
+    });
     if (args._.length === 0 || args.help) {
       await showHelp(builder);
       process.exit(0);
