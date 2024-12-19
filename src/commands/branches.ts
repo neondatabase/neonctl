@@ -51,6 +51,10 @@ export const builder = (argv: yargs.Argv) =>
       },
     })
     .middleware(fillSingleProject as any)
+    .middleware((args: any) => {
+      // Provide alias for analytics
+      args.branchId ??= args.id;
+    })
     .command(
       'list',
       'List branches',
@@ -134,6 +138,7 @@ export const builder = (argv: yargs.Argv) =>
           .middleware((args: any) => {
             args.id = args.targetId;
             args.pointInTime = args['source@(timestamp'];
+            args.branchId = args.id; // for analytics
           })
           .usage(
             '$0 branches restore <target-id|name> <source>[@(timestamp|lsn)]',
@@ -375,12 +380,11 @@ const create = async (
 };
 
 const rename = async (
-  props: ProjectScopeProps &
-    IdOrNameProps & { newName: string; branchId: string },
+  props: ProjectScopeProps & IdOrNameProps & { newName: string },
 ) => {
-  props.branchId = await branchIdFromProps(props);
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.updateProjectBranch(props.projectId, props.branchId, {
+    props.apiClient.updateProjectBranch(props.projectId, branchId, {
       branch: {
         name: props.newName,
       },
@@ -391,37 +395,31 @@ const rename = async (
   });
 };
 
-const setDefault = async (
-  props: ProjectScopeProps & IdOrNameProps & { branchId: string },
-) => {
-  props.branchId = await branchIdFromProps(props);
+const setDefault = async (props: ProjectScopeProps & IdOrNameProps) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.setDefaultProjectBranch(props.projectId, props.branchId),
+    props.apiClient.setDefaultProjectBranch(props.projectId, branchId),
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
   });
 };
 
-const deleteBranch = async (
-  props: ProjectScopeProps & IdOrNameProps & { branchId: string },
-) => {
-  props.branchId = await branchIdFromProps(props);
+const deleteBranch = async (props: ProjectScopeProps & IdOrNameProps) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
-    props.apiClient.deleteProjectBranch(props.projectId, props.branchId),
+    props.apiClient.deleteProjectBranch(props.projectId, branchId),
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
   });
 };
 
-const get = async (
-  props: ProjectScopeProps & IdOrNameProps & { branchId: string },
-) => {
-  props.branchId = await branchIdFromProps(props);
+const get = async (props: ProjectScopeProps & IdOrNameProps) => {
+  const branchId = await branchIdFromProps(props);
   const { data } = await props.apiClient.getProjectBranch(
     props.projectId,
-    props.branchId,
+    branchId,
   );
   writer(props).end(data.branch, {
     fields: BRANCH_FIELDS,
@@ -433,13 +431,13 @@ const addCompute = async (
     IdOrNameProps & {
       type: EndpointType;
       cu?: string;
-    } & { branchId: string },
+    },
 ) => {
-  props.branchId = await branchIdFromProps(props);
+  const branchId = await branchIdFromProps(props);
   const { data } = await retryOnLock(() =>
     props.apiClient.createProjectEndpoint(props.projectId, {
       endpoint: {
-        branch_id: props.branchId,
+        branch_id: branchId,
         type: props.type,
         ...(props.cu ? getComputeUnits(props.cu) : undefined),
       },
@@ -455,22 +453,22 @@ const reset = async (
     IdOrNameProps & {
       parent: boolean;
       preserveUnderName?: string;
-    } & { branchId: string },
+    },
 ) => {
   if (!props.parent) {
     throw new Error('Only resetting to parent is supported for now');
   }
-  props.branchId = await branchIdFromProps(props);
+  const branchId = await branchIdFromProps(props);
   const {
     data: {
       branch: { parent_id },
     },
-  } = await props.apiClient.getProjectBranch(props.projectId, props.branchId);
+  } = await props.apiClient.getProjectBranch(props.projectId, branchId);
   if (!parent_id) {
     throw new Error('Branch has no parent');
   }
   const { data } = await retryOnLock(() =>
-    props.apiClient.restoreProjectBranch(props.projectId, props.branchId, {
+    props.apiClient.restoreProjectBranch(props.projectId, branchId, {
       source_branch_id: parent_id,
       preserve_under_name: props.preserveUnderName || undefined,
     }),
