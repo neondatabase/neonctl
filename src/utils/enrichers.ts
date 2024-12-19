@@ -64,7 +64,7 @@ export const fillSingleProject = async (props: ProjectScopeProps) => {
   if (props.projectId) {
     return props;
   }
-  const { data } = await props.apiClient.listProjects({});
+  const { data } = await props.apiClient.listProjects({ limit: 2 });
   if (data.projects.length === 0) {
     throw new Error('No projects found');
   }
