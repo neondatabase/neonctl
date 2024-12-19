@@ -34,7 +34,7 @@ export const branchIdResolve = async ({
   return branchData.id;
 };
 
-export const branchIdFromProps = async (props: BranchScopeProps) => {
+const getBranchIdFromProps = async (props: BranchScopeProps) => {
   const branch =
     'branch' in props && typeof props.branch === 'string'
       ? props.branch
@@ -58,6 +58,11 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
   }
 
   throw new Error('No default branch found');
+};
+
+export const branchIdFromProps = async (props: BranchScopeProps) => {
+  (props as any).branchId = await getBranchIdFromProps(props);
+  return (props as any).branchId;
 };
 
 export const fillSingleProject = async (props: ProjectScopeProps) => {

@@ -65,15 +65,7 @@ export const analyticsMiddleware = async (args: {
   client.track({
     userId: userId ?? 'anonymous',
     event: 'CLI Started',
-    properties: {
-      version: pkg.version,
-      command: args._.join(' '),
-      flags: {
-        output: args.output,
-      },
-      ci: isCi(),
-      githubEnvVars: getGithubEnvVars(process.env),
-    },
+    properties: getAnalyticsEventProperties(args),
     context: {
       direct: true,
     },
@@ -120,3 +112,13 @@ export const trackEvent = (
   });
   log.debug('Sent CLI event: %s', event);
 };
+
+export const getAnalyticsEventProperties = (args: any) => ({
+  version: pkg.version,
+  command: args._.join(' '),
+  flags: {
+    output: args.output,
+  },
+  ci: isCi(),
+  githubEnvVars: getGithubEnvVars(process.env),
+});
