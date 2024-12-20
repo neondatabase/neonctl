@@ -51,6 +51,10 @@ export const builder = (argv: yargs.Argv) =>
       },
     })
     .middleware(fillSingleProject as any)
+    .middleware((args: any) => {
+      // Provide alias for analytics
+      args.branchId ??= args.id;
+    })
     .command(
       'list',
       'List branches',
@@ -134,6 +138,7 @@ export const builder = (argv: yargs.Argv) =>
           .middleware((args: any) => {
             args.id = args.targetId;
             args.pointInTime = args['source@(timestamp'];
+            args.branchId = args.id; // for analytics
           })
           .usage(
             '$0 branches restore <target-id|name> <source>[@(timestamp|lsn)]',
