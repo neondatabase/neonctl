@@ -106,6 +106,7 @@ function createNewMigrationCommand(props: CreateMigrationProps) {
     log: (obj) => {
       cliLogger(props)(obj);
     },
+    processStdin: true,
   });
 }
 
