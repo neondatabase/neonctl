@@ -23,10 +23,11 @@ const typesMapping = {
   boolean: 'boolean',
 } as const;
 
-(async () => {
-  const spec: OpenAPIV3.Document = (await SwaggerParser.dereference(
+// Explicitly mark the IIFE as void to satisfy no-floating-promises
+void (async () => {
+  const spec = (await SwaggerParser.dereference(
     './node_modules/@neondatabase/api-client/public-v2.yaml',
-  )) as any;
+  )) as OpenAPIV3.Document;
   const outFile = createWriteStream('./src/parameters.gen.ts', 'utf8');
   outFile.write('// FILE IS GENERATED, DO NOT EDIT\n\n');
   EXTRACT_PROPERTIES.forEach((name) => {
@@ -40,7 +41,7 @@ const typesMapping = {
       ).forEach(([key, value]) => {
         if (value.type === 'object' && value.properties) {
           parseProperties(value, [...context, key]);
-        } else if (value.type! in typesMapping) {
+        } else if (value.type && value.type in typesMapping) {
           outFile.write(
             `  '${[...context, key].join('.')}': {
               type: ${JSON.stringify(
