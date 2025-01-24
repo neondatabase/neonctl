@@ -98,7 +98,7 @@
     "lint:fix": "pnpm typecheck && eslint src --fix && prettier --w .",
     "build": "pnpm generateParams && pnpm clean && tsc && cp src/*.html package*.json README.md ./dist",
     "clean": "rm -rf dist",
-    "generateParams": "NODE_OPTIONS=\"--loader ts-node/esm\" node --loader ts-node/esm generateOptionsFromSpec.ts",
+    "generateParams": "node --import 'data:text/javascript,import { register } from \"node:module\"; import { pathToFileURL } from \"node:url\"; register(\"ts-node/esm\", pathToFileURL(\"./\"));' generateOptionsFromSpec.ts",
     "start": "node dist/index.js",
     "pretest": "pnpm build",
     "test": "vitest run",
