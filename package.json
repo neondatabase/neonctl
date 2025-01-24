@@ -94,13 +94,13 @@
   "scripts": {
     "watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "lint": "npm run typecheck && eslint src && prettier --check .",
-    "lint:fix": "npm run typecheck && eslint src --fix && prettier --w .",
-    "build": "npm run generateParams && npm run clean && tsc && cp src/*.html package*.json README.md ./dist",
+    "lint": "pnpm typecheck && eslint src && prettier --check .",
+    "lint:fix": "pnpm typecheck && eslint src --fix && prettier --w .",
+    "build": "pnpm generateParams && pnpm clean && tsc && cp src/*.html package*.json README.md ./dist",
     "clean": "rm -rf dist",
     "generateParams": "node --loader ts-node/esm generateOptionsFromSpec.ts",
     "start": "node dist/index.js",
-    "pretest": "npm run build",
+    "pretest": "pnpm build",
     "test": "vitest run",
     "prepare": "test -d .git && husky install || true"
   },
