@@ -98,7 +98,7 @@
     "lint:fix": "pnpm typecheck && eslint src --fix && prettier --w .",
     "build": "pnpm generateParams && pnpm clean && tsc && cp src/*.html package*.json README.md ./dist",
     "clean": "rm -rf dist",
-    "generateParams": "ts-node --esm generateOptionsFromSpec.ts",
+    "generateParams": "NODE_OPTIONS=\"--experimental-specifier-resolution=node\" ts-node --esm generateOptionsFromSpec.ts",
     "start": "node dist/index.js",
     "pretest": "pnpm build",
     "test": "vitest run",
