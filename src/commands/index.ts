@@ -11,6 +11,7 @@ import * as operations from './operations.js';
 import * as cs from './connection_string.js';
 import * as setContext from './set_context.js';
 import * as bootstrap from './bootstrap/index.js';
+import * as sql from './sql.js';
 
 export default [
   auth,
@@ -26,4 +27,5 @@ export default [
   cs,
   setContext,
   bootstrap,
+  sql,
 ];
