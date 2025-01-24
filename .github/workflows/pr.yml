@@ -10,20 +10,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 9.14.2
       - name: Setup node
         uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: 'pnpm'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
       - name: Build
-        run: pnpm run build
+        run: bun run build
       - name: Lint
-        run: pnpm run lint
+        run: bun run lint
       - name: Test
-        run: pnpm run test
+        run: bun run test

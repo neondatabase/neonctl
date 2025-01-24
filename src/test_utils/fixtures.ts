@@ -32,7 +32,7 @@ export const test = originalTest.extend<Fixtures>({
         '/',
         emocks(join(process.cwd(), 'mocks', mockDir), {
           '404': (_req, res) => res.status(404).send({ message: 'Not Found' }),
-        }),
+        }) as any, // TODO: Fix type error properly in a separate PR
       );
 
       await new Promise<void>((resolve) => {
