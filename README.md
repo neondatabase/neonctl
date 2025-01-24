@@ -67,7 +67,7 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 | Command                                                                     | Subcommands                                                               | Description                  |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------- |
 | [auth](https://neon.tech/docs/reference/cli-auth)                           |                                                                           | Authenticate                 |
-| [sql](https://neon.tech/docs/reference/cli-sql)                           |                                                                           | Create projects using SQL    |
+| [sql](https://neon.tech/docs/reference/cli-sql)                             |                                                                           | Create projects using SQL    |
 | [projects](https://neon.tech/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                               | Manage projects              |
 | [ip-allow](https://neon.tech/docs/reference/cli-ip-allow)                   | `list`, `add`, `remove`, `reset`                                          | Manage IP Allow              |
 | [me](https://neon.tech/docs/reference/cli-me)                               |                                                                           | Show current user            |
