@@ -106,13 +106,12 @@ const formatHelp = (help: string) => {
     result.push('');
   }
 
-  while (true) {
+  let optionsBlock;
+  while (
+    (optionsBlock = consumeBlockIfMatches(lines, /.*options:/i)).length > 0
+  ) {
     // there are two options blocks: global and specific
     // example to see both: neonctl projects create
-    const optionsBlock = consumeBlockIfMatches(lines, /.*options:/i);
-    if (optionsBlock.length === 0) {
-      break;
-    }
     result.push(optionsBlock.shift() as string);
     optionsBlock.forEach((line) => {
       const [option, description] = splitColumns(line);
