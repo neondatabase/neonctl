@@ -79,7 +79,11 @@ const preserveCredentials = async (
 };
 
 export const ensureAuth = async (
-  props: AuthProps & { apiKey: string; apiClient: Api<unknown>; help: boolean },
+  props: AuthProps & {
+    apiKey: string;
+    apiClient: Api<unknown>;
+    help: boolean;
+  },
 ) => {
   if (props._.length === 0 || props.help) {
     return;
@@ -106,11 +110,7 @@ export const ensureAuth = async (
             clientId: props.clientId,
           },
           tokenSet,
-        ).catch((err: unknown) => {
-          const typedErr = err && err instanceof Error ? err : undefined;
-          log.error('failed to refresh token\n%s', typedErr?.message);
-          process.exit(1);
-        });
+        );
 
         props.apiKey = refreshedTokenSet.access_token || 'UNKNOWN';
         props.apiClient = getApiClient({
@@ -133,11 +133,15 @@ export const ensureAuth = async (
       });
       return;
     } catch (e) {
-      if ((e as { code: string }).code !== 'ENOENT') {
-        // not a "file does not exist" error
+      if (
+        (e instanceof Error && e.message.includes('AUTH_REFRESH_FAILED')) ||
+        (e as { code: string }).code === 'ENOENT'
+      ) {
+        props.apiKey = await authFlow(props);
+      } else {
+        // throw for any other errors
         throw e;
       }
-      props.apiKey = await authFlow(props);
     }
   } else {
     props.apiKey = await authFlow(props);

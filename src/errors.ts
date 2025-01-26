@@ -5,12 +5,14 @@ export type ErrorCode =
   | 'API_ERROR'
   | 'UNKNOWN_COMMAND'
   | 'MISSING_ARGUMENT'
-  | 'UNKNOWN_ERROR';
+  | 'UNKNOWN_ERROR'
+  | 'AUTH_REFRESH_FAILED';
 
 const ERROR_MATCHERS = [
   [/^Unknown command: (.*)$/, 'UNKNOWN_COMMAND'],
   [/^Missing required argument: (.*)$/, 'MISSING_ARGUMENT'],
   [/^Failed to open web browser. (.*)$/, 'AUTH_BROWSER_FAILED'],
+  [/^Failed to refresh token. (.*)$/, 'AUTH_REFRESH_FAILED'],
 ] as const;
 
 export const matchErrorCode = (message?: string): ErrorCode => {
