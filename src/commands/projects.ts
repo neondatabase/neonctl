@@ -6,7 +6,10 @@ import {
 import yargs from 'yargs';
 
 import { log } from '../log.js';
-import { projectCreateRequest } from '../parameters.gen.js';
+import {
+  projectCreateRequest,
+  projectUpdateRequest,
+} from '../parameters.gen.js';
 import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
@@ -108,13 +111,25 @@ export const builder = (argv: yargs.Argv) => {
       'Update a project',
       (yargs) =>
         yargs.options({
-          name: {
-            describe: projectCreateRequest['project.name'].description,
-            type: 'string',
+          block_vpc_connections: {
+            describe:
+              projectUpdateRequest['project.settings.block_vpc_connections']
+                .description,
+            type: 'boolean',
+          },
+          block_public_connections: {
+            describe:
+              projectUpdateRequest['project.settings.block_public_connections']
+                .description,
+            type: 'boolean',
           },
           cu: {
             describe:
               'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
+            type: 'string',
+          },
+          name: {
+            describe: projectUpdateRequest['project.name'].description,
             type: 'string',
           },
         }),
@@ -270,9 +285,23 @@ const update = async (
     IdOrNameProps & {
       name?: string;
       cu?: string;
+      block_vpc_connections?: boolean;
+      block_public_connections?: boolean;
     },
 ) => {
   const project: ProjectUpdateRequest['project'] = {};
+  if (props.block_public_connections !== undefined) {
+    if (!project.settings) {
+      project.settings = {};
+    }
+    project.settings.block_public_connections = props.block_public_connections;
+  }
+  if (props.block_vpc_connections !== undefined) {
+    if (!project.settings) {
+      project.settings = {};
+    }
+    project.settings.block_vpc_connections = props.block_vpc_connections;
+  }
   if (props.name) {
     project.name = props.name;
   }
