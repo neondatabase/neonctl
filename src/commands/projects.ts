@@ -64,6 +64,18 @@ export const builder = (argv: yargs.Argv) => {
       'Create a project',
       (yargs) =>
         yargs.options({
+          'block-public-connections': {
+            describe:
+              projectCreateRequest['project.settings.block_public_connections']
+                .description,
+            type: 'boolean',
+          },
+          'block-vpc-connections': {
+            describe:
+              projectCreateRequest['project.settings.block_vpc_connections']
+                .description,
+            type: 'boolean',
+          },
           name: {
             describe: projectCreateRequest['project.name'].description,
             type: 'string',
@@ -217,6 +229,8 @@ const list = async (props: CommonProps & { orgId?: string }) => {
 
 const create = async (
   props: CommonProps & {
+    blockPublicConnections?: boolean;
+    blockVpcConnections?: boolean;
     name?: string;
     regionId?: string;
     cu?: string;
@@ -229,6 +243,18 @@ const create = async (
   },
 ) => {
   const project: ProjectCreateRequest['project'] = {};
+  if (props.blockPublicConnections !== undefined) {
+    if (!project.settings) {
+      project.settings = {};
+    }
+    project.settings.block_public_connections = props.blockPublicConnections;
+  }
+  if (props.blockVpcConnections !== undefined) {
+    if (!project.settings) {
+      project.settings = {};
+    }
+    project.settings.block_vpc_connections = props.blockVpcConnections;
+  }
   if (props.name) {
     project.name = props.name;
   }
