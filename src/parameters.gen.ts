@@ -98,7 +98,7 @@ export const projectCreateRequest = {
   },
   'project.default_endpoint_settings.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the default value.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Scale to zero configuration](https://neon.tech/docs/manage/endpoints#scale-to-zero-configuration).\n",
               demandOption: false,
   },
   'project.pg_version': {
@@ -196,7 +196,7 @@ export const projectUpdateRequest = {
   },
   'project.default_endpoint_settings.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the default value.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Scale to zero configuration](https://neon.tech/docs/manage/endpoints#scale-to-zero-configuration).\n",
               demandOption: false,
   },
   'project.history_retention_seconds': {
@@ -242,11 +242,10 @@ export const branchCreateRequest = {
               description: "Whether to create the branch as archived\n",
               demandOption: false,
   },
-  'branch.schema_initialization_type': {
+  'branch.init_source': {
               type: "string",
-              description: "The type of schema initialization. Defines how the schema is initialized, currently only empty is supported. This parameter is under\nactive development and may change its semantics in the future.\n",
+              description: "The initialization source type for the branch. Valid values are `import`, `empty`, `schema` and `parent-data`.\nThis parameter is under active development and may change its semantics in the future.\n",
               demandOption: false,
- choices: ["empty"],
   },
 } as const;
 
@@ -264,7 +263,7 @@ export const branchCreateRequestEndpointOptions = {
   },
   'suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the default value.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Scale to zero configuration](https://neon.tech/docs/manage/endpoints#scale-to-zero-configuration).\n",
               demandOption: false,
   },
 } as const;
@@ -327,7 +326,7 @@ export const endpointCreateRequest = {
   },
   'endpoint.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the default value.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Scale to zero configuration](https://neon.tech/docs/manage/endpoints#scale-to-zero-configuration).\n",
               demandOption: false,
   },
 } as const;
@@ -366,7 +365,7 @@ export const endpointUpdateRequest = {
   },
   'endpoint.suspend_timeout_seconds': {
               type: "number",
-              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Auto-suspend configuration](https://neon.tech/docs/manage/endpoints#auto-suspend-configuration).\n",
+              description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the default value.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Scale to zero configuration](https://neon.tech/docs/manage/endpoints#scale-to-zero-configuration).\n",
               demandOption: false,
   },
 } as const;
