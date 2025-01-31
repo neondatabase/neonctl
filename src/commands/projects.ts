@@ -111,16 +111,18 @@ export const builder = (argv: yargs.Argv) => {
       'Update a project',
       (yargs) =>
         yargs.options({
-          block_vpc_connections: {
+          'block-vpc-connections': {
             describe:
               projectUpdateRequest['project.settings.block_vpc_connections']
-                .description,
+                .description +
+              ' Use --block-vpc-connections=false to set the value to false.',
             type: 'boolean',
           },
-          block_public_connections: {
+          'block-public-connections': {
             describe:
               projectUpdateRequest['project.settings.block_public_connections']
-                .description,
+                .description +
+              ' Use --block-public-connections=false to set the value to false.',
             type: 'boolean',
           },
           cu: {
@@ -285,22 +287,22 @@ const update = async (
     IdOrNameProps & {
       name?: string;
       cu?: string;
-      block_vpc_connections?: boolean;
-      block_public_connections?: boolean;
+      blockVpcConnections?: boolean;
+      blockPublicConnections?: boolean;
     },
 ) => {
   const project: ProjectUpdateRequest['project'] = {};
-  if (props.block_public_connections !== undefined) {
+  if (props.blockPublicConnections !== undefined) {
     if (!project.settings) {
       project.settings = {};
     }
-    project.settings.block_public_connections = props.block_public_connections;
+    project.settings.block_public_connections = props.blockPublicConnections;
   }
-  if (props.block_vpc_connections !== undefined) {
+  if (props.blockVpcConnections !== undefined) {
     if (!project.settings) {
       project.settings = {};
     }
-    project.settings.block_vpc_connections = props.block_vpc_connections;
+    project.settings.block_vpc_connections = props.blockVpcConnections;
   }
   if (props.name) {
     project.name = props.name;
