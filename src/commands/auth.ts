@@ -104,13 +104,21 @@ export const ensureAuth = async (
       const tokenSet = new TokenSet(tokenSetContents);
       if (tokenSet.expired()) {
         log.debug('using refresh token to update access token');
-        const refreshedTokenSet = await refreshToken(
-          {
-            oauthHost: props.oauthHost,
-            clientId: props.clientId,
-          },
-          tokenSet,
-        );
+        let refreshedTokenSet;
+        try {
+          refreshedTokenSet = await refreshToken(
+            {
+              oauthHost: props.oauthHost,
+              clientId: props.clientId,
+            },
+            tokenSet,
+          );
+        } catch (err: unknown) {
+          const typedErr = err && err instanceof Error ? err : undefined;
+          log.error('failed to refresh token\n%s', typedErr?.message);
+          log.info('starting auth flow');
+          throw new Error('AUTH_REFRESH_FAILED');
+        }
 
         props.apiKey = refreshedTokenSet.access_token || 'UNKNOWN';
         props.apiClient = getApiClient({

@@ -47,24 +47,15 @@ export const refreshToken = async (
   { oauthHost, clientId }: AuthProps,
   tokenSet: TokenSet,
 ) => {
-  try {
-    log.debug('Discovering oauth server');
-    const issuer = await Issuer.discover(oauthHost);
+  log.debug('Discovering oauth server');
+  const issuer = await Issuer.discover(oauthHost);
 
-    const neonOAuthClient = new issuer.Client({
-      token_endpoint_auth_method: 'none',
-      client_id: clientId,
-      response_types: ['code'],
-    });
-    return await neonOAuthClient.refresh(tokenSet);
-  } catch (err) {
-    const typedErr = err && err instanceof Error ? err : undefined;
-    const errCode = matchErrorCode(typedErr?.message);
-    log.info('Failed to refresh token\n%s', typedErr?.message);
-    sendError(typedErr || new Error('Failed to refresh token'), errCode);
-    log.debug(typedErr);
-    throw new Error(errCode);
-  }
+  const neonOAuthClient = new issuer.Client({
+    token_endpoint_auth_method: 'none',
+    client_id: clientId,
+    response_types: ['code'],
+  });
+  return await neonOAuthClient.refresh(tokenSet);
 };
 
 export const auth = async ({ oauthHost, clientId }: AuthProps) => {
