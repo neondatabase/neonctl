@@ -40,6 +40,10 @@ export const builder = (argv: yargs.Argv) =>
             type: 'string',
             demandOption: true,
           },
+          'no-login': {
+            describe: 'Create a passwordless role that cannot login',
+            boolean: true,
+          },
         }),
       (args) => create(args as any),
     )
@@ -68,6 +72,7 @@ export const list = async (props: BranchScopeProps) => {
 export const create = async (
   props: BranchScopeProps & {
     name: string;
+    'no-login': boolean;
   },
 ) => {
   const branchId = await branchIdFromProps(props);
@@ -75,6 +80,7 @@ export const create = async (
     props.apiClient.createProjectBranchRole(props.projectId, branchId, {
       role: {
         name: props.name,
+        no_login: props['no-login'],
       },
     }),
   );
