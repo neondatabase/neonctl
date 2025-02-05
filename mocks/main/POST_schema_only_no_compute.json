@@ -1,0 +1,4 @@
+{
+  "code": "invalid_request",
+  "message": "Schema-only branches require a compute endpoint"
+}
