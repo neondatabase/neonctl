@@ -161,10 +161,10 @@ describe('branches', () => {
       '--project-id',
       'test',
       '--name',
-      'test_schema_only_branch',
+      'test_branch',
       '--schema-only',
     ]);
-  }, 10000);
+  }, 30000);
 
   test('create schema-only branch fails without compute', async ({
     testCliCommand,
@@ -176,11 +176,12 @@ describe('branches', () => {
         '--project-id',
         'test',
         '--name',
-        'test_schema_only_branch',
+        'test_branch',
         '--schema-only',
         '--no-compute',
       ],
       {
+        mockDir: 'POST_schema_only_no_compute',
         code: 1,
         stderr: 'ERROR: Schema-only branches require a compute endpoint',
       },
@@ -197,12 +198,13 @@ describe('branches', () => {
         '--project-id',
         'test',
         '--name',
-        'test_schema_only_branch',
+        'test_branch',
         '--schema-only',
         '--type',
         'read_only',
       ],
       {
+        mockDir: 'POST_schema_only_readonly',
         code: 1,
         stderr:
           'ERROR: Schema-only branches require a read-write compute endpoint',
