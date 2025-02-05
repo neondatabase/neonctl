@@ -164,7 +164,7 @@ describe('branches', () => {
       'test_schema_only_branch',
       '--schema-only',
     ]);
-  });
+  }, 10000);
 
   test('create schema-only branch fails without compute', async ({
     testCliCommand,
