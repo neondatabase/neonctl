@@ -181,7 +181,7 @@ describe('branches', () => {
         '--no-compute',
       ],
       {
-        mockDir: 'POST_schema_only_no_compute',
+        mockDir: 'main',
         code: 1,
         stderr: 'ERROR: Schema-only branches require a compute endpoint',
       },
@@ -204,7 +204,7 @@ describe('branches', () => {
         'read_only',
       ],
       {
-        mockDir: 'POST_schema_only_readonly',
+        mockDir: 'main',
         code: 1,
         stderr:
           'ERROR: Schema-only branches require a read-write compute endpoint',
