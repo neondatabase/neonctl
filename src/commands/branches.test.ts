@@ -154,6 +154,64 @@ describe('branches', () => {
     ]);
   });
 
+  test('create schema-only branch', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch',
+      '--schema-only',
+    ]);
+  });
+
+  test('create schema-only branch fails without compute', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'create',
+        '--project-id',
+        'test',
+        '--name',
+        'test_branch',
+        '--schema-only',
+        '--no-compute',
+      ],
+      {
+        mockDir: 'main',
+        code: 1,
+        stderr: 'ERROR: Schema-only branches require a compute endpoint',
+      },
+    );
+  });
+
+  test('create schema-only branch fails with read-only compute', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'create',
+        '--project-id',
+        'test',
+        '--name',
+        'test_branch',
+        '--schema-only',
+        '--type',
+        'read_only',
+      ],
+      {
+        mockDir: 'main',
+        code: 1,
+        stderr:
+          'ERROR: Schema-only branches require a read-write compute endpoint',
+      },
+    );
+  });
+
   /* delete */
 
   test('delete by id', async ({ testCliCommand }) => {

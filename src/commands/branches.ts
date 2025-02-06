@@ -108,6 +108,12 @@ export const builder = (argv: yargs.Argv) =>
             hidden: true,
             default: '{}',
           },
+          'schema-only': {
+            describe:
+              'Create a schema-only branch. Requires exactly one read-write compute.',
+            type: 'boolean',
+            default: false,
+          },
         }),
       (args) => create(args as any),
     )
@@ -281,6 +287,7 @@ const create = async (
     psql: boolean;
     suspendTimeout: number;
     annotation?: string;
+    schemaOnly: boolean;
     '--'?: string[];
   },
 ) => {
@@ -316,11 +323,24 @@ const create = async (
     return { parent_id: branch.id };
   })();
 
+  // Validate schema-only branch requirements
+  if (props.schemaOnly) {
+    if (!props.compute) {
+      throw new Error('Schema-only branches require a compute endpoint');
+    }
+    if (props.type !== EndpointType.ReadWrite) {
+      throw new Error(
+        'Schema-only branches require a read-write compute endpoint',
+      );
+    }
+  }
+
   const { data } = await retryOnLock(() =>
     props.apiClient.createProjectBranch(props.projectId, {
       branch: {
         name: props.name,
         ...parentProps,
+        ...(props.schemaOnly ? { init_source: 'schema-only' } : {}),
       },
       endpoints: props.compute
         ? [
