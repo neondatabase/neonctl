@@ -25,7 +25,7 @@ const typesMapping = {
 
 (async () => {
   const spec: OpenAPIV3.Document = (await SwaggerParser.dereference(
-    './node_modules/@neondatabase/api-client/public-v2.yaml',
+    './node_modules/@neondatabase/api-client/public-v2-for-users.gen.yaml',
   )) as any;
   const outFile = createWriteStream('./src/parameters.gen.ts', 'utf8');
   outFile.write('// FILE IS GENERATED, DO NOT EDIT\n\n');
