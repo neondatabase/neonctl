@@ -244,7 +244,7 @@ export const branchCreateRequest = {
   },
   'branch.init_source': {
               type: "string",
-              description: "The initialization source type for the branch. Valid values are `import`, `empty`, `schema` and `parent-data`.\nThis parameter is under active development and may change its semantics in the future.\n",
+              description: "The initialization source type for the branch. Valid values are `schema-only` and `parent-data`.\nThis parameter is under active development and may change its semantics in the future.\n",
               demandOption: false,
   },
 } as const;
@@ -334,7 +334,7 @@ export const endpointCreateRequest = {
 export const endpointUpdateRequest = {
   'endpoint.branch_id': {
               type: "string",
-              description: "DEPRECATED: This field will be removed in a future release.\nThe destination branch ID. The destination branch must not have an exsiting read-write endpoint.\n",
+              description: "DEPRECATED: This field will be removed in a future release.\nThe destination branch ID. The destination branch must not have an existing read-write endpoint.\n",
               demandOption: false,
   },
   'endpoint.provisioner': {
@@ -373,7 +373,7 @@ export const endpointUpdateRequest = {
 export const databaseCreateRequest = {
   'database.name': {
               type: "string",
-              description: "The name of the datbase\n",
+              description: "The name of the database\n",
               demandOption: true,
   },
   'database.owner_name': {
@@ -388,6 +388,11 @@ export const roleCreateRequest = {
               type: "string",
               description: "The role name. Cannot exceed 63 bytes in length.\n",
               demandOption: true,
+  },
+  'role.no_login': {
+              type: "boolean",
+              description: "Whether to create a role that cannot login.\n",
+              demandOption: false,
   },
 } as const;
 
