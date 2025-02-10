@@ -80,7 +80,7 @@ const preserveCredentials = async (
 
 export const ensureAuth = async (
   props: AuthProps & { apiKey: string; apiClient: Api<unknown>; help: boolean },
-) => {
+): Promise<void> => {
   if (props._.length === 0 || props.help) {
     return;
   }
@@ -98,31 +98,38 @@ export const ensureAuth = async (
       let fileContents;
       try {
         fileContents = readFileSync(credentialsPath, 'utf8');
-      } catch (error) {
-        log.debug('failed to read credentials file: %s, re-authenticating', error.message);
-        return props.apiKey = await authFlow(props);
+      } catch (error: unknown) {
+        const typedError = error instanceof Error ? error : new Error('Unknown error');
+        log.debug('failed to read credentials file: %s, re-authenticating', typedError.message);
+        props.apiKey = await authFlow(props);
+        return;
       }
 
       let tokenSetContents;
       try {
         tokenSetContents = JSON.parse(fileContents);
-      } catch (error) {
-        log.debug('failed to parse credentials file: %s, re-authenticating', error.message);
-        return props.apiKey = await authFlow(props);
+      } catch (error: unknown) {
+        const typedError = error instanceof Error ? error : new Error('Unknown error');
+        log.debug('failed to parse credentials file: %s, re-authenticating', typedError.message);
+        props.apiKey = await authFlow(props);
+        return;
       }
 
       // Validate required fields in token set
       if (!tokenSetContents || typeof tokenSetContents !== 'object') {
         log.debug('invalid credentials format, re-authenticating');
-        return props.apiKey = await authFlow(props);
+        props.apiKey = await authFlow(props);
+        return;
       }
 
       let tokenSet;
       try {
         tokenSet = new TokenSet(tokenSetContents);
-      } catch (error) {
-        log.debug('invalid token set structure: %s, re-authenticating', error.message);
-        return props.apiKey = await authFlow(props);
+      } catch (error: unknown) {
+        const typedError = error instanceof Error ? error : new Error('Unknown error');
+        log.debug('invalid token set structure: %s, re-authenticating', typedError.message);
+        props.apiKey = await authFlow(props);
+        return;
       }
 
       if (!tokenSet.access_token) {
