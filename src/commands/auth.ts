@@ -99,8 +99,12 @@ export const ensureAuth = async (
       try {
         fileContents = readFileSync(credentialsPath, 'utf8');
       } catch (error: unknown) {
-        const typedError = error instanceof Error ? error : new Error('Unknown error');
-        log.debug('failed to read credentials file: %s, re-authenticating', typedError.message);
+        const typedError =
+          error instanceof Error ? error : new Error('Unknown error');
+        log.debug(
+          'failed to read credentials file: %s, re-authenticating',
+          typedError.message,
+        );
         props.apiKey = await authFlow(props);
         return;
       }
@@ -109,8 +113,12 @@ export const ensureAuth = async (
       try {
         tokenSetContents = JSON.parse(fileContents);
       } catch (error: unknown) {
-        const typedError = error instanceof Error ? error : new Error('Unknown error');
-        log.debug('failed to parse credentials file: %s, re-authenticating', typedError.message);
+        const typedError =
+          error instanceof Error ? error : new Error('Unknown error');
+        log.debug(
+          'failed to parse credentials file: %s, re-authenticating',
+          typedError.message,
+        );
         props.apiKey = await authFlow(props);
         return;
       }
@@ -126,8 +134,12 @@ export const ensureAuth = async (
       try {
         tokenSet = new TokenSet(tokenSetContents);
       } catch (error: unknown) {
-        const typedError = error instanceof Error ? error : new Error('Unknown error');
-        log.debug('invalid token set structure: %s, re-authenticating', typedError.message);
+        const typedError =
+          error instanceof Error ? error : new Error('Unknown error');
+        log.debug(
+          'invalid token set structure: %s, re-authenticating',
+          typedError.message,
+        );
         props.apiKey = await authFlow(props);
         return;
       }
