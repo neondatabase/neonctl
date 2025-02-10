@@ -142,7 +142,7 @@ builder = builder
       await showHelp(builder);
     }
   })
-  .middleware(ensureAuth)
+  .middleware(ensureAuth as any)
   .middleware(enrichFromContext as any)
   .command(commands as any)
   .strictCommands()
