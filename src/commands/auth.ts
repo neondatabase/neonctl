@@ -94,6 +94,7 @@ export const ensureAuth = async (
   const credentialsPath = join(props.configDir, CREDENTIALS_FILE);
   if (existsSync(credentialsPath)) {
     try {
+      log.debug('checking existing credentials');
       const tokenSetContents = await JSON.parse(
         readFileSync(credentialsPath, 'utf8'),
       );
@@ -106,10 +107,16 @@ export const ensureAuth = async (
             clientId: props.clientId,
           },
           tokenSet,
-        ).catch((err: unknown) => {
+        ).catch(async (err: unknown) => {
           const typedErr = err && err instanceof Error ? err : undefined;
-          log.error('failed to refresh token\n%s', typedErr?.message);
-          process.exit(1);
+          log.debug(
+            'failed to refresh token, re-authenticating\n%s',
+            typedErr?.message,
+          );
+          return await auth({
+            oauthHost: props.oauthHost,
+            clientId: props.clientId,
+          });
         });
 
         props.apiKey = refreshedTokenSet.access_token || 'UNKNOWN';
