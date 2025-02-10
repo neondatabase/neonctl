@@ -134,7 +134,8 @@ export const ensureAuth = async (
 
       if (!tokenSet.access_token) {
         log.debug('missing access token, re-authenticating');
-        return props.apiKey = await authFlow(props);
+        props.apiKey = await authFlow(props);
+        return;
       }
 
       if (tokenSet.expired()) {
