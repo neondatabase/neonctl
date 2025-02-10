@@ -95,10 +95,41 @@ export const ensureAuth = async (
   if (existsSync(credentialsPath)) {
     try {
       log.debug('checking existing credentials');
-      const tokenSetContents = await JSON.parse(
-        readFileSync(credentialsPath, 'utf8'),
-      );
-      const tokenSet = new TokenSet(tokenSetContents);
+      let fileContents;
+      try {
+        fileContents = readFileSync(credentialsPath, 'utf8');
+      } catch (error) {
+        log.debug('failed to read credentials file: %s, re-authenticating', error.message);
+        return props.apiKey = await authFlow(props);
+      }
+
+      let tokenSetContents;
+      try {
+        tokenSetContents = JSON.parse(fileContents);
+      } catch (error) {
+        log.debug('failed to parse credentials file: %s, re-authenticating', error.message);
+        return props.apiKey = await authFlow(props);
+      }
+
+      // Validate required fields in token set
+      if (!tokenSetContents || typeof tokenSetContents !== 'object') {
+        log.debug('invalid credentials format, re-authenticating');
+        return props.apiKey = await authFlow(props);
+      }
+
+      let tokenSet;
+      try {
+        tokenSet = new TokenSet(tokenSetContents);
+      } catch (error) {
+        log.debug('invalid token set structure: %s, re-authenticating', error.message);
+        return props.apiKey = await authFlow(props);
+      }
+
+      if (!tokenSet.access_token) {
+        log.debug('missing access token, re-authenticating');
+        return props.apiKey = await authFlow(props);
+      }
+
       if (tokenSet.expired()) {
         log.debug('using refresh token to update access token');
         const refreshedTokenSet = await refreshToken(
