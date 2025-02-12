@@ -1,6 +1,12 @@
 import { Api } from '@neondatabase/api-client';
 import axios from 'axios';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { AddressInfo } from 'node:net';
 import { TokenSet } from 'openid-client';
 import { join } from 'path';
@@ -123,6 +129,41 @@ describe('ensureAuth', () => {
     expect(refreshTokenSpy).toHaveBeenCalledTimes(1);
     expect(authSpy).toHaveBeenCalledTimes(1);
     expect(props.apiKey).toBe('new-auth-token');
+  });
+
+  test('should trigger auth flow when credentials.json does not exist', async ({
+    runMockServer,
+  }) => {
+    const server = await runMockServer('main');
+
+    // Ensure the credentials file does not exist
+    const credentialsPath = join(configDir, 'credentials.json');
+    if (existsSync(credentialsPath)) {
+      rmSync(credentialsPath);
+    }
+
+    const props = setupTestProps(server);
+    await ensureAuth(props);
+
+    expect(authSpy).toHaveBeenCalledTimes(1);
+    expect(refreshTokenSpy).not.toHaveBeenCalled();
+    expect(props.apiKey).toEqual(expect.any(String));
+  });
+
+  test('should trigger auth flow when credentials.json is invalid', async ({
+    runMockServer,
+  }) => {
+    const server = await runMockServer('main');
+
+    // Write an empty credentials file
+    writeFileSync(join(configDir, 'credentials.json'), '', { mode: 0o700 });
+
+    const props = setupTestProps(server);
+    await ensureAuth(props);
+
+    expect(authSpy).toHaveBeenCalledTimes(1);
+    expect(refreshTokenSpy).not.toHaveBeenCalled();
+    expect(props.apiKey).toEqual(expect.any(String));
   });
 
   test('should try refresh when token is missing access_token but has refresh_token', async ({
