@@ -87,7 +87,9 @@ const isValidTokenSet = (tokenSet: TokenSet): boolean => {
   return !!tokenSet.refresh_token;
 };
 
-const isCompleteTokenSet = (tokenSet: TokenSet): boolean => {
+const isCompleteTokenSet = (
+  tokenSet: TokenSet,
+): tokenSet is Required<TokenSet> => {
   return !!(
     tokenSet.access_token &&
     tokenSet.refresh_token &&
@@ -128,7 +130,7 @@ const handleExistingToken = async (
         return null;
       }
 
-      const apiKey = refreshedTokenSet.access_token ?? '';
+      const apiKey = refreshedTokenSet.access_token;
       const apiClient = getApiClient({
         apiKey,
         apiHost: props.apiHost,
