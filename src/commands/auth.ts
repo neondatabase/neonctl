@@ -84,12 +84,9 @@ type TokenSetContents = {
   user_id: string;
 } & TokenSet;
 
-const isValidTokenSet = (tokenSet: TokenSet): boolean => {
-  // Only require refresh_token for refresh attempts
-  return !!tokenSet.refresh_token;
-};
-
-const isCompleteTokenSet = (tokenSet: TokenSet): boolean => {
+const isCompleteTokenSet = (
+  tokenSet: TokenSet,
+): tokenSet is Required<TokenSet> => {
   return !!(
     tokenSet.access_token &&
     tokenSet.refresh_token &&
@@ -102,58 +99,57 @@ const handleExistingToken = async (
   props: AuthProps,
   credentialsPath: string,
 ): Promise<{ apiKey: string; apiClient: Api<unknown> } | null> => {
-  // Validate token set
-  if (!isValidTokenSet(tokenSet)) {
-    log.debug('Invalid token set found');
+  // Use existing access_token, if present and valid
+  if (!!tokenSet.access_token && !tokenSet.expired()) {
+    const apiClient = getApiClient({
+      apiKey: tokenSet.access_token,
+      apiHost: props.apiHost,
+    });
+
+    return { apiKey: tokenSet.access_token, apiClient };
+  }
+
+  // Either access_token is missing or its expired. Refresh the token
+  log.debug(
+    tokenSet.expired()
+      ? 'Token is expired, attempting refresh'
+      : 'Token is missing access_token, attempting refresh',
+  );
+
+  if (!tokenSet.refresh_token) {
+    log.debug('TokenSet is missing refresh_token, starting authentication');
     return null;
   }
 
-  // Check if token needs refresh or is missing
-  if (tokenSet.expired() || !tokenSet.access_token) {
-    log.debug(
-      tokenSet.expired()
-        ? 'Token is expired, attempting refresh'
-        : 'Token is missing access_token, attempting refresh',
+  try {
+    const refreshedTokenSet = await refreshToken(
+      {
+        oauthHost: props.oauthHost,
+        clientId: props.clientId,
+      },
+      tokenSet,
     );
 
-    try {
-      const refreshedTokenSet = await refreshToken(
-        {
-          oauthHost: props.oauthHost,
-          clientId: props.clientId,
-        },
-        tokenSet,
-      );
-
-      if (!isCompleteTokenSet(refreshedTokenSet)) {
-        log.debug('Refreshed token is invalid or missing access_token');
-        return null;
-      }
-
-      const apiKey = refreshedTokenSet.access_token ?? '';
-      const apiClient = getApiClient({
-        apiKey,
-        apiHost: props.apiHost,
-      });
-
-      await preserveCredentials(credentialsPath, refreshedTokenSet, apiClient);
-      log.debug('Token refresh successful');
-
-      return { apiKey, apiClient };
-    } catch (err: unknown) {
-      const typedErr = err instanceof Error ? err : new Error('Unknown error');
-      log.debug('Failed to refresh token: %s', typedErr.message);
-      throw new Error('AUTH_REFRESH_FAILED');
+    if (!isCompleteTokenSet(refreshedTokenSet)) {
+      log.debug('Refreshed token is invalid or missing access_token');
+      return null;
     }
+
+    const apiKey = refreshedTokenSet.access_token;
+    const apiClient = getApiClient({
+      apiKey,
+      apiHost: props.apiHost,
+    });
+
+    await preserveCredentials(credentialsPath, refreshedTokenSet, apiClient);
+    log.debug('Token refresh successful');
+
+    return { apiKey, apiClient };
+  } catch (err: unknown) {
+    const typedErr = err instanceof Error ? err : new Error('Unknown error');
+    log.debug('Failed to refresh token: %s', typedErr.message);
+    throw new Error('AUTH_REFRESH_FAILED');
   }
-
-  // Use existing valid token
-  const apiClient = getApiClient({
-    apiKey: tokenSet.access_token,
-    apiHost: props.apiHost,
-  });
-
-  return { apiKey: tokenSet.access_token, apiClient };
 };
 
 export const ensureAuth = async (
@@ -171,7 +167,7 @@ export const ensureAuth = async (
   // Use existing API key or handle auth command
   if (props.apiKey || props._[0] === 'auth') {
     if (props.apiKey) {
-      log.debug('using an API key to authorize requests');
+      log.debug('Using an API key to authorize requests');
     }
     props.apiClient = getApiClient({
       apiKey: props.apiKey,
@@ -188,9 +184,7 @@ export const ensureAuth = async (
     try {
       const contents = readFileSync(credentialsPath, 'utf8');
       log.debug('Credentials MD5 hash: %s', md5hash(contents));
-      const tokenSetContents: TokenSetContents = JSON.parse(
-        contents,
-      );
+      const tokenSetContents: TokenSetContents = JSON.parse(contents);
       const tokenSet = new TokenSet(tokenSetContents);
 
       // Try to use existing token or refresh it
@@ -204,17 +198,18 @@ export const ensureAuth = async (
         props.apiClient = result.apiClient;
         return;
       }
-    } catch (e) {
+    } catch (err) {
       if (
-        !(e instanceof Error && e.message === 'AUTH_REFRESH_FAILED') &&
-        (e as { code: string }).code !== 'ENOENT' &&
-        !(e instanceof SyntaxError)
+        !(err instanceof Error && err.message === 'AUTH_REFRESH_FAILED') &&
+        (err as { code: string }).code !== 'ENOENT' &&
+        !(err instanceof SyntaxError)
       ) {
         // Throw for any errors except auth refresh failure, missing file, or invalid credentials file
-        throw e;
+        throw err;
       }
+
       // Fall through to new auth flow for auth failures
-      log.debug('Auth failed, starting new flow');
+      log.debug('Ensure auth failed, starting authentication', err);
     }
   } else {
     log.debug(
@@ -222,7 +217,7 @@ export const ensureAuth = async (
       credentialsPath,
     );
   }
-  
+
   // Start new auth flow if no valid token exists or refresh failed
   const apiKey = await authFlow(props);
   props.apiKey = apiKey;
