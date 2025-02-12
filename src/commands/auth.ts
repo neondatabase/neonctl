@@ -12,6 +12,17 @@ import { getApiClient } from '../api.js';
 import { isCi } from '../env.js';
 import { CREDENTIALS_FILE } from '../config.js';
 
+type AuthError = {
+  code:
+    | 'FILE_READ_ERROR'
+    | 'PARSE_ERROR'
+    | 'INVALID_FORMAT'
+    | 'INVALID_TOKEN'
+    | 'MISSING_TOKEN'
+    | 'REFRESH_FAILED';
+  message: string;
+};
+
 type AuthProps = {
   _: (string | number)[];
   configDir: string;
@@ -90,6 +101,7 @@ export const ensureAuth = async (
   if (props._.length === 0 || props.help) {
     return;
   }
+
   if (props.apiKey || props._[0] === 'auth') {
     if (props.apiKey) {
       log.debug('using an API key to authorize requests');
@@ -100,73 +112,109 @@ export const ensureAuth = async (
     });
     return;
   }
+
   const credentialsPath = join(props.configDir, CREDENTIALS_FILE);
-  if (existsSync(credentialsPath)) {
-    log.debug('Trying to read credentials from %s', credentialsPath);
-    try {
-      const contents = readFileSync(credentialsPath, 'utf8');
-      log.debug('Credentials MD5 hash: %s', md5hash(contents));
-      const tokenSet = new TokenSet(JSON.parse(contents));
-      if (tokenSet.expired()) {
-        log.debug('Using refresh token to update access token');
-        let refreshedTokenSet;
-        try {
-          refreshedTokenSet = await refreshToken(
-            {
-              oauthHost: props.oauthHost,
-              clientId: props.clientId,
-            },
-            tokenSet,
-          );
-        } catch (err: unknown) {
-          const typedErr = err && err instanceof Error ? err : undefined;
-          log.error('Failed to refresh token\n%s', typedErr?.message);
-          log.info('Starting auth flow');
-          throw new Error('AUTH_REFRESH_FAILED');
-        }
-
-        props.apiKey = refreshedTokenSet.access_token || 'UNKNOWN';
-        props.apiClient = getApiClient({
-          apiKey: props.apiKey,
-          apiHost: props.apiHost,
-        });
-        await preserveCredentials(
-          credentialsPath,
-          refreshedTokenSet,
-          props.apiClient,
-        );
-        return;
-      }
-      const token = tokenSet.access_token || 'UNKNOWN';
-
-      props.apiKey = token;
-      props.apiClient = getApiClient({
-        apiKey: props.apiKey,
-        apiHost: props.apiHost,
-      });
-      return;
-    } catch (e) {
-      if (
-        (e instanceof Error && e.message.includes('AUTH_REFRESH_FAILED')) ||
-        (e as { code: string }).code === 'ENOENT'
-      ) {
-        props.apiKey = await authFlow(props);
-      } else {
-        // throw for any other errors
-        throw e;
-      }
-    }
-  } else {
+  if (!existsSync(credentialsPath)) {
     log.debug(
       'Credentials file %s does not exist, starting authentication',
       credentialsPath,
     );
     props.apiKey = await authFlow(props);
+    props.apiClient = getApiClient({
+      apiKey: props.apiKey,
+      apiHost: props.apiHost,
+    });
+    return;
   }
-  props.apiClient = getApiClient({
-    apiKey: props.apiKey,
-    apiHost: props.apiHost,
-  });
+
+  try {
+    log.debug('Trying to read credentials from %s', credentialsPath);
+    const contents = readCredentials(credentialsPath);
+    log.debug('Credentials MD5 hash: %s', md5hash(contents));
+
+    const tokenSet = validateTokenSet(contents);
+    if (!tokenSet.expired()) {
+      props.apiKey = tokenSet.access_token || 'UNKNOWN';
+      props.apiClient = getApiClient({
+        apiKey: props.apiKey,
+        apiHost: props.apiHost,
+      });
+      return;
+    }
+
+    log.debug('Using refresh token to update access token');
+    try {
+      const refreshedTokenSet = await refreshToken(
+        {
+          oauthHost: props.oauthHost,
+          clientId: props.clientId,
+        },
+        tokenSet,
+      );
+
+      props.apiKey = refreshedTokenSet.access_token || 'UNKNOWN';
+      props.apiClient = getApiClient({
+        apiKey: props.apiKey,
+        apiHost: props.apiHost,
+      });
+      await preserveCredentials(
+        credentialsPath,
+        refreshedTokenSet,
+        props.apiClient,
+      );
+      return;
+    } catch (err) {
+      const typedErr = err instanceof Error ? err : undefined;
+      log.error('Failed to refresh token\n%s', typedErr?.message);
+      throw new Error('Token refresh failed');
+    }
+  } catch (error) {
+    const authError = error as AuthError;
+    log.debug('re-authenticating: %s', authError.message);
+    props.apiKey = await authFlow(props);
+    props.apiClient = getApiClient({
+      apiKey: props.apiKey,
+      apiHost: props.apiHost,
+    });
+  }
+};
+
+const validateTokenSet = (contents: string): TokenSet => {
+  let parsed;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    throw new Error('Failed to parse credentials file');
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Invalid credentials format');
+  }
+
+  let tokenSet;
+  try {
+    tokenSet = new TokenSet(parsed);
+  } catch (error) {
+    throw new Error(
+      `Invalid token set structure: ${error instanceof Error ? error.message : 'unknown error'}`,
+    );
+  }
+
+  if (!tokenSet.access_token) {
+    throw new Error('Missing access token');
+  }
+
+  return tokenSet;
+};
+
+const readCredentials = (path: string): string => {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    throw new Error(
+      `Failed to read credentials file: ${error instanceof Error ? error.message : 'unknown error'}`,
+    );
+  }
 };
 
 const md5hash = (s: string) => createHash('md5').update(s).digest('hex');
