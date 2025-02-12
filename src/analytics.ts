@@ -85,6 +85,10 @@ export const sendError = (err: Error, errCode: ErrorCode) => {
     return;
   }
   const axiosError = isAxiosError(err) ? err : undefined;
+  const requestId = axiosError?.response?.headers['x-neon-ret-request-id'];
+  if (requestId) {
+    log.debug('Failed request ID: %s', requestId);
+  }
   client.track({
     event: 'CLI Error',
     userId: userId ?? 'anonymous',
@@ -93,6 +97,7 @@ export const sendError = (err: Error, errCode: ErrorCode) => {
       stack: err.stack,
       errCode,
       statusCode: axiosError?.response?.status,
+      requestId: requestId,
     },
   });
   log.debug('Sent CLI error event: %s', errCode);
