@@ -142,7 +142,7 @@ const handleExistingToken = async (
       return { apiKey, apiClient };
     } catch (err: unknown) {
       const typedErr = err instanceof Error ? err : new Error('Unknown error');
-      log.error('Failed to refresh token: %s', typedErr.message);
+      log.debug('Failed to refresh token: %s', typedErr.message);
       throw new Error('AUTH_REFRESH_FAILED');
     }
   }
@@ -207,9 +207,10 @@ export const ensureAuth = async (
     } catch (e) {
       if (
         !(e instanceof Error && e.message === 'AUTH_REFRESH_FAILED') &&
-        (e as { code: string }).code !== 'ENOENT'
+        (e as { code: string }).code !== 'ENOENT' &&
+        !(e instanceof SyntaxError)
       ) {
-        // Throw for any errors except auth refresh failure and missing file
+        // Throw for any errors except auth refresh failure, missing file, or invalid credentials file
         throw e;
       }
       // Fall through to new auth flow for auth failures
