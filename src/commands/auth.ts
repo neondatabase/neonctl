@@ -1,15 +1,15 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { TokenSet } from 'openid-client';
 import yargs from 'yargs';
 
 import { Api } from '@neondatabase/api-client';
 
-import { auth, refreshToken } from '../auth.js';
-import { log } from '../log.js';
 import { getApiClient } from '../api.js';
-import { isCi } from '../env.js';
+import { auth, refreshToken } from '../auth.js';
 import { CREDENTIALS_FILE } from '../config.js';
+import { isCi } from '../env.js';
+import { log } from '../log.js';
 
 type AuthProps = {
   _: (string | number)[];
@@ -78,6 +78,82 @@ const preserveCredentials = async (
   });
 };
 
+type TokenSetContents = {
+  user_id: string;
+} & TokenSet;
+
+const isValidTokenSet = (tokenSet: TokenSet): boolean => {
+  // Only require refresh_token for refresh attempts
+  return !!tokenSet.refresh_token;
+};
+
+const isCompleteTokenSet = (tokenSet: TokenSet): boolean => {
+  return !!(
+    tokenSet.access_token &&
+    tokenSet.refresh_token &&
+    tokenSet.expires_at
+  );
+};
+
+const handleExistingToken = async (
+  tokenSet: TokenSet,
+  props: AuthProps,
+  credentialsPath: string,
+): Promise<{ apiKey: string; apiClient: Api<unknown> } | null> => {
+  // Validate token set
+  if (!isValidTokenSet(tokenSet)) {
+    log.debug('Invalid token set found');
+    return null;
+  }
+
+  // Check if token needs refresh or is missing
+  if (tokenSet.expired() || !tokenSet.access_token) {
+    log.debug(
+      tokenSet.expired()
+        ? 'Token is expired, attempting refresh'
+        : 'Token is missing access_token, attempting refresh',
+    );
+
+    try {
+      const refreshedTokenSet = await refreshToken(
+        {
+          oauthHost: props.oauthHost,
+          clientId: props.clientId,
+        },
+        tokenSet,
+      );
+
+      if (!isCompleteTokenSet(refreshedTokenSet)) {
+        log.debug('Refreshed token is invalid or missing access_token');
+        return null;
+      }
+
+      const apiKey = refreshedTokenSet.access_token ?? '';
+      const apiClient = getApiClient({
+        apiKey,
+        apiHost: props.apiHost,
+      });
+
+      await preserveCredentials(credentialsPath, refreshedTokenSet, apiClient);
+      log.debug('Token refresh successful');
+
+      return { apiKey, apiClient };
+    } catch (err: unknown) {
+      const typedErr = err instanceof Error ? err : new Error('Unknown error');
+      log.debug('Failed to refresh token: %s', typedErr.message);
+      throw new Error('AUTH_REFRESH_FAILED');
+    }
+  }
+
+  // Use existing valid token
+  const apiClient = getApiClient({
+    apiKey: tokenSet.access_token,
+    apiHost: props.apiHost,
+  });
+
+  return { apiKey: tokenSet.access_token, apiClient };
+};
+
 export const ensureAuth = async (
   props: AuthProps & {
     apiKey: string;
@@ -85,9 +161,12 @@ export const ensureAuth = async (
     help: boolean;
   },
 ) => {
+  // Skip auth for help command or no command
   if (props._.length === 0 || props.help) {
     return;
   }
+
+  // Use existing API key or handle auth command
   if (props.apiKey || props._[0] === 'auth') {
     props.apiClient = getApiClient({
       apiKey: props.apiKey,
@@ -95,67 +174,47 @@ export const ensureAuth = async (
     });
     return;
   }
+
   const credentialsPath = join(props.configDir, CREDENTIALS_FILE);
+
+  // Handle case when credentials file exists
   if (existsSync(credentialsPath)) {
     try {
-      const tokenSetContents = await JSON.parse(
+      const tokenSetContents: TokenSetContents = JSON.parse(
         readFileSync(credentialsPath, 'utf8'),
       );
       const tokenSet = new TokenSet(tokenSetContents);
-      if (tokenSet.expired()) {
-        log.debug('using refresh token to update access token');
-        let refreshedTokenSet;
-        try {
-          refreshedTokenSet = await refreshToken(
-            {
-              oauthHost: props.oauthHost,
-              clientId: props.clientId,
-            },
-            tokenSet,
-          );
-        } catch (err: unknown) {
-          const typedErr = err && err instanceof Error ? err : undefined;
-          log.error('failed to refresh token\n%s', typedErr?.message);
-          log.info('starting auth flow');
-          throw new Error('AUTH_REFRESH_FAILED');
-        }
 
-        props.apiKey = refreshedTokenSet.access_token || 'UNKNOWN';
-        props.apiClient = getApiClient({
-          apiKey: props.apiKey,
-          apiHost: props.apiHost,
-        });
-        await preserveCredentials(
-          credentialsPath,
-          refreshedTokenSet,
-          props.apiClient,
-        );
+      // Try to use existing token or refresh it
+      const result = await handleExistingToken(
+        tokenSet,
+        props,
+        credentialsPath,
+      );
+      if (result) {
+        props.apiKey = result.apiKey;
+        props.apiClient = result.apiClient;
         return;
       }
-      const token = tokenSet.access_token || 'UNKNOWN';
-
-      props.apiKey = token;
-      props.apiClient = getApiClient({
-        apiKey: props.apiKey,
-        apiHost: props.apiHost,
-      });
-      return;
     } catch (e) {
       if (
-        (e instanceof Error && e.message.includes('AUTH_REFRESH_FAILED')) ||
-        (e as { code: string }).code === 'ENOENT'
+        !(e instanceof Error && e.message === 'AUTH_REFRESH_FAILED') &&
+        (e as { code: string }).code !== 'ENOENT' &&
+        !(e instanceof SyntaxError)
       ) {
-        props.apiKey = await authFlow(props);
-      } else {
-        // throw for any other errors
+        // Throw for any errors except auth refresh failure, missing file, or invalid credentials file
         throw e;
       }
+      // Fall through to new auth flow for auth failures
+      log.debug('Auth failed, starting new flow');
     }
-  } else {
-    props.apiKey = await authFlow(props);
   }
+
+  // Start new auth flow if no valid token exists or refresh failed
+  const apiKey = await authFlow(props);
+  props.apiKey = apiKey;
   props.apiClient = getApiClient({
-    apiKey: props.apiKey,
+    apiKey,
     apiHost: props.apiHost,
   });
 };
