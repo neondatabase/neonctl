@@ -54,6 +54,7 @@
     "vitest": "^1.6.0"
   },
   "dependencies": {
+    "@drizzle-team/studio": "1.0.0",
     "@neondatabase/api-client": "1.12.0",
     "@segment/analytics-node": "^1.0.0-beta.26",
     "axios": "^1.4.0",
