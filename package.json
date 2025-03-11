@@ -62,7 +62,6 @@
     "cli-table": "^0.3.11",
     "crypto-random-string": "^5.0.0",
     "diff": "^5.2.0",
-    "inquirer": "^9.2.6",
     "open": "^10.1.0",
     "openid-client": "^5.6.5",
     "prompts": "2.4.2",
