@@ -10,7 +10,6 @@ import * as roles from './roles.js';
 import * as operations from './operations.js';
 import * as cs from './connection_string.js';
 import * as setContext from './set_context.js';
-import * as bootstrap from './bootstrap/index.js';
 
 export default [
   auth,
@@ -25,5 +24,4 @@ export default [
   operations,
   cs,
   setContext,
-  bootstrap,
 ];
