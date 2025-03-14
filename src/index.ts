@@ -47,8 +47,6 @@ const NO_SUBCOMMANDS_VERBS = [
   'set-context',
 
   // aliases
-  'create-app',
-  'bootstrap',
 ];
 
 let builder = yargs(hideBin(process.argv));
