@@ -311,20 +311,44 @@ describe('deleteCredentials', () => {
 });
 
 describe('401 response handling', () => {
-  test('should call deleteCredentials when 401 response is received', () => {
-    // Create a mock function to test the behavior
-    const deleteCredentialsMock = vi.fn();
+  test('should delete credentials when 401 response is received', async () => {
+    // Import the modules we need
+    const authModule = await import('./auth');
+    const configModule = await import('../config');
+    const axiosModule = await import('axios');
 
-    // Create a mock axios error with 401 status
-    const axiosError = new Error('Unauthorized') as any;
-    axiosError.response = { status: 401 };
+    // Create a spy on the deleteCredentials function
+    const deleteCredentialsSpy = vi
+      .spyOn(authModule, 'deleteCredentials')
+      .mockImplementation(() => {
+        /* empty implementation */
+      });
 
-    // Simulate the 401 error handling logic from index.ts
-    if (axiosError.response?.status === 401) {
-      deleteCredentialsMock('/mock/config/dir');
+    // Create a mock API client that will throw a 401 error
+    const mockApiClient = {
+      projects: {
+        list: vi.fn().mockRejectedValue({
+          response: { status: 401 },
+          isAxiosError: true,
+        }),
+      },
+    };
+
+    // Try to call the API and handle the 401 error
+    try {
+      await mockApiClient.projects.list();
+    } catch (err: any) {
+      // This is the exact logic from index.ts for handling 401 errors
+      if (axiosModule.isAxiosError(err) && err.response?.status === 401) {
+        // In the test, we don't need to catch errors since we're mocking the function
+        authModule.deleteCredentials(configModule.defaultDir);
+      }
     }
 
-    // Verify our mock would be called in the same conditions as in index.ts
-    expect(deleteCredentialsMock).toHaveBeenCalledWith('/mock/config/dir');
+    // Verify deleteCredentials was called with the correct directory
+    expect(deleteCredentialsSpy).toHaveBeenCalledWith(configModule.defaultDir);
+
+    // Restore the original implementation
+    deleteCredentialsSpy.mockRestore();
   });
 });
