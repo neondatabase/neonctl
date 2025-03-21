@@ -15,7 +15,7 @@ axiosDebug({
 });
 import { Api } from '@neondatabase/api-client';
 
-import { ensureAuth } from './commands/auth.js';
+import { ensureAuth, deleteCredentials } from './commands/auth.js';
 import { defaultDir, ensureConfigDir } from './config.js';
 import { log } from './log.js';
 import { defaultClientID } from './auth.js';
@@ -171,8 +171,16 @@ builder = builder
         log.error('Request timed out');
         sendError(err, 'REQUEST_TIMEOUT');
       } else if (err.response?.status === 401) {
-        sendError(err, 'AUTH_FAILED');
         log.error('Authentication failed, please run `neonctl auth`');
+        sendError(err, 'AUTH_FAILED');
+        try {
+          deleteCredentials(defaultDir);
+        } catch (deleteErr) {
+          log.debug(
+            'Failed to delete credentials: %s',
+            deleteErr instanceof Error ? deleteErr.message : 'unknown error',
+          );
+        }
       } else {
         if (err.response?.data?.message) {
           log.error(err.response?.data?.message);
