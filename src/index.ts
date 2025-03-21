@@ -18,7 +18,7 @@ import { Api } from '@neondatabase/api-client';
 import { ensureAuth, deleteCredentials } from './commands/auth.js';
 import { defaultDir, ensureConfigDir } from './config.js';
 import { log } from './log.js';
-import { defaultClientID } from './auth.js';
+import { defaultClientID, refreshToken } from './auth.js';
 import { fillInArgs } from './utils/middlewares.js';
 import pkg from './pkg.js';
 import commands from './commands/index.js';
@@ -29,10 +29,132 @@ import {
   sendError,
   trackEvent,
 } from './analytics.js';
-import { isAxiosError } from 'axios';
+import { isAxiosError, AxiosError } from 'axios';
 import { matchErrorCode } from './errors.js';
 import { showHelp } from './help.js';
 import { currentContextFile, enrichFromContext } from './context.js';
+import { join } from 'node:path';
+import { CREDENTIALS_FILE } from './config.js';
+import { getApiClient } from './api.js';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { TokenSet } from 'openid-client';
+import { createHash } from 'node:crypto';
+
+/**
+ * Reads credentials from the credentials file
+ * @param configDir Directory where credentials file is stored
+ * @returns TokenSet or null if file doesn't exist or is invalid
+ */
+const readCredentials = (configDir: string): TokenSet | null => {
+  const credentialsPath = join(configDir, CREDENTIALS_FILE);
+  if (!existsSync(credentialsPath)) {
+    return null;
+  }
+
+  try {
+    const contents = readFileSync(credentialsPath, 'utf8');
+    return new TokenSet(JSON.parse(contents));
+  } catch (err) {
+    log.debug(
+      'Failed to read credentials: %s',
+      err instanceof Error ? err.message : 'unknown error',
+    );
+    return null;
+  }
+};
+
+/**
+ * Preserves credentials to the specified path
+ * @param path Path to save credentials to
+ * @param credentials TokenSet to save
+ * @param apiClient API client to use for getting user info
+ */
+const preserveCredentials = async (
+  path: string,
+  credentials: TokenSet,
+  apiClient: Api<unknown>,
+): Promise<void> => {
+  const {
+    data: { id },
+  } = await apiClient.getCurrentUserInfo();
+  const contents = JSON.stringify({
+    ...credentials,
+    user_id: id,
+  });
+  // correctly sets needed permissions for the credentials file
+  writeFileSync(path, contents, {
+    mode: 0o700,
+  });
+  log.info('Saved credentials to %s', path);
+  log.debug(
+    'Credentials MD5 hash: %s',
+    createHash('md5').update(contents).digest('hex'),
+  );
+};
+
+/**
+ * Handles 401 authentication errors by attempting to refresh the token
+ * If refresh fails, deletes credentials and shows error message
+ * @param err The axios error that occurred
+ * @param defaultDir Directory where credentials are stored
+ * @returns boolean indicating if the command should be retried
+ */
+async function handleAuthError(
+  err: AxiosError,
+  defaultDir: string,
+): Promise<boolean> {
+  if (err.response?.status === 401) {
+    try {
+      // Read current credentials
+      const credentials = readCredentials(defaultDir);
+
+      if (!credentials?.refresh_token) {
+        throw new Error('No valid credentials found for refresh');
+      }
+
+      // Try to refresh token
+      const newTokenSet = await refreshToken(
+        {
+          oauthHost: process.env.NEON_OAUTH_HOST ?? 'https://oauth2.neon.tech',
+          clientId: 'neonctl',
+        },
+        credentials,
+      );
+
+      // Update credentials with new token
+      const apiClient = getApiClient({
+        apiKey: newTokenSet.access_token || '',
+        apiHost:
+          process.env.NEON_API_HOST ?? 'https://console.neon.tech/api/v2',
+      });
+
+      await preserveCredentials(
+        join(defaultDir, CREDENTIALS_FILE),
+        newTokenSet,
+        apiClient,
+      );
+
+      log.info('Successfully refreshed authentication token');
+
+      // Indicate retry should happen
+      return true;
+    } catch {
+      // If refresh fails, delete credentials and show error
+      log.error('Authentication failed, please run `neonctl auth`');
+      sendError(err, 'AUTH_FAILED');
+      try {
+        deleteCredentials(defaultDir);
+      } catch (deleteErr) {
+        log.debug(
+          'Failed to delete credentials: %s',
+          deleteErr instanceof Error ? deleteErr.message : 'unknown error',
+        );
+      }
+      return false; // Indicate no retry
+    }
+  }
+  return false; // Not a 401 error
+}
 
 const NO_SUBCOMMANDS_VERBS = [
   // aliases
@@ -171,16 +293,11 @@ builder = builder
         log.error('Request timed out');
         sendError(err, 'REQUEST_TIMEOUT');
       } else if (err.response?.status === 401) {
-        sendError(err, 'AUTH_FAILED');
-        try {
-          deleteCredentials(defaultDir);
-        } catch (deleteErr) {
-          log.debug(
-            'Failed to delete credentials: %s',
-            deleteErr instanceof Error ? deleteErr.message : 'unknown error',
-          );
+        const shouldRetry = await handleAuthError(err, defaultDir);
+        if (shouldRetry) {
+          // Retry the original command
+          return yargs.parse();
         }
-        log.error('Authentication failed, please run `neonctl auth`');
       } else {
         if (err.response?.data?.message) {
           log.error(err.response?.data?.message);
