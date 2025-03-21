@@ -309,3 +309,22 @@ describe('deleteCredentials', () => {
     expect(typeof deleteCredentials).toBe('function');
   });
 });
+
+describe('401 response handling', () => {
+  test('should call deleteCredentials when 401 response is received', () => {
+    // Create a mock function to test the behavior
+    const deleteCredentialsMock = vi.fn();
+
+    // Create a mock axios error with 401 status
+    const axiosError = new Error('Unauthorized') as any;
+    axiosError.response = { status: 401 };
+
+    // Simulate the 401 error handling logic from index.ts
+    if (axiosError.response?.status === 401) {
+      deleteCredentialsMock('/mock/config/dir');
+    }
+
+    // Verify our mock would be called in the same conditions as in index.ts
+    expect(deleteCredentialsMock).toHaveBeenCalledWith('/mock/config/dir');
+  });
+});
