@@ -22,7 +22,7 @@
     "@apidevtools/swagger-parser": "^10.1.0",
     "@commitlint/cli": "^17.6.5",
     "@commitlint/config-conventional": "^17.6.5",
-    "@eslint/js": "^9.6.0",
+    "@eslint/js": "^9.23.0",
     "@rollup/plugin-commonjs": "^25.0.2",
     "@rollup/plugin-json": "^6.0.0",
     "@rollup/plugin-node-resolve": "^15.1.0",
@@ -39,7 +39,7 @@
     "@types/which": "^3.0.0",
     "@types/yargs": "^17.0.24",
     "emocks": "^3.0.1",
-    "eslint": "^9.6.0",
+    "eslint": "^9.23.0",
     "express": "^4.18.2",
     "husky": "^8.0.3",
     "lint-staged": "^13.0.3",
@@ -50,11 +50,11 @@
     "semantic-release": "^23.0.8",
     "strip-ansi": "^7.1.0",
     "typescript": "^4.7.4",
-    "typescript-eslint": "v8.0.0-alpha.41",
-    "vitest": "^1.6.1"
+    "typescript-eslint": "8.28.0",
+    "vitest": "^1.6.0"
   },
   "dependencies": {
-    "@neondatabase/api-client": "1.12.0",
+    "@neondatabase/api-client": "2.0.0",
     "@segment/analytics-node": "^1.0.0-beta.26",
     "axios": "^1.4.0",
     "axios-debug-log": "^1.0.0",

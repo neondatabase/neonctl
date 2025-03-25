@@ -66,9 +66,25 @@ export const projectCreateRequest = {
               description: "When set, connections using VPC endpoints are disallowed.\nThis parameter is under active development and its semantics may change in the future.\n",
               demandOption: false,
   },
+  'project.settings.audit_log_level': {
+              type: "string",
+              description: undefined,
+              demandOption: false,
+ choices: ["hipaa"],
+  },
+  'project.settings.preload_libraries.use_defaults': {
+              type: "boolean",
+              description: undefined,
+              demandOption: false,
+  },
+  'project.settings.preload_libraries.enabled_libraries': {
+              type: "array",
+              description: undefined,
+              demandOption: false,
+  },
   'project.name': {
               type: "string",
-              description: "The project name",
+              description: "The project name. If not specified, the name will be identical to the generated project ID",
               demandOption: false,
   },
   'project.branch.name': {
@@ -189,6 +205,22 @@ export const projectUpdateRequest = {
               description: "When set, connections using VPC endpoints are disallowed.\nThis parameter is under active development and its semantics may change in the future.\n",
               demandOption: false,
   },
+  'project.settings.audit_log_level': {
+              type: "string",
+              description: undefined,
+              demandOption: false,
+ choices: ["hipaa"],
+  },
+  'project.settings.preload_libraries.use_defaults': {
+              type: "boolean",
+              description: undefined,
+              demandOption: false,
+  },
+  'project.settings.preload_libraries.enabled_libraries': {
+              type: "array",
+              description: undefined,
+              demandOption: false,
+  },
   'project.name': {
               type: "string",
               description: "The project name",
@@ -244,7 +276,7 @@ export const branchCreateRequest = {
   },
   'branch.init_source': {
               type: "string",
-              description: "The initialization source type for the branch. Valid values are `schema-only` and `parent-data`.\nThis parameter is under active development and may change its semantics in the future.\n",
+              description: "The source of initialization for the branch. Valid values are `schema-only` and `parent-data` (default).\n  * `schema-only` - creates a new root branch containing only the schema. Use `parent_id` to specify the source branch. Optionally, you can provide `parent_lsn` or `parent_timestamp` to branch from a specific point in time or LSN. These fields define which branch to copy the schema from and at what point—they do not establish a parent-child relationship between the `parent_id` branch and the new schema-only branch.\n  * `parent-data` - creates the branch with both schema and data from the parent.\n",
               demandOption: false,
   },
 } as const;
