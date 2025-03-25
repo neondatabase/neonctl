@@ -69,7 +69,7 @@ const preserveCredentials = async (
     data: { id },
   } = await apiClient.getCurrentUserInfo();
   const contents = JSON.stringify({
-    ...credentials,
+    ...(credentials as Record<string, unknown>),
     user_id: id,
   });
   // correctly sets needed permissions for the credentials file
