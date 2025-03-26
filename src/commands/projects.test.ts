@@ -18,6 +18,31 @@ describe('projects', () => {
     await testCliCommand(['projects', 'create', '--name', 'test_project']);
   });
 
+  test('create with audit log level', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'projects',
+      'create',
+      '--name',
+      'test_project',
+      '--audit-log-level',
+      'hipaa',
+    ]);
+  });
+
+  test('create with invalid audit log level', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'projects',
+        'create',
+        '--name',
+        'test_project',
+        '--audit-log-level',
+        'invalid',
+      ],
+      { code: 1 },
+    );
+  });
+
   test('create with org id', async ({ testCliCommand }) => {
     await testCliCommand([
       'projects',
@@ -125,6 +150,23 @@ describe('projects', () => {
       '--name',
       'test_project_new_name',
     ]);
+  });
+
+  test('update audit log level', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'projects',
+      'update',
+      'test',
+      '--audit-log-level',
+      'hipaa',
+    ]);
+  });
+
+  test('update with invalid audit log level', async ({ testCliCommand }) => {
+    await testCliCommand(
+      ['projects', 'update', 'test', '--audit-log-level', 'invalid'],
+      { code: 1 },
+    );
   });
 
   test('update project with default fixed size CU', async ({
