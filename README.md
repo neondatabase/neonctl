@@ -145,6 +145,7 @@ Global options are supported with any Neon CLI command.
 To run the CLI locally, execute the build command after making changes:
 
 ```shell
+npm install
 npm run build
 ```
 
