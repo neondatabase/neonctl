@@ -60,6 +60,16 @@ connection_uris:
 "
 `;
 
+exports[`projects > create with audit log level 1`] = `
+"project:
+  id: new-project-123456
+  name: test_project
+  created_at: 2021-01-01T00:00:00.000Z
+connection_uris:
+  - connection_uri: postgres://localhost:5432/test_project
+"
+`;
+
 exports[`projects > create with database and role 1`] = `
 "project:
   id: new-project-123456
@@ -69,6 +79,8 @@ connection_uris:
   - connection_uri: postgres://localhost:5432/test_project
 "
 `;
+
+exports[`projects > create with invalid audit log level 1`] = `""`;
 
 exports[`projects > create with org id 1`] = `
 "project:
@@ -142,6 +154,19 @@ exports[`projects > list with org id 1`] = `
 "
 `;
 
+exports[`projects > update audit log level 1`] = `
+"id: test
+name: test_project
+created_at: 2019-01-01T00:00:00Z
+settings:
+  allowed_ips:
+    ips:
+      - 192.168.1.1
+    protected_branches_only: false
+  audit_log_level: hipaa
+"
+`;
+
 exports[`projects > update name 1`] = `
 "id: test
 name: test_project_new_name
@@ -177,3 +202,5 @@ settings:
     protected_branches_only: false
 "
 `;
+
+exports[`projects > update with invalid audit log level 1`] = `""`;
