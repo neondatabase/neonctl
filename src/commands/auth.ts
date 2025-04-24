@@ -59,6 +59,7 @@ export const authFlow = async ({
     );
   } catch {
     log.error('Failed to save credentials');
+    return '';
   }
   log.info('Auth complete');
   return tokenSet.access_token || '';
