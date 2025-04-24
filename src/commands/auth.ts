@@ -48,14 +48,18 @@ export const authFlow = async ({
   });
 
   const credentialsPath = join(configDir, CREDENTIALS_FILE);
-  await preserveCredentials(
-    credentialsPath,
-    tokenSet,
-    getApiClient({
-      apiKey: tokenSet.access_token || '',
-      apiHost,
-    }),
-  );
+  try {
+    await preserveCredentials(
+      credentialsPath,
+      tokenSet,
+      getApiClient({
+        apiKey: tokenSet.access_token || '',
+        apiHost,
+      }),
+    );
+  } catch {
+    log.error('Failed to save credentials');
+  }
   log.info('Auth complete');
   return tokenSet.access_token || '';
 };
