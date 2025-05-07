@@ -26,8 +26,8 @@ jobs:
       - run: bun install
       - run: bun run build
       - run: bun run test
-      - run: node pkg.js
       - run: bunx semantic-release
+      - run: node pkg.js
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
