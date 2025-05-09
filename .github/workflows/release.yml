@@ -30,7 +30,6 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-      - run: node pkg.js
       - run: git fetch origin
       - run: git checkout main
       - run: git rebase origin/release
