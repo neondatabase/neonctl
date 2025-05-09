@@ -12,7 +12,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "cp dist/package*.json ./"
+        "prepareCmd": "cp dist/package*.json ./ && node pkg.js"
       }
     ],
     "@semantic-release/git",
