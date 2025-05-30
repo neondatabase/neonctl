@@ -13,10 +13,11 @@ import {
 import { CommonProps, IdOrNameProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
-import { CONTEXT_FILE, updateContextFile } from '../context.js';
+import { updateContextFile } from '../context.js';
 import { getComputeUnits } from '../utils/compute_units.js';
 import { isAxiosError } from 'axios';
 import prompts, { InitialReturnValue } from 'prompts';
+import { isCi } from '../env.js';
 
 export const PROJECT_FIELDS = [
   'id',
@@ -58,15 +59,7 @@ export const builder = (argv: yargs.Argv) => {
           },
         }),
       async (args) => {
-        try {
-          await list(args as any);
-        } catch (err) {
-          if (isOrgIdError(err)) {
-            await selectOrgAndRetry(args as any, list);
-          } else {
-            throw err;
-          }
-        }
+        await handleMissingOrgId(args as any, list);
       },
     )
     .command(
@@ -125,15 +118,7 @@ export const builder = (argv: yargs.Argv) => {
           },
         }),
       async (args) => {
-        try {
-          await create(args as any);
-        } catch (err) {
-          if (isOrgIdError(err)) {
-            await selectOrgAndRetry(args as any, create);
-          } else {
-            throw err;
-          }
-        }
+        await handleMissingOrgId(args as any, create);
       },
     )
     .command(
@@ -369,6 +354,22 @@ const get = async (props: CommonProps & IdOrNameProps) => {
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };
 
+const handleMissingOrgId = async (
+  args: CommonProps,
+  cmd: (props: any) => Promise<void>,
+) => {
+  try {
+    await cmd(args as any);
+  } catch (err) {
+    if (!isCi() && isOrgIdError(err)) {
+      const orgId = await selectOrg(args as any);
+      await cmd({ ...args, orgId });
+    } else {
+      throw err;
+    }
+  }
+};
+
 const isOrgIdError = (err: any) => {
   return (
     isAxiosError(err) &&
@@ -377,19 +378,15 @@ const isOrgIdError = (err: any) => {
   );
 };
 
-const selectOrgAndRetry = async (
-  props: CommonProps,
-  cmd: (props: any) => Promise<void>,
-) => {
+const selectOrg = async (props: CommonProps) => {
   const {
     data: { organizations },
   } = await props.apiClient.getCurrentUserOrganizations();
 
   if (!organizations?.length) {
-    log.error(
+    throw new Error(
       `You don't belong to any organizations. Please create an organization first.`,
     );
-    return;
   }
 
   const { orgId } = await prompts({
@@ -416,7 +413,8 @@ const selectOrgAndRetry = async (
     updateContextFile(props.contextFile, { orgId });
 
     writer(props).text(`
-The organization ID has been saved in the ${CONTEXT_FILE} file. Use
+The organization ID has been saved in ${props.contextFile}
+Use
 
     neonctl set-context --org-id <org_id>
 
@@ -429,7 +427,7 @@ to clear the context file and forget the default organization.
 `);
   }
 
-  await cmd({ ...props, orgId });
+  return orgId;
 };
 
 const onPromptState = (state: {
