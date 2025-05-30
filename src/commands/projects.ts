@@ -416,11 +416,15 @@ const selectOrgAndRetry = async (
     updateContextFile(props.contextFile, { orgId });
 
     writer(props).text(`
-The organization ID has been saved in ${CONTEXT_FILE} file. Use
+The organization ID has been saved in the ${CONTEXT_FILE} file. Use
 
     neonctl set-context --org-id <org_id>
 
-if you'd like to change the default organization later.
+if you'd like to change the default organization later, or
+
+    neonctl set-context
+
+to clear the context file and forget the default organization.
 
 `);
   }
