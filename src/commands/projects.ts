@@ -414,15 +414,14 @@ const selectOrg = async (props: CommonProps) => {
 
     writer(props).text(`
 The organization ID has been saved in ${props.contextFile}
-Use
+
+If you'd like to change the default organization later, use
 
     neonctl set-context --org-id <org_id>
 
-if you'd like to change the default organization later, or
+Or to clear the context file and forget the default organization
 
     neonctl set-context
-
-to clear the context file and forget the default organization.
 
 `);
   }
