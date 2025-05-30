@@ -9,7 +9,7 @@ export type Context = {
   branchId?: string;
 };
 
-const CONTEXT_FILE = '.neon';
+export const CONTEXT_FILE = '.neon';
 const CHECK_FILES = [CONTEXT_FILE, 'package.json', '.git'];
 
 const wrapWithContextFile = (dir: string) => resolve(dir, CONTEXT_FILE);
