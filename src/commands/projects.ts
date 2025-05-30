@@ -15,6 +15,9 @@ import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
 import { updateContextFile } from '../context.js';
 import { getComputeUnits } from '../utils/compute_units.js';
+import { isAxiosError } from 'axios';
+import prompts, { InitialReturnValue } from 'prompts';
+import { isCi } from '../env.js';
 
 export const PROJECT_FIELDS = [
   'id',
@@ -56,7 +59,7 @@ export const builder = (argv: yargs.Argv) => {
           },
         }),
       async (args) => {
-        await list(args as any);
+        await handleMissingOrgId(args as any, list);
       },
     )
     .command(
@@ -115,7 +118,7 @@ export const builder = (argv: yargs.Argv) => {
           },
         }),
       async (args) => {
-        await create(args as any);
+        await handleMissingOrgId(args as any, create);
       },
     )
     .command(
@@ -349,4 +352,93 @@ const update = async (
 const get = async (props: CommonProps & IdOrNameProps) => {
   const { data } = await props.apiClient.getProject(props.id);
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
+};
+
+const handleMissingOrgId = async (
+  args: CommonProps,
+  cmd: (props: any) => Promise<void>,
+) => {
+  try {
+    await cmd(args as any);
+  } catch (err) {
+    if (!isCi() && isOrgIdError(err)) {
+      const orgId = await selectOrg(args as any);
+      await cmd({ ...args, orgId });
+    } else {
+      throw err;
+    }
+  }
+};
+
+const isOrgIdError = (err: any) => {
+  return (
+    isAxiosError(err) &&
+    err.response?.status == 400 &&
+    err.response?.data?.message?.includes('org_id is required')
+  );
+};
+
+const selectOrg = async (props: CommonProps) => {
+  const {
+    data: { organizations },
+  } = await props.apiClient.getCurrentUserOrganizations();
+
+  if (!organizations?.length) {
+    throw new Error(
+      `You don't belong to any organizations. Please create an organization first.`,
+    );
+  }
+
+  const { orgId } = await prompts({
+    onState: onPromptState,
+    type: 'select',
+    name: 'orgId',
+    message: `What organization would you like to use?`,
+    choices: organizations.map((org) => ({
+      title: `${org.name} (${org.id})`,
+      value: org.id,
+    })),
+    initial: 0,
+  });
+
+  const { save } = await prompts({
+    onState: onPromptState,
+    type: 'confirm',
+    name: 'save',
+    message: `Would you like to use this organization by default?`,
+    initial: true,
+  });
+
+  if (save) {
+    updateContextFile(props.contextFile, { orgId });
+
+    writer(props).text(`
+The organization ID has been saved in ${props.contextFile}
+
+If you'd like to change the default organization later, use
+
+    neonctl set-context --org-id <org_id>
+
+Or to clear the context file and forget the default organization
+
+    neonctl set-context
+
+`);
+  }
+
+  return orgId;
+};
+
+const onPromptState = (state: {
+  value: InitialReturnValue;
+  aborted: boolean;
+  exited: boolean;
+}) => {
+  if (state.aborted) {
+    // If we don't re-enable the terminal cursor before exiting
+    // the program, the cursor will remain hidden
+    process.stdout.write('\x1B[?25h');
+    process.stdout.write('\n');
+    process.exit(1);
+  }
 };
