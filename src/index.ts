@@ -51,6 +51,7 @@ const NO_SUBCOMMANDS_VERBS = [
 
 let builder = yargs(hideBin(process.argv));
 builder = builder
+  .strict()
   .scriptName(pkg.name)
   .locale('en')
   .usage('$0 <command> [options]')
