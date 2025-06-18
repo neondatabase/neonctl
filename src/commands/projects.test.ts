@@ -18,6 +18,16 @@ describe('projects', () => {
     await testCliCommand(['projects', 'create', '--name', 'test_project']);
   });
 
+  test('create with hipaa flag', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'projects',
+      'create',
+      '--name',
+      'test_project',
+      '--hipaa',
+    ]);
+  });
+
   test('create with org id', async ({ testCliCommand }) => {
     await testCliCommand([
       'projects',
@@ -125,6 +135,10 @@ describe('projects', () => {
       '--name',
       'test_project_new_name',
     ]);
+  });
+
+  test('update hipaa flag', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'update', 'test', '--hipaa']);
   });
 
   test('update project with default fixed size CU', async ({

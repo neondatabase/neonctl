@@ -114,14 +114,13 @@ const fetchSchema = async (
   props: SchemaDiffProps,
 ) => {
   try {
-    return props.apiClient
-      .getProjectBranchSchema({
-        projectId: props.projectId,
-        branchId: pointInTime.branchId,
-        db_name: database.name,
-        ...pointInTimeParams(pointInTime),
-      })
-      .then((response) => response.data.sql ?? '');
+    const response = await props.apiClient.getProjectBranchSchema({
+      projectId: props.projectId,
+      branchId: pointInTime.branchId,
+      db_name: database.name,
+      ...pointInTimeParams(pointInTime),
+    });
+    return response.data.sql ?? '';
   } catch (error) {
     if (isAxiosError(error)) {
       const data = error.response?.data;

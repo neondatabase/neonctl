@@ -79,6 +79,11 @@ export const builder = (argv: yargs.Argv) => {
                 .description,
             type: 'boolean',
           },
+          hipaa: {
+            describe:
+              projectCreateRequest['project.settings.hipaa'].description,
+            type: 'boolean',
+          },
           name: {
             describe: projectCreateRequest['project.name'].description,
             type: 'string',
@@ -138,6 +143,11 @@ export const builder = (argv: yargs.Argv) => {
               projectUpdateRequest['project.settings.block_public_connections']
                 .description +
               ' Use --block-public-connections=false to set the value to false.',
+            type: 'boolean',
+          },
+          hipaa: {
+            describe:
+              projectUpdateRequest['project.settings.hipaa'].description,
             type: 'boolean',
           },
           cu: {
@@ -242,10 +252,17 @@ const create = async (
     role?: string;
     psql: boolean;
     setContext: boolean;
+    hipaa?: boolean;
     '--'?: string[];
   },
 ) => {
   const project: ProjectCreateRequest['project'] = {};
+  if (props.hipaa !== undefined) {
+    if (!project.settings) {
+      project.settings = {};
+    }
+    project.settings.hipaa = props.hipaa;
+  }
   if (props.blockPublicConnections !== undefined) {
     if (!project.settings) {
       project.settings = {};
@@ -318,9 +335,16 @@ const update = async (
       cu?: string;
       blockVpcConnections?: boolean;
       blockPublicConnections?: boolean;
+      hipaa?: boolean;
     },
 ) => {
   const project: ProjectUpdateRequest['project'] = {};
+  if (props.hipaa !== undefined) {
+    if (!project.settings) {
+      project.settings = {};
+    }
+    project.settings.hipaa = props.hipaa;
+  }
   if (props.blockPublicConnections !== undefined) {
     if (!project.settings) {
       project.settings = {};
