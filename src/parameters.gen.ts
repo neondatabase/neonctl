@@ -23,7 +23,7 @@ export const projectCreateRequest = {
   },
   'project.settings.quota.logical_size_bytes': {
               type: "number",
-              description: "Limit on the logical size of every project's branch.\n",
+              description: "Limit on the logical size of every project's branch.\n\nIf a branch exceeds its `logical_size_bytes` quota, computes can still be started,\nbut write operations will fail—allowing data to be deleted to free up space.\nComputes on other branches are not affected.\n\nSetting `logical_size_bytes` overrides any lower value set by the `neon.max_cluster_size` Postgres setting.\n",
               demandOption: false,
   },
   'project.settings.allowed_ips.ips': {
@@ -70,7 +70,12 @@ export const projectCreateRequest = {
               type: "string",
               description: undefined,
               demandOption: false,
- choices: ["hipaa"],
+ choices: ["base","extended","full"],
+  },
+  'project.settings.hipaa': {
+              type: "boolean",
+              description: undefined,
+              demandOption: false,
   },
   'project.settings.preload_libraries.use_defaults': {
               type: "boolean",
@@ -162,7 +167,7 @@ export const projectUpdateRequest = {
   },
   'project.settings.quota.logical_size_bytes': {
               type: "number",
-              description: "Limit on the logical size of every project's branch.\n",
+              description: "Limit on the logical size of every project's branch.\n\nIf a branch exceeds its `logical_size_bytes` quota, computes can still be started,\nbut write operations will fail—allowing data to be deleted to free up space.\nComputes on other branches are not affected.\n\nSetting `logical_size_bytes` overrides any lower value set by the `neon.max_cluster_size` Postgres setting.\n",
               demandOption: false,
   },
   'project.settings.allowed_ips.ips': {
@@ -209,7 +214,12 @@ export const projectUpdateRequest = {
               type: "string",
               description: undefined,
               demandOption: false,
- choices: ["hipaa"],
+ choices: ["base","extended","full"],
+  },
+  'project.settings.hipaa': {
+              type: "boolean",
+              description: undefined,
+              demandOption: false,
   },
   'project.settings.preload_libraries.use_defaults': {
               type: "boolean",

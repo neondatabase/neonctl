@@ -4,7 +4,7 @@
     "": {
       "name": "neonctl",
       "dependencies": {
-        "@neondatabase/api-client": "2.0.0",
+        "@neondatabase/api-client": "2.1.0",
         "@segment/analytics-node": "^1.0.0-beta.26",
         "axios": "^1.4.0",
         "axios-debug-log": "^1.0.0",
@@ -212,7 +212,7 @@
 
     "@lukeed/uuid": ["@lukeed/uuid@2.0.1", "", { "dependencies": { "@lukeed/csprng": "^1.1.0" } }, "sha512-qC72D4+CDdjGqJvkFMMEAtancHUQ7/d/tAiHf64z8MopFDmcrtbcJuerDtFceuAfQJ2pDSfCKCtbqoGBNnwg0w=="],
 
-    "@neondatabase/api-client": ["@neondatabase/api-client@2.0.0", "", { "dependencies": { "axios": "^1.7.9" } }, "sha512-UwjRRy8gyShNDfbbP1N+rA235FzqVWP/WPi4cgLnkGgConqpiR+U9Dsegaxu+HxAgK678kQ/5wc4/EPexvE7tw=="],
+    "@neondatabase/api-client": ["@neondatabase/api-client@2.1.0", "", { "dependencies": { "axios": "^1.9.0" } }, "sha512-2noK3Ys1MHUxSk7UA/unt+UkJasotlqDJj87ez+Aq6mXWPTcutMhIFLAp9eHazjYbho/cmYtPIawqeuFl3dDEQ=="],
 
     "@nodelib/fs.scandir": ["@nodelib/fs.scandir@2.1.5", "", { "dependencies": { "@nodelib/fs.stat": "2.0.5", "run-parallel": "^1.1.9" } }, "sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g=="],
 
@@ -1702,7 +1702,7 @@
 
     "@isaacs/cliui/string-width": ["string-width@5.1.2", "", { "dependencies": { "eastasianwidth": "^0.2.0", "emoji-regex": "^9.2.2", "strip-ansi": "^7.0.1" } }, "sha512-HnLOCR3vjcY8beoNLtcjZ5/nxn2afmME6lhrDrebokqMap+XbeW8n9TXpPDOqdGK5qcI3oT0GKTW6wC7EMiVqA=="],
 
-    "@neondatabase/api-client/axios": ["axios@1.7.9", "", { "dependencies": { "follow-redirects": "^1.15.6", "form-data": "^4.0.0", "proxy-from-env": "^1.1.0" } }, "sha512-LhLcE7Hbiryz8oMDdDptSrWowmB4Bl6RCt6sIJKpRB4XtVf0iEgewX3au/pJqm+Py1kCASkb/FFKjxQaLtxJvw=="],
+    "@neondatabase/api-client/axios": ["axios@1.10.0", "", { "dependencies": { "follow-redirects": "^1.15.6", "form-data": "^4.0.0", "proxy-from-env": "^1.1.0" } }, "sha512-/1xYAC4MP/HEG+3duIhFr4ZQXR4sQXOIe+o6sdqzeykGLx6Upp/1p8MHqhINOvGeP7xyNHe7tsiJByc4SSVUxw=="],
 
     "@npmcli/agent/agent-base": ["agent-base@7.1.1", "", { "dependencies": { "debug": "^4.3.4" } }, "sha512-H0TSyFNDMomMNJQBn8wFV5YC/2eJ+VXECwOadZJT554xP6cODZHPX3H9QMQECxvrgiSOP1pHjy1sMWQVYJOUOA=="],
 

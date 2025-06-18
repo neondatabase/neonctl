@@ -2,7 +2,6 @@ import {
   ProjectCreateRequest,
   ProjectListItem,
   ProjectUpdateRequest,
-  ProjectAuditLogLevel,
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
@@ -80,13 +79,10 @@ export const builder = (argv: yargs.Argv) => {
                 .description,
             type: 'boolean',
           },
-          'audit-log-level': {
+          hipaa: {
             describe:
-              projectCreateRequest['project.settings.audit_log_level']
-                .description,
-            type: 'string',
-            choices:
-              projectCreateRequest['project.settings.audit_log_level'].choices,
+              projectCreateRequest['project.settings.hipaa'].description,
+            type: 'boolean',
           },
           name: {
             describe: projectCreateRequest['project.name'].description,
@@ -149,13 +145,10 @@ export const builder = (argv: yargs.Argv) => {
               ' Use --block-public-connections=false to set the value to false.',
             type: 'boolean',
           },
-          'audit-log-level': {
+          hipaa: {
             describe:
-              projectUpdateRequest['project.settings.audit_log_level']
-                .description,
-            type: 'string',
-            choices:
-              projectUpdateRequest['project.settings.audit_log_level'].choices,
+              projectUpdateRequest['project.settings.hipaa'].description,
+            type: 'boolean',
           },
           cu: {
             describe:
@@ -247,18 +240,6 @@ const list = async (props: CommonProps & { orgId?: string }) => {
   out.end();
 };
 
-const setAuditLogLevel = (
-  settings: { audit_log_level?: ProjectAuditLogLevel },
-  value?: string,
-) => {
-  if (value !== undefined) {
-    if (value !== 'hipaa') {
-      throw new Error('audit_log_level must be "hipaa"');
-    }
-    settings.audit_log_level = value as ProjectAuditLogLevel;
-  }
-};
-
 const create = async (
   props: CommonProps & {
     blockPublicConnections?: boolean;
@@ -271,16 +252,16 @@ const create = async (
     role?: string;
     psql: boolean;
     setContext: boolean;
-    auditLogLevel?: string;
+    hipaa?: boolean;
     '--'?: string[];
   },
 ) => {
   const project: ProjectCreateRequest['project'] = {};
-  if (props.auditLogLevel !== undefined) {
+  if (props.hipaa !== undefined) {
     if (!project.settings) {
       project.settings = {};
     }
-    setAuditLogLevel(project.settings, props.auditLogLevel);
+    project.settings.hipaa = props.hipaa;
   }
   if (props.blockPublicConnections !== undefined) {
     if (!project.settings) {
@@ -354,15 +335,15 @@ const update = async (
       cu?: string;
       blockVpcConnections?: boolean;
       blockPublicConnections?: boolean;
-      auditLogLevel?: string;
+      hipaa?: boolean;
     },
 ) => {
   const project: ProjectUpdateRequest['project'] = {};
-  if (props.auditLogLevel !== undefined) {
+  if (props.hipaa !== undefined) {
     if (!project.settings) {
       project.settings = {};
     }
-    setAuditLogLevel(project.settings, props.auditLogLevel);
+    project.settings.hipaa = props.hipaa;
   }
   if (props.blockPublicConnections !== undefined) {
     if (!project.settings) {
