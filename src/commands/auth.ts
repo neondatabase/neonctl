@@ -74,7 +74,8 @@ const preserveCredentials = async (
     data: { id },
   } = await apiClient.getCurrentUserInfo();
   const contents = JSON.stringify({
-    ...credentials,
+    // Making the linter happy by explicitly confirming we don't care about @typescript-eslint/no-misused-spread
+    ...(credentials as Record<string, unknown>),
     user_id: id,
   });
   // correctly sets needed permissions for the credentials file
