@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { TokenSet } from 'openid-client';
@@ -231,6 +231,26 @@ export const ensureAuth = async (
     apiKey,
     apiHost: props.apiHost,
   });
+};
+
+/**
+ * Deletes the credentials file at the specified path
+ * @param configDir Directory where credentials file is stored
+ */
+export const deleteCredentials = (configDir: string): void => {
+  const credentialsPath = join(configDir, CREDENTIALS_FILE);
+  try {
+    if (existsSync(credentialsPath)) {
+      rmSync(credentialsPath);
+      log.info('Deleted credentials from %s', credentialsPath);
+    } else {
+      log.debug('Credentials file %s does not exist', credentialsPath);
+    }
+  } catch (err) {
+    const typedErr = err instanceof Error ? err : new Error('Unknown error');
+    log.error('Failed to delete credentials: %s', typedErr.message);
+    throw new Error('CREDENTIALS_DELETE_FAILED');
+  }
 };
 
 const md5hash = (s: string) => createHash('md5').update(s).digest('hex');

@@ -15,7 +15,7 @@ axiosDebug({
 });
 import { Api } from '@neondatabase/api-client';
 
-import { ensureAuth } from './commands/auth.js';
+import { ensureAuth, deleteCredentials } from './commands/auth.js';
 import { defaultDir, ensureConfigDir } from './config.js';
 import { log } from './log.js';
 import { defaultClientID } from './auth.js';
@@ -160,45 +160,67 @@ builder = builder
     'For more information, visit https://neon.tech/docs/reference/neon-cli',
   )
   .wrap(null)
-  .fail(async (msg, err) => {
-    if (process.argv.some((arg) => arg === '--help' || arg === '-h')) {
-      await showHelp(builder);
-      process.exit(0);
-    }
+  .fail(false);
 
-    if (isAxiosError(err)) {
-      if (err.code === 'ECONNABORTED') {
-        log.error('Request timed out');
-        sendError(err, 'REQUEST_TIMEOUT');
-      } else if (err.response?.status === 401) {
-        sendError(err, 'AUTH_FAILED');
-        log.error('Authentication failed, please run `neonctl auth`');
-      } else {
-        if (err.response?.data?.message) {
-          log.error(err.response?.data?.message);
-        }
+async function handleError(msg: string, err: unknown): Promise<boolean> {
+  if (process.argv.some((arg) => arg === '--help' || arg === '-h')) {
+    await showHelp(builder);
+    process.exit(0);
+  }
+
+  // Log stack trace if available
+  if (err instanceof Error && err.stack) {
+    log.debug('Stack: %s', err.stack);
+  }
+
+  if (isAxiosError(err)) {
+    if (err.code === 'ECONNABORTED') {
+      log.error('Request timed out');
+      sendError(err, 'REQUEST_TIMEOUT');
+      return false;
+    } else if (err.response?.status === 401) {
+      sendError(err, 'AUTH_FAILED');
+      log.info('Authentication failed, deleting credentials...');
+      try {
+        deleteCredentials(defaultDir);
+        return true; // Allow retry for auth failures
+      } catch (deleteErr) {
         log.debug(
-          'status: %d %s | path: %s',
-          err.response?.status,
-          err.response?.statusText,
-          err.request?.path,
+          'Failed to delete credentials: %s',
+          deleteErr instanceof Error ? deleteErr.message : 'unknown error',
         );
-        sendError(err, 'API_ERROR');
+        return false;
       }
     } else {
-      sendError(err || new Error(msg), matchErrorCode(msg || err?.message));
-      log.error(msg || err?.message);
+      if (err.response?.data?.message) {
+        log.error(err.response?.data?.message);
+      }
+      log.debug(
+        'status: %d %s | path: %s',
+        err.response?.status,
+        err.response?.statusText,
+        err.request?.path,
+      );
+      sendError(err, 'API_ERROR');
+      return false;
     }
-    await closeAnalytics();
-    if (err?.stack) {
-      log.debug('Stack: %s', err.stack);
-    }
-    process.exit(1);
-  });
+  } else {
+    const error =
+      err instanceof Error ? err : new Error(msg || 'Unknown error');
+    sendError(error, matchErrorCode(error.message));
+    log.error(error.message);
+    return false;
+  }
+}
 
-void (async () => {
+// Main loop with max 2 attempts (initial + 1 retry):
+let attempts = 0;
+const MAX_ATTEMPTS = 2;
+
+while (attempts < MAX_ATTEMPTS) {
   try {
     const args = await builder.argv;
+    // Send analytics for a successful attempt
     trackEvent('cli_command_success', {
       ...getAnalyticsEventProperties(args),
       projectId: args.projectId,
@@ -208,8 +230,16 @@ void (async () => {
       await showHelp(builder);
       process.exit(0);
     }
+
     await closeAnalytics();
-  } catch {
-    // noop
+    process.exit(0);
+  } catch (err) {
+    attempts++;
+    const shouldRetry = await handleError('', err);
+    if (!shouldRetry || attempts >= MAX_ATTEMPTS) {
+      await closeAnalytics();
+      process.exit(1);
+    }
+    // If shouldRetry is true and we haven't hit max attempts, loop continues
   }
-})();
+}

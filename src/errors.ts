@@ -5,6 +5,7 @@ export type ErrorCode =
   | 'API_ERROR'
   | 'UNKNOWN_COMMAND'
   | 'MISSING_ARGUMENT'
+  | 'CREDENTIALS_DELETE_FAILED'
   | 'UNKNOWN_ERROR';
 
 const ERROR_MATCHERS = [
