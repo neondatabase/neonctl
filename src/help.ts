@@ -100,9 +100,9 @@ const formatHelp = (help: string) => {
 
   // command description
   // example command to see: neonctl projects list
-  const descritpionBlock = consumeBlockIfMatches(lines, /^(?!.*options:)/i);
-  if (descritpionBlock.length > 0) {
-    result.push(...descritpionBlock);
+  const descriptionBlock = consumeBlockIfMatches(lines, /^(?!.*options:)/i);
+  if (descriptionBlock.length > 0) {
+    result.push(...descriptionBlock);
     result.push('');
   }
 
