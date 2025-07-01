@@ -39,13 +39,27 @@ export const analyticsMiddleware = async (args: {
   }
 
   try {
-    if (!userId && args.apiKey) {
+    if (args.apiKey) {
       const apiClient = getApiClient({
         apiKey: args.apiKey,
         apiHost: args.apiHost,
       });
-      const resp = await apiClient?.getCurrentUserInfo?.();
-      userId = resp?.data?.id;
+
+      // Populating api key details for analytics
+      const authDetailsResponse = await apiClient.getAuthDetails();
+      const authDetails = authDetailsResponse.data;
+      args.accountId = authDetails.account_id;
+      args.authMethod = authDetails.auth_method;
+      args.authData = authDetails.auth_data;
+
+      // Get user id if not org api key
+      if (!userId && authDetails.auth_method !== 'api_key_org') {
+        const resp = await apiClient?.getCurrentUserInfo?.();
+        userId = resp?.data?.id;
+      }
+    } else {
+      args.accountId = userId;
+      args.authMethod = 'oauth';
     }
   } catch (err) {
     log.debug('Failed to get user id from api', err);

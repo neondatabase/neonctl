@@ -220,11 +220,15 @@ const MAX_ATTEMPTS = 2;
 while (attempts < MAX_ATTEMPTS) {
   try {
     const args = await builder.argv;
+
     // Send analytics for a successful attempt
     trackEvent('cli_command_success', {
       ...getAnalyticsEventProperties(args),
       projectId: args.projectId,
       branchId: args.branchId,
+      accountId: args.accountId,
+      authMethod: args.authMethod,
+      authData: args.authData,
     });
     if (args._.length === 0 || args.help) {
       await showHelp(builder);
