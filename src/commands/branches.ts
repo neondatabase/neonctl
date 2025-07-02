@@ -202,6 +202,10 @@ export const builder = (argv: yargs.Argv) =>
               'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
             type: 'string',
           },
+          name: {
+            type: 'string',
+            describe: 'Optional name of the compute',
+          },
         }),
       (args) => addCompute(args as any),
     )
@@ -451,15 +455,18 @@ const addCompute = async (
     IdOrNameProps & {
       type: EndpointType;
       cu?: string;
+      name?: string;
     },
 ) => {
   const branchId = await branchIdFromProps(props);
+  const computeName = props.name ? { name: props.name } : null;
   const { data } = await retryOnLock(() =>
     props.apiClient.createProjectEndpoint(props.projectId, {
       endpoint: {
         branch_id: branchId,
         type: props.type,
         ...(props.cu ? getComputeUnits(props.cu) : undefined),
+        ...computeName,
       },
     }),
   );
