@@ -321,6 +321,20 @@ describe('branches', () => {
     ]);
   });
 
+  test('add compute with a name', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'add-compute',
+      'test_branch_with_autoscaling',
+      '--project-id',
+      'test',
+      '--cu',
+      '0.5-2',
+      '--name',
+      'My fancy new compute',
+    ]);
+  });
+
   /* reset */
 
   test('reset branch to parent', async ({ testCliCommand }) => {
