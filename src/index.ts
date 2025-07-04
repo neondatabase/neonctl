@@ -213,37 +213,39 @@ async function handleError(msg: string, err: unknown): Promise<boolean> {
   }
 }
 
-// Main loop with max 2 attempts (initial + 1 retry):
-let attempts = 0;
-const MAX_ATTEMPTS = 2;
+void (async () => {
+  // Main loop with max 2 attempts (initial + 1 retry):
+  let attempts = 0;
+  const MAX_ATTEMPTS = 2;
 
-while (attempts < MAX_ATTEMPTS) {
-  try {
-    const args = await builder.argv;
+  while (attempts < MAX_ATTEMPTS) {
+    try {
+      const args = await builder.argv;
 
-    // Send analytics for a successful attempt
-    trackEvent('cli_command_success', {
-      ...getAnalyticsEventProperties(args),
-      projectId: args.projectId,
-      branchId: args.branchId,
-      accountId: args.accountId,
-      authMethod: args.authMethod,
-      authData: args.authData,
-    });
-    if (args._.length === 0 || args.help) {
-      await showHelp(builder);
-      process.exit(0);
-    }
+      // Send analytics for a successful attempt
+      trackEvent('cli_command_success', {
+        ...getAnalyticsEventProperties(args),
+        projectId: args.projectId,
+        branchId: args.branchId,
+        accountId: args.accountId,
+        authMethod: args.authMethod,
+        authData: args.authData,
+      });
+      if (args._.length === 0 || args.help) {
+        await showHelp(builder);
+        process.exit(0);
+      }
 
-    await closeAnalytics();
-    process.exit(0);
-  } catch (err) {
-    attempts++;
-    const shouldRetry = await handleError('', err);
-    if (!shouldRetry || attempts >= MAX_ATTEMPTS) {
       await closeAnalytics();
-      process.exit(1);
+      process.exit(0);
+    } catch (err) {
+      attempts++;
+      const shouldRetry = await handleError('', err);
+      if (!shouldRetry || attempts >= MAX_ATTEMPTS) {
+        await closeAnalytics();
+        process.exit(1);
+      }
+      // If shouldRetry is true and we haven't hit max attempts, loop continues
     }
-    // If shouldRetry is true and we haven't hit max attempts, loop continues
   }
-}
+})();
