@@ -145,13 +145,14 @@ Global options are supported with any Neon CLI command.
 To run the CLI locally, execute the build command after making changes:
 
 ```shell
-npm run build
+bun install
+bun run build
 ```
 
 To develop continuously:
 
 ```shell
-npm run watch
+bun run watch
 ```
 
 To run commands from the local build, replace the `neonctl` command with `node dist`; for example:
