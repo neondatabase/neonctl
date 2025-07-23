@@ -184,6 +184,7 @@ export const handler = async (
 
   if (props.ssl !== 'omit') {
     connectionString.searchParams.set('sslmode', props.ssl);
+    connectionString.searchParams.set('channel_binding', 'require');
   }
 
   if (parsedPIT.tag === 'lsn') {
