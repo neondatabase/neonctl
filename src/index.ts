@@ -157,7 +157,7 @@ builder = builder
   .completion()
   .scriptName(basename(process.argv[1]) === 'neon' ? 'neon' : 'neonctl')
   .epilog(
-    'For more information, visit https://neon.tech/docs/reference/neon-cli',
+    'For more information, visit https://neon.com/docs/reference/neon-cli',
   )
   .wrap(null)
   .fail(false);

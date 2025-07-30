@@ -434,4 +434,118 @@ describe('branches', () => {
       },
     );
   });
+
+  /* set expiration */
+
+  test('set expiration date', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'set-expiration',
+      'br-sunny-branch-123456',
+      '--project-id',
+      'test',
+      '--expires-at',
+      '2024-12-31T23:59:59Z',
+    ]);
+  });
+
+  test('remove expiration date', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'set-expiration',
+      'br-sunny-branch-123456',
+      '--project-id',
+      'test',
+    ]);
+  });
+
+  test('set expiration by branch name', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'set-expiration',
+      'test_branch',
+      '--project-id',
+      'test',
+      '--expires-at',
+      '2024-12-31T23:59:59Z',
+    ]);
+  });
+
+  test('set expiration fails on default branch', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'set-expiration',
+        'br-main-branch-123456',
+        '--project-id',
+        'test',
+        '--expires-at',
+        '2024-12-31T23:59:59Z',
+      ],
+      {
+        code: 1,
+        stderr: 'ERROR: Default branch cannot have an expiration date',
+      },
+    );
+  });
+
+  test('set expiration fails on default branch by name', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'set-expiration',
+        'main',
+        '--project-id',
+        'test',
+        '--expires-at',
+        '2024-12-31T23:59:59Z',
+      ],
+      {
+        code: 1,
+        stderr: 'ERROR: Default branch cannot have an expiration date',
+      },
+    );
+  });
+
+  test('set expiration fails on protected branch', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'set-expiration',
+        'br-protected-branch-123456',
+        '--project-id',
+        'test',
+        '--expires-at',
+        '2024-12-31T23:59:59Z',
+      ],
+      {
+        code: 1,
+        stderr: 'ERROR: Protected branch cannot have an expiration date',
+      },
+    );
+  });
+
+  test('set expiration fails on protected branch by name', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'set-expiration',
+        'protected_branch',
+        '--project-id',
+        'test',
+        '--expires-at',
+        '2024-12-31T23:59:59Z',
+      ],
+      {
+        code: 1,
+        stderr: 'ERROR: Protected branch cannot have an expiration date',
+      },
+    );
+  });
 });

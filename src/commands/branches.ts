@@ -193,6 +193,20 @@ export const builder = (argv: yargs.Argv) =>
       (yargs) => yargs,
       (args) => setDefault(args as any),
     )
+    .command({
+      command: 'set-expiration <id|name>',
+      describe: 'Set or remove the expiration date for a branch',
+      builder: (yargs) =>
+        yargs.options({
+          'expires-at': {
+            describe:
+              'Set a expiration date for the branch. If omitted, expiration will be removed. Format [RFC3339]: 2024-12-31T23:59:59Z',
+            type: 'string',
+            requiresArg: false,
+          },
+        }),
+      handler: (args) => setExpiration(args as any),
+    })
     .command(
       'add-compute <id|name>',
       'Add a compute to a branch',
@@ -273,21 +287,7 @@ export const builder = (argv: yargs.Argv) =>
       },
 
       handler: (args) => schemaDiff(args as any),
-    })
-    .command(
-      'set-expiration <branch-id>',
-      'Set or remove the expiration date for a branch',
-      (yargs) =>
-        yargs.options({
-          'expires-at': {
-            describe:
-              'Set a expiration date for the branch. Accepts a date string (e.g., 2024-12-31T23:59:59Z). If omitted, expiration will be removed.',
-            type: 'string',
-            requiresArg: false,
-          },
-        }),
-      (args) => setExpiration(args as any),
-    );
+    });
 
 export const handler = (args: yargs.Argv) => {
   return args;
