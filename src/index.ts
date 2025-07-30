@@ -237,7 +237,7 @@ void (async () => {
       }
 
       await closeAnalytics();
-      process.exit(0);
+      break;
     } catch (err) {
       attempts++;
       const shouldRetry = await handleError('', err);
