@@ -212,6 +212,19 @@ describe('branches', () => {
     );
   });
 
+  test('create with expiration date', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch',
+      '--expiration-date',
+      '2021-01-01T00:00:00.000Z',
+    ]);
+  });
+
   /* delete */
 
   test('delete by id', async ({ testCliCommand }) => {
@@ -238,7 +251,6 @@ describe('branches', () => {
   });
 
   /* set default */
-
   test('set default by id', async ({ testCliCommand }) => {
     await testCliCommand([
       'branches',

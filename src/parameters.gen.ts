@@ -289,6 +289,11 @@ export const branchCreateRequest = {
               description: "The source of initialization for the branch. Valid values are `schema-only` and `parent-data` (default).\n  * `schema-only` - creates a new root branch containing only the schema. Use `parent_id` to specify the source branch. Optionally, you can provide `parent_lsn` or `parent_timestamp` to branch from a specific point in time or LSN. These fields define which branch to copy the schema from and at what point—they do not establish a parent-child relationship between the `parent_id` branch and the new schema-only branch.\n  * `parent-data` - creates the branch with both schema and data from the parent.\n",
               demandOption: false,
   },
+  'branch.expires_at': {
+              type: "string",
+              description: "The timestamp when the branch is scheduled to expire and be automatically deleted. Must be set by the client following the [RFC 3339, section 5.6](https://tools.ietf.org/html/rfc3339#section-5.6) format with precision up to seconds (such as 2025-06-09T18:02:16Z). Deletion is performed by a background job and may not occur exactly at the specified time.\n\nThis feature is still under development and not yet generally available.\n",
+              demandOption: false,
+  },
 } as const;
 
 export const branchCreateRequestEndpointOptions = {
@@ -319,6 +324,11 @@ export const branchUpdateRequest = {
   'branch.protected': {
               type: "boolean",
               description: undefined,
+              demandOption: false,
+  },
+  'branch.expires_at': {
+              type: "string",
+              description: "The timestamp when the branch is scheduled to expire and be automatically deleted. Must be set by the client following the [RFC 3339, section 5.6](https://tools.ietf.org/html/rfc3339#section-5.6) format with precision up to seconds (such as 2025-06-09T18:02:16Z). Deletion is performed by a background job and may not occur exactly at the specified time. If this field is set to null, the expiration timestamp is removed.\n\nThis feature is still under development and not yet generally available.\n",
               demandOption: false,
   },
 } as const;
@@ -371,6 +381,11 @@ export const endpointCreateRequest = {
               description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the default value.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Scale to zero configuration](https://neon.tech/docs/manage/endpoints#scale-to-zero-configuration).\n",
               demandOption: false,
   },
+  'endpoint.name': {
+              type: "string",
+              description: "Optional name of the compute endpoint\n",
+              demandOption: false,
+  },
 } as const;
 
 export const endpointUpdateRequest = {
@@ -408,6 +423,11 @@ export const endpointUpdateRequest = {
   'endpoint.suspend_timeout_seconds': {
               type: "number",
               description: "Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the default value.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe minimum value is `60` seconds (1 minute).\nThe maximum value is `604800` seconds (1 week). For more information, see\n[Scale to zero configuration](https://neon.tech/docs/manage/endpoints#scale-to-zero-configuration).\n",
+              demandOption: false,
+  },
+  'endpoint.name': {
+              type: "string",
+              description: "Optional name of the compute endpoint\n",
               demandOption: false,
   },
 } as const;
