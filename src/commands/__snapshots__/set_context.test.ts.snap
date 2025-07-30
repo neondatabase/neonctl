@@ -94,6 +94,12 @@ exports[`set_context > should set the context to project > list branches selecti
   parent_id: br-parent-branch-123456
   created_at: 2021-01-01T00:00:00.000Z
   updated_at: 2021-01-01T00:00:00.000Z
+- id: br-protected-branch-123456
+  name: protected_branch
+  parent_id: br-main-branch-123456
+  protected: true
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
