@@ -104,6 +104,21 @@ created_at: 2021-01-01T00:00:00.000Z
 "
 `;
 
+exports[`branches > create with expiration date 1`] = `
+"branch:
+  id: br-new-branch-123456
+  name: test_branch
+  created_at: 2021-01-01T00:00:00.000Z
+endpoints:
+  - id: ep-undefined-123456
+    type: read_write
+    created_at: 2021-01-01T00:00:00.000Z
+    host: undefined.example.com
+connection_uris:
+  - connection_uri: postgres://ep-undefined-123456.example.com:5432/test_project
+"
+`;
+
 exports[`branches > create with fixed size CU 1`] = `
 "id: br-new-branch-123456
 name: test_branch_with_fixed_cu

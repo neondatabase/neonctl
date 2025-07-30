@@ -27,6 +27,7 @@ export const BRANCH_FIELDS: readonly (keyof Branch)[] = [
   'default',
   'current_state',
   'created_at',
+  'expires_at',
 ];
 
 const BRANCH_FIELDS_RESET: readonly (keyof Branch)[] = [
@@ -113,6 +114,12 @@ export const builder = (argv: yargs.Argv) =>
               'Create a schema-only branch. Requires exactly one read-write compute.',
             type: 'boolean',
             default: false,
+          },
+          'expires-at': {
+            describe:
+              'Set an expiration date for the branch. Accepts a date string (e.g., 2024-12-31T23:59:59Z).',
+            type: 'string',
+            requiresArg: true,
           },
         }),
       (args) => create(args as any),
@@ -266,7 +273,21 @@ export const builder = (argv: yargs.Argv) =>
       },
 
       handler: (args) => schemaDiff(args as any),
-    });
+    })
+    .command(
+      'set-expiration <branch-id>',
+      'Set or remove the expiration date for a branch',
+      (yargs) =>
+        yargs.options({
+          'expires-at': {
+            describe:
+              'Set a expiration date for the branch. Accepts a date string (e.g., 2024-12-31T23:59:59Z). If omitted, expiration will be removed.',
+            type: 'string',
+            requiresArg: false,
+          },
+        }),
+      (args) => setExpiration(args as any),
+    );
 
 export const handler = (args: yargs.Argv) => {
   return args;
@@ -292,6 +313,7 @@ const create = async (
     suspendTimeout: number;
     annotation?: string;
     schemaOnly: boolean;
+    ttl?: string;
     '--'?: string[];
   },
 ) => {
@@ -345,6 +367,7 @@ const create = async (
         name: props.name,
         ...parentProps,
         ...(props.schemaOnly ? { init_source: 'schema-only' } : {}),
+        ...(props.ttl ? { expires_at: new Date(props.ttl).toISOString() } : {}),
       },
       endpoints: props.compute
         ? [
@@ -562,4 +585,29 @@ const restore = async (
     });
   }
   writeInst.end();
+};
+
+const setExpiration = async (
+  props: ProjectScopeProps & { branchId: string; expiresAt?: string },
+) => {
+  // Accept either branch name or id
+  const branchId = await branchIdFromProps({
+    ...props,
+    id: props.branchId,
+  });
+  const expiresAt =
+    typeof props.expiresAt === 'string'
+      ? new Date(props.expiresAt).toISOString()
+      : null;
+  const { data } = await retryOnLock(() =>
+    props.apiClient.updateProjectBranch(props.projectId, branchId, {
+      branch: {
+        expires_at: expiresAt,
+      },
+    }),
+  );
+
+  writer(props).end(data.branch, {
+    fields: BRANCH_FIELDS,
+  });
 };
