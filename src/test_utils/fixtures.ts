@@ -94,6 +94,7 @@ export const test = originalTest.extend<Fixtures>({
         });
 
         cp.on('error', (err) => {
+          log.error(err);
           throw err;
         });
 
@@ -113,6 +114,9 @@ export const test = originalTest.extend<Fixtures>({
             reject(err instanceof Error ? err : new Error(String(err)));
           }
         });
+      }).catch((err: unknown) => {
+        log.error(err);
+        throw err;
       });
     });
   },

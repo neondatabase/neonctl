@@ -4,7 +4,7 @@
     "": {
       "name": "neonctl",
       "dependencies": {
-        "@neondatabase/api-client": "2.1.0",
+        "@neondatabase/api-client": "2.2.0",
         "@segment/analytics-node": "^1.0.0-beta.26",
         "axios": "^1.4.0",
         "axios-debug-log": "^1.0.0",
@@ -212,7 +212,7 @@
 
     "@lukeed/uuid": ["@lukeed/uuid@2.0.1", "", { "dependencies": { "@lukeed/csprng": "^1.1.0" } }, "sha512-qC72D4+CDdjGqJvkFMMEAtancHUQ7/d/tAiHf64z8MopFDmcrtbcJuerDtFceuAfQJ2pDSfCKCtbqoGBNnwg0w=="],
 
-    "@neondatabase/api-client": ["@neondatabase/api-client@2.1.0", "", { "dependencies": { "axios": "^1.9.0" } }, "sha512-2noK3Ys1MHUxSk7UA/unt+UkJasotlqDJj87ez+Aq6mXWPTcutMhIFLAp9eHazjYbho/cmYtPIawqeuFl3dDEQ=="],
+    "@neondatabase/api-client": ["@neondatabase/api-client@2.2.0", "", { "dependencies": { "axios": "^1.9.0" } }, "sha512-KP7NWn2gdrcXmB6xtrU+RZNGbgkUm5AwIv6B78XvdTKX+jFEkYznNfWUUbFCMehH4N0x/plErIeuMh75pk0KiQ=="],
 
     "@nodelib/fs.scandir": ["@nodelib/fs.scandir@2.1.5", "", { "dependencies": { "@nodelib/fs.stat": "2.0.5", "run-parallel": "^1.1.9" } }, "sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g=="],
 
