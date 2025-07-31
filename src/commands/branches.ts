@@ -195,8 +195,11 @@ export const builder = (argv: yargs.Argv) =>
     )
     .command({
       command: 'set-expiration <id|name>',
-      describe: 'Set or remove the expiration date for a branch',
-      builder: (yargs) =>
+      /**
+       * @info setting `describe` to `false` hides from the `help` command
+       */
+      describe: false, //'Set a expiration date for the branch',
+      builder: (yargs: yargs.Argv) =>
         yargs.options({
           'expires-at': {
             describe:
