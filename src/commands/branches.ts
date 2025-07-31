@@ -317,7 +317,7 @@ const create = async (
     suspendTimeout: number;
     annotation?: string;
     schemaOnly: boolean;
-    ttl?: string;
+    'expires-at'?: string;
     '--'?: string[];
   },
 ) => {
@@ -371,7 +371,9 @@ const create = async (
         name: props.name,
         ...parentProps,
         ...(props.schemaOnly ? { init_source: 'schema-only' } : {}),
-        ...(props.ttl ? { expires_at: new Date(props.ttl).toISOString() } : {}),
+        ...(props['expires-at']
+          ? { expires_at: new Date(props['expires-at']).toISOString() }
+          : {}),
       },
       endpoints: props.compute
         ? [
