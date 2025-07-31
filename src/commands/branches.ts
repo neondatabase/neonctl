@@ -115,9 +115,10 @@ export const builder = (argv: yargs.Argv) =>
             type: 'boolean',
             default: false,
           },
+
           'expires-at': {
             describe:
-              'Set an expiration date for the branch. Accepts a date string (e.g., 2024-12-31T23:59:59Z).',
+              '[PRIVATE-PREVIEW] Set an expiration date for the branch. Accepts a date string (e.g., 2024-12-31T23:59:59Z).',
             type: 'string',
             requiresArg: true,
           },
