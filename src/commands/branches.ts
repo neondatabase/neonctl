@@ -196,10 +196,7 @@ export const builder = (argv: yargs.Argv) =>
     )
     .command({
       command: 'set-expiration <id|name>',
-      /**
-       * @info setting `describe` to `false` hides from the `help` command
-       */
-      describe: false, //'Set a expiration date for the branch',
+      describe: '[Early Access Program] Set an expiration date for the branch',
       builder: (yargs: yargs.Argv) =>
         yargs.options({
           'expires-at': {
