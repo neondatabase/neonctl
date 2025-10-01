@@ -44,6 +44,7 @@ describe('auth', () => {
       configDir,
       forceAuth: true,
       oauthHost: `http://localhost:${oauthServer.address().port}`,
+      allowUnsafeTls: true,
     });
 
     const credentials = JSON.parse(
@@ -84,13 +85,14 @@ describe('ensureAuth', () => {
   const setupTestProps = (server: any) => ({
     _: ['some-command'],
     configDir,
-    oauthHost: `http://localhost:${oauthServer.address().port}`,
+    oauthHost: `http://127.0.0.1:${oauthServer.address().port}`,
     clientId: 'test-client-id',
     forceAuth: true,
     apiKey: '',
     apiHost: `http://localhost:${(server.address() as AddressInfo).port}`,
     help: false,
     apiClient: mockApiClient,
+    allowUnsafeTls: true,
   });
 
   test('should start new auth flow when refresh token fails', async ({
