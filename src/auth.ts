@@ -39,10 +39,11 @@ export const defaultClientID = 'neonctl';
 export type AuthProps = {
   oauthHost: string;
   clientId: string;
+  allowUnsafeTls?: boolean;
 };
 
 export const refreshToken = async (
-  { oauthHost, clientId }: AuthProps,
+  { oauthHost, clientId, allowUnsafeTls }: AuthProps,
   tokenSet: ExtendedTokenSet,
 ) => {
   log.debug('Discovering oauth server');
@@ -53,6 +54,8 @@ export const refreshToken = async (
     client.None(),
     {
       timeout: SERVER_TIMEOUT,
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      execute: allowUnsafeTls ? [client.allowInsecureRequests] : undefined,
     },
   );
 
@@ -62,7 +65,11 @@ export const refreshToken = async (
   );
 };
 
-export const auth = async ({ oauthHost, clientId }: AuthProps) => {
+export const auth = async ({
+  oauthHost,
+  clientId,
+  allowUnsafeTls,
+}: AuthProps) => {
   log.debug('Discovering oauth server');
   const configuration = await client.discovery(
     new URL(oauthHost),
@@ -71,6 +78,8 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
     client.None(),
     {
       timeout: SERVER_TIMEOUT,
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      execute: allowUnsafeTls ? [client.allowInsecureRequests] : undefined,
     },
   );
 

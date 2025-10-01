@@ -20,6 +20,7 @@ type AuthProps = {
   apiHost: string;
   clientId: string;
   forceAuth: boolean;
+  allowUnsafeTls?: boolean;
 };
 
 export const command = 'auth';
@@ -39,6 +40,7 @@ export const authFlow = async ({
   clientId,
   apiHost,
   forceAuth,
+  allowUnsafeTls,
 }: AuthProps) => {
   if (!forceAuth && isCi()) {
     throw new Error('Cannot run interactive auth in CI');
@@ -46,6 +48,7 @@ export const authFlow = async ({
   const tokenSet = await auth({
     oauthHost: oauthHost,
     clientId: clientId,
+    allowUnsafeTls,
   });
 
   const credentialsPath = join(configDir, CREDENTIALS_FILE);
@@ -120,6 +123,7 @@ const handleExistingToken = async (
       {
         oauthHost: props.oauthHost,
         clientId: props.clientId,
+        allowUnsafeTls: props.allowUnsafeTls,
       },
       tokenSet,
     );
