@@ -9,7 +9,6 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { AddressInfo } from 'node:net';
-import { TokenSet } from 'openid-client';
 import { join } from 'path';
 import { afterAll, beforeAll, beforeEach, describe, expect, vi } from 'vitest';
 
@@ -102,21 +101,19 @@ describe('ensureAuth', () => {
     );
 
     authSpy.mockImplementationOnce(() =>
-      Promise.resolve(
-        new TokenSet({
-          access_token: 'new-auth-token',
-          refresh_token: 'new-refresh-token',
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-      ),
+      Promise.resolve({
+        access_token: 'new-auth-token',
+        refresh_token: 'new-refresh-token',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
     );
 
     const server = await runMockServer('main');
-    const expiredTokenSet = new TokenSet({
+    const expiredTokenSet = {
       access_token: 'expired-token',
       refresh_token: 'refresh-token',
-      expires_at: Math.floor(Date.now() / 1000) - 3600, // 1 hour ago
-    });
+      expires_at: Date.now() - 3600 * 1000,
+    };
 
     writeFileSync(
       join(configDir, 'credentials.json'),
@@ -171,9 +168,9 @@ describe('ensureAuth', () => {
     runMockServer,
   }) => {
     const server = await runMockServer('main');
-    const tokenWithoutAccess = new TokenSet({
+    const tokenWithoutAccess = {
       refresh_token: 'refresh-token',
-    });
+    };
 
     writeFileSync(
       join(configDir, 'credentials.json'),
@@ -182,13 +179,11 @@ describe('ensureAuth', () => {
     );
 
     refreshTokenSpy.mockImplementationOnce(() =>
-      Promise.resolve(
-        new TokenSet({
-          access_token: 'refreshed-token',
-          refresh_token: 'new-refresh-token',
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-      ),
+      Promise.resolve({
+        access_token: 'refreshed-token',
+        refresh_token: 'new-refresh-token',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
     );
 
     const props = setupTestProps(server);
@@ -201,11 +196,11 @@ describe('ensureAuth', () => {
 
   test('should use existing valid token', async ({ runMockServer }) => {
     const server = await runMockServer('main');
-    const validTokenSet = new TokenSet({
+    const validTokenSet = {
       access_token: 'valid-token',
       refresh_token: 'refresh-token',
-      expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
-    });
+      expires_at: Date.now() + 3600 * 1000, // 1 hour from now
+    };
 
     writeFileSync(
       join(configDir, 'credentials.json'),
@@ -225,21 +220,19 @@ describe('ensureAuth', () => {
     runMockServer,
   }) => {
     refreshTokenSpy.mockImplementationOnce(() =>
-      Promise.resolve(
-        new TokenSet({
-          access_token: 'new-token',
-          refresh_token: 'new-refresh-token',
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-      ),
+      Promise.resolve({
+        access_token: 'new-token',
+        refresh_token: 'new-refresh-token',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
     );
 
     const server = await runMockServer('main');
-    const expiredTokenSet = new TokenSet({
+    const expiredTokenSet = {
       access_token: 'expired-token',
       refresh_token: 'refresh-token',
-      expires_at: Math.floor(Date.now() / 1000) - 3600, // 1 hour ago
-    });
+      expires_at: Date.now() - 3600 * 1000, // expired 1 hour ago
+    };
 
     writeFileSync(
       join(configDir, 'credentials.json'),

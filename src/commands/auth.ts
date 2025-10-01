@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { TokenSet } from 'openid-client';
 import yargs from 'yargs';
 
 import { Api } from '@neondatabase/api-client';
@@ -11,6 +10,8 @@ import { auth, refreshToken } from '../auth.js';
 import { CREDENTIALS_FILE } from '../config.js';
 import { isCi } from '../env.js';
 import { log } from '../log.js';
+import { ExtendedTokenSet } from '../types.js';
+import { extendTokenSet } from '../utils/auth.js';
 
 type AuthProps = {
   _: (string | number)[];
@@ -67,7 +68,7 @@ export const authFlow = async ({
 
 const preserveCredentials = async (
   path: string,
-  credentials: TokenSet,
+  credentials: ExtendedTokenSet,
   apiClient: Api<unknown>,
 ) => {
   const {
@@ -82,31 +83,18 @@ const preserveCredentials = async (
   writeFileSync(path, contents, {
     mode: 0o700,
   });
-  log.info('Saved credentials to %s', path);
+  log.debug('Saved credentials to %s', path);
   log.debug('Credentials MD5 hash: %s', md5hash(contents));
 };
 
-type TokenSetContents = {
-  user_id: string;
-} & TokenSet;
-
-const isCompleteTokenSet = (
-  tokenSet: TokenSet,
-): tokenSet is Required<TokenSet> => {
-  return !!(
-    tokenSet.access_token &&
-    tokenSet.refresh_token &&
-    tokenSet.expires_at
-  );
-};
-
 const handleExistingToken = async (
-  tokenSet: TokenSet,
+  tokenSet: ExtendedTokenSet,
   props: AuthProps,
   credentialsPath: string,
 ): Promise<{ apiKey: string; apiClient: Api<unknown> } | null> => {
   // Use existing access_token, if present and valid
-  if (!!tokenSet.access_token && !tokenSet.expired()) {
+  if (tokenSet.access_token && tokenSet.expires_at > Date.now()) {
+    log.debug('Using existing valid access_token');
     const apiClient = getApiClient({
       apiKey: tokenSet.access_token,
       apiHost: props.apiHost,
@@ -117,7 +105,7 @@ const handleExistingToken = async (
 
   // Either access_token is missing or its expired. Refresh the token
   log.debug(
-    tokenSet.expired()
+    tokenSet.expires_at < Date.now()
       ? 'Token is expired, attempting refresh'
       : 'Token is missing access_token, attempting refresh',
   );
@@ -136,18 +124,16 @@ const handleExistingToken = async (
       tokenSet,
     );
 
-    if (!isCompleteTokenSet(refreshedTokenSet)) {
-      log.debug('Refreshed token is invalid or missing access_token');
-      return null;
-    }
+    // Extend the token set with expires_at
+    const extendedTokenSet = extendTokenSet(refreshedTokenSet);
 
-    const apiKey = refreshedTokenSet.access_token;
+    const apiKey = extendedTokenSet.access_token;
     const apiClient = getApiClient({
       apiKey,
       apiHost: props.apiHost,
     });
 
-    await preserveCredentials(credentialsPath, refreshedTokenSet, apiClient);
+    await preserveCredentials(credentialsPath, extendedTokenSet, apiClient);
     log.debug('Token refresh successful');
 
     return { apiKey, apiClient };
@@ -190,8 +176,7 @@ export const ensureAuth = async (
     try {
       const contents = readFileSync(credentialsPath, 'utf8');
       log.debug('Credentials MD5 hash: %s', md5hash(contents));
-      const tokenSetContents: TokenSetContents = JSON.parse(contents);
-      const tokenSet = new TokenSet(tokenSetContents);
+      const tokenSet: ExtendedTokenSet = JSON.parse(contents);
 
       // Try to use existing token or refresh it
       const result = await handleExistingToken(
