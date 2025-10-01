@@ -85,7 +85,7 @@ describe('ensureAuth', () => {
   const setupTestProps = (server: any) => ({
     _: ['some-command'],
     configDir,
-    oauthHost: `http://127.0.0.1:${oauthServer.address().port}`,
+    oauthHost: `http://localhost:${oauthServer.address().port}`,
     clientId: 'test-client-id',
     forceAuth: true,
     apiKey: '',
