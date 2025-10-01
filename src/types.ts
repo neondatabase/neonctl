@@ -1,4 +1,5 @@
 import { Api } from '@neondatabase/api-client';
+import { TokenEndpointResponse } from 'openid-client';
 
 export type CommonProps = {
   apiClient: Api<unknown>;
@@ -27,3 +28,7 @@ export type BranchScopeProps = ProjectScopeProps &
       }
     | IdOrNameProps
   );
+
+export type ExtendedTokenSet = TokenEndpointResponse & {
+  expires_at: number;
+};

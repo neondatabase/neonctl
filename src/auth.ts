@@ -1,4 +1,4 @@
-import { custom, generators, Issuer, TokenSet } from 'openid-client';
+import * as client from 'openid-client';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
@@ -9,6 +9,8 @@ import { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { sendError } from './analytics.js';
 import { matchErrorCode } from './errors.js';
+import { ExtendedTokenSet } from './types.js';
+import { extendTokenSet } from './utils/auth.js';
 
 // oauth server timeouts
 const SERVER_TIMEOUT = 10_000;
@@ -39,28 +41,38 @@ export type AuthProps = {
   clientId: string;
 };
 
-custom.setHttpOptionsDefaults({
-  timeout: SERVER_TIMEOUT,
-});
-
 export const refreshToken = async (
   { oauthHost, clientId }: AuthProps,
-  tokenSet: TokenSet,
+  tokenSet: ExtendedTokenSet,
 ) => {
   log.debug('Discovering oauth server');
-  const issuer = await Issuer.discover(oauthHost);
+  const configuration = await client.discovery(
+    new URL(oauthHost),
+    clientId,
+    { token_endpoint_auth_method: 'none' },
+    client.None(),
+    {
+      timeout: SERVER_TIMEOUT,
+    },
+  );
 
-  const neonOAuthClient = new issuer.Client({
-    token_endpoint_auth_method: 'none',
-    client_id: clientId,
-    response_types: ['code'],
-  });
-  return await neonOAuthClient.refresh(tokenSet);
+  return await client.refreshTokenGrant(
+    configuration,
+    tokenSet.refresh_token as string,
+  );
 };
 
 export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   log.debug('Discovering oauth server');
-  const issuer = await Issuer.discover(oauthHost);
+  const configuration = await client.discovery(
+    new URL(oauthHost),
+    clientId,
+    { token_endpoint_auth_method: 'none' },
+    client.None(),
+    {
+      timeout: SERVER_TIMEOUT,
+    },
+  );
 
   //
   // Start HTTP server and wait till /callback is hit
@@ -73,22 +85,15 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
   await new Promise((resolve) => server.once('listening', resolve));
   const listen_port = (server.address() as AddressInfo).port;
 
-  const neonOAuthClient = new issuer.Client({
-    token_endpoint_auth_method: 'none',
-    client_id: clientId,
-    redirect_uris: [REDIRECT_URI(listen_port)],
-    response_types: ['code'],
-  });
-
   // https://datatracker.ietf.org/doc/html/rfc6819#section-4.4.1.8
-  const state = generators.state();
+  const state = client.randomState();
 
   // we store the code_verifier in memory
-  const codeVerifier = generators.codeVerifier();
+  const codeVerifier = client.randomPKCECodeVerifier();
 
-  const codeChallenge = generators.codeChallenge(codeVerifier);
+  const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
 
-  return new Promise<TokenSet>((resolve, reject) => {
+  return new Promise<ExtendedTokenSet>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(
         new Error(
@@ -122,15 +127,15 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       }
 
       log.debug(`Callback received: ${request.url}`);
-      const params = neonOAuthClient.callbackParams(request);
-      const tokenSet = await neonOAuthClient.callback(
-        REDIRECT_URI(listen_port),
-        params,
-        {
-          code_verifier: codeVerifier,
-          state,
-        },
-      );
+      const tokenSet: client.TokenEndpointResponse =
+        await client.authorizationCodeGrant(
+          configuration,
+          new URL(request.url, `http://127.0.0.1:${listen_port}`),
+          {
+            pkceCodeVerifier: codeVerifier,
+            expectedState: state,
+          },
+        );
 
       response.writeHead(200, { 'Content-Type': 'text/html' });
       createReadStream(
@@ -138,7 +143,9 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
       ).pipe(response);
 
       clearTimeout(timer);
-      resolve(tokenSet);
+      const exp = new Date();
+      exp.setSeconds(exp.getSeconds() + (tokenSet.expires_in ?? 0));
+      resolve(extendTokenSet(tokenSet));
       server.close();
     };
 
@@ -152,17 +159,18 @@ export const auth = async ({ oauthHost, clientId }: AuthProps) => {
     const scopes =
       clientId == defaultClientID ? NEONCTL_SCOPES : ALWAYS_PRESENT_SCOPES;
 
-    const authUrl = neonOAuthClient.authorizationUrl({
+    const authUrl = client.buildAuthorizationUrl(configuration, {
       scope: scopes.join(' '),
       state,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
+      redirect_uri: REDIRECT_URI(listen_port),
     });
 
     log.info('Awaiting authentication in web browser.');
     log.info(`Auth Url: ${authUrl}`);
 
-    open(authUrl).catch((err: unknown) => {
+    open(authUrl.href).catch((err: unknown) => {
       const msg = `Failed to open web browser. Please copy & paste auth url to authenticate in browser.`;
       const typedErr = err && err instanceof Error ? err : undefined;
       sendError(typedErr || new Error(msg), matchErrorCode(msg));
