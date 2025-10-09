@@ -1,0 +1,10 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`init > init should pass through arguments to neon-init 1`] = `"{"npx-command":"neon-init","neon-init-args":["--some-flag","--another-option"]}"`;
+
+exports[`init > init should run neon-init 1`] = `"{"npx-command":"neon-init","neon-init-args":[]}"`;
+
+exports[`init > init with multiple arguments 1`] = `"{"npx-command":"neon-init","neon-init-args":["--template","nextjs","--typescript"]}"`;
+
+exports[`init > init with single argument 1`] = `"{"npx-command":"neon-init","neon-init-args":["--debug"]}"`;
+

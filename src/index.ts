@@ -46,6 +46,8 @@ const NO_SUBCOMMANDS_VERBS = [
 
   'set-context',
 
+  'init',
+
   // aliases
 ];
 
