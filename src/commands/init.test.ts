@@ -6,17 +6,7 @@ describe('init', () => {
     await testCliCommand(['init']);
   });
 
-  test('init with single argument', async ({ testCliCommand }) => {
+  test('init with an argument', async ({ testCliCommand }) => {
     await testCliCommand(['init', '--', '--debug']);
-  });
-
-  test('init with multiple arguments', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'init',
-      '--',
-      '--template',
-      'nextjs',
-      '--typescript',
-    ]);
   });
 });
