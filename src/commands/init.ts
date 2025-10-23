@@ -1,6 +1,5 @@
-import { spawn } from 'child_process';
+import { execa } from 'execa';
 import yargs from 'yargs';
-import which from 'which';
 import { log } from '../log.js';
 import { CommonProps } from '../types.js';
 import { sendError } from '../analytics.js';
@@ -24,42 +23,33 @@ export const handler = async (
   await runNeonInit(passThruArgs);
 };
 
-const runNeonInit = async (args: string[] = []) => {
-  const npxPathOrNull = await which('npx', { nothrow: true });
-
-  if (npxPathOrNull === null) {
-    const error = new Error('npx is not available in the PATH');
-    log.error(error.message);
-    sendError(error, 'NPX_NOT_FOUND');
-    process.exit(1);
-  }
-
-  const isWindows = process.platform === 'win32';
-
-  const child = isWindows
-    ? spawn('cmd', ['/c', 'npx', 'neon-init', ...args], {
-        stdio: 'inherit',
-      })
-    : spawn(npxPathOrNull, ['neon-init', ...args], {
-        stdio: 'inherit',
-      });
-
-  for (const signame of ['SIGINT', 'SIGTERM']) {
-    process.on(signame, (code) => {
-      if (!child.killed && code !== null) {
-        child.kill(code);
-      }
+const runNeonInit = async (args: string[]) => {
+  try {
+    await execa('npx', ['neon-init', ...args], {
+      stdio: 'inherit',
     });
-  }
-
-  child.on('exit', (code: number | null) => {
-    const exitCode = code === null ? 1 : code;
-
-    if (exitCode !== 0 && code !== null) {
-      const error = new Error(`neon-init exited with code ${exitCode}`);
-      sendError(error, 'NEON_INIT_FAILED');
+  } catch (error: any) {
+    // Check if it's an ENOENT error (command not found)
+    if (error?.code === 'ENOENT') {
+      log.error('npx is not available in the PATH');
+      sendError(error, 'NPX_NOT_FOUND');
+      process.exit(1);
     }
 
-    process.exit(exitCode);
-  });
+    // Check if the process was killed by a signal (user cancelled)
+    else if (error?.signal) {
+      process.exit(1);
+    }
+
+    // Handle all other errors
+    else {
+      const exitError = new Error(`failed to run neon-init`);
+      sendError(exitError, 'NEON_INIT_FAILED');
+      if (typeof error?.exitCode === 'number') {
+        process.exit(error.exitCode);
+      } else {
+        process.exit(1);
+      }
+    }
+  }
 };
