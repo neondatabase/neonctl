@@ -218,6 +218,26 @@ describe('ensureAuth', () => {
     expect(props.apiKey).toBe('valid-token');
   });
 
+  test('should skip auth for init command', async ({ runMockServer }) => {
+    const server = await runMockServer('main');
+
+    const credentialsPath = join(configDir, 'credentials.json');
+    if (existsSync(credentialsPath)) {
+      rmSync(credentialsPath);
+    }
+
+    const props = {
+      ...setupTestProps(server),
+      _: ['init'],
+    };
+
+    await ensureAuth(props);
+
+    expect(authSpy).not.toHaveBeenCalled();
+    expect(refreshTokenSpy).not.toHaveBeenCalled();
+    expect(props.apiKey).toBe('');
+  });
+
   test('should successfully refresh expired token', async ({
     runMockServer,
   }) => {
