@@ -1,5 +1,0 @@
-// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
-
-exports[`init > init should run neon-init 1`] = `"{"npx-command":"neon-init","neon-init-args":[]}"`;
-
-exports[`init > init with an argument 1`] = `"{"npx-command":"neon-init","neon-init-args":["--debug"]}"`;
