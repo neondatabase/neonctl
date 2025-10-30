@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { rollup } from 'rollup';
-import { exec } from 'pkg';
+import { exec } from '@yao-pkg/pkg';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import json from '@rollup/plugin-json';
