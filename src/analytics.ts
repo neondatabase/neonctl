@@ -77,7 +77,7 @@ export const analyticsMiddleware = async (args: {
   });
 
   client.track({
-    userId: userId ?? 'anonymous',
+    userId: userId || 'anonymous',
     event: 'CLI Started',
     properties: getAnalyticsEventProperties(args),
     context: {
@@ -105,7 +105,7 @@ export const sendError = (err: Error, errCode: ErrorCode) => {
   }
   client.track({
     event: 'CLI Error',
-    userId: userId ?? 'anonymous',
+    userId: userId || 'anonymous',
     properties: {
       message: err.message,
       stack: err.stack,
@@ -126,7 +126,7 @@ export const trackEvent = (
   }
   client.track({
     event,
-    userId: userId ?? 'anonymous',
+    userId: userId || 'anonymous',
     properties,
   });
   log.debug('Sent CLI event: %s', event);
