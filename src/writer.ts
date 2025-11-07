@@ -8,15 +8,20 @@ import { isObject, toSnakeCase } from './utils/string.js';
 
 type ExtractFromArray<T> = T extends (infer R)[] ? R : T;
 type OnlyStrings<T> = T extends string ? T : never;
+type FullExtract<T> = OnlyStrings<keyof ExtractFromArray<T>>;
 
 type WriteOutConfig<T> = {
   // Fields to output in human-readable format
-  fields: readonly OnlyStrings<keyof ExtractFromArray<T>>[];
+  fields: readonly FullExtract<T>[];
   // Title of the output
   title?: string;
   // Display message if data is empty
   // does not apply to json and yaml output
   emptyMessage?: string;
+  // Custom render functions for specific columns
+  renderColumns?: Partial<
+    Record<FullExtract<T>, (value: ExtractFromArray<T>) => string>
+  >;
 };
 
 type Chunk = { data: any; config: WriteOutConfig<any> };
@@ -55,46 +60,53 @@ const writeTable = (
   chunks: { data: any; config: WriteOutConfig<any> }[],
   out: NodeJS.WritableStream,
 ) => {
-  chunks.forEach(({ data, config }) => {
-    const arrayData = Array.isArray(data) ? data : [data];
-    if (!arrayData.length && config.emptyMessage) {
-      out.write('\n' + config.emptyMessage + '\n');
-      return;
-    }
+  chunks.forEach(
+    ({ data, config: { emptyMessage, fields, title, renderColumns = {} } }) => {
+      const arrayData = Array.isArray(data) ? data : [data];
+      if (!arrayData.length && emptyMessage) {
+        out.write('\n' + emptyMessage + '\n');
+        return;
+      }
 
-    const fields = config.fields.filter((field) =>
-      arrayData.some((item) => item[field] !== undefined && item[field] !== ''),
-    );
-    const table = new Table({
-      style: {
-        head: ['green'],
-      },
-      head: fields.map((field: string) =>
-        field
-          .split('_')
-          .map((word) => word[0].toUpperCase() + word.slice(1))
-          .join(' '),
-      ),
-    });
-    arrayData.forEach((item) => {
-      table.push(
-        fields.map((field: string | number) => {
-          const value = item[field];
-          return Array.isArray(value)
-            ? value.join('\n')
-            : isObject(value)
-              ? JSON.stringify(value, null, 2)
-              : value;
-        }),
+      const fieldsFiltered = fields.filter((field) =>
+        arrayData.some(
+          (item) => item[field] !== undefined && item[field] !== '',
+        ),
       );
-    });
+      const table = new Table({
+        style: {
+          head: ['green'],
+        },
+        head: fieldsFiltered.map((field: string) =>
+          field
+            .split('_')
+            .map((word) => word[0].toUpperCase() + word.slice(1))
+            .join(' '),
+        ),
+      });
+      arrayData.forEach((item) => {
+        table.push(
+          fieldsFiltered.map((field: string | number) => {
+            const value = item[field];
+            if (renderColumns[field]) {
+              return renderColumns[field]?.(item);
+            }
+            return Array.isArray(value)
+              ? value.join('\n')
+              : isObject(value)
+                ? JSON.stringify(value, null, 2)
+                : value;
+          }),
+        );
+      });
 
-    if (config.title) {
-      out.write((isCi() ? config.title : chalk.bold(config.title)) + '\n');
-    }
-    out.write(table.toString());
-    out.write('\n');
-  });
+      if (title) {
+        out.write((isCi() ? title : chalk.bold(title)) + '\n');
+      }
+      out.write(table.toString());
+      out.write('\n');
+    },
+  );
 };
 
 /**

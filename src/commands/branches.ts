@@ -22,17 +22,16 @@ import { parseSchemaDiffParams, schemaDiff } from './schema_diff.js';
 import { getComputeUnits } from '../utils/compute_units.js';
 
 export const BRANCH_FIELDS: readonly (keyof Branch)[] = [
-  'id',
   'name',
-  'default',
+  'id',
   'current_state',
   'created_at',
   'expires_at',
 ];
 
 const BRANCH_FIELDS_RESET: readonly (keyof Branch)[] = [
-  'id',
   'name',
+  'id',
   'default',
   'current_state',
   'created_at',
@@ -295,11 +294,32 @@ export const handler = (args: yargs.Argv) => {
 };
 
 const list = async (props: ProjectScopeProps) => {
-  const { data } = await props.apiClient.listProjectBranches({
+  const {
+    data: { branches, annotations },
+  } = await props.apiClient.listProjectBranches({
     projectId: props.projectId,
   });
-  writer(props).end(data.branches, {
+  writer(props).end(branches, {
     fields: BRANCH_FIELDS,
+    renderColumns: {
+      name: (br) => {
+        const annotation = annotations[br.id];
+        const isAnon = annotation?.value.anonymized;
+        const result: string[] = [];
+        if (br.default) {
+          result.push('✱');
+        }
+        if (br.protected) {
+          result.push('⛨');
+        }
+        if (isAnon) {
+          result.push('[anon]');
+        }
+        result.push(br.name);
+
+        return result.join(' ');
+      },
+    },
   });
 };
 
