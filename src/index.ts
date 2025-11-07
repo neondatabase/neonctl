@@ -48,6 +48,8 @@ const NO_SUBCOMMANDS_VERBS = [
 
   'init',
 
+  'create-app',
+
   // aliases
 ];
 
