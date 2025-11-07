@@ -1,0 +1,9 @@
+{
+  "endpoint": {
+    "id": "test_endpoint_id",
+    "type": "read_only",
+    "created_at": "2019-01-01T00:00:00Z",
+    "branch_id": "test_branch_id",
+    "host": "test_host.neon.tech"
+  }
+}

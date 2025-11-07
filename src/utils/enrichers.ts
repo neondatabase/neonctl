@@ -5,6 +5,7 @@ import {
   OrgScopeProps,
 } from '../types.js';
 import { looksLikeBranchId } from './formats.js';
+import { isAxiosError } from 'axios';
 
 export const branchIdResolve = async ({
   branch,
@@ -69,19 +70,33 @@ export const fillSingleProject = async (props: ProjectScopeProps) => {
   if (props.projectId) {
     return props;
   }
-  const { data } = await props.apiClient.listProjects({ limit: 2 });
-  if (data.projects.length === 0) {
-    throw new Error('No projects found');
+  try {
+    const { data } = await props.apiClient.listProjects({ limit: 2 });
+    if (data.projects.length === 0) {
+      throw new Error('No projects found');
+    }
+    if (data.projects.length > 1) {
+      throw new Error(
+        `Multiple projects found, please provide one with the --project-id option`,
+      );
+    }
+    return {
+      ...props,
+      projectId: data.projects[0].id,
+    };
+  } catch (err) {
+    // Handle the case where the API requires org_id because the user belongs to multiple organizations
+    if (
+      isAxiosError(err) &&
+      err.response?.status === 400 &&
+      err.response?.data?.message?.includes('org_id is required')
+    ) {
+      throw new Error(
+        `--project-id is required. You can find your project ID by running:\n\n    neon projects list\n\nOr set a default project with:\n\n    neon set-context --project-id <project_id>`,
+      );
+    }
+    throw err;
   }
-  if (data.projects.length > 1) {
-    throw new Error(
-      `Multiple projects found, please provide one with the --project-id option`,
-    );
-  }
-  return {
-    ...props,
-    projectId: data.projects[0].id,
-  };
 };
 
 export const fillSingleOrg = async (props: OrgScopeProps) => {

@@ -1,0 +1,9 @@
+{
+  "endpoints": [
+    {
+      "id": "ep-test",
+      "created_at": "2019-01-01T00:00:00Z",
+      "type": "read_only"
+    }
+  ]
+}

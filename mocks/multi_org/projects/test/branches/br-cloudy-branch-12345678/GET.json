@@ -1,0 +1,9 @@
+{
+  "branch": {
+    "name": "test-branch-cloudy",
+    "id": "br-cloudy-branch-12345678",
+    "default": true,
+    "created_at": "2019-01-01T00:00:00Z",
+    "updated_at": "2019-01-01T00:00:00Z"
+  }
+}

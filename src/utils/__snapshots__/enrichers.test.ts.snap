@@ -1,0 +1,38 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`enrichers > fillSingleProject shows helpful error when org_id is required 1`] = `""`;
+
+exports[`enrichers > fillSingleProject works with project-id provided 1`] = `
+"- id: br-main-branch-123456
+  name: main
+  default: true
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-sunny-branch-123456
+  name: test_branch
+  parent_id: br-parent-branch-123456
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-numbered-branch-123456
+  name: "123"
+  parent_id: br-parent-branch-123456
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-numbered-branch-123456
+  name: test_branch_with_fixed_cu
+  parent_id: br-parent-branch-123456
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-numbered-branch-123456
+  name: test_branch_with_autoscaling
+  parent_id: br-parent-branch-123456
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+- id: br-protected-branch-123456
+  name: protected_branch
+  parent_id: br-main-branch-123456
+  protected: true
+  created_at: 2021-01-01T00:00:00.000Z
+  updated_at: 2021-01-01T00:00:00.000Z
+"
+`;
