@@ -302,6 +302,7 @@ const list = async (props: ProjectScopeProps) => {
   writer(props).end(branches, {
     fields: BRANCH_FIELDS,
     renderColumns: {
+      expires_at: (br) => br.expires_at || 'never',
       name: (br) => {
         const annotation = annotations[br.id];
         const isAnon = annotation?.value.anonymized;

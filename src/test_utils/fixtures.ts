@@ -17,6 +17,7 @@ type Fixtures = {
       mockDir?: string;
       stderr?: string;
       code?: number;
+      outputTable?: boolean;
     },
   ) => Promise<void>;
 };
@@ -69,7 +70,7 @@ export const test = originalTest.extend<Fixtures>({
           '--api-host',
           `http://localhost:${(server.address() as AddressInfo).port}`,
           '--output',
-          'yaml',
+          options.outputTable ? 'table' : 'yaml',
           '--api-key',
           'test-key',
           '--no-analytics',
