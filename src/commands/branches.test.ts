@@ -5,8 +5,14 @@ import { test } from '../test_utils/fixtures';
 describe('branches', () => {
   /* list */
 
-  test('list', async ({ testCliCommand }) => {
+  test('list/yaml', async ({ testCliCommand }) => {
     await testCliCommand(['branches', 'list', '--project-id', 'test']);
+  });
+
+  test('list/table output', async ({ testCliCommand }) => {
+    await testCliCommand(['branches', 'list', '--project-id', 'test'], {
+      outputTable: true,
+    });
   });
 
   /* create */
