@@ -228,38 +228,64 @@ updated_at: 2019-01-01T00:00:00Z
 "
 `;
 
-exports[`branches > list 1`] = `
+exports[`branches > list/table output 1`] = `
+"┌──────────────────────────────┬────────────────────────────┬───────────────┬──────────────────────────┬──────────────────────────┐
+│ Name                         │ Id                         │ Current State │ Created At               │ Expires At               │
+├──────────────────────────────┼────────────────────────────┼───────────────┼──────────────────────────┼──────────────────────────┤
+│ ✱ main                       │ br-main-branch-123456      │ ready         │ 2021-01-01T00:00:00.000Z │ never                    │
+├──────────────────────────────┼────────────────────────────┼───────────────┼──────────────────────────┼──────────────────────────┤
+│ test_branch                  │ br-sunny-branch-123456     │ ready         │ 2021-01-01T00:00:00.000Z │ 2022-01-01T00:00:00.000Z │
+├──────────────────────────────┼────────────────────────────┼───────────────┼──────────────────────────┼──────────────────────────┤
+│ 123                          │ br-numbered-branch-123456  │ ready         │ 2021-01-01T00:00:00.000Z │ never                    │
+├──────────────────────────────┼────────────────────────────┼───────────────┼──────────────────────────┼──────────────────────────┤
+│ test_branch_with_fixed_cu    │ br-numbered-branch-123456  │ ready         │ 2021-01-01T00:00:00.000Z │ never                    │
+├──────────────────────────────┼────────────────────────────┼───────────────┼──────────────────────────┼──────────────────────────┤
+│ test_branch_with_autoscaling │ br-numbered-branch-123456  │ ready         │ 2021-01-01T00:00:00.000Z │ never                    │
+├──────────────────────────────┼────────────────────────────┼───────────────┼──────────────────────────┼──────────────────────────┤
+│ ⛨ protected_branch           │ br-protected-branch-123456 │ ready         │ 2021-01-01T00:00:00.000Z │ never                    │
+└──────────────────────────────┴────────────────────────────┴───────────────┴──────────────────────────┴──────────────────────────┘
+"
+`;
+
+exports[`branches > list/yaml 1`] = `
 "- id: br-main-branch-123456
   name: main
   default: true
   created_at: 2021-01-01T00:00:00.000Z
   updated_at: 2021-01-01T00:00:00.000Z
+  current_state: ready
 - id: br-sunny-branch-123456
   name: test_branch
   parent_id: br-parent-branch-123456
   created_at: 2021-01-01T00:00:00.000Z
   updated_at: 2021-01-01T00:00:00.000Z
+  expires_at: 2022-01-01T00:00:00.000Z
+  current_state: ready
 - id: br-numbered-branch-123456
   name: "123"
   parent_id: br-parent-branch-123456
   created_at: 2021-01-01T00:00:00.000Z
   updated_at: 2021-01-01T00:00:00.000Z
+  current_state: ready
 - id: br-numbered-branch-123456
   name: test_branch_with_fixed_cu
   parent_id: br-parent-branch-123456
   created_at: 2021-01-01T00:00:00.000Z
   updated_at: 2021-01-01T00:00:00.000Z
+  current_state: ready
 - id: br-numbered-branch-123456
   name: test_branch_with_autoscaling
   parent_id: br-parent-branch-123456
   created_at: 2021-01-01T00:00:00.000Z
   updated_at: 2021-01-01T00:00:00.000Z
+  current_state: ready
 - id: br-protected-branch-123456
   name: protected_branch
   parent_id: br-main-branch-123456
   protected: true
   created_at: 2021-01-01T00:00:00.000Z
   updated_at: 2021-01-01T00:00:00.000Z
+  current_state: ready
 "
 `;
 
