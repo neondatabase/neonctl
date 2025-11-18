@@ -4,7 +4,7 @@ import { sendError } from '../analytics.js';
 
 export const command = 'init';
 export const describe =
-  'Initialize a new project with Neonusing your AI coding assistant';
+  'Initialize a project with Neon using your AI coding assistant';
 export const builder = (yargs: yargs.Argv) =>
   yargs
     .option('context-file', {
