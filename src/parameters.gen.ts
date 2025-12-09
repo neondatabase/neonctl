@@ -124,7 +124,7 @@ export const projectCreateRequest = {
   },
   'project.pg_version': {
               type: "number",
-              description: "The major Postgres version number. Currently supported versions are `14`, `15`, `16`, and `17`.",
+              description: "The major Postgres version number. Currently supported versions are `14`, `15`, `16`, `17`, and `18`.",
               demandOption: false,
   },
   'project.store_passwords': {
@@ -291,7 +291,7 @@ export const branchCreateRequest = {
   },
   'branch.expires_at': {
               type: "string",
-              description: "The timestamp when the branch is scheduled to expire and be automatically deleted. Must be set by the client following the [RFC 3339, section 5.6](https://tools.ietf.org/html/rfc3339#section-5.6) format with precision up to seconds (such as 2025-06-09T18:02:16Z). Deletion is performed by a background job and may not occur exactly at the specified time.\n\nThis feature is still under development and not yet generally available.\n",
+              description: "The timestamp when the branch is scheduled to expire and be automatically deleted. Must be set by the client following the [RFC 3339, section 5.6](https://tools.ietf.org/html/rfc3339#section-5.6) format with precision up to seconds (such as 2025-06-09T18:02:16Z). Deletion is performed by a background job and may not occur exactly at the specified time.\n\nAccess to this feature is currently limited to participants in the Early Access Program.\n",
               demandOption: false,
   },
 } as const;
@@ -302,6 +302,16 @@ export const branchCreateRequestEndpointOptions = {
               description: "The compute endpoint type. Either `read_write` or `read_only`.\n",
               demandOption: true,
  choices: ["read_only","read_write"],
+  },
+  'settings.preload_libraries.use_defaults': {
+              type: "boolean",
+              description: undefined,
+              demandOption: false,
+  },
+  'settings.preload_libraries.enabled_libraries': {
+              type: "array",
+              description: undefined,
+              demandOption: false,
   },
   'provisioner': {
               type: "string",
@@ -328,7 +338,7 @@ export const branchUpdateRequest = {
   },
   'branch.expires_at': {
               type: "string",
-              description: "The timestamp when the branch is scheduled to expire and be automatically deleted. Must be set by the client following the [RFC 3339, section 5.6](https://tools.ietf.org/html/rfc3339#section-5.6) format with precision up to seconds (such as 2025-06-09T18:02:16Z). Deletion is performed by a background job and may not occur exactly at the specified time. If this field is set to null, the expiration timestamp is removed.\n\nThis feature is still under development and not yet generally available.\n",
+              description: "The timestamp when the branch is scheduled to expire and be automatically deleted. Must be set by the client following the [RFC 3339, section 5.6](https://tools.ietf.org/html/rfc3339#section-5.6) format with precision up to seconds (such as 2025-06-09T18:02:16Z). Deletion is performed by a background job and may not occur exactly at the specified time. If this field is set to null, the expiration timestamp is removed.\n\nAccess to this feature is currently limited to participants in the Early Access Program.\n",
               demandOption: false,
   },
 } as const;
@@ -349,6 +359,16 @@ export const endpointCreateRequest = {
               description: "The compute endpoint type. Either `read_write` or `read_only`.\n",
               demandOption: true,
  choices: ["read_only","read_write"],
+  },
+  'endpoint.settings.preload_libraries.use_defaults': {
+              type: "boolean",
+              description: undefined,
+              demandOption: false,
+  },
+  'endpoint.settings.preload_libraries.enabled_libraries': {
+              type: "array",
+              description: undefined,
+              demandOption: false,
   },
   'endpoint.provisioner': {
               type: "string",
@@ -397,6 +417,16 @@ export const endpointUpdateRequest = {
   'endpoint.provisioner': {
               type: "string",
               description: "The Neon compute provisioner.\nSpecify the `k8s-neonvm` provisioner to create a compute endpoint that supports Autoscaling.\n\nProvisioner can be one of the following values:\n* k8s-pod\n* k8s-neonvm\n\nClients must expect, that any string value that is not documented in the description above should be treated as a error. UNKNOWN value if safe to treat as an error too.\n",
+              demandOption: false,
+  },
+  'endpoint.settings.preload_libraries.use_defaults': {
+              type: "boolean",
+              description: undefined,
+              demandOption: false,
+  },
+  'endpoint.settings.preload_libraries.enabled_libraries': {
+              type: "array",
+              description: undefined,
               demandOption: false,
   },
   'endpoint.pooler_enabled': {

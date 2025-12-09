@@ -2,6 +2,7 @@ import {
   ProjectCreateRequest,
   ProjectListItem,
   ProjectUpdateRequest,
+  Organization,
 } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
@@ -418,7 +419,7 @@ const selectOrg = async (props: CommonProps) => {
     type: 'select',
     name: 'orgId',
     message: `What organization would you like to use?`,
-    choices: organizations.map((org) => ({
+    choices: organizations.map((org: Organization) => ({
       title: `${org.name} (${org.id})`,
       value: org.id,
     })),

@@ -151,7 +151,9 @@ const remove = async (props: ProjectScopeProps & { ips: string[] }) => {
   project.settings = {
     allowed_ips: {
       ips:
-        existingAllowedIps?.ips?.filter((ip) => !props.ips.includes(ip)) ?? [],
+        existingAllowedIps?.ips?.filter(
+          (ip: string) => !props.ips.includes(ip),
+        ) ?? [],
       protected_branches_only:
         existingAllowedIps?.protected_branches_only ?? false,
     },

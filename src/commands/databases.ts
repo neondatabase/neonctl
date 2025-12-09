@@ -4,6 +4,7 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 
 import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
+import { Role } from '@neondatabase/api-client';
 
 export const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
 
@@ -87,7 +88,7 @@ export const create = async (
         if (data.roles.length > 1) {
           throw new Error(
             `More than one role found in branch ${branchId}. Please specify the owner name. Roles: ${data.roles
-              .map((r) => r.name)
+              .map((r: Role) => r.name)
               .join(', ')}`,
           );
         }
