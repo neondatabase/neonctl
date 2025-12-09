@@ -5,6 +5,7 @@ import {
   OrgScopeProps,
 } from '../types.js';
 import { looksLikeBranchId } from './formats.js';
+import { Branch } from '@neondatabase/api-client';
 
 export const branchIdResolve = async ({
   branch,
@@ -23,11 +24,11 @@ export const branchIdResolve = async ({
   const { data } = await apiClient.listProjectBranches({
     projectId,
   });
-  const branchData = data.branches.find((b) => b.name === branch);
+  const branchData = data.branches.find((b: Branch) => b.name === branch);
   if (!branchData) {
     throw new Error(
       `Branch ${branch} not found.\nAvailable branches: ${data.branches
-        .map((b) => b.name)
+        .map((b: Branch) => b.name)
         .join(', ')}`,
     );
   }
@@ -51,7 +52,7 @@ const getBranchIdFromProps = async (props: BranchScopeProps) => {
   const { data } = await props.apiClient.listProjectBranches({
     projectId: props.projectId,
   });
-  const defaultBranch = data.branches.find((b) => b.default);
+  const defaultBranch = data.branches.find((b: Branch) => b.default);
 
   if (defaultBranch) {
     return defaultBranch.id;
