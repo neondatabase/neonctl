@@ -14,6 +14,10 @@ describe('projects', () => {
     await testCliCommand(['projects', 'list', '--org-id', 'org-2']);
   });
 
+  test('list recoverable projects', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'list', '--recoverable-only']);
+  });
+
   test('create', async ({ testCliCommand }) => {
     await testCliCommand(['projects', 'create', '--name', 'test_project']);
   });
@@ -125,6 +129,10 @@ describe('projects', () => {
 
   test('delete', async ({ testCliCommand }) => {
     await testCliCommand(['projects', 'delete', 'test']);
+  });
+
+  test('recover deleted project', async ({ testCliCommand }) => {
+    await testCliCommand(['projects', 'recover', 'test']);
   });
 
   test('update name', async ({ testCliCommand }) => {

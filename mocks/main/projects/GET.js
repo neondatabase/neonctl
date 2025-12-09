@@ -5,6 +5,29 @@ export default function (req, res) {
     limit: '100',
   });
 
+  if (req.query.recoverable) {
+    return res.json({
+      projects: [
+        {
+          id: 'deleted-project-123456',
+          name: 'Deleted_Project_1',
+          region_id: 'aws-us-east-2',
+          created_at: '2019-01-01T00:00:00.000Z',
+          deleted_at: '2019-06-01T00:00:00.000Z',
+          recoverable_until: '2019-06-08T00:00:00.000Z',
+        },
+        {
+          id: 'deleted-project-789012',
+          name: 'Deleted_Project_2',
+          region_id: 'aws-us-west-2',
+          created_at: '2019-02-01T00:00:00.000Z',
+          deleted_at: '2019-06-02T00:00:00.000Z',
+          recoverable_until: '2019-06-09T00:00:00.000Z',
+        },
+      ],
+    });
+  }
+
   if (req.query.org_id) {
     expect(['org-2', 'org-3']).toContain(req.query.org_id);
 
