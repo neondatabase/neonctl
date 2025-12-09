@@ -58,6 +58,11 @@ export const builder = (argv: yargs.Argv) => {
             describe: 'List projects of a given organization',
             type: 'string',
           },
+          'recoverable-only': {
+            describe:
+              'List only deleted projects within their deletion grace period',
+            type: 'boolean',
+          },
         }),
       async (args) => {
         await handleMissingOrgId(args as any, list);
@@ -194,7 +199,9 @@ export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-const list = async (props: CommonProps & { orgId?: string }) => {
+const list = async (
+  props: CommonProps & { orgId?: string; recoverableOnly?: boolean },
+) => {
   const getList = async (
     fn:
       | typeof props.apiClient.listProjects
@@ -207,6 +214,7 @@ const list = async (props: CommonProps & { orgId?: string }) => {
       const { data } = await fn({
         limit: PROJECTS_LIST_LIMIT,
         org_id: props.orgId,
+        recoverable: props.recoverableOnly,
         cursor,
       });
       result.push(...data.projects);
@@ -225,20 +233,25 @@ const list = async (props: CommonProps & { orgId?: string }) => {
   };
 
   const ownedProjects = await getList(props.apiClient.listProjects);
-  const sharedProjects = props.orgId
-    ? []
-    : await getList(props.apiClient.listSharedProjects);
+  const sharedProjects =
+    props.orgId || props.recoverableOnly
+      ? []
+      : await getList(props.apiClient.listSharedProjects);
 
   const out = writer(props);
 
   out.write(ownedProjects, {
-    fields: PROJECT_FIELDS,
+    fields: props.recoverableOnly
+      ? ([...PROJECT_FIELDS, 'deleted_at', 'recoverable_until'] as const)
+      : PROJECT_FIELDS,
     title: 'Projects',
-    emptyMessage:
-      "You don't have any projects yet. See how to create a new project:\n> neonctl projects create --help",
+    emptyMessage: props.recoverableOnly
+      ? "You don't have any recoverable projects."
+      : "You don't have any projects yet. See how to create a new project:\n> neon projects create --help",
   });
 
-  if (!props.orgId) {
+  if (!props.orgId && !props.recoverableOnly) {
+    // We don't list shared projects when listing recoverable projects
     out.write(sharedProjects, {
       fields: PROJECT_FIELDS,
       title: 'Shared with you',
