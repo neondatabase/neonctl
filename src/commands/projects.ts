@@ -174,6 +174,14 @@ export const builder = (argv: yargs.Argv) => {
       },
     )
     .command(
+      'recover <id>',
+      'Recovers a deleted project during the deletion grace period',
+      (yargs) => yargs,
+      async (args) => {
+        await recover(args as any);
+      },
+    )
+    .command(
       'get <id>',
       'Get a project',
       (yargs) => yargs,
@@ -371,6 +379,11 @@ const update = async (
     project,
   });
 
+  writer(props).end(data.project, { fields: PROJECT_FIELDS });
+};
+
+const recover = async (props: CommonProps & IdOrNameProps) => {
+  const { data } = await props.apiClient.recoverProject(props.id);
   writer(props).end(data.project, { fields: PROJECT_FIELDS });
 };
 
