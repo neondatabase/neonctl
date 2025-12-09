@@ -1,4 +1,9 @@
-import { EndpointType } from '@neondatabase/api-client';
+import {
+  Database,
+  Endpoint,
+  EndpointType,
+  Role,
+} from '@neondatabase/api-client';
 import yargs from 'yargs';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
@@ -101,7 +106,7 @@ export const handler = async (
     data: { endpoints },
   } = await props.apiClient.listProjectBranchEndpoints(projectId, branchId);
   const matchEndpointType = props.endpointType ?? EndpointType.ReadWrite;
-  let endpoint = endpoints.find((e) => e.type === matchEndpointType);
+  let endpoint = endpoints.find((e: Endpoint) => e.type === matchEndpointType);
   if (!endpoint && props.endpointType == null) {
     endpoint = endpoints[0];
   }
@@ -126,7 +131,7 @@ export const handler = async (
         }
         throw new Error(
           `Multiple roles found for the branch, please provide one with the --role-name option: ${data.roles
-            .map((r) => r.name)
+            .map((r: Role) => r.name)
             .join(', ')}`,
         );
       }));
@@ -146,12 +151,12 @@ export const handler = async (
       }
       throw new Error(
         `Multiple databases found for the branch, please provide one with the --database-name option: ${branchDatabases
-          .map((d) => d.name)
+          .map((d: Database) => d.name)
           .join(', ')}`,
       );
     })();
 
-  if (!branchDatabases.find((d) => d.name === database)) {
+  if (!branchDatabases.find((d: Database) => d.name === database)) {
     throw new Error(`Database not found: ${database}`);
   }
 

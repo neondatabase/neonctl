@@ -1,6 +1,6 @@
 import { BranchScopeProps } from '../types';
 import { createPatch } from 'diff';
-import { Database } from '@neondatabase/api-client';
+import { Branch, Database } from '@neondatabase/api-client';
 import chalk from 'chalk';
 import { writer } from '../writer.js';
 import { branchIdFromProps } from '../utils/enrichers.js';
@@ -51,7 +51,9 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
 
   const baseDatabases = await fetchDatabases(baseBranch, props);
   if (props.database) {
-    const database = baseDatabases.find((db) => db.name === props.database);
+    const database = baseDatabases.find(
+      (db: Database) => db.name === props.database,
+    );
 
     if (!database) {
       throw new Error(
@@ -70,7 +72,7 @@ export const schemaDiff = async (props: SchemaDiffProps) => {
   }
 
   await Promise.all(
-    baseDatabases.map(async (database) => {
+    baseDatabases.map(async (database: Database) => {
       const patch = await createSchemaDiff(
         baseBranchPoint,
         pointInTime,
@@ -190,7 +192,7 @@ export const parseSchemaDiffParams = async (props: SchemaDiffProps) => {
         projectId: props.projectId,
       });
       const contextBranch = data.branches.find(
-        (b) => b.id === props.branch || b.name === props.branch,
+        (b: Branch) => b.id === props.branch || b.name === props.branch,
       );
 
       if (contextBranch?.parent_id == undefined) {
@@ -207,7 +209,7 @@ export const parseSchemaDiffParams = async (props: SchemaDiffProps) => {
       const { data } = await props.apiClient.listProjectBranches({
         projectId: props.projectId,
       });
-      const defaultBranch = data.branches.find((b) => b.default);
+      const defaultBranch = data.branches.find((b: Branch) => b.default);
 
       if (defaultBranch?.parent_id == undefined) {
         throw new Error(

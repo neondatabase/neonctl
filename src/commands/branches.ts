@@ -345,7 +345,7 @@ const create = async (
 
   const parentProps = (() => {
     if (!props.parent) {
-      const branch = branches.find((b) => b.default);
+      const branch = branches.find((b: Branch) => b.default);
       if (!branch) {
         throw new Error('No default branch found');
       }
@@ -364,7 +364,7 @@ const create = async (
       return { parent_id: props.parent };
     }
 
-    const branch = branches.find((b) => b.name === props.parent);
+    const branch = branches.find((b: Branch) => b.name === props.parent);
     if (!branch) {
       throw new Error(`Branch ${props.parent} not found`);
     }
@@ -409,7 +409,7 @@ const create = async (
     }),
   );
 
-  const parent = branches.find((b) => b.id === data.branch.parent_id);
+  const parent = branches.find((b: Branch) => b.id === data.branch.parent_id);
   if (parent?.protected) {
     log.warning(
       'The parent branch is protected; a unique role password has been generated for the new branch.',
