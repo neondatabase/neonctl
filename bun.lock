@@ -4,7 +4,7 @@
     "": {
       "name": "neonctl",
       "dependencies": {
-        "@neondatabase/api-client": "^2.6.0",
+        "@neondatabase/api-client": "2.6.0",
         "@segment/analytics-node": "^1.0.0-beta.26",
         "@yao-pkg/pkg": "^6.10.0",
         "axios": "^1.4.0",
