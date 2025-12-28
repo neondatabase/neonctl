@@ -6,6 +6,7 @@ import {
 } from '../types.js';
 import { looksLikeBranchId } from './formats.js';
 import { Branch } from '@neondatabase/api-client';
+import { isAxiosError } from 'axios';
 
 export const branchIdResolve = async ({
   branch,
@@ -66,23 +67,53 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
   return (props as any).branchId;
 };
 
-export const fillSingleProject = async (props: ProjectScopeProps) => {
+export const fillSingleProject = async (
+  props: ProjectScopeProps & { orgId?: string },
+) => {
   if (props.projectId) {
     return props;
   }
-  const { data } = await props.apiClient.listProjects({ limit: 2 });
-  if (data.projects.length === 0) {
-    throw new Error('No projects found');
+
+  // If no orgId is provided, try to auto-fill it if there's only one org
+  let orgId = props.orgId;
+  if (!orgId) {
+    const { data: orgsData } =
+      await props.apiClient.getCurrentUserOrganizations();
+    if (orgsData.organizations.length === 1) {
+      orgId = orgsData.organizations[0].id;
+    }
   }
-  if (data.projects.length > 1) {
-    throw new Error(
-      `Multiple projects found, please provide one with the --project-id option`,
-    );
+
+  try {
+    const { data } = await props.apiClient.listProjects({
+      limit: 2,
+      org_id: orgId,
+    });
+    if (data.projects.length === 0) {
+      throw new Error('No projects found');
+    }
+    if (data.projects.length > 1) {
+      throw new Error(
+        `Multiple projects found, please provide one with the --project-id option`,
+      );
+    }
+    return {
+      ...props,
+      projectId: data.projects[0].id,
+    };
+  } catch (error) {
+    // If the API error is about missing org_id, provide a user-friendly message
+    if (
+      isAxiosError(error) &&
+      error.response?.status === 400 &&
+      error.response?.data?.message?.includes('org_id is required')
+    ) {
+      throw new Error(
+        'Multiple projects found, please provide one with the --project-id option',
+      );
+    }
+    throw error;
   }
-  return {
-    ...props,
-    projectId: data.projects[0].id,
-  };
 };
 
 export const fillSingleOrg = async (props: OrgScopeProps) => {
