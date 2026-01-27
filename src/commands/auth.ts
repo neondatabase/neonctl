@@ -155,8 +155,8 @@ export const ensureAuth = async (
     help: boolean;
   },
 ) => {
-  // Skip auth for help command, no command, or init command
-  if (props._.length === 0 || props.help || props._[0] === 'init') {
+  // Skip auth for help command or no command
+  if (props._.length === 0 || props.help) {
     return;
   }
 
