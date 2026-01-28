@@ -5,7 +5,7 @@
     "url": "git+ssh://git@github.com/neondatabase/neonctl.git"
   },
   "type": "module",
-  "version": "2.20.0",
+  "version": "2.20.1",
   "description": "CLI tool for NeonDB Cloud management",
   "main": "index.js",
   "author": "NeonDB",
