@@ -19,7 +19,8 @@ type AuthProps = {
   oauthHost: string;
   apiHost: string;
   clientId: string;
-  forceAuth: boolean;
+  forceAuth?: boolean;
+  'force-auth'?: boolean;
   allowUnsafeTls?: boolean;
 };
 
@@ -40,9 +41,11 @@ export const authFlow = async ({
   clientId,
   apiHost,
   forceAuth,
+  'force-auth': forceAuthKebab,
   allowUnsafeTls,
 }: AuthProps) => {
-  if (!forceAuth && isCi()) {
+  const allowInteractiveAuth = forceAuth ?? forceAuthKebab;
+  if (!allowInteractiveAuth && isCi()) {
     throw new Error('Cannot run interactive auth in CI');
   }
   const tokenSet = await auth({
