@@ -14,7 +14,7 @@
         "cli-table": "^0.3.11",
         "crypto-random-string": "^5.0.0",
         "diff": "^5.2.0",
-        "neon-init": "^0.13.0",
+        "neon-init": "^0.13.1",
         "open": "^10.1.0",
         "openid-client": "^6.8.1",
         "prompts": "2.4.2",
@@ -1210,7 +1210,7 @@
 
     "neo-async": ["neo-async@2.6.2", "", {}, "sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw=="],
 
-    "neon-init": ["neon-init@0.13.0", "", { "dependencies": { "@clack/prompts": "0.10.1", "execa": "^9.5.2", "yargs": "^18.0.0", "yoctocolors": "^2.1.2" }, "bin": { "neon-init": "dist/cli.js" } }, "sha512-PXSOTm5NvBWoahq9P/cIIR16hWLytAIFfIRNkD1YAyE6gjhcBsqGRa/YJCDf5RGQHUZfd2xE4i0QcnOb0SRGsQ=="],
+    "neon-init": ["neon-init@0.13.1", "", { "dependencies": { "@clack/prompts": "0.10.1", "execa": "^9.5.2", "yargs": "^18.0.0", "yoctocolors": "^2.1.2" }, "bin": { "neon-init": "dist/cli.js" } }, "sha512-XKiE/ClM4dQJfTKhQxmjbMzav8acTvJTW48H5eRTEvPEv3Uh8NcGkqtDv2kfAaXFjthyEk76xfFKyAZAhIWkmA=="],
 
     "nerf-dart": ["nerf-dart@1.0.0", "", {}, "sha512-EZSPZB70jiVsivaBLYDCyntd5eH8NTSMOn3rB+HxwdmKThGELLdYv8qVIMWvZEFy9w8ZZpW9h9OB32l1rGtj7g=="],
 
