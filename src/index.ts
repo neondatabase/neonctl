@@ -121,6 +121,12 @@ builder = builder
       type: 'boolean',
       default: true,
     },
+    analytics: {
+      describe: 'Manage analytics. Example: --no-analytics, --analytics false',
+      group: 'Global options:',
+      type: 'boolean',
+      default: true,
+    },
   })
   .middleware((args) => {
     fillInArgs(args);
@@ -144,15 +150,9 @@ builder = builder
   })
   .middleware(ensureAuth)
   .middleware(enrichFromContext as any)
+  .middleware(analyticsMiddleware)
   .command(commands as any)
   .strictCommands()
-  .option('analytics', {
-    describe: 'Manage analytics. Example: --no-analytics, --analytics false',
-    group: 'Global options:',
-    type: 'boolean',
-    default: true,
-  })
-  .middleware(analyticsMiddleware, true)
   .version(pkg.version)
   .group('version', 'Global options:')
   .alias('version', 'v')
