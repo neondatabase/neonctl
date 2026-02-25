@@ -17,6 +17,33 @@ let client: Analytics | undefined;
 let clientInitialized = false;
 let userId = '';
 
+/**
+ * Phase 1: Run before validation so the Segment client exists if any
+ * middleware (e.g. auth) fails. Enables sendError() in the fail handler.
+ * Does not resolve user id or send CLI Started.
+ */
+export const initAnalyticsClientMiddleware = (args: {
+  analytics: boolean;
+  [key: string]: unknown;
+}) => {
+  if (!args.analytics || clientInitialized) {
+    return;
+  }
+  clientInitialized = true;
+  client = new Analytics({
+    writeKey: WRITE_KEY,
+    host: 'https://track.neon.tech',
+  });
+  log.debug('Initialized CLI analytics client');
+  client.identify({
+    userId: 'anonymous',
+  });
+};
+
+/**
+ * Phase 2: Run after auth. Resolves user id from credentials,
+ * identifies the user, and sends CLI Started.
+ */
 export const analyticsMiddleware = async (args: {
   analytics: boolean;
   apiKey?: string;
@@ -25,11 +52,10 @@ export const analyticsMiddleware = async (args: {
   _: (string | number)[];
   [key: string]: unknown;
 }) => {
-  if (!args.analytics || clientInitialized) {
+  if (!client || !args.analytics) {
     return;
   }
 
-  clientInitialized = true;
   try {
     const credentialsPath = join(args.configDir, CREDENTIALS_FILE);
     const credentials = readFileSync(credentialsPath, { encoding: 'utf-8' });
@@ -64,13 +90,6 @@ export const analyticsMiddleware = async (args: {
   } catch (err) {
     log.debug('Failed to get user id from api', err);
   }
-
-  client = new Analytics({
-    writeKey: WRITE_KEY,
-    host: 'https://track.neon.tech',
-  });
-
-  log.debug('Initialized CLI analytics');
 
   client.identify({
     userId: userId?.toString() ?? 'anonymous',
