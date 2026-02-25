@@ -24,6 +24,7 @@ import pkg from './pkg.js';
 import commands from './commands/index.js';
 import {
   analyticsMiddleware,
+  initAnalyticsClientMiddleware,
   closeAnalytics,
   getAnalyticsEventProperties,
   sendError,
@@ -131,6 +132,7 @@ builder = builder
   .middleware((args) => {
     fillInArgs(args);
   }, true)
+  .middleware(initAnalyticsClientMiddleware, true)
   .help(false)
   .group('help', 'Global options:')
   .option('help', {
