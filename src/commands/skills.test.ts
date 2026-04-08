@@ -1,8 +1,28 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { existsSync } from 'node:fs';
 
-import { parseFrontmatter, parseBody, validateName } from './skills.js';
+import {
+  parseFrontmatter,
+  parseBody,
+  getInstallStatus,
+  validateName,
+} from './skills.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(() => false) };
+});
+
+const existsSyncMock = vi.mocked(existsSync);
 
 describe('skills', () => {
+  beforeEach(() => {
+    existsSyncMock.mockReset();
+    existsSyncMock.mockReturnValue(false);
+  });
+
   describe('validateName', () => {
     it('accepts valid skill names', () => {
       expect(validateName('neon-postgres')).toBe('neon-postgres');
@@ -151,6 +171,38 @@ describe('skills', () => {
     it('handles \\r\\n line endings', () => {
       const content = '---\r\nname: test\r\n---\r\nBody content here';
       expect(parseBody(content)).toBe('Body content here');
+    });
+  });
+
+  describe('getInstallStatus', () => {
+    it('returns empty string when not installed', () => {
+      expect(getInstallStatus('my-skill')).toBe('');
+    });
+
+    it('returns "local" when installed locally', () => {
+      existsSyncMock.mockImplementation(
+        (path) =>
+          path ===
+          resolve(join(process.cwd(), '.agents', 'skills', 'my-skill')),
+      );
+      expect(getInstallStatus('my-skill')).toBe('local');
+    });
+
+    it('returns "global" when installed globally', () => {
+      existsSyncMock.mockImplementation(
+        (path) =>
+          path === resolve(join(homedir(), '.agents', 'skills', 'my-skill')),
+      );
+      expect(getInstallStatus('my-skill')).toBe('global');
+    });
+
+    it('returns "local, global" when installed in both locations', () => {
+      existsSyncMock.mockReturnValue(true);
+      expect(getInstallStatus('my-skill')).toBe('local, global');
+    });
+
+    it('returns empty string for invalid names instead of throwing', () => {
+      expect(getInstallStatus('../../etc')).toBe('');
     });
   });
 });
