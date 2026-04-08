@@ -2,6 +2,7 @@ import {
   NeonAuthSupportedAuthProvider,
   NeonAuthCreateIntegrationResponse,
   NeonAuthIntegration,
+  NeonAuthOauthProviderId,
 } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 import chalk from 'chalk';
@@ -44,6 +45,12 @@ const INTEGRATION_STATUS_FIELDS = [
   'created_at',
   'jwks_url',
 ] as const;
+
+const OAUTH_PROVIDER_FIELDS = ['id', 'type', 'client_id'] as const;
+
+const DOMAIN_FIELDS = ['domain'] as const;
+
+const USER_RESPONSE_FIELDS = ['id'] as const;
 
 export const command = 'neon-auth';
 export const describe = 'Manage Neon Auth';
@@ -98,7 +105,177 @@ export const builder = (argv: yargs.Argv) => {
       async (args) => {
         await disable(args as any);
       },
-    );
+    )
+    .command('oauth-provider', 'Manage OAuth providers', (yargs) => {
+      return yargs
+        .command(
+          'list',
+          'List OAuth providers',
+          (yargs) => yargs,
+          async (args) => {
+            await oauthProviderList(args as any);
+          },
+        )
+        .command(
+          'add',
+          'Add an OAuth provider',
+          (yargs) =>
+            yargs.options({
+              'provider-id': {
+                describe: 'OAuth provider',
+                type: 'string',
+                choices: Object.values(NeonAuthOauthProviderId),
+                demandOption: true,
+              },
+              'oauth-client-id': {
+                describe: 'OAuth client ID',
+                type: 'string',
+              },
+              'oauth-client-secret': {
+                describe: 'OAuth client secret',
+                type: 'string',
+              },
+              'microsoft-tenant-id': {
+                describe: 'Microsoft tenant ID (for Microsoft provider)',
+                type: 'string',
+              },
+            }),
+          async (args) => {
+            await oauthProviderAdd(args as any);
+          },
+        )
+        .command(
+          'update',
+          'Update an OAuth provider',
+          (yargs) =>
+            yargs.options({
+              'provider-id': {
+                describe: 'OAuth provider',
+                type: 'string',
+                choices: Object.values(NeonAuthOauthProviderId),
+                demandOption: true,
+              },
+              'oauth-client-id': {
+                describe: 'OAuth client ID',
+                type: 'string',
+              },
+              'oauth-client-secret': {
+                describe: 'OAuth client secret',
+                type: 'string',
+              },
+              'microsoft-tenant-id': {
+                describe: 'Microsoft tenant ID (for Microsoft provider)',
+                type: 'string',
+              },
+            }),
+          async (args) => {
+            await oauthProviderUpdate(args as any);
+          },
+        )
+        .command(
+          'delete',
+          'Delete an OAuth provider',
+          (yargs) =>
+            yargs.options({
+              'provider-id': {
+                describe: 'OAuth provider',
+                type: 'string',
+                choices: Object.values(NeonAuthOauthProviderId),
+                demandOption: true,
+              },
+            }),
+          async (args) => {
+            await oauthProviderDelete(args as any);
+          },
+        );
+    })
+    .command('domain', 'Manage redirect URI trusted domains', (yargs) => {
+      return yargs
+        .command(
+          'list',
+          'List trusted domains',
+          (yargs) => yargs,
+          async (args) => {
+            await domainList(args as any);
+          },
+        )
+        .command(
+          'add',
+          'Add a trusted domain',
+          (yargs) =>
+            yargs.options({
+              domain: {
+                describe: 'Domain to add',
+                type: 'string',
+                demandOption: true,
+              },
+            }),
+          async (args) => {
+            await domainAdd(args as any);
+          },
+        )
+        .command(
+          'remove',
+          'Remove a trusted domain',
+          (yargs) =>
+            yargs.options({
+              domain: {
+                describe: 'Domain to remove',
+                type: 'string',
+                demandOption: true,
+              },
+            }),
+          async (args) => {
+            await domainRemove(args as any);
+          },
+        );
+    })
+    .command('user', 'Manage Neon Auth users', (yargs) => {
+      return yargs
+        .command(
+          'create',
+          'Create an auth user',
+          (yargs) =>
+            yargs.options({
+              email: {
+                describe: 'User email address',
+                type: 'string',
+                demandOption: true,
+              },
+              name: {
+                describe: 'User display name',
+                type: 'string',
+              },
+            }),
+          async (args) => {
+            await userCreate(args as any);
+          },
+        )
+        .command(
+          'delete <user-id>',
+          'Delete an auth user',
+          (yargs) => yargs,
+          async (args) => {
+            await userDelete(args as any);
+          },
+        )
+        .command(
+          'set-role <user-id>',
+          'Set roles for an auth user',
+          (yargs) =>
+            yargs.options({
+              roles: {
+                describe: 'Roles to assign',
+                type: 'string',
+                array: true,
+                demandOption: true,
+              },
+            }),
+          async (args) => {
+            await userSetRole(args as any);
+          },
+        );
+    });
 };
 
 export const handler = (args: yargs.Argv) => {
@@ -199,4 +376,148 @@ const disable = async (props: AuthBranchProps & { deleteData: boolean }) => {
     }),
   );
   printMessage('Neon Auth has been disabled');
+};
+
+// --- OAuth provider ---
+
+const oauthProviderList = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.listBranchNeonAuthOauthProviders(
+    props.projectId,
+    branchId,
+  );
+  writer(props).end(data.providers, { fields: OAUTH_PROVIDER_FIELDS });
+};
+
+const oauthProviderAdd = async (
+  props: AuthBranchProps & {
+    providerId: string;
+    oauthClientId?: string;
+    oauthClientSecret?: string;
+    microsoftTenantId?: string;
+  },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.addBranchNeonAuthOauthProvider(
+    props.projectId,
+    branchId,
+    {
+      id: props.providerId as NeonAuthOauthProviderId,
+      client_id: props.oauthClientId,
+      client_secret: props.oauthClientSecret,
+      microsoft_tenant_id: props.microsoftTenantId,
+    },
+  );
+  writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
+};
+
+const oauthProviderUpdate = async (
+  props: AuthBranchProps & {
+    providerId: string;
+    oauthClientId?: string;
+    oauthClientSecret?: string;
+    microsoftTenantId?: string;
+  },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.updateBranchNeonAuthOauthProvider(
+    props.projectId,
+    branchId,
+    props.providerId as NeonAuthOauthProviderId,
+    {
+      client_id: props.oauthClientId,
+      client_secret: props.oauthClientSecret,
+      microsoft_tenant_id: props.microsoftTenantId,
+    },
+  );
+  writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
+};
+
+const oauthProviderDelete = async (
+  props: AuthBranchProps & { providerId: string },
+) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.deleteBranchNeonAuthOauthProvider(
+    props.projectId,
+    branchId,
+    props.providerId as NeonAuthOauthProviderId,
+  );
+  log.info(`OAuth provider "${props.providerId}" deleted`);
+};
+
+// --- Domains ---
+
+const domainList = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.listBranchNeonAuthTrustedDomains(
+    props.projectId,
+    branchId,
+  );
+  writer(props).end(data.domains, { fields: DOMAIN_FIELDS });
+};
+
+const domainAdd = async (props: AuthBranchProps & { domain: string }) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.addBranchNeonAuthTrustedDomain(
+    props.projectId,
+    branchId,
+    {
+      domain: props.domain,
+      auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
+    },
+  );
+  log.info(`Domain "${props.domain}" added`);
+};
+
+const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.deleteBranchNeonAuthTrustedDomain(
+    props.projectId,
+    branchId,
+    {
+      auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
+      domains: [{ domain: props.domain }],
+    },
+  );
+  log.info(`Domain "${props.domain}" removed`);
+};
+
+// --- User ---
+
+const userCreate = async (
+  props: AuthBranchProps & { email: string; name?: string },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.createBranchNeonAuthNewUser(
+    props.projectId,
+    branchId,
+    {
+      email: props.email,
+      name: props.name,
+    },
+  );
+  writer(props).end(data, { fields: USER_RESPONSE_FIELDS });
+};
+
+const userDelete = async (props: AuthBranchProps & { userId: string }) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.deleteBranchNeonAuthUser(
+    props.projectId,
+    branchId,
+    props.userId,
+  );
+  log.info(`User "${props.userId}" deleted`);
+};
+
+const userSetRole = async (
+  props: AuthBranchProps & { userId: string; roles: string[] },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.updateNeonAuthUserRole(
+    props.projectId,
+    branchId,
+    props.userId,
+    { roles: props.roles },
+  );
+  writer(props).end(data, { fields: USER_RESPONSE_FIELDS });
 };

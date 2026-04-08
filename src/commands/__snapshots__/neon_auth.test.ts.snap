@@ -14,6 +14,16 @@ Neon Auth has been disabled
 "
 `;
 
+exports[`neon-auth > domain add 1`] = `""`;
+
+exports[`neon-auth > domain list 1`] = `
+"- domain: https://example.com
+- domain: https://app.example.com
+"
+`;
+
+exports[`neon-auth > domain remove 1`] = `""`;
+
 exports[`neon-auth > enable 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
@@ -37,6 +47,32 @@ jwks_url: https://auth.test.neon.tech/.well-known/jwks.json
 "
 `;
 
+exports[`neon-auth > oauth-provider add 1`] = `
+"id: google
+type: shared
+client_id: ""
+"
+`;
+
+exports[`neon-auth > oauth-provider delete 1`] = `""`;
+
+exports[`neon-auth > oauth-provider list 1`] = `
+"- id: google
+  type: shared
+  client_id: ""
+- id: github
+  type: shared
+  client_id: ""
+"
+`;
+
+exports[`neon-auth > oauth-provider update 1`] = `
+"id: google
+type: standard
+client_id: my-client-id
+"
+`;
+
 exports[`neon-auth > status 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
@@ -52,5 +88,17 @@ exports[`neon-auth > status not configured 1`] = `
 "
 Neon Auth is not configured for this branch
 
+"
+`;
+
+exports[`neon-auth > user create 1`] = `
+"id: test-user-id
+"
+`;
+
+exports[`neon-auth > user delete 1`] = `""`;
+
+exports[`neon-auth > user set-role 1`] = `
+"id: test-user-id
 "
 `;
