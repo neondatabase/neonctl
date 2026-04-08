@@ -1,0 +1,14 @@
+{
+  "providers": [
+    {
+      "id": "google",
+      "type": "shared",
+      "client_id": ""
+    },
+    {
+      "id": "github",
+      "type": "shared",
+      "client_id": ""
+    }
+  ]
+}

@@ -2,6 +2,8 @@ import { describe } from 'vitest';
 import { test } from '../test_utils/fixtures';
 
 describe('neon-auth', () => {
+  // --- Enable / Status / Disable ---
+
   test('enable', async ({ testCliCommand }) => {
     await testCliCommand([
       'neon-auth',
@@ -76,5 +78,171 @@ describe('neon-auth', () => {
       ],
       { mockDir: 'neon-auth-delete-data' },
     );
+  });
+
+  // --- OAuth Provider ---
+
+  test('oauth-provider list', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'oauth-provider',
+      'list',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('oauth-provider add', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'oauth-provider',
+      'add',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--provider-id',
+      'google',
+    ]);
+  });
+
+  test('oauth-provider update', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'oauth-provider',
+      'update',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--provider-id',
+      'google',
+      '--oauth-client-id',
+      'my-client-id',
+    ]);
+  });
+
+  test('oauth-provider delete', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'neon-auth',
+        'oauth-provider',
+        'delete',
+        '--project-id',
+        'test',
+        '--branch',
+        'test_branch',
+        '--provider-id',
+        'google',
+      ],
+      {
+        stderr: 'INFO: OAuth provider "google" deleted',
+      },
+    );
+  });
+
+  // --- Domain ---
+
+  test('domain list', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'domain',
+      'list',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('domain add', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'neon-auth',
+        'domain',
+        'add',
+        '--project-id',
+        'test',
+        '--branch',
+        'test_branch',
+        '--domain',
+        'https://myapp.com',
+      ],
+      {
+        stderr: 'INFO: Domain "https://myapp.com" added',
+      },
+    );
+  });
+
+  test('domain remove', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'neon-auth',
+        'domain',
+        'remove',
+        '--project-id',
+        'test',
+        '--branch',
+        'test_branch',
+        '--domain',
+        'https://myapp.com',
+      ],
+      {
+        stderr: 'INFO: Domain "https://myapp.com" removed',
+      },
+    );
+  });
+
+  // --- User ---
+
+  test('user create', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'user',
+      'create',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--email',
+      'test@example.com',
+      '--name',
+      'Test User',
+    ]);
+  });
+
+  test('user delete', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'neon-auth',
+        'user',
+        'delete',
+        'test-user-id',
+        '--project-id',
+        'test',
+        '--branch',
+        'test_branch',
+      ],
+      {
+        stderr: 'INFO: User "test-user-id" deleted',
+      },
+    );
+  });
+
+  test('user set-role', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'user',
+      'set-role',
+      'test-user-id',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--roles',
+      'admin',
+    ]);
   });
 });
