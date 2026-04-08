@@ -16,13 +16,36 @@ type SkillMeta = {
   description: string;
   compatibility?: string;
   license?: string;
+  installed?: string;
 };
 
 type OutputProps = {
   output: 'json' | 'yaml' | 'table';
 };
 
-const SKILL_FIELDS = ['name', 'description'] as const;
+const LIST_FIELDS = [
+  'name',
+  'description',
+  'compatibility',
+  'installed',
+] as const;
+
+const GET_FIELDS = [
+  'name',
+  'description',
+  'compatibility',
+  'license',
+  'installed',
+] as const;
+
+const GET_FIELDS_FULL = [
+  'name',
+  'description',
+  'compatibility',
+  'license',
+  'installed',
+  'body',
+] as const;
 
 const VALID_NAME = /^[a-z0-9][a-z0-9._-]*$/;
 
@@ -83,6 +106,19 @@ export function parseBody(content: string): string {
   return match ? match[1].trim() : content;
 }
 
+export function getInstallStatus(skillName: string): string {
+  try {
+    const localBase = join(process.cwd(), '.agents', 'skills');
+    const globalBase = join(homedir(), '.agents', 'skills');
+    const locations: string[] = [];
+    if (existsSync(safePath(localBase, skillName))) locations.push('local');
+    if (existsSync(safePath(globalBase, skillName))) locations.push('global');
+    return locations.join(', ') || '';
+  } catch {
+    return '';
+  }
+}
+
 async function fetchSkillDirs(): Promise<string[]> {
   const response = await fetch(GITHUB_API, {
     headers: { Accept: 'application/vnd.github.v3+json' },
@@ -135,28 +171,42 @@ async function downloadDir(remotePath: string, localPath: string) {
 
 // --- Subcommand handlers ---
 
-const list = async (props: OutputProps) => {
+const list = async (props: OutputProps & { search?: string }) => {
   const dirs = await fetchSkillDirs();
-  const skills: SkillMeta[] = await Promise.all(
+  let skills: SkillMeta[] = await Promise.all(
     dirs.map(async (name) => {
       try {
         const content = await fetchSkillMd(name);
-        return parseFrontmatter(content);
+        const meta = parseFrontmatter(content);
+        meta.installed = getInstallStatus(name) || undefined;
+        return meta;
       } catch {
         return {
           name,
           description: '(unable to fetch)',
           compatibility: undefined,
           license: undefined,
+          installed: getInstallStatus(name) || undefined,
         };
       }
     }),
   );
 
+  if (props.search) {
+    const term = props.search.toLowerCase();
+    skills = skills.filter(
+      (s) =>
+        s.name.toLowerCase().includes(term) ||
+        s.description.toLowerCase().includes(term),
+    );
+  }
+
   writer(props).end(skills, {
-    fields: SKILL_FIELDS,
+    fields: LIST_FIELDS,
     title: 'Available Skills',
-    emptyMessage: 'No skills found',
+    emptyMessage: props.search
+      ? `No skills matching "${props.search}"`
+      : 'No skills found',
   });
 };
 
@@ -165,23 +215,20 @@ const get = async (props: OutputProps & { name: string }) => {
   const content = await fetchSkillMd(props.name);
   const meta = parseFrontmatter(content);
   const body = parseBody(content);
+  const installed = getInstallStatus(props.name);
+
+  const skillData = { ...meta, installed: installed || undefined };
 
   if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(
-      { ...meta, body },
-      {
-        fields: [
-          'name',
-          'description',
-          'compatibility',
-          'license',
-          'body',
-        ] as any,
-      },
-    );
+    writer(props).end({ ...skillData, body }, { fields: GET_FIELDS_FULL });
   } else {
-    process.stdout.write(content);
-    process.stdout.write('\n');
+    const w = writer(props);
+    w.write(skillData, {
+      fields: GET_FIELDS,
+      title: meta.name || props.name,
+    });
+    w.end();
+    process.stdout.write('\n' + body + '\n');
   }
 };
 
@@ -220,7 +267,12 @@ export const builder = (argv: yargs.Argv) =>
     .command(
       'list',
       'List available Neon agent skills',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.option('search', {
+          alias: 's',
+          describe: 'Filter skills by name or description',
+          type: 'string',
+        }),
       (args) => list(args as any),
     )
     .command(
