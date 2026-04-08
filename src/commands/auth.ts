@@ -163,6 +163,11 @@ export const ensureAuth = async (
     return;
   }
 
+  // Skills command doesn't need Neon API auth
+  if (props._[0] === 'skills' || props._[0] === 'skill') {
+    return;
+  }
+
   // Use existing API key or handle auth command
   if (props.apiKey || props._[0] === 'auth') {
     if (props.apiKey) {
