@@ -11,6 +11,7 @@ import * as operations from './operations.js';
 import * as cs from './connection_string.js';
 import * as setContext from './set_context.js';
 import * as init from './init.js';
+import * as neonAuth from './neon_auth.js';
 
 export default [
   auth,
@@ -19,6 +20,7 @@ export default [
   projects,
   ipAllow,
   vpcEndpoints,
+  neonAuth,
   branches,
   databases,
   roles,
