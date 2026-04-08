@@ -178,6 +178,92 @@ describe('neon-auth', () => {
     ]);
   });
 
+  // --- Email and Password ---
+
+  test('email-password get', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'email-password',
+      'get',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('email-password update', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'email-password',
+      'update',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--enabled',
+      '--require-email-verification',
+    ]);
+  });
+
+  // --- Email Provider ---
+
+  test('email-provider get', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'email-provider',
+      'get',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('email-provider update', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'email-provider',
+      'update',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--type',
+      'shared',
+      '--sender-email',
+      'noreply@test.com',
+      '--sender-name',
+      'Test App',
+    ]);
+  });
+
+  test('email-provider test', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'email-provider',
+      'test',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--recipient-email',
+      'user@test.com',
+      '--host',
+      'smtp.test.com',
+      '--port',
+      '587',
+      '--username',
+      'smtp-user',
+      '--password',
+      'smtp-pass',
+      '--sender-email',
+      'noreply@test.com',
+      '--sender-name',
+      'Test App',
+    ]);
+  });
+
   // --- Allow localhost ---
 
   test('domain allow-localhost get', async ({ testCliCommand }) => {
@@ -206,6 +292,20 @@ describe('neon-auth', () => {
     ]);
   });
 
+  // --- Organization ---
+
+  test('organization get', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'organization',
+      'get',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
   test('domain allow-localhost disable', async ({ testCliCommand }) => {
     await testCliCommand([
       'neon-auth',
@@ -218,6 +318,53 @@ describe('neon-auth', () => {
       'test_branch',
     ]);
   });
+
+  test('organization update', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'organization',
+      'update',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--enabled',
+      '--organization-limit',
+      '10',
+    ]);
+  });
+
+  // --- Webhook ---
+
+  test('webhook get', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'webhook',
+      'get',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('webhook update', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'webhook',
+      'update',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--enabled',
+      '--webhook-url',
+      'https://hooks.test.com/webhook',
+      '--enabled-events',
+      'user.created',
+    ]);
+  });
+
 
   // --- User ---
 
