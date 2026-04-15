@@ -437,6 +437,7 @@ const oauthProviderAdd = async (
     throw err;
   }
   writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
+  await printCallbackInstructions(props, branchId, props.providerId);
 };
 
 const oauthProviderUpdate = async (
@@ -464,6 +465,51 @@ const oauthProviderUpdate = async (
     },
   );
   writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
+  await printCallbackInstructions(props, branchId, props.providerId);
+};
+
+const CALLBACK_INSTRUCTIONS: Record<
+  string,
+  { lead: string; urlLabel: string }
+> = {
+  github: {
+    lead: 'Create an OAuth app in the GitHub Developer Portal and add the following authorization callback URL:',
+    urlLabel: 'callback/github',
+  },
+  vercel: {
+    lead: 'Create a Vercel App in your Vercel Dashboard and add the following authorization callback URL:',
+    urlLabel: 'callback/vercel',
+  },
+  google: {
+    lead: 'Get Google credentials by creating an OAuth client in Google Cloud Console > Credentials, and add the following authorized redirect URL:',
+    urlLabel: 'callback/google',
+  },
+};
+
+const printCallbackInstructions = async (
+  props: AuthBranchProps,
+  branchId: string,
+  providerId: string,
+) => {
+  const instructions = CALLBACK_INSTRUCTIONS[providerId];
+  if (!instructions) return;
+  if (props.output === 'json' || props.output === 'yaml') return;
+
+  let baseUrl: string | undefined;
+  try {
+    const { data } = await props.apiClient.getNeonAuth(
+      props.projectId,
+      branchId,
+    );
+    baseUrl = data.base_url;
+  } catch {
+    return;
+  }
+  if (!baseUrl) return;
+
+  const callbackUrl = `${baseUrl}/${instructions.urlLabel}`;
+  process.stdout.write(`\n  ${chalk.green(instructions.lead)}\n`);
+  process.stdout.write(`  ${callbackUrl}\n\n`);
 };
 
 const oauthProviderDelete = async (
