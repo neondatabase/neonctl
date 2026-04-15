@@ -570,6 +570,12 @@ const domainList = async (props: AuthBranchProps) => {
     props.projectId,
     branchId,
   );
+  if (data.domains.length === 0 && props.output === 'table') {
+    process.stdout.write(
+      `\n${chalk.green('No trusted domains are configured for this branch.')}\n\n`,
+    );
+    return;
+  }
   writer(props).end(data.domains, { fields: DOMAIN_FIELDS });
 };
 
