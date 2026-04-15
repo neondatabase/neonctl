@@ -3,6 +3,7 @@ import {
   NeonAuthCreateIntegrationResponse,
   NeonAuthIntegration,
   NeonAuthOauthProviderId,
+  NeonAuthOauthProviderType,
 } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 import chalk from 'chalk';
@@ -385,6 +386,11 @@ const disable = async (props: AuthBranchProps & { deleteData: boolean }) => {
 
 // --- OAuth provider ---
 
+const SHARED_PROVIDER_DISCLAIMER =
+  'Caution: Shared keys are created by the Neon team for development only ' +
+  'and should not be used for production apps. It helps you get started, ' +
+  'but will show Neon branding (logo and name) on the OAuth consent screen.';
+
 const oauthProviderList = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
   const { data } = await props.apiClient.listBranchNeonAuthOauthProviders(
@@ -392,6 +398,14 @@ const oauthProviderList = async (props: AuthBranchProps) => {
     branchId,
   );
   writer(props).end(data.providers, { fields: OAUTH_PROVIDER_FIELDS });
+  const hasShared = data.providers.some(
+    (p) => p.type === NeonAuthOauthProviderType.Shared,
+  );
+  if (hasShared && props.output === 'table') {
+    process.stdout.write(
+      `\n  ${chalk.yellow('Caution:')} ${SHARED_PROVIDER_DISCLAIMER.slice('Caution: '.length)}\n\n`,
+    );
+  }
 };
 
 const oauthProviderAdd = async (
