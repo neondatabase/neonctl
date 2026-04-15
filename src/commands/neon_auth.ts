@@ -611,6 +611,16 @@ const domainAdd = async (props: AuthBranchProps & { domain: string }) => {
 const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
   validateDomainUri(props.domain);
   const branchId = await resolveBranch(props);
+  const { data: existing } =
+    await props.apiClient.listBranchNeonAuthTrustedDomains(
+      props.projectId,
+      branchId,
+    );
+  if (!existing.domains.some((d) => d.domain === props.domain)) {
+    throw new Error(
+      `Domain "${props.domain}" is not in the trusted domains list.`,
+    );
+  }
   await props.apiClient.deleteBranchNeonAuthTrustedDomain(
     props.projectId,
     branchId,
