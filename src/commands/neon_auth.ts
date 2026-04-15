@@ -303,239 +303,248 @@ export const builder = (argv: yargs.Argv) => {
               ),
         );
     })
-    .command(
-      'email-password',
-      'Manage email and password authentication settings',
-      (yargs) => {
-        return yargs
-          .command(
-            'get',
-            'Get email and password config',
-            (yargs) => yargs,
-            async (args) => {
-              await emailPasswordGet(args as any);
-            },
-          )
-          .command(
-            'update',
-            'Update email and password config',
-            (yargs) =>
-              yargs.options({
-                enabled: {
-                  describe: 'Enable email and password authentication',
-                  type: 'boolean',
-                },
-                'email-verification-method': {
-                  describe: 'Email verification method',
-                  type: 'string',
-                  choices: Object.values(NeonAuthEmailVerificationMethod),
-                },
-                'require-email-verification': {
-                  describe:
-                    'Require email verification before users can sign in',
-                  type: 'boolean',
-                },
-                'auto-sign-in-after-verification': {
-                  describe: 'Auto sign in users after verifying their email',
-                  type: 'boolean',
-                },
-                'send-verification-email-on-sign-up': {
-                  describe: 'Send verification email on sign up',
-                  type: 'boolean',
-                },
-                'send-verification-email-on-sign-in': {
-                  describe: 'Send verification email on sign in',
-                  type: 'boolean',
-                },
-                'disable-sign-up': {
-                  describe: 'Disable new user sign ups',
-                  type: 'boolean',
-                },
-              }),
-            async (args) => {
-              await emailPasswordUpdate(args as any);
-            },
-          );
-      },
-    )
-    .command(
-      'email-provider',
-      'Manage email provider configuration',
-      (yargs) => {
-        return yargs
-          .command(
-            'get',
-            'Get email provider config',
-            (yargs) => yargs,
-            async (args) => {
-              await emailProviderGet(args as any);
-            },
-          )
-          .command(
-            'update',
-            'Update email provider config',
-            (yargs) =>
-              yargs.options({
-                type: {
-                  describe: 'Email provider type',
-                  type: 'string',
-                  choices: ['standard', 'shared'] as const,
-                  demandOption: true,
-                },
-                host: {
-                  describe: 'SMTP host (required for standard)',
-                  type: 'string',
-                },
-                port: {
-                  describe: 'SMTP port (required for standard)',
-                  type: 'number',
-                },
-                username: {
-                  describe: 'SMTP username (required for standard)',
-                  type: 'string',
-                },
-                password: {
-                  describe: 'SMTP password (required for standard)',
-                  type: 'string',
-                },
-                'sender-email': {
-                  describe: 'Sender email address',
-                  type: 'string',
-                },
-                'sender-name': {
-                  describe: 'Sender display name',
-                  type: 'string',
-                },
-              }),
-            async (args) => {
-              await emailProviderUpdate(args as any);
-            },
-          )
-          .command(
-            'test',
-            'Send a test email',
-            (yargs) =>
-              yargs.options({
-                'recipient-email': {
-                  describe: 'Email address to send test email to',
-                  type: 'string',
-                  demandOption: true,
-                },
-                host: {
-                  describe: 'SMTP host',
-                  type: 'string',
-                  demandOption: true,
-                },
-                port: {
-                  describe: 'SMTP port',
-                  type: 'number',
-                  demandOption: true,
-                },
-                username: {
-                  describe: 'SMTP username',
-                  type: 'string',
-                  demandOption: true,
-                },
-                password: {
-                  describe: 'SMTP password',
-                  type: 'string',
-                  demandOption: true,
-                },
-                'sender-email': {
-                  describe: 'Sender email address',
-                  type: 'string',
-                  demandOption: true,
-                },
-                'sender-name': {
-                  describe: 'Sender display name',
-                  type: 'string',
-                  demandOption: true,
-                },
-              }),
-            async (args) => {
-              await emailProviderTest(args as any);
-            },
-          );
-      },
-    )
-    .command('organization', 'Manage organization plugin settings', (yargs) => {
+    .command('config', 'Manage Neon Auth configuration', (yargs) => {
       return yargs
         .command(
-          'get',
-          'Get organization plugin config',
-          (yargs) => yargs,
-          async (args) => {
-            await organizationGet(args as any);
+          'email-password',
+          'Manage email and password authentication settings',
+          (yargs) => {
+            return yargs
+              .command(
+                'get',
+                'Get email and password config',
+                (yargs) => yargs,
+                async (args) => {
+                  await emailPasswordGet(args as any);
+                },
+              )
+              .command(
+                'update',
+                'Update email and password config',
+                (yargs) =>
+                  yargs.options({
+                    enabled: {
+                      describe: 'Enable email and password authentication',
+                      type: 'boolean',
+                    },
+                    'email-verification-method': {
+                      describe: 'Email verification method',
+                      type: 'string',
+                      choices: Object.values(NeonAuthEmailVerificationMethod),
+                    },
+                    'require-email-verification': {
+                      describe:
+                        'Require email verification before users can sign in',
+                      type: 'boolean',
+                    },
+                    'auto-sign-in-after-verification': {
+                      describe:
+                        'Auto sign in users after verifying their email',
+                      type: 'boolean',
+                    },
+                    'send-verification-email-on-sign-up': {
+                      describe: 'Send verification email on sign up',
+                      type: 'boolean',
+                    },
+                    'send-verification-email-on-sign-in': {
+                      describe: 'Send verification email on sign in',
+                      type: 'boolean',
+                    },
+                    'disable-sign-up': {
+                      describe: 'Disable new user sign ups',
+                      type: 'boolean',
+                    },
+                  }),
+                async (args) => {
+                  await emailPasswordUpdate(args as any);
+                },
+              );
           },
         )
         .command(
-          'update',
-          'Update organization plugin config',
-          (yargs) =>
-            yargs.options({
-              enabled: {
-                describe: 'Enable the organization plugin',
-                type: 'boolean',
-              },
-              limit: {
-                describe: 'Maximum number of organizations a user can create',
-                type: 'number',
-              },
-              'creator-role': {
-                describe: 'Role assigned to organization creator',
-                type: 'string',
-                choices: ['admin', 'owner'] as const,
-              },
-            }),
-          async (args) => {
-            await organizationUpdate(args as any);
-          },
-        );
-    })
-    .command('webhook', 'Manage webhook configuration', (yargs) => {
-      return yargs
-        .command(
-          'get',
-          'Get webhook config',
-          (yargs) => yargs,
-          async (args) => {
-            await webhookGet(args as any);
+          'email-provider',
+          'Manage email provider configuration',
+          (yargs) => {
+            return yargs
+              .command(
+                'get',
+                'Get email provider config',
+                (yargs) => yargs,
+                async (args) => {
+                  await emailProviderGet(args as any);
+                },
+              )
+              .command(
+                'update',
+                'Update email provider config',
+                (yargs) =>
+                  yargs.options({
+                    type: {
+                      describe: 'Email provider type',
+                      type: 'string',
+                      choices: ['standard', 'shared'] as const,
+                      demandOption: true,
+                    },
+                    host: {
+                      describe: 'SMTP host (required for standard)',
+                      type: 'string',
+                    },
+                    port: {
+                      describe: 'SMTP port (required for standard)',
+                      type: 'number',
+                    },
+                    username: {
+                      describe: 'SMTP username (required for standard)',
+                      type: 'string',
+                    },
+                    password: {
+                      describe: 'SMTP password (required for standard)',
+                      type: 'string',
+                    },
+                    'sender-email': {
+                      describe: 'Sender email address',
+                      type: 'string',
+                    },
+                    'sender-name': {
+                      describe: 'Sender display name',
+                      type: 'string',
+                    },
+                  }),
+                async (args) => {
+                  await emailProviderUpdate(args as any);
+                },
+              )
+              .command(
+                'test',
+                'Send a test email',
+                (yargs) =>
+                  yargs.options({
+                    'recipient-email': {
+                      describe: 'Email address to send test email to',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    host: {
+                      describe: 'SMTP host',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    port: {
+                      describe: 'SMTP port',
+                      type: 'number',
+                      demandOption: true,
+                    },
+                    username: {
+                      describe: 'SMTP username',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    password: {
+                      describe: 'SMTP password',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    'sender-email': {
+                      describe: 'Sender email address',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    'sender-name': {
+                      describe: 'Sender display name',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                  }),
+                async (args) => {
+                  await emailProviderTest(args as any);
+                },
+              );
           },
         )
         .command(
-          'update',
-          'Update webhook config',
-          (yargs) =>
-            yargs.options({
-              enabled: {
-                describe: 'Enable webhooks',
-                type: 'boolean',
-                demandOption: true,
-              },
-              url: {
-                describe: 'Webhook endpoint URL',
-                type: 'string',
-              },
-              'enabled-events': {
-                describe: 'Events to enable',
-                type: 'string',
-                choices: [
-                  'user.before_create',
-                  'user.created',
-                  'send.otp',
-                  'send.magic_link',
-                ] as const,
-                array: true,
-              },
-              timeout: {
-                describe: 'Webhook timeout in seconds (1-10)',
-                type: 'number',
-              },
-            }),
-          async (args) => {
-            await webhookUpdate(args as any);
+          'organization',
+          'Manage organization plugin settings',
+          (yargs) => {
+            return yargs
+              .command(
+                'get',
+                'Get organization plugin config',
+                (yargs) => yargs,
+                async (args) => {
+                  await organizationGet(args as any);
+                },
+              )
+              .command(
+                'update',
+                'Update organization plugin config',
+                (yargs) =>
+                  yargs.options({
+                    enabled: {
+                      describe: 'Enable the organization plugin',
+                      type: 'boolean',
+                    },
+                    limit: {
+                      describe:
+                        'Maximum number of organizations a user can create',
+                      type: 'number',
+                    },
+                    'creator-role': {
+                      describe: 'Role assigned to organization creator',
+                      type: 'string',
+                      choices: ['admin', 'owner'] as const,
+                    },
+                  }),
+                async (args) => {
+                  await organizationUpdate(args as any);
+                },
+              );
           },
-        );
+        )
+        .command('webhook', 'Manage webhook configuration', (yargs) => {
+          return yargs
+            .command(
+              'get',
+              'Get webhook config',
+              (yargs) => yargs,
+              async (args) => {
+                await webhookGet(args as any);
+              },
+            )
+            .command(
+              'update',
+              'Update webhook config',
+              (yargs) =>
+                yargs.options({
+                  enabled: {
+                    describe: 'Enable webhooks',
+                    type: 'boolean',
+                    demandOption: true,
+                  },
+                  url: {
+                    describe: 'Webhook endpoint URL',
+                    type: 'string',
+                  },
+                  'enabled-events': {
+                    describe: 'Events to enable',
+                    type: 'string',
+                    choices: [
+                      'user.before_create',
+                      'user.created',
+                      'send.otp',
+                      'send.magic_link',
+                    ] as const,
+                    array: true,
+                  },
+                  timeout: {
+                    describe: 'Webhook timeout in seconds (1-10)',
+                    type: 'number',
+                  },
+                }),
+              async (args) => {
+                await webhookUpdate(args as any);
+              },
+            );
+        });
     })
     .command('user', 'Manage Neon Auth users', (yargs) => {
       return yargs
