@@ -95,7 +95,7 @@ const writeTable = (
               ? value.join('\n')
               : isObject(value)
                 ? JSON.stringify(value, null, 2)
-                : value;
+                : (value ?? '');
           }),
         );
       });
