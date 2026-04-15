@@ -284,7 +284,8 @@ export const builder = (argv: yargs.Argv) => {
                 demandOption: true,
               },
               name: {
-                describe: 'User display name',
+                describe:
+                  'User display name (defaults to email if not provided)',
                 type: 'string',
               },
             }),
@@ -712,13 +713,14 @@ const userCreate = async (
   props: AuthBranchProps & { email: string; name?: string },
 ) => {
   const branchId = await resolveBranch(props);
+  const requestBody = {
+    email: props.email,
+    name: props.name ?? props.email,
+  };
   const { data } = await props.apiClient.createBranchNeonAuthNewUser(
     props.projectId,
     branchId,
-    {
-      email: props.email,
-      ...(props.name != null && { name: props.name }),
-    },
+    requestBody,
   );
   writer(props).end(data, { fields: USER_RESPONSE_FIELDS });
 };
