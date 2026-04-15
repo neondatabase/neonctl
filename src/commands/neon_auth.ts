@@ -722,12 +722,12 @@ const userCreate = async (
   );
   const displayName =
     requestBody.name !== props.email ? requestBody.name : undefined;
-  process.stdout.write(`\n${chalk.green('User created')}\n`);
-  process.stdout.write(`  ${chalk.green('ID:')}    ${data.id}\n`);
-  process.stdout.write(`  ${chalk.green('Email:')} ${requestBody.email}\n`);
-  if (displayName) {
-    process.stdout.write(`  ${chalk.green('Name:')}  ${displayName}\n`);
-  }
+  const kv = (key: string, value: string | undefined) =>
+    process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
+  process.stdout.write(`\n  ${chalk.green('User created')}\n\n`);
+  kv('ID:    ', data.id);
+  kv('Email: ', requestBody.email);
+  if (displayName) kv('Name:  ', displayName);
   process.stdout.write('\n');
 };
 
@@ -751,10 +751,10 @@ const userSetRole = async (
     props.userId,
     { roles: props.roles },
   );
-  process.stdout.write(`\n${chalk.green('Roles updated')}\n`);
-  process.stdout.write(`  ${chalk.green('User ID:')} ${data.id}\n`);
-  process.stdout.write(
-    `  ${chalk.green('Roles:')}   ${props.roles.join(', ')}\n`,
-  );
+  const kv = (key: string, value: string | undefined) =>
+    process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
+  process.stdout.write(`\n  ${chalk.green('Roles updated')}\n\n`);
+  kv('User ID: ', data.id);
+  kv('Roles:   ', props.roles.join(', '));
   process.stdout.write('\n');
 };
