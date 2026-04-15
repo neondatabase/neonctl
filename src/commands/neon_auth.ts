@@ -208,11 +208,13 @@ export const builder = (argv: yargs.Argv) => {
           'add <domain>',
           'Add a trusted domain',
           (yargs) =>
-            yargs.positional('domain', {
-              describe: 'Domain to add',
-              type: 'string',
-              demandOption: true,
-            }),
+            yargs
+              .usage('$0 neon-auth domain add <domain> [options]')
+              .positional('domain', {
+                describe: 'Domain to add',
+                type: 'string',
+                demandOption: true,
+              }),
           async (args) => {
             await domainAdd(args as any);
           },
@@ -221,11 +223,13 @@ export const builder = (argv: yargs.Argv) => {
           'remove <domain>',
           'Remove a trusted domain',
           (yargs) =>
-            yargs.positional('domain', {
-              describe: 'Domain to remove',
-              type: 'string',
-              demandOption: true,
-            }),
+            yargs
+              .usage('$0 neon-auth domain remove <domain> [options]')
+              .positional('domain', {
+                describe: 'Domain to remove',
+                type: 'string',
+                demandOption: true,
+              }),
           async (args) => {
             await domainRemove(args as any);
           },
