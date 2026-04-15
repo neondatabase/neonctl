@@ -409,15 +409,33 @@ const oauthProviderAdd = async (
     );
   }
   const branchId = await resolveBranch(props);
-  const { data } = await props.apiClient.addBranchNeonAuthOauthProvider(
-    props.projectId,
-    branchId,
-    {
-      id: props.providerId as NeonAuthOauthProviderId,
-      client_id: props.oauthClientId,
-      client_secret: props.oauthClientSecret,
-    },
-  );
+  let data: Awaited<
+    ReturnType<typeof props.apiClient.addBranchNeonAuthOauthProvider>
+  >['data'];
+  try {
+    ({ data } = await props.apiClient.addBranchNeonAuthOauthProvider(
+      props.projectId,
+      branchId,
+      {
+        id: props.providerId as NeonAuthOauthProviderId,
+        client_id: props.oauthClientId,
+        client_secret: props.oauthClientSecret,
+      },
+    ));
+  } catch (err) {
+    if (
+      isAxiosError(err) &&
+      (err.response?.data as { code?: string } | undefined)?.code ===
+        'INVALID_SHARED_OAUTH_PROVIDER'
+    ) {
+      throw new Error(
+        `The "${props.providerId}" provider requires your own OAuth app credentials.\n` +
+          `Re-run with --oauth-client-id and --oauth-client-secret to provide them.\n` +
+          `Create an OAuth app at your provider and use those credentials.`,
+      );
+    }
+    throw err;
+  }
   writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
 };
 
