@@ -134,15 +134,15 @@ export const builder = (argv: yargs.Argv) => {
                 choices: SUPPORTED_OAUTH_PROVIDERS,
                 demandOption: true,
               },
-              'client-id': {
-                describe: 'OAuth client ID',
+              'oauth-client-id': {
+                describe:
+                  "OAuth client ID from your provider app. Omit to use Neon's shared OAuth app.",
                 type: 'string',
-                demandOption: true,
               },
               'client-secret': {
-                describe: 'OAuth client secret',
+                describe:
+                  "OAuth client secret from your provider app. Omit to use Neon's shared OAuth app.",
                 type: 'string',
-                demandOption: true,
               },
             }),
           async (args) => {
@@ -160,15 +160,15 @@ export const builder = (argv: yargs.Argv) => {
                 choices: SUPPORTED_OAUTH_PROVIDERS,
                 demandOption: true,
               },
-              'client-id': {
-                describe: 'OAuth client ID',
+              'oauth-client-id': {
+                describe:
+                  "OAuth client ID from your provider app. Omit to use Neon's shared OAuth app.",
                 type: 'string',
-                demandOption: true,
               },
               'client-secret': {
-                describe: 'OAuth client secret',
+                describe:
+                  "OAuth client secret from your provider app. Omit to use Neon's shared OAuth app.",
                 type: 'string',
-                demandOption: true,
               },
             }),
           async (args) => {
@@ -397,8 +397,8 @@ const oauthProviderList = async (props: AuthBranchProps) => {
 const oauthProviderAdd = async (
   props: AuthBranchProps & {
     providerId: string;
-    clientId: string;
-    clientSecret: string;
+    oauthClientId?: string;
+    clientSecret?: string;
   },
 ) => {
   if (
@@ -414,7 +414,7 @@ const oauthProviderAdd = async (
     branchId,
     {
       id: props.providerId as NeonAuthOauthProviderId,
-      client_id: props.clientId,
+      client_id: props.oauthClientId,
       client_secret: props.clientSecret,
     },
   );
@@ -424,8 +424,8 @@ const oauthProviderAdd = async (
 const oauthProviderUpdate = async (
   props: AuthBranchProps & {
     providerId: string;
-    clientId: string;
-    clientSecret: string;
+    oauthClientId?: string;
+    clientSecret?: string;
   },
 ) => {
   if (
@@ -441,7 +441,7 @@ const oauthProviderUpdate = async (
     branchId,
     props.providerId as NeonAuthOauthProviderId,
     {
-      client_id: props.clientId,
+      client_id: props.oauthClientId,
       client_secret: props.clientSecret,
     },
   );
