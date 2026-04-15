@@ -48,6 +48,12 @@ const INTEGRATION_STATUS_FIELDS = [
 
 const OAUTH_PROVIDER_FIELDS = ['id', 'type', 'client_id'] as const;
 
+const SUPPORTED_OAUTH_PROVIDERS = [
+  NeonAuthOauthProviderId.Google,
+  NeonAuthOauthProviderId.Github,
+  NeonAuthOauthProviderId.Vercel,
+] as const;
+
 const DOMAIN_FIELDS = ['domain'] as const;
 
 const USER_RESPONSE_FIELDS = ['id'] as const;
@@ -122,9 +128,9 @@ export const builder = (argv: yargs.Argv) => {
           (yargs) =>
             yargs.options({
               'provider-id': {
-                describe: `OAuth provider ID. Supported values: ${[NeonAuthOauthProviderId.Google, NeonAuthOauthProviderId.Github, NeonAuthOauthProviderId.Vercel].join(', ')}`,
+                describe: `OAuth provider ID. Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
                 type: 'string',
-                choices: Object.values(NeonAuthOauthProviderId),
+                choices: SUPPORTED_OAUTH_PROVIDERS,
                 demandOption: true,
               },
               'client-id': {
@@ -148,9 +154,9 @@ export const builder = (argv: yargs.Argv) => {
           (yargs) =>
             yargs.options({
               'provider-id': {
-                describe: `OAuth provider ID. Supported values: ${[NeonAuthOauthProviderId.Google, NeonAuthOauthProviderId.Github, NeonAuthOauthProviderId.Vercel].join(', ')}`,
+                describe: `OAuth provider ID. Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
                 type: 'string',
-                choices: Object.values(NeonAuthOauthProviderId),
+                choices: SUPPORTED_OAUTH_PROVIDERS,
                 demandOption: true,
               },
               'client-id': {
@@ -174,9 +180,9 @@ export const builder = (argv: yargs.Argv) => {
           (yargs) =>
             yargs.options({
               'provider-id': {
-                describe: `OAuth provider ID. Supported values: ${[NeonAuthOauthProviderId.Google, NeonAuthOauthProviderId.Github, NeonAuthOauthProviderId.Vercel].join(', ')}`,
+                describe: `OAuth provider ID. Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
                 type: 'string',
-                choices: Object.values(NeonAuthOauthProviderId),
+                choices: SUPPORTED_OAUTH_PROVIDERS,
                 demandOption: true,
               },
             }),
@@ -393,12 +399,10 @@ const oauthProviderAdd = async (
   },
 ) => {
   if (
-    !Object.values(NeonAuthOauthProviderId).includes(
-      props.providerId as NeonAuthOauthProviderId,
-    )
+    !(SUPPORTED_OAUTH_PROVIDERS as readonly string[]).includes(props.providerId)
   ) {
     throw new Error(
-      `Unsupported provider "${props.providerId}". Supported values: ${Object.values(NeonAuthOauthProviderId).join(', ')}`,
+      `Unsupported provider "${props.providerId}". Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
     );
   }
   const branchId = await resolveBranch(props);
@@ -422,12 +426,10 @@ const oauthProviderUpdate = async (
   },
 ) => {
   if (
-    !Object.values(NeonAuthOauthProviderId).includes(
-      props.providerId as NeonAuthOauthProviderId,
-    )
+    !(SUPPORTED_OAUTH_PROVIDERS as readonly string[]).includes(props.providerId)
   ) {
     throw new Error(
-      `Unsupported provider "${props.providerId}". Supported values: ${Object.values(NeonAuthOauthProviderId).join(', ')}`,
+      `Unsupported provider "${props.providerId}". Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
     );
   }
   const branchId = await resolveBranch(props);
