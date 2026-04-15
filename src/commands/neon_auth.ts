@@ -122,22 +122,20 @@ export const builder = (argv: yargs.Argv) => {
           (yargs) =>
             yargs.options({
               'provider-id': {
-                describe: 'OAuth provider',
+                describe: `OAuth provider ID. Supported values: ${[NeonAuthOauthProviderId.Google, NeonAuthOauthProviderId.Github, NeonAuthOauthProviderId.Vercel].join(', ')}`,
                 type: 'string',
                 choices: Object.values(NeonAuthOauthProviderId),
                 demandOption: true,
               },
-              'oauth-client-id': {
+              'client-id': {
                 describe: 'OAuth client ID',
                 type: 'string',
+                demandOption: true,
               },
-              'oauth-client-secret': {
+              'client-secret': {
                 describe: 'OAuth client secret',
                 type: 'string',
-              },
-              'microsoft-tenant-id': {
-                describe: 'Microsoft tenant ID (for Microsoft provider)',
-                type: 'string',
+                demandOption: true,
               },
             }),
           async (args) => {
@@ -150,22 +148,20 @@ export const builder = (argv: yargs.Argv) => {
           (yargs) =>
             yargs.options({
               'provider-id': {
-                describe: 'OAuth provider',
+                describe: `OAuth provider ID. Supported values: ${[NeonAuthOauthProviderId.Google, NeonAuthOauthProviderId.Github, NeonAuthOauthProviderId.Vercel].join(', ')}`,
                 type: 'string',
                 choices: Object.values(NeonAuthOauthProviderId),
                 demandOption: true,
               },
-              'oauth-client-id': {
+              'client-id': {
                 describe: 'OAuth client ID',
                 type: 'string',
+                demandOption: true,
               },
-              'oauth-client-secret': {
+              'client-secret': {
                 describe: 'OAuth client secret',
                 type: 'string',
-              },
-              'microsoft-tenant-id': {
-                describe: 'Microsoft tenant ID (for Microsoft provider)',
-                type: 'string',
+                demandOption: true,
               },
             }),
           async (args) => {
@@ -178,7 +174,7 @@ export const builder = (argv: yargs.Argv) => {
           (yargs) =>
             yargs.options({
               'provider-id': {
-                describe: 'OAuth provider',
+                describe: `OAuth provider ID. Supported values: ${[NeonAuthOauthProviderId.Google, NeonAuthOauthProviderId.Github, NeonAuthOauthProviderId.Vercel].join(', ')}`,
                 type: 'string',
                 choices: Object.values(NeonAuthOauthProviderId),
                 demandOption: true,
@@ -392,20 +388,27 @@ const oauthProviderList = async (props: AuthBranchProps) => {
 const oauthProviderAdd = async (
   props: AuthBranchProps & {
     providerId: string;
-    oauthClientId?: string;
-    oauthClientSecret?: string;
-    microsoftTenantId?: string;
+    clientId: string;
+    clientSecret: string;
   },
 ) => {
+  if (
+    !Object.values(NeonAuthOauthProviderId).includes(
+      props.providerId as NeonAuthOauthProviderId,
+    )
+  ) {
+    throw new Error(
+      `Unsupported provider "${props.providerId}". Supported values: ${Object.values(NeonAuthOauthProviderId).join(', ')}`,
+    );
+  }
   const branchId = await resolveBranch(props);
   const { data } = await props.apiClient.addBranchNeonAuthOauthProvider(
     props.projectId,
     branchId,
     {
       id: props.providerId as NeonAuthOauthProviderId,
-      client_id: props.oauthClientId,
-      client_secret: props.oauthClientSecret,
-      microsoft_tenant_id: props.microsoftTenantId,
+      client_id: props.clientId,
+      client_secret: props.clientSecret,
     },
   );
   writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
@@ -414,20 +417,27 @@ const oauthProviderAdd = async (
 const oauthProviderUpdate = async (
   props: AuthBranchProps & {
     providerId: string;
-    oauthClientId?: string;
-    oauthClientSecret?: string;
-    microsoftTenantId?: string;
+    clientId: string;
+    clientSecret: string;
   },
 ) => {
+  if (
+    !Object.values(NeonAuthOauthProviderId).includes(
+      props.providerId as NeonAuthOauthProviderId,
+    )
+  ) {
+    throw new Error(
+      `Unsupported provider "${props.providerId}". Supported values: ${Object.values(NeonAuthOauthProviderId).join(', ')}`,
+    );
+  }
   const branchId = await resolveBranch(props);
   const { data } = await props.apiClient.updateBranchNeonAuthOauthProvider(
     props.projectId,
     branchId,
     props.providerId as NeonAuthOauthProviderId,
     {
-      client_id: props.oauthClientId,
-      client_secret: props.oauthClientSecret,
-      microsoft_tenant_id: props.microsoftTenantId,
+      client_id: props.clientId,
+      client_secret: props.clientSecret,
     },
   );
   writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
