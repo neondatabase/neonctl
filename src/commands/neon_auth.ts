@@ -475,7 +475,9 @@ const oauthProviderDelete = async (
     branchId,
     props.providerId as NeonAuthOauthProviderId,
   );
-  log.info(`OAuth provider "${props.providerId}" deleted`);
+  process.stdout.write(
+    `\n  ${chalk.green(`OAuth provider "${props.providerId}" deleted`)}\n\n`,
+  );
 };
 
 // --- Domains ---
