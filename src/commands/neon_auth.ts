@@ -126,7 +126,7 @@ const enable = async (props: AuthBranchProps & { databaseName?: string }) => {
   const kv = (key: string, value: string | undefined) =>
     process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
 
-  process.stdout.write(`\n  ${chalk.green('Neon Auth enabled')}\n\n`);
+  process.stdout.write(`\n${chalk.green('Neon Auth enabled')}\n`);
   kv('Auth Provider:', data.auth_provider as string);
   kv('Base URL:     ', data.base_url as string);
   kv('Schema Name:  ', data.schema_name as string);
@@ -149,7 +149,7 @@ const status = async (props: AuthBranchProps) => {
   } catch (err) {
     if (isAxiosError(err) && err.response?.status === 404) {
       process.stdout.write(
-        `\n  ${chalk.green('Neon Auth is not configured for this branch')}\n\n`,
+        `\n${chalk.green('Neon Auth is not configured for this branch')}\n\n`,
       );
       return;
     }
@@ -181,5 +181,5 @@ const disable = async (props: AuthBranchProps & { deleteData: boolean }) => {
       delete_data: props.deleteData,
     }),
   );
-  process.stdout.write(`\n  ${chalk.green('Neon Auth has been disabled')}\n\n`);
+  process.stdout.write(`\n${chalk.green('Neon Auth has been disabled')}\n\n`);
 };
