@@ -49,6 +49,8 @@ const INTEGRATION_STATUS_FIELDS = [
 
 const OAUTH_PROVIDER_FIELDS = ['id', 'type', 'client_id'] as const;
 
+const ALLOW_LOCALHOST_FIELDS = ['allow_localhost'] as const;
+
 const SUPPORTED_OAUTH_PROVIDERS = [
   NeonAuthOauthProviderId.Google,
   NeonAuthOauthProviderId.Github,
@@ -233,6 +235,39 @@ export const builder = (argv: yargs.Argv) => {
           async (args) => {
             await domainRemove(args as any);
           },
+        )
+        .command(
+          'allow-localhost',
+          'Manage localhost connection settings',
+          (yargs) =>
+            yargs
+              .usage(
+                '$0 neon-auth domain allow-localhost <sub-command> [options]',
+              )
+              .command(
+                'get',
+                'Get localhost connection setting',
+                (yargs) => yargs,
+                async (args) => {
+                  await allowLocalhostGet(args as any);
+                },
+              )
+              .command(
+                'enable',
+                'Allow localhost connections',
+                (yargs) => yargs,
+                async (args) => {
+                  await allowLocalhostEnable(args as any);
+                },
+              )
+              .command(
+                'disable',
+                'Restrict localhost connections',
+                (yargs) => yargs,
+                async (args) => {
+                  await allowLocalhostDisable(args as any);
+                },
+              ),
         );
     })
     .command('user', 'Manage Neon Auth users', (yargs) => {
@@ -631,6 +666,43 @@ const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
   );
   process.stdout.write(
     `\n${chalk.green(`Domain "${props.domain}" deleted`)}\n\n`,
+  );
+};
+
+// --- Allow localhost ---
+
+const allowLocalhostGet = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.getNeonAuthAllowLocalhost(
+    props.projectId,
+    branchId,
+  );
+  writer(props).end(data, { fields: ALLOW_LOCALHOST_FIELDS });
+};
+
+const allowLocalhostEnable = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.updateNeonAuthAllowLocalhost(
+    props.projectId,
+    branchId,
+    {
+      allow_localhost: true,
+    },
+  );
+  process.stdout.write(`\n${chalk.green('Localhost connections allowed')}\n\n`);
+};
+
+const allowLocalhostDisable = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.updateNeonAuthAllowLocalhost(
+    props.projectId,
+    branchId,
+    {
+      allow_localhost: false,
+    },
+  );
+  process.stdout.write(
+    `\n${chalk.green('Localhost connections restricted')}\n\n`,
   );
 };
 
