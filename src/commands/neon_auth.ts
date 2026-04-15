@@ -205,30 +205,26 @@ export const builder = (argv: yargs.Argv) => {
           },
         )
         .command(
-          'add',
+          'add <domain>',
           'Add a trusted domain',
           (yargs) =>
-            yargs.options({
-              domain: {
-                describe: 'Domain to add',
-                type: 'string',
-                demandOption: true,
-              },
+            yargs.positional('domain', {
+              describe: 'Domain to add',
+              type: 'string',
+              demandOption: true,
             }),
           async (args) => {
             await domainAdd(args as any);
           },
         )
         .command(
-          'remove',
+          'remove <domain>',
           'Remove a trusted domain',
           (yargs) =>
-            yargs.options({
-              domain: {
-                describe: 'Domain to remove',
-                type: 'string',
-                demandOption: true,
-              },
+            yargs.positional('domain', {
+              describe: 'Domain to remove',
+              type: 'string',
+              demandOption: true,
             }),
           async (args) => {
             await domainRemove(args as any);
