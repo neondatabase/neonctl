@@ -490,7 +490,7 @@ const oauthProviderAdd = async (
     const kv = (key: string, value: string | undefined) =>
       process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
 
-    process.stdout.write(`\n  ${chalk.green('OAuth provider added')}\n\n`);
+    process.stdout.write(`\n${chalk.green('OAuth provider added')}\n`);
     kv('ID:         ', data.id);
     kv('Type:       ', data.type);
     if (data.client_id) kv('Client ID:  ', data.client_id);
@@ -529,7 +529,7 @@ const oauthProviderUpdate = async (
     const kv = (key: string, value: string | undefined) =>
       process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
 
-    process.stdout.write(`\n  ${chalk.green('OAuth provider updated')}\n\n`);
+    process.stdout.write(`\n${chalk.green('OAuth provider updated')}\n`);
     kv('ID:         ', data.id);
     kv('Type:       ', data.type);
     if (data.client_id) kv('Client ID:  ', data.client_id);
@@ -578,7 +578,7 @@ const printCallbackInstructions = async (
   if (!baseUrl) return;
 
   const callbackUrl = `${baseUrl}/${instructions.urlLabel}`;
-  process.stdout.write(`\n  ${chalk.green(instructions.lead)}\n`);
+  process.stdout.write(`\n${chalk.green(instructions.lead)}\n`);
   process.stdout.write(`  ${callbackUrl}\n\n`);
 };
 
@@ -592,7 +592,7 @@ const oauthProviderDelete = async (
     props.providerId as NeonAuthOauthProviderId,
   );
   process.stdout.write(
-    `\n  ${chalk.green(`OAuth provider "${props.providerId}" deleted`)}\n\n`,
+    `\n${chalk.green(`OAuth provider "${props.providerId}" deleted`)}\n\n`,
   );
 };
 
@@ -724,7 +724,7 @@ const userCreate = async (
     requestBody.name !== props.email ? requestBody.name : undefined;
   const kv = (key: string, value: string | undefined) =>
     process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
-  process.stdout.write(`\n  ${chalk.green('User created')}\n\n`);
+  process.stdout.write(`\n${chalk.green('User created')}\n`);
   kv('ID:    ', data.id);
   kv('Email: ', requestBody.email);
   if (displayName) kv('Name:  ', displayName);
@@ -738,7 +738,9 @@ const userDelete = async (props: AuthBranchProps & { userId: string }) => {
     branchId,
     props.userId,
   );
-  process.stdout.write(chalk.green(`  User "${props.userId}" deleted\n`));
+  process.stdout.write(
+    `\n${chalk.green(`User "${props.userId}" deleted`)}\n\n`,
+  );
 };
 
 const userSetRole = async (
@@ -753,7 +755,7 @@ const userSetRole = async (
   );
   const kv = (key: string, value: string | undefined) =>
     process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
-  process.stdout.write(`\n  ${chalk.green('Roles updated')}\n\n`);
+  process.stdout.write(`\n${chalk.green('Roles updated')}\n`);
   kv('User ID: ', data.id);
   kv('Roles:   ', props.roles.join(', '));
   process.stdout.write('\n');
