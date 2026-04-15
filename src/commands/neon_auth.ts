@@ -139,7 +139,7 @@ export const builder = (argv: yargs.Argv) => {
                   "OAuth client ID from your provider app. Omit to use Neon's shared OAuth app.",
                 type: 'string',
               },
-              'client-secret': {
+              'oauth-client-secret': {
                 describe:
                   "OAuth client secret from your provider app. Omit to use Neon's shared OAuth app.",
                 type: 'string',
@@ -165,7 +165,7 @@ export const builder = (argv: yargs.Argv) => {
                   "OAuth client ID from your provider app. Omit to use Neon's shared OAuth app.",
                 type: 'string',
               },
-              'client-secret': {
+              'oauth-client-secret': {
                 describe:
                   "OAuth client secret from your provider app. Omit to use Neon's shared OAuth app.",
                 type: 'string',
@@ -398,7 +398,7 @@ const oauthProviderAdd = async (
   props: AuthBranchProps & {
     providerId: string;
     oauthClientId?: string;
-    clientSecret?: string;
+    oauthClientSecret?: string;
   },
 ) => {
   if (
@@ -415,7 +415,7 @@ const oauthProviderAdd = async (
     {
       id: props.providerId as NeonAuthOauthProviderId,
       client_id: props.oauthClientId,
-      client_secret: props.clientSecret,
+      client_secret: props.oauthClientSecret,
     },
   );
   writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
@@ -425,7 +425,7 @@ const oauthProviderUpdate = async (
   props: AuthBranchProps & {
     providerId: string;
     oauthClientId?: string;
-    clientSecret?: string;
+    oauthClientSecret?: string;
   },
 ) => {
   if (
@@ -442,7 +442,7 @@ const oauthProviderUpdate = async (
     props.providerId as NeonAuthOauthProviderId,
     {
       client_id: props.oauthClientId,
-      client_secret: props.clientSecret,
+      client_secret: props.oauthClientSecret,
     },
   );
   writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
