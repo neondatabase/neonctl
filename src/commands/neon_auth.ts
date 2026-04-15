@@ -1,5 +1,6 @@
 import { NeonAuthSupportedAuthProvider } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
+import chalk from 'chalk';
 import yargs from 'yargs';
 import { retryOnLock } from '../api.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
@@ -117,17 +118,60 @@ const enable = async (props: AuthBranchProps & { databaseName?: string }) => {
       throw err;
     }
   }
-  writer(props).end(data, { fields: INTEGRATION_RESPONSE_FIELDS });
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: INTEGRATION_RESPONSE_FIELDS });
+    return;
+  }
+
+  const kv = (key: string, value: string | undefined) =>
+    process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
+
+  process.stdout.write(`\n  ${chalk.green('Neon Auth enabled')}\n\n`);
+  kv('Auth Provider:', data.auth_provider as string);
+  kv('Base URL:     ', data.base_url as string);
+  kv('Schema Name:  ', data.schema_name as string);
+  kv('Table Name:   ', data.table_name as string);
+  kv('JWKS URL:     ', data.jwks_url as string);
+  process.stdout.write('\n');
   if (typeof data.base_url === 'string') {
-    log.info(`\nSet these environment variables in your application:`);
-    log.info(`  NEON_AUTH_BASE_URL=${data.base_url}`);
+    process.stdout.write(
+      `  ${chalk.green('Set this environment variable in your application:')}\n`,
+    );
+    process.stdout.write(`  NEON_AUTH_BASE_URL=${data.base_url}\n\n`);
   }
 };
 
 const status = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
-  const { data } = await props.apiClient.getNeonAuth(props.projectId, branchId);
-  writer(props).end(data, { fields: INTEGRATION_STATUS_FIELDS });
+  let data: Awaited<ReturnType<typeof props.apiClient.getNeonAuth>>['data'];
+  try {
+    ({ data } = await props.apiClient.getNeonAuth(props.projectId, branchId));
+  } catch (err) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      process.stdout.write(
+        `\n  ${chalk.green('Neon Auth is not configured for this branch')}\n\n`,
+      );
+      return;
+    }
+    throw err;
+  }
+
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: INTEGRATION_STATUS_FIELDS });
+    return;
+  }
+
+  const kv = (key: string, value: string | undefined) =>
+    process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
+
+  process.stdout.write('\n');
+  kv('Auth Provider:', data.auth_provider);
+  kv('Branch ID:    ', data.branch_id);
+  kv('Database:     ', data.db_name);
+  kv('Base URL:     ', data.base_url);
+  kv('Created At:   ', data.created_at);
+  kv('JWKS URL:     ', data.jwks_url);
+  process.stdout.write('\n');
 };
 
 const disable = async (props: AuthBranchProps & { deleteData: boolean }) => {
@@ -137,5 +181,5 @@ const disable = async (props: AuthBranchProps & { deleteData: boolean }) => {
       delete_data: props.deleteData,
     }),
   );
-  log.info('Neon Auth has been disabled');
+  process.stdout.write(`\n  ${chalk.green('Neon Auth has been disabled')}\n\n`);
 };
