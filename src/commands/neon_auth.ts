@@ -436,7 +436,18 @@ const oauthProviderAdd = async (
     }
     throw err;
   }
-  writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
+  } else {
+    const kv = (key: string, value: string | undefined) =>
+      process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
+
+    process.stdout.write(`\n  ${chalk.green('OAuth provider added')}\n\n`);
+    kv('ID:         ', data.id);
+    kv('Type:       ', data.type);
+    if (data.client_id) kv('Client ID:  ', data.client_id);
+    process.stdout.write('\n');
+  }
   await printCallbackInstructions(props, branchId, props.providerId);
 };
 
