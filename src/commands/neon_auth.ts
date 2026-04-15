@@ -403,7 +403,7 @@ const oauthProviderList = async (props: AuthBranchProps) => {
   );
   if (hasShared && props.output === 'table') {
     process.stdout.write(
-      `\n  ${chalk.yellow('Caution:')} ${SHARED_PROVIDER_DISCLAIMER.slice('Caution: '.length)}\n\n`,
+      `\n${chalk.yellow('Caution:')} ${SHARED_PROVIDER_DISCLAIMER.slice('Caution: '.length)}\n\n`,
     );
   }
 };
