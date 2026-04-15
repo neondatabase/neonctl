@@ -717,7 +717,7 @@ const userCreate = async (
     branchId,
     {
       email: props.email,
-      name: props.name,
+      ...(props.name !== undefined && { name: props.name }),
     },
   );
   writer(props).end(data, { fields: USER_RESPONSE_FIELDS });
