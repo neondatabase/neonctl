@@ -82,7 +82,6 @@ const EMAIL_PROVIDER_FIELDS = [
 const ORGANIZATION_FIELDS = [
   'enabled',
   'organization_limit',
-  'allow_user_to_create_organization',
   'creator_role',
 ] as const;
 
@@ -478,13 +477,9 @@ export const builder = (argv: yargs.Argv) => {
                 describe: 'Enable the organization plugin',
                 type: 'boolean',
               },
-              'organization-limit': {
+              limit: {
                 describe: 'Maximum number of organizations a user can create',
                 type: 'number',
-              },
-              'allow-user-to-create-organization': {
-                describe: 'Allow users to create organizations',
-                type: 'boolean',
               },
               'creator-role': {
                 describe: 'Role assigned to organization creator',
@@ -517,7 +512,7 @@ export const builder = (argv: yargs.Argv) => {
                 type: 'boolean',
                 demandOption: true,
               },
-              'webhook-url': {
+              url: {
                 describe: 'Webhook endpoint URL',
                 type: 'string',
               },
@@ -532,7 +527,7 @@ export const builder = (argv: yargs.Argv) => {
                 ] as const,
                 array: true,
               },
-              'timeout-seconds': {
+              timeout: {
                 describe: 'Webhook timeout in seconds (1-10)',
                 type: 'number',
               },
@@ -1130,8 +1125,7 @@ const organizationGet = async (props: AuthBranchProps) => {
 const organizationUpdate = async (
   props: AuthBranchProps & {
     enabled?: boolean;
-    organizationLimit?: number;
-    allowUserToCreateOrganization?: boolean;
+    limit?: number;
     creatorRole?: string;
   },
 ) => {
@@ -1141,8 +1135,7 @@ const organizationUpdate = async (
     branchId,
     {
       enabled: props.enabled,
-      organization_limit: props.organizationLimit,
-      allow_user_to_create_organization: props.allowUserToCreateOrganization,
+      organization_limit: props.limit,
       creator_role: props.creatorRole as 'admin' | 'owner',
     },
   );
@@ -1163,9 +1156,9 @@ const webhookGet = async (props: AuthBranchProps) => {
 const webhookUpdate = async (
   props: AuthBranchProps & {
     enabled: boolean;
-    webhookUrl?: string;
+    url?: string;
     enabledEvents?: string[];
-    timeoutSeconds?: number;
+    timeout?: number;
   },
 ) => {
   const branchId = await resolveBranch(props);
@@ -1174,7 +1167,7 @@ const webhookUpdate = async (
     branchId,
     {
       enabled: props.enabled,
-      webhook_url: props.webhookUrl,
+      webhook_url: props.url,
       enabled_events: props.enabledEvents as
         | (
             | 'user.before_create'
@@ -1183,7 +1176,7 @@ const webhookUpdate = async (
             | 'send.magic_link'
           )[]
         | undefined,
-      timeout_seconds: props.timeoutSeconds,
+      timeout_seconds: props.timeout,
     },
   );
   writer(props).end(data, { fields: WEBHOOK_FIELDS });
