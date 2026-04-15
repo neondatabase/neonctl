@@ -220,13 +220,13 @@ export const builder = (argv: yargs.Argv) => {
           },
         )
         .command(
-          'remove <domain>',
-          'Remove a trusted domain',
+          'delete <domain>',
+          'Delete a trusted domain',
           (yargs) =>
             yargs
-              .usage('$0 neon-auth domain remove <domain> [options]')
+              .usage('$0 neon-auth domain delete <domain> [options]')
               .positional('domain', {
-                describe: 'Domain to remove',
+                describe: 'Domain to delete',
                 type: 'string',
                 demandOption: true,
               }),
@@ -620,7 +620,7 @@ const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
     },
   );
   process.stdout.write(
-    `\n${chalk.green(`Domain "${props.domain}" removed`)}\n\n`,
+    `\n${chalk.green(`Domain "${props.domain}" deleted`)}\n\n`,
   );
 };
 
