@@ -732,7 +732,7 @@ const userDelete = async (props: AuthBranchProps & { userId: string }) => {
     branchId,
     props.userId,
   );
-  log.info(`User "${props.userId}" deleted`);
+  process.stdout.write(chalk.green(`  User "${props.userId}" deleted\n`));
 };
 
 const userSetRole = async (
