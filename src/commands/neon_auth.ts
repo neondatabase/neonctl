@@ -579,7 +579,21 @@ const domainList = async (props: AuthBranchProps) => {
   writer(props).end(data.domains, { fields: DOMAIN_FIELDS });
 };
 
+const validateDomainUri = (domain: string) => {
+  try {
+    const url = new URL(domain);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      throw new Error();
+    }
+  } catch {
+    throw new Error(
+      `Invalid domain URI "${domain}". Must be a full URI including scheme, e.g. https://${domain.replace(/^https?:\/\//, '')}`,
+    );
+  }
+};
+
 const domainAdd = async (props: AuthBranchProps & { domain: string }) => {
+  validateDomainUri(props.domain);
   const branchId = await resolveBranch(props);
   await props.apiClient.addBranchNeonAuthTrustedDomain(
     props.projectId,
@@ -589,10 +603,13 @@ const domainAdd = async (props: AuthBranchProps & { domain: string }) => {
       auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
     },
   );
-  log.info(`Domain "${props.domain}" added`);
+  process.stdout.write(
+    `\n${chalk.green(`Domain "${props.domain}" added`)}\n\n`,
+  );
 };
 
 const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
+  validateDomainUri(props.domain);
   const branchId = await resolveBranch(props);
   await props.apiClient.deleteBranchNeonAuthTrustedDomain(
     props.projectId,
@@ -602,7 +619,9 @@ const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
       domains: [{ domain: props.domain }],
     },
   );
-  log.info(`Domain "${props.domain}" removed`);
+  process.stdout.write(
+    `\n${chalk.green(`Domain "${props.domain}" removed`)}\n\n`,
+  );
 };
 
 // --- User ---
