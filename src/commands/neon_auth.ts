@@ -114,6 +114,7 @@ export const builder = (argv: yargs.Argv) => {
     )
     .command('oauth-provider', 'Manage OAuth providers', (yargs) => {
       return yargs
+        .usage('$0 neon-auth oauth-provider <sub-command> [options]')
         .command(
           'list',
           'List OAuth providers',
@@ -193,6 +194,7 @@ export const builder = (argv: yargs.Argv) => {
     })
     .command('domain', 'Manage redirect URI trusted domains', (yargs) => {
       return yargs
+        .usage('$0 neon-auth domain <sub-command> [options]')
         .command(
           'list',
           'List trusted domains',
@@ -234,6 +236,7 @@ export const builder = (argv: yargs.Argv) => {
     })
     .command('user', 'Manage Neon Auth users', (yargs) => {
       return yargs
+        .usage('$0 neon-auth user <sub-command> [options]')
         .command(
           'create',
           'Create an auth user',
