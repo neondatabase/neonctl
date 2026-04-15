@@ -1,4 +1,5 @@
 import { NeonAuthSupportedAuthProvider } from '@neondatabase/api-client';
+import { isAxiosError } from 'axios';
 import yargs from 'yargs';
 import { retryOnLock } from '../api.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
@@ -6,9 +7,9 @@ import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { log } from '../log.js';
 
-// Field definitions for table output
 const INTEGRATION_RESPONSE_FIELDS = [
   'auth_provider',
+  'db_name',
   'base_url',
   'schema_name',
   'table_name',
@@ -93,14 +94,31 @@ const resolveBranch = async (props: AuthBranchProps) => {
 
 const enable = async (props: AuthBranchProps & { databaseName?: string }) => {
   const branchId = await resolveBranch(props);
-  const { data } = await retryOnLock(() =>
-    props.apiClient.createNeonAuth(props.projectId, branchId, {
-      auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
-      database_name: props.databaseName,
-    }),
-  );
+  let data: Record<string, unknown>;
+  try {
+    const result = await retryOnLock(() =>
+      props.apiClient.createNeonAuth(props.projectId, branchId, {
+        auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
+        database_name: props.databaseName,
+      }),
+    );
+    data = result.data as unknown as Record<string, unknown>;
+  } catch (err) {
+    if (isAxiosError(err) && err.response?.status === 409) {
+      log.info(
+        'Neon Auth is already enabled. Fetching existing configuration.',
+      );
+      const existing = await props.apiClient.getNeonAuth(
+        props.projectId,
+        branchId,
+      );
+      data = existing.data as unknown as Record<string, unknown>;
+    } else {
+      throw err;
+    }
+  }
   writer(props).end(data, { fields: INTEGRATION_RESPONSE_FIELDS });
-  if (data.base_url) {
+  if (typeof data.base_url === 'string') {
     log.info(`\nSet these environment variables in your application:`);
     log.info(`  NEON_AUTH_BASE_URL=${data.base_url}`);
   }
