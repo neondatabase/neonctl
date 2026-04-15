@@ -59,8 +59,6 @@ const SUPPORTED_OAUTH_PROVIDERS = [
 
 const DOMAIN_FIELDS = ['domain'] as const;
 
-const USER_RESPONSE_FIELDS = ['id'] as const;
-
 export const command = 'neon-auth';
 export const describe = 'Manage Neon Auth';
 export const builder = (argv: yargs.Argv) => {
@@ -722,7 +720,15 @@ const userCreate = async (
     branchId,
     requestBody,
   );
-  writer(props).end(data, { fields: USER_RESPONSE_FIELDS });
+  const displayName =
+    requestBody.name !== props.email ? requestBody.name : undefined;
+  process.stdout.write(`\n${chalk.green('User created')}\n`);
+  process.stdout.write(`  ${chalk.green('ID:')}    ${data.id}\n`);
+  process.stdout.write(`  ${chalk.green('Email:')} ${requestBody.email}\n`);
+  if (displayName) {
+    process.stdout.write(`  ${chalk.green('Name:')}  ${displayName}\n`);
+  }
+  process.stdout.write('\n');
 };
 
 const userDelete = async (props: AuthBranchProps & { userId: string }) => {
@@ -745,5 +751,10 @@ const userSetRole = async (
     props.userId,
     { roles: props.roles },
   );
-  writer(props).end(data, { fields: USER_RESPONSE_FIELDS });
+  process.stdout.write(`\n${chalk.green('Roles updated')}\n`);
+  process.stdout.write(`  ${chalk.green('User ID:')} ${data.id}\n`);
+  process.stdout.write(
+    `  ${chalk.green('Roles:')}   ${props.roles.join(', ')}\n`,
+  );
+  process.stdout.write('\n');
 };
