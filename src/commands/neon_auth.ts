@@ -1012,13 +1012,53 @@ const allowLocalhostDisable = async (props: AuthBranchProps) => {
 
 // --- Email and password ---
 
+const printEmailPasswordConfig = (
+  props: AuthBranchProps,
+  data: {
+    enabled: boolean;
+    email_verification_method: string;
+    require_email_verification: boolean;
+    auto_sign_in_after_verification: boolean;
+    send_verification_email_on_sign_up: boolean;
+    send_verification_email_on_sign_in: boolean;
+    disable_sign_up: boolean;
+  },
+  title?: string,
+) => {
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: EMAIL_PASSWORD_FIELDS });
+    return;
+  }
+  const kv = (key: string, value: string) =>
+    process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
+  if (title) process.stdout.write(`\n${chalk.green(title)}\n`);
+  process.stdout.write('\n');
+  kv('Enabled:                    ', String(data.enabled));
+  kv('Verification Method:        ', data.email_verification_method);
+  kv('Require Verification:       ', String(data.require_email_verification));
+  kv(
+    'Auto Sign In After Verify:  ',
+    String(data.auto_sign_in_after_verification),
+  );
+  kv(
+    'Send Email On Sign Up:      ',
+    String(data.send_verification_email_on_sign_up),
+  );
+  kv(
+    'Send Email On Sign In:      ',
+    String(data.send_verification_email_on_sign_in),
+  );
+  kv('Disable Sign Up:            ', String(data.disable_sign_up));
+  process.stdout.write('\n');
+};
+
 const emailPasswordGet = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
   const { data } = await props.apiClient.getNeonAuthEmailAndPasswordConfig(
     props.projectId,
     branchId,
   );
-  writer(props).end(data, { fields: EMAIL_PASSWORD_FIELDS });
+  printEmailPasswordConfig(props, data);
 };
 
 const emailPasswordUpdate = async (
@@ -1047,7 +1087,7 @@ const emailPasswordUpdate = async (
       disable_sign_up: props.disableSignUp,
     },
   );
-  writer(props).end(data, { fields: EMAIL_PASSWORD_FIELDS });
+  printEmailPasswordConfig(props, data, 'Email password settings updated');
 };
 
 // --- Email provider ---
