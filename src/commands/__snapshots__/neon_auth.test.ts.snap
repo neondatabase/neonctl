@@ -21,6 +21,25 @@ Domain "https://myapp.com" added
 "
 `;
 
+exports[`neon-auth > domain allow-localhost disable 1`] = `
+"
+Localhost connections restricted
+
+"
+`;
+
+exports[`neon-auth > domain allow-localhost enable 1`] = `
+"
+Localhost connections allowed
+
+"
+`;
+
+exports[`neon-auth > domain allow-localhost get 1`] = `
+"allow_localhost: true
+"
+`;
+
 exports[`neon-auth > domain delete 1`] = `
 "
 Domain "https://example.com" deleted
