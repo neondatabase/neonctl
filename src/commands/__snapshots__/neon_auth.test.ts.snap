@@ -7,6 +7,13 @@ Neon Auth has been disabled
 "
 `;
 
+exports[`neon-auth > disable with delete data 1`] = `
+"
+Neon Auth has been disabled
+
+"
+`;
+
 exports[`neon-auth > enable 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
@@ -19,6 +26,17 @@ base_url: https://auth.test.neon.tech
 "
 `;
 
+exports[`neon-auth > enable already enabled 1`] = `
+"auth_provider: better_auth
+auth_provider_project_id: test-auth-project-id
+branch_id: br-sunny-branch-123456
+db_name: neondb
+base_url: https://auth.test.neon.tech
+created_at: 2024-01-01T00:00:00Z
+jwks_url: https://auth.test.neon.tech/.well-known/jwks.json
+"
+`;
+
 exports[`neon-auth > status 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
@@ -27,5 +45,12 @@ db_name: neondb
 base_url: https://auth.test.neon.tech
 created_at: 2024-01-01T00:00:00Z
 jwks_url: https://auth.test.neon.tech/.well-known/jwks.json
+"
+`;
+
+exports[`neon-auth > status not configured 1`] = `
+"
+Neon Auth is not configured for this branch
+
 "
 `;
