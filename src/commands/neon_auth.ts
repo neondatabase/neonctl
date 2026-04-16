@@ -1176,15 +1176,47 @@ const emailProviderTest = async (
 
 // --- Organization plugin ---
 
+const printOrganizationConfig = (
+  props: AuthBranchProps,
+  data: {
+    enabled: boolean;
+    organization_limit: number;
+    allow_user_to_create_organization: boolean;
+    creator_role: string;
+  },
+  title?: string,
+) => {
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: ORGANIZATION_FIELDS });
+    return;
+  }
+  const kv = (key: string, value: string) =>
+    process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
+  if (title) {
+    process.stdout.write(`\n${chalk.green(title)}\n`);
+  } else {
+    process.stdout.write('\n');
+  }
+  kv('Enabled:          ', String(data.enabled));
+  kv('Org Limit:        ', String(data.organization_limit));
+  kv('Creator Role:     ', data.creator_role);
+  process.stdout.write('\n');
+};
+
 const organizationGet = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
   const { data } = await props.apiClient.getNeonAuthPluginConfigs(
     props.projectId,
     branchId,
   );
-  writer(props).end(data.organization ?? ({} as any), {
-    fields: ORGANIZATION_FIELDS,
-  });
+  const org = data.organization;
+  if (!org) {
+    process.stdout.write(
+      `\n${chalk.green('No organization plugin config found.')}\n\n`,
+    );
+    return;
+  }
+  printOrganizationConfig(props, org);
 };
 
 const organizationUpdate = async (
@@ -1204,7 +1236,7 @@ const organizationUpdate = async (
       creator_role: props.creatorRole as 'admin' | 'owner',
     },
   );
-  writer(props).end(data, { fields: ORGANIZATION_FIELDS });
+  printOrganizationConfig(props, data, 'Organization configuration updated');
 };
 
 // --- Webhook ---
