@@ -165,7 +165,7 @@ const enable = async (props: AuthBranchProps & { databaseName?: string }) => {
 
 const status = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
-  let data: Awaited<ReturnType<typeof props.apiClient.getNeonAuth>>['data'];
+  let data: NeonAuthIntegration;
   try {
     ({ data } = await props.apiClient.getNeonAuth(props.projectId, branchId));
   } catch (err) {

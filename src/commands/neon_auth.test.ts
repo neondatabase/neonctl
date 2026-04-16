@@ -64,14 +64,17 @@ describe('neon-auth', () => {
   });
 
   test('disable with delete data', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'neon-auth',
-      'disable',
-      '--project-id',
-      'test',
-      '--branch',
-      'test_branch',
-      '--delete-data',
-    ]);
+    await testCliCommand(
+      [
+        'neon-auth',
+        'disable',
+        '--project-id',
+        'test',
+        '--branch',
+        'test_branch',
+        '--delete-data',
+      ],
+      { mockDir: 'neon-auth-delete-data' },
+    );
   });
 });
