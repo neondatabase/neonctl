@@ -487,14 +487,13 @@ const oauthProviderAdd = async (
   if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
   } else {
-    const kv = (key: string, value: string | undefined) =>
-      process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
-
-    process.stdout.write(`\n${chalk.green('OAuth provider added')}\n`);
-    kv('ID:         ', data.id);
-    kv('Type:       ', data.type);
-    if (data.client_id) kv('Client ID:  ', data.client_id);
-    process.stdout.write('\n');
+    printKvBlock('OAuth provider added', [
+      ['ID:         ', data.id],
+      ['Type:       ', data.type],
+      ...(data.client_id
+        ? [['Client ID:  ', data.client_id] as [string, string]]
+        : []),
+    ]);
   }
   await printCallbackInstructions(props, branchId, props.providerId);
 };
@@ -526,14 +525,13 @@ const oauthProviderUpdate = async (
   if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
   } else {
-    const kv = (key: string, value: string | undefined) =>
-      process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
-
-    process.stdout.write(`\n${chalk.green('OAuth provider updated')}\n`);
-    kv('ID:         ', data.id);
-    kv('Type:       ', data.type);
-    if (data.client_id) kv('Client ID:  ', data.client_id);
-    process.stdout.write('\n');
+    printKvBlock('OAuth provider updated', [
+      ['ID:         ', data.id],
+      ['Type:       ', data.type],
+      ...(data.client_id
+        ? [['Client ID:  ', data.client_id] as [string, string]]
+        : []),
+    ]);
   }
   await printCallbackInstructions(props, branchId, props.providerId);
 };
@@ -578,8 +576,7 @@ const printCallbackInstructions = async (
   if (!baseUrl) return;
 
   const callbackUrl = `${baseUrl}/${instructions.urlLabel}`;
-  process.stdout.write(`\n${chalk.green(instructions.lead)}\n`);
-  process.stdout.write(`  ${callbackUrl}\n\n`);
+  printKvBlock(instructions.lead, [['URL:  ', callbackUrl]]);
 };
 
 const oauthProviderDelete = async (
@@ -591,9 +588,7 @@ const oauthProviderDelete = async (
     branchId,
     props.providerId as NeonAuthOauthProviderId,
   );
-  process.stdout.write(
-    `\n${chalk.green(`OAuth provider "${props.providerId}" deleted`)}\n\n`,
-  );
+  printMessage(`OAuth provider "${props.providerId}" deleted`);
 };
 
 // --- Domains ---
@@ -605,9 +600,7 @@ const domainList = async (props: AuthBranchProps) => {
     branchId,
   );
   if (data.domains.length === 0 && props.output === 'table') {
-    process.stdout.write(
-      `\n${chalk.green('No trusted domains are configured for this branch.')}\n\n`,
-    );
+    printMessage('No trusted domains are configured for this branch.');
     return;
   }
   writer(props).end(data.domains, { fields: DOMAIN_FIELDS });
@@ -637,9 +630,7 @@ const domainAdd = async (props: AuthBranchProps & { domain: string }) => {
       auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
     },
   );
-  process.stdout.write(
-    `\n${chalk.green(`Domain "${props.domain}" added`)}\n\n`,
-  );
+  printMessage(`Domain "${props.domain}" added`);
 };
 
 const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
@@ -663,9 +654,7 @@ const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
       domains: [{ domain: props.domain }],
     },
   );
-  process.stdout.write(
-    `\n${chalk.green(`Domain "${props.domain}" deleted`)}\n\n`,
-  );
+  printMessage(`Domain "${props.domain}" deleted`);
 };
 
 // --- Allow localhost ---
@@ -676,7 +665,13 @@ const allowLocalhostGet = async (props: AuthBranchProps) => {
     props.projectId,
     branchId,
   );
-  writer(props).end(data, { fields: ALLOW_LOCALHOST_FIELDS });
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: ALLOW_LOCALHOST_FIELDS });
+    return;
+  }
+  printKvBlock('Localhost connection settings', [
+    ['Allow localhost:', String(data.allow_localhost)],
+  ]);
 };
 
 const allowLocalhostEnable = async (props: AuthBranchProps) => {
@@ -688,7 +683,7 @@ const allowLocalhostEnable = async (props: AuthBranchProps) => {
       allow_localhost: true,
     },
   );
-  process.stdout.write(`\n${chalk.green('Localhost connections allowed')}\n\n`);
+  printMessage('Localhost connections allowed');
 };
 
 const allowLocalhostDisable = async (props: AuthBranchProps) => {
@@ -700,9 +695,7 @@ const allowLocalhostDisable = async (props: AuthBranchProps) => {
       allow_localhost: false,
     },
   );
-  process.stdout.write(
-    `\n${chalk.green('Localhost connections restricted')}\n\n`,
-  );
+  printMessage('Localhost connections restricted');
 };
 
 // --- User ---
@@ -722,13 +715,11 @@ const userCreate = async (
   );
   const displayName =
     requestBody.name !== props.email ? requestBody.name : undefined;
-  const kv = (key: string, value: string | undefined) =>
-    process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
-  process.stdout.write(`\n${chalk.green('User created')}\n`);
-  kv('ID:    ', data.id);
-  kv('Email: ', requestBody.email);
-  if (displayName) kv('Name:  ', displayName);
-  process.stdout.write('\n');
+  printKvBlock('User created', [
+    ['ID:    ', data.id],
+    ['Email: ', requestBody.email],
+    ...(displayName ? [['Name:  ', displayName] as [string, string]] : []),
+  ]);
 };
 
 const userDelete = async (props: AuthBranchProps & { userId: string }) => {
@@ -738,9 +729,7 @@ const userDelete = async (props: AuthBranchProps & { userId: string }) => {
     branchId,
     props.userId,
   );
-  process.stdout.write(
-    `\n${chalk.green(`User "${props.userId}" deleted`)}\n\n`,
-  );
+  printMessage(`User "${props.userId}" deleted`);
 };
 
 const userSetRole = async (
@@ -753,10 +742,8 @@ const userSetRole = async (
     props.userId,
     { roles: props.roles },
   );
-  const kv = (key: string, value: string | undefined) =>
-    process.stdout.write(`  ${chalk.green(key)}  ${value ?? ''}\n`);
-  process.stdout.write(`\n${chalk.green('Roles updated')}\n`);
-  kv('User ID: ', data.id);
-  kv('Roles:   ', props.roles.join(', '));
-  process.stdout.write('\n');
+  printKvBlock('Roles updated', [
+    ['User ID: ', data.id],
+    ['Roles:   ', props.roles.join(', ')],
+  ]);
 };
