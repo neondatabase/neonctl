@@ -1099,13 +1099,47 @@ const emailPasswordUpdate = async (
 
 // --- Email provider ---
 
+const printEmailProviderConfig = (
+  props: AuthBranchProps,
+  data: {
+    type: string;
+    host?: string;
+    port?: number;
+    username?: string;
+    sender_email?: string;
+    sender_name?: string;
+  },
+  title?: string,
+) => {
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: EMAIL_PROVIDER_FIELDS });
+    return;
+  }
+  const kv = (key: string, value: string) =>
+    process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
+  if (title) {
+    process.stdout.write(`\n${chalk.green(title)}\n`);
+  } else {
+    process.stdout.write('\n');
+  }
+  kv('Type:          ', data.type);
+  if (data.type === 'standard') {
+    kv('Host:          ', data.host ?? '');
+    kv('Port:          ', data.port != null ? String(data.port) : '');
+    kv('Username:      ', data.username ?? '');
+  }
+  kv('Sender Email:  ', data.sender_email ?? '');
+  kv('Sender Name:   ', data.sender_name ?? '');
+  process.stdout.write('\n');
+};
+
 const emailProviderGet = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
   const { data } = await props.apiClient.getNeonAuthEmailProvider(
     props.projectId,
     branchId,
   );
-  writer(props).end(data as any, { fields: EMAIL_PROVIDER_FIELDS });
+  printEmailProviderConfig(props, data as any);
 };
 
 const emailProviderUpdate = async (
@@ -1143,7 +1177,11 @@ const emailProviderUpdate = async (
     branchId,
     config,
   );
-  writer(props).end(data as any, { fields: EMAIL_PROVIDER_FIELDS });
+  printEmailProviderConfig(
+    props,
+    data as any,
+    'Email provider configuration updated',
+  );
 };
 
 const emailProviderTest = async (
@@ -1171,7 +1209,17 @@ const emailProviderTest = async (
       sender_name: props.senderName,
     },
   );
-  writer(props).end(data, { fields: TEST_EMAIL_FIELDS });
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: TEST_EMAIL_FIELDS });
+  } else if (data.success) {
+    process.stdout.write(
+      `\n${chalk.green('Test email sent successfully')}\n\n`,
+    );
+  } else {
+    process.stdout.write(
+      `\n${chalk.green('Test email failed')}\n  ${data.error_message ?? 'Unknown error'}\n\n`,
+    );
+  }
 };
 
 // --- Organization plugin ---
