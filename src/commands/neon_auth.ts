@@ -1241,13 +1241,44 @@ const organizationUpdate = async (
 
 // --- Webhook ---
 
+const printWebhookConfig = (
+  props: AuthBranchProps,
+  data: {
+    enabled: boolean;
+    webhook_url?: string;
+    enabled_events?: string[];
+    timeout_seconds?: number;
+  },
+  title?: string,
+) => {
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: WEBHOOK_FIELDS });
+    return;
+  }
+  const kv = (key: string, value: string) =>
+    process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
+  if (title) {
+    process.stdout.write(`\n${chalk.green(title)}\n`);
+  } else {
+    process.stdout.write('\n');
+  }
+  kv('Enabled:        ', String(data.enabled));
+  kv('URL:            ', data.webhook_url ?? '');
+  kv('Events:         ', (data.enabled_events ?? []).join(', '));
+  kv(
+    'Timeout (sec):  ',
+    data.timeout_seconds != null ? String(data.timeout_seconds) : '',
+  );
+  process.stdout.write('\n');
+};
+
 const webhookGet = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
   const { data } = await props.apiClient.getNeonAuthWebhookConfig(
     props.projectId,
     branchId,
   );
-  writer(props).end(data, { fields: WEBHOOK_FIELDS });
+  printWebhookConfig(props, data);
 };
 
 const webhookUpdate = async (
@@ -1276,7 +1307,7 @@ const webhookUpdate = async (
       timeout_seconds: props.timeout,
     },
   );
-  writer(props).end(data, { fields: WEBHOOK_FIELDS });
+  printWebhookConfig(props, data, 'Webhook configuration updated');
 };
 
 // --- User ---
