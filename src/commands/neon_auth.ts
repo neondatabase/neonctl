@@ -1140,6 +1140,14 @@ const emailProviderUpdate = async (
     senderName?: string;
   },
 ) => {
+  if (
+    props.type === 'standard' &&
+    (!props.host || !props.port || !props.username || !props.password)
+  ) {
+    throw new Error(
+      '--host, --port, --username, and --password are required for standard email provider',
+    );
+  }
   const branchId = await resolveBranch(props);
   let config: any;
   if (props.type === 'standard') {
