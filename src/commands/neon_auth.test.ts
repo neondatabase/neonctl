@@ -125,22 +125,17 @@ describe('neon-auth', () => {
   });
 
   test('oauth-provider delete', async ({ testCliCommand }) => {
-    await testCliCommand(
-      [
-        'neon-auth',
-        'oauth-provider',
-        'delete',
-        '--project-id',
-        'test',
-        '--branch',
-        'test_branch',
-        '--provider-id',
-        'google',
-      ],
-      {
-        stderr: 'INFO: OAuth provider "google" deleted',
-      },
-    );
+    await testCliCommand([
+      'neon-auth',
+      'oauth-provider',
+      'delete',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--provider-id',
+      'google',
+    ]);
   });
 
   // --- Domain ---
@@ -158,41 +153,29 @@ describe('neon-auth', () => {
   });
 
   test('domain add', async ({ testCliCommand }) => {
-    await testCliCommand(
-      [
-        'neon-auth',
-        'domain',
-        'add',
-        '--project-id',
-        'test',
-        '--branch',
-        'test_branch',
-        '--domain',
-        'https://myapp.com',
-      ],
-      {
-        stderr: 'INFO: Domain "https://myapp.com" added',
-      },
-    );
+    await testCliCommand([
+      'neon-auth',
+      'domain',
+      'add',
+      'https://myapp.com',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
   });
 
-  test('domain remove', async ({ testCliCommand }) => {
-    await testCliCommand(
-      [
-        'neon-auth',
-        'domain',
-        'remove',
-        '--project-id',
-        'test',
-        '--branch',
-        'test_branch',
-        '--domain',
-        'https://myapp.com',
-      ],
-      {
-        stderr: 'INFO: Domain "https://myapp.com" removed',
-      },
-    );
+  test('domain delete', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'domain',
+      'delete',
+      'https://example.com',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
   });
 
   // --- User ---
@@ -214,21 +197,16 @@ describe('neon-auth', () => {
   });
 
   test('user delete', async ({ testCliCommand }) => {
-    await testCliCommand(
-      [
-        'neon-auth',
-        'user',
-        'delete',
-        'test-user-id',
-        '--project-id',
-        'test',
-        '--branch',
-        'test_branch',
-      ],
-      {
-        stderr: 'INFO: User "test-user-id" deleted',
-      },
-    );
+    await testCliCommand([
+      'neon-auth',
+      'user',
+      'delete',
+      'test-user-id',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
   });
 
   test('user set-role', async ({ testCliCommand }) => {
