@@ -1,6 +1,11 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`neon-auth > disable 1`] = `""`;
+exports[`neon-auth > disable 1`] = `
+"
+Neon Auth has been disabled
+
+"
+`;
 
 exports[`neon-auth > enable 1`] = `
 "auth_provider: better_auth
