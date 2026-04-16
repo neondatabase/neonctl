@@ -305,11 +305,15 @@ export const builder = (argv: yargs.Argv) => {
     })
     .command('config', 'Manage Neon Auth configuration', (yargs) => {
       return yargs
+        .usage('$0 neon-auth config <sub-command> [options]')
         .command(
           'email-password',
           'Manage email and password authentication settings',
           (yargs) => {
             return yargs
+              .usage(
+                '$0 neon-auth config email-password <sub-command> [options]',
+              )
               .command(
                 'get',
                 'Get email and password config',
@@ -366,6 +370,9 @@ export const builder = (argv: yargs.Argv) => {
           'Manage email provider configuration',
           (yargs) => {
             return yargs
+              .usage(
+                '$0 neon-auth config email-provider <sub-command> [options]',
+              )
               .command(
                 'get',
                 'Get email provider config',
@@ -466,6 +473,7 @@ export const builder = (argv: yargs.Argv) => {
           'Manage organization plugin settings',
           (yargs) => {
             return yargs
+              .usage('$0 neon-auth config organization <sub-command> [options]')
               .command(
                 'get',
                 'Get organization plugin config',
@@ -502,6 +510,7 @@ export const builder = (argv: yargs.Argv) => {
         )
         .command('webhook', 'Manage webhook configuration', (yargs) => {
           return yargs
+            .usage('$0 neon-auth config webhook <sub-command> [options]')
             .command(
               'get',
               'Get webhook config',
