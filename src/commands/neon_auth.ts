@@ -1,4 +1,8 @@
-import { NeonAuthSupportedAuthProvider } from '@neondatabase/api-client';
+import {
+  NeonAuthSupportedAuthProvider,
+  NeonAuthCreateIntegrationResponse,
+  NeonAuthIntegration,
+} from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 import chalk from 'chalk';
 import yargs from 'yargs';
@@ -6,7 +10,6 @@ import { retryOnLock } from '../api.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
-import { log } from '../log.js';
 
 // Shared styled output helpers
 const printKvBlock = (
@@ -86,7 +89,8 @@ export const builder = (argv: yargs.Argv) => {
       (yargs) =>
         yargs.options({
           'delete-data': {
-            describe: 'Delete the neon_auth schema from the database',
+            describe:
+              'Permanently delete all Neon Auth data and schema from the database',
             type: 'boolean',
             default: false,
           },
@@ -111,42 +115,47 @@ const resolveBranch = async (props: AuthBranchProps) => {
 
 const enable = async (props: AuthBranchProps & { databaseName?: string }) => {
   const branchId = await resolveBranch(props);
-  let data: Record<string, unknown>;
+  let data: NeonAuthCreateIntegrationResponse | NeonAuthIntegration;
+  let alreadyEnabled = false;
   try {
-    const result = await retryOnLock(() =>
+    ({ data } = await retryOnLock(() =>
       props.apiClient.createNeonAuth(props.projectId, branchId, {
         auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
         database_name: props.databaseName,
       }),
-    );
-    data = result.data as unknown as Record<string, unknown>;
+    ));
   } catch (err) {
     if (isAxiosError(err) && err.response?.status === 409) {
-      log.info(
-        'Neon Auth is already enabled. Fetching existing configuration.',
-      );
-      const existing = await props.apiClient.getNeonAuth(
-        props.projectId,
-        branchId,
-      );
-      data = existing.data as unknown as Record<string, unknown>;
+      alreadyEnabled = true;
+      ({ data } = await props.apiClient.getNeonAuth(props.projectId, branchId));
     } else {
       throw err;
     }
   }
   if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(data, { fields: INTEGRATION_RESPONSE_FIELDS });
+    writer(props).end(data as any, { fields: INTEGRATION_RESPONSE_FIELDS });
     return;
   }
 
-  printKvBlock('Neon Auth enabled', [
-    ['Auth Provider:', data.auth_provider as string],
-    ['Base URL:     ', data.base_url as string],
-    ['Schema Name:  ', data.schema_name as string],
-    ['Table Name:   ', data.table_name as string],
-    ['JWKS URL:     ', data.jwks_url as string],
-  ]);
-  if (typeof data.base_url === 'string') {
+  // Access type-specific fields loosely — CREATE response has schema/table,
+  // GET response (already-enabled path) has db_name instead.
+  const d = data as unknown as Record<string, string | undefined>;
+  printKvBlock(
+    alreadyEnabled ? 'Neon Auth is already enabled' : 'Neon Auth enabled',
+    [
+      ['Auth Provider:', data.auth_provider],
+      ...(d.db_name ? [['Database:     ', d.db_name] as [string, string]] : []),
+      ['Base URL:     ', data.base_url],
+      ...(d.schema_name
+        ? [['Schema Name:  ', d.schema_name] as [string, string]]
+        : []),
+      ...(d.table_name
+        ? [['Table Name:   ', d.table_name] as [string, string]]
+        : []),
+      ['JWKS URL:     ', data.jwks_url],
+    ],
+  );
+  if (data.base_url) {
     process.stdout.write(
       `  ${chalk.green('Set this environment variable in your application:')}\n`,
     );
