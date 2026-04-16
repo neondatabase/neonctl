@@ -231,7 +231,7 @@ export const builder = (argv: yargs.Argv) => {
                 demandOption: true,
               }),
           async (args) => {
-            await domainRemove(args as any);
+            await domainDelete(args as any);
           },
         )
         .command(
@@ -449,13 +449,6 @@ const oauthProviderAdd = async (
     oauthClientSecret?: string;
   },
 ) => {
-  if (
-    !(SUPPORTED_OAUTH_PROVIDERS as readonly string[]).includes(props.providerId)
-  ) {
-    throw new Error(
-      `Unsupported provider "${props.providerId}". Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
-    );
-  }
   const branchId = await resolveBranch(props);
   let data: Awaited<
     ReturnType<typeof props.apiClient.addBranchNeonAuthOauthProvider>
@@ -505,13 +498,6 @@ const oauthProviderUpdate = async (
     oauthClientSecret?: string;
   },
 ) => {
-  if (
-    !(SUPPORTED_OAUTH_PROVIDERS as readonly string[]).includes(props.providerId)
-  ) {
-    throw new Error(
-      `Unsupported provider "${props.providerId}". Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
-    );
-  }
   const branchId = await resolveBranch(props);
   const { data } = await props.apiClient.updateBranchNeonAuthOauthProvider(
     props.projectId,
@@ -633,7 +619,7 @@ const domainAdd = async (props: AuthBranchProps & { domain: string }) => {
   printMessage(`Domain "${props.domain}" added`);
 };
 
-const domainRemove = async (props: AuthBranchProps & { domain: string }) => {
+const domainDelete = async (props: AuthBranchProps & { domain: string }) => {
   validateDomainUri(props.domain);
   const branchId = await resolveBranch(props);
   const { data: existing } =

@@ -178,6 +178,47 @@ describe('neon-auth', () => {
     ]);
   });
 
+  // --- Allow localhost ---
+
+  test('domain allow-localhost get', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'domain',
+      'allow-localhost',
+      'get',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('domain allow-localhost enable', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'domain',
+      'allow-localhost',
+      'enable',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('domain allow-localhost disable', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'domain',
+      'allow-localhost',
+      'disable',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
   // --- User ---
 
   test('user create', async ({ testCliCommand }) => {
