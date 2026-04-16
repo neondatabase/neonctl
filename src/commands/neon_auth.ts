@@ -1012,48 +1012,32 @@ const allowLocalhostDisable = async (props: AuthBranchProps) => {
 
 // --- Email and password ---
 
-const printEmailPasswordConfig = (
-  props: AuthBranchProps,
-  data: {
-    enabled: boolean;
-    email_verification_method: string;
-    require_email_verification: boolean;
-    auto_sign_in_after_verification: boolean;
-    send_verification_email_on_sign_up: boolean;
-    send_verification_email_on_sign_in: boolean;
-    disable_sign_up: boolean;
-  },
-  title?: string,
-) => {
-  if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(data, { fields: EMAIL_PASSWORD_FIELDS });
-    return;
-  }
-  const kv = (key: string, value: string) =>
-    process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
-  if (title) {
-    process.stdout.write(`\n${chalk.green(title)}\n`);
-  } else {
-    process.stdout.write('\n');
-  }
-  kv('Enabled:                    ', String(data.enabled));
-  kv('Verification Method:        ', data.email_verification_method);
-  kv('Require Verification:       ', String(data.require_email_verification));
-  kv(
+const printEmailPasswordEntries = (data: {
+  enabled: boolean;
+  email_verification_method: string;
+  require_email_verification: boolean;
+  auto_sign_in_after_verification: boolean;
+  send_verification_email_on_sign_up: boolean;
+  send_verification_email_on_sign_in: boolean;
+  disable_sign_up: boolean;
+}): [string, string][] => [
+  ['Enabled:                    ', String(data.enabled)],
+  ['Verification Method:        ', data.email_verification_method],
+  ['Require Verification:       ', String(data.require_email_verification)],
+  [
     'Auto Sign In After Verify:  ',
     String(data.auto_sign_in_after_verification),
-  );
-  kv(
+  ],
+  [
     'Send Email On Sign Up:      ',
     String(data.send_verification_email_on_sign_up),
-  );
-  kv(
+  ],
+  [
     'Send Email On Sign In:      ',
     String(data.send_verification_email_on_sign_in),
-  );
-  kv('Disable Sign Up:            ', String(data.disable_sign_up));
-  process.stdout.write('\n');
-};
+  ],
+  ['Disable Sign Up:            ', String(data.disable_sign_up)],
+];
 
 const emailPasswordGet = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
@@ -1061,7 +1045,14 @@ const emailPasswordGet = async (props: AuthBranchProps) => {
     props.projectId,
     branchId,
   );
-  printEmailPasswordConfig(props, data);
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: EMAIL_PASSWORD_FIELDS });
+    return;
+  }
+  printKvBlock(
+    'Email & password auth configuration',
+    printEmailPasswordEntries(data),
+  );
 };
 
 const emailPasswordUpdate = async (
@@ -1090,48 +1081,37 @@ const emailPasswordUpdate = async (
       disable_sign_up: props.disableSignUp,
     },
   );
-  printEmailPasswordConfig(
-    props,
-    data,
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: EMAIL_PASSWORD_FIELDS });
+    return;
+  }
+  printKvBlock(
     'Email & password auth configuration updated',
+    printEmailPasswordEntries(data),
   );
 };
 
 // --- Email provider ---
 
-const printEmailProviderConfig = (
-  props: AuthBranchProps,
-  data: {
-    type: string;
-    host?: string;
-    port?: number;
-    username?: string;
-    sender_email?: string;
-    sender_name?: string;
-  },
-  title?: string,
-) => {
-  if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(data, { fields: EMAIL_PROVIDER_FIELDS });
-    return;
-  }
-  const kv = (key: string, value: string) =>
-    process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
-  if (title) {
-    process.stdout.write(`\n${chalk.green(title)}\n`);
-  } else {
-    process.stdout.write('\n');
-  }
-  kv('Type:          ', data.type);
-  if (data.type === 'standard') {
-    kv('Host:          ', data.host ?? '');
-    kv('Port:          ', data.port != null ? String(data.port) : '');
-    kv('Username:      ', data.username ?? '');
-  }
-  kv('Sender Email:  ', data.sender_email ?? '');
-  kv('Sender Name:   ', data.sender_name ?? '');
-  process.stdout.write('\n');
-};
+const printEmailProviderEntries = (data: {
+  type: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  sender_email?: string;
+  sender_name?: string;
+}): [string, string | undefined][] => [
+  ['Type:          ', data.type],
+  ...(data.type === 'standard'
+    ? ([
+        ['Host:          ', data.host],
+        ['Port:          ', data.port != null ? String(data.port) : undefined],
+        ['Username:      ', data.username],
+      ] as [string, string | undefined][])
+    : []),
+  ['Sender Email:  ', data.sender_email],
+  ['Sender Name:   ', data.sender_name],
+];
 
 const emailProviderGet = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
@@ -1139,7 +1119,14 @@ const emailProviderGet = async (props: AuthBranchProps) => {
     props.projectId,
     branchId,
   );
-  printEmailProviderConfig(props, data as any);
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data as any, { fields: EMAIL_PROVIDER_FIELDS as any });
+    return;
+  }
+  printKvBlock(
+    'Email provider configuration',
+    printEmailProviderEntries(data as any),
+  );
 };
 
 const emailProviderUpdate = async (
@@ -1177,10 +1164,13 @@ const emailProviderUpdate = async (
     branchId,
     config,
   );
-  printEmailProviderConfig(
-    props,
-    data as any,
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data as any, { fields: EMAIL_PROVIDER_FIELDS as any });
+    return;
+  }
+  printKvBlock(
     'Email provider configuration updated',
+    printEmailProviderEntries(data as any),
   );
 };
 
@@ -1212,9 +1202,7 @@ const emailProviderTest = async (
   if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(data, { fields: TEST_EMAIL_FIELDS });
   } else if (data.success) {
-    process.stdout.write(
-      `\n${chalk.green('Test email sent successfully')}\n\n`,
-    );
+    printMessage('Test email sent successfully');
   } else {
     process.stdout.write(
       `\n${chalk.green('Test email failed')}\n  ${data.error_message ?? 'Unknown error'}\n\n`,
@@ -1224,32 +1212,15 @@ const emailProviderTest = async (
 
 // --- Organization plugin ---
 
-const printOrganizationConfig = (
-  props: AuthBranchProps,
-  data: {
-    enabled: boolean;
-    organization_limit: number;
-    allow_user_to_create_organization: boolean;
-    creator_role: string;
-  },
-  title?: string,
-) => {
-  if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(data, { fields: ORGANIZATION_FIELDS });
-    return;
-  }
-  const kv = (key: string, value: string) =>
-    process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
-  if (title) {
-    process.stdout.write(`\n${chalk.green(title)}\n`);
-  } else {
-    process.stdout.write('\n');
-  }
-  kv('Enabled:          ', String(data.enabled));
-  kv('Org Limit:        ', String(data.organization_limit));
-  kv('Creator Role:     ', data.creator_role);
-  process.stdout.write('\n');
-};
+const printOrganizationEntries = (data: {
+  enabled: boolean;
+  organization_limit: number;
+  creator_role: string;
+}): [string, string][] => [
+  ['Enabled:          ', String(data.enabled)],
+  ['Org Limit:        ', String(data.organization_limit)],
+  ['Creator Role:     ', data.creator_role],
+];
 
 const organizationGet = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
@@ -1259,12 +1230,18 @@ const organizationGet = async (props: AuthBranchProps) => {
   );
   const org = data.organization;
   if (!org) {
-    process.stdout.write(
-      `\n${chalk.green('No organization plugin config found.')}\n\n`,
-    );
+    if (props.output !== 'table') {
+      writer(props).end({} as any, { fields: ORGANIZATION_FIELDS as any });
+      return;
+    }
+    printMessage('No organization plugin config found.');
     return;
   }
-  printOrganizationConfig(props, org);
+  if (props.output !== 'table') {
+    writer(props).end(org as any, { fields: ORGANIZATION_FIELDS as any });
+    return;
+  }
+  printKvBlock('Organization configuration', printOrganizationEntries(org));
 };
 
 const organizationUpdate = async (
@@ -1284,41 +1261,32 @@ const organizationUpdate = async (
       creator_role: props.creatorRole as 'admin' | 'owner',
     },
   );
-  printOrganizationConfig(props, data, 'Organization configuration updated');
+  if (props.output !== 'table') {
+    writer(props).end(data as any, { fields: ORGANIZATION_FIELDS as any });
+    return;
+  }
+  printKvBlock(
+    'Organization configuration updated',
+    printOrganizationEntries(data),
+  );
 };
 
 // --- Webhook ---
 
-const printWebhookConfig = (
-  props: AuthBranchProps,
-  data: {
-    enabled: boolean;
-    webhook_url?: string;
-    enabled_events?: string[];
-    timeout_seconds?: number;
-  },
-  title?: string,
-) => {
-  if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(data, { fields: WEBHOOK_FIELDS });
-    return;
-  }
-  const kv = (key: string, value: string) =>
-    process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
-  if (title) {
-    process.stdout.write(`\n${chalk.green(title)}\n`);
-  } else {
-    process.stdout.write('\n');
-  }
-  kv('Enabled:        ', String(data.enabled));
-  kv('URL:            ', data.webhook_url ?? '');
-  kv('Events:         ', (data.enabled_events ?? []).join(', '));
-  kv(
+const printWebhookEntries = (data: {
+  enabled: boolean;
+  webhook_url?: string;
+  enabled_events?: string[];
+  timeout_seconds?: number;
+}): [string, string][] => [
+  ['Enabled:        ', String(data.enabled)],
+  ['URL:            ', data.webhook_url ?? ''],
+  ['Events:         ', (data.enabled_events ?? []).join(', ')],
+  [
     'Timeout (sec):  ',
     data.timeout_seconds != null ? String(data.timeout_seconds) : '',
-  );
-  process.stdout.write('\n');
-};
+  ],
+];
 
 const webhookGet = async (props: AuthBranchProps) => {
   const branchId = await resolveBranch(props);
@@ -1326,7 +1294,11 @@ const webhookGet = async (props: AuthBranchProps) => {
     props.projectId,
     branchId,
   );
-  printWebhookConfig(props, data);
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: WEBHOOK_FIELDS });
+    return;
+  }
+  printKvBlock('Webhook configuration', printWebhookEntries(data));
 };
 
 const webhookUpdate = async (
@@ -1355,7 +1327,11 @@ const webhookUpdate = async (
       timeout_seconds: props.timeout,
     },
   );
-  printWebhookConfig(props, data, 'Webhook configuration updated');
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: WEBHOOK_FIELDS });
+    return;
+  }
+  printKvBlock('Webhook configuration updated', printWebhookEntries(data));
 };
 
 // --- User ---
