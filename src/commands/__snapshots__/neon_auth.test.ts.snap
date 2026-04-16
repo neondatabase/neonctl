@@ -1,24 +1,5 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`neon-auth > allow-localhost enable 1`] = `
-"
-Localhost connections allowed
-
-"
-`;
-
-exports[`neon-auth > allow-localhost get 1`] = `
-"allow_localhost: true
-"
-`;
-
-exports[`neon-auth > disable 1`] = `
-"
-Neon Auth has been disabled
-
-"
-`;
-
 exports[`neon-auth > disable 1`] = `
 "
 Neon Auth has been disabled
@@ -113,7 +94,6 @@ sender_name: Test App
 "
 `;
 
-
 exports[`neon-auth > enable 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
@@ -178,7 +158,7 @@ creator_role: owner
 
 exports[`neon-auth > organization update 1`] = `
 "enabled: true
-organization_limit: 5
+organization_limit: 10
 allow_user_to_create_organization: true
 creator_role: owner
 "
@@ -212,7 +192,6 @@ User created
 "
 `;
 
-
 exports[`neon-auth > user delete 1`] = `
 "
 User "test-user-id" deleted
@@ -239,7 +218,7 @@ timeout_seconds: 5
 
 exports[`neon-auth > webhook update 1`] = `
 "enabled: true
-webhook_url: ""
+webhook_url: https://hooks.test.com/webhook
 enabled_events:
   - user.created
 timeout_seconds: 5
