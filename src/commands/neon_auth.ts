@@ -597,7 +597,7 @@ const printCallbackInstructions = async (
   }
   if (!baseUrl) return;
 
-  const callbackUrl = `${baseUrl}/${instructions.urlLabel}`;
+  const callbackUrl = `${baseUrl.replace(/\/$/, '')}/${instructions.urlLabel}`;
   printKvBlock(instructions.lead, [['URL:  ', callbackUrl]]);
 };
 
