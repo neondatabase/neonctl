@@ -491,7 +491,7 @@ export const builder = (argv: yargs.Argv) => {
                       describe: 'Enable the organization plugin',
                       type: 'boolean',
                     },
-                    'organization-limit': {
+                    limit: {
                       describe:
                         'Maximum number of organizations a user can create',
                       type: 'number',
@@ -529,7 +529,7 @@ export const builder = (argv: yargs.Argv) => {
                     type: 'boolean',
                     demandOption: true,
                   },
-                  'webhook-url': {
+                  url: {
                     describe: 'Webhook endpoint URL',
                     type: 'string',
                   },
@@ -1247,7 +1247,7 @@ const organizationGet = async (props: AuthBranchProps) => {
 const organizationUpdate = async (
   props: AuthBranchProps & {
     enabled?: boolean;
-    organizationLimit?: number;
+    limit?: number;
     creatorRole?: string;
   },
 ) => {
@@ -1257,7 +1257,7 @@ const organizationUpdate = async (
     branchId,
     {
       enabled: props.enabled,
-      organization_limit: props.organizationLimit,
+      organization_limit: props.limit,
       creator_role: props.creatorRole as 'admin' | 'owner',
     },
   );
@@ -1304,7 +1304,7 @@ const webhookGet = async (props: AuthBranchProps) => {
 const webhookUpdate = async (
   props: AuthBranchProps & {
     enabled: boolean;
-    webhookUrl?: string;
+    url?: string;
     enabledEvents?: string[];
     timeout?: number;
   },
@@ -1315,7 +1315,7 @@ const webhookUpdate = async (
     branchId,
     {
       enabled: props.enabled,
-      webhook_url: props.webhookUrl,
+      webhook_url: props.url,
       enabled_events: props.enabledEvents as
         | (
             | 'user.before_create'

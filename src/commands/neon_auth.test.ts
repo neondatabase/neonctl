@@ -336,7 +336,7 @@ describe('neon-auth', () => {
       '--branch',
       'test_branch',
       '--enabled',
-      '--organization-limit',
+      '--limit',
       '10',
     ]);
   });
@@ -367,7 +367,7 @@ describe('neon-auth', () => {
       '--branch',
       'test_branch',
       '--enabled',
-      '--webhook-url',
+      '--url',
       'https://hooks.test.com/webhook',
       '--enabled-events',
       'user.created',
