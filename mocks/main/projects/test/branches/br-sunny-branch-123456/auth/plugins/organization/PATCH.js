@@ -1,4 +1,8 @@
+import { expect } from 'vitest';
+
 export default function (req, res) {
+  expect(req.body).toHaveProperty('enabled');
+  expect(req.body).toHaveProperty('organization_limit');
   res.send({
     enabled: req.body.enabled ?? true,
     organization_limit: req.body.organization_limit ?? 5,

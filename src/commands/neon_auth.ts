@@ -491,7 +491,7 @@ export const builder = (argv: yargs.Argv) => {
                       describe: 'Enable the organization plugin',
                       type: 'boolean',
                     },
-                    limit: {
+                    'organization-limit': {
                       describe:
                         'Maximum number of organizations a user can create',
                       type: 'number',
@@ -529,7 +529,7 @@ export const builder = (argv: yargs.Argv) => {
                     type: 'boolean',
                     demandOption: true,
                   },
-                  url: {
+                  'webhook-url': {
                     describe: 'Webhook endpoint URL',
                     type: 'string',
                   },
@@ -1205,7 +1205,7 @@ const emailProviderTest = async (
     printMessage('Test email sent successfully');
   } else {
     process.stdout.write(
-      `\n${chalk.green('Test email failed')}\n  ${data.error_message ?? 'Unknown error'}\n\n`,
+      `\n${chalk.red('Test email failed')}\n  ${data.error_message ?? 'Unknown error'}\n\n`,
     );
   }
 };
@@ -1230,14 +1230,14 @@ const organizationGet = async (props: AuthBranchProps) => {
   );
   const org = data.organization;
   if (!org) {
-    if (props.output !== 'table') {
+    if (props.output === 'json' || props.output === 'yaml') {
       writer(props).end({} as any, { fields: ORGANIZATION_FIELDS as any });
       return;
     }
     printMessage('No organization plugin config found.');
     return;
   }
-  if (props.output !== 'table') {
+  if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(org as any, { fields: ORGANIZATION_FIELDS as any });
     return;
   }
@@ -1247,7 +1247,7 @@ const organizationGet = async (props: AuthBranchProps) => {
 const organizationUpdate = async (
   props: AuthBranchProps & {
     enabled?: boolean;
-    limit?: number;
+    organizationLimit?: number;
     creatorRole?: string;
   },
 ) => {
@@ -1257,11 +1257,11 @@ const organizationUpdate = async (
     branchId,
     {
       enabled: props.enabled,
-      organization_limit: props.limit,
+      organization_limit: props.organizationLimit,
       creator_role: props.creatorRole as 'admin' | 'owner',
     },
   );
-  if (props.output !== 'table') {
+  if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(data as any, { fields: ORGANIZATION_FIELDS as any });
     return;
   }
@@ -1304,7 +1304,7 @@ const webhookGet = async (props: AuthBranchProps) => {
 const webhookUpdate = async (
   props: AuthBranchProps & {
     enabled: boolean;
-    url?: string;
+    webhookUrl?: string;
     enabledEvents?: string[];
     timeout?: number;
   },
@@ -1315,7 +1315,7 @@ const webhookUpdate = async (
     branchId,
     {
       enabled: props.enabled,
-      webhook_url: props.url,
+      webhook_url: props.webhookUrl,
       enabled_events: props.enabledEvents as
         | (
             | 'user.before_create'

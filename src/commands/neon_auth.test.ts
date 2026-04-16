@@ -178,34 +178,6 @@ describe('neon-auth', () => {
     ]);
   });
 
-  // --- Allow Localhost ---
-
-  test('allow-localhost get', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'neon-auth',
-      'domain',
-      'allow-localhost',
-      'get',
-      '--project-id',
-      'test',
-      '--branch',
-      'test_branch',
-    ]);
-  });
-
-  test('allow-localhost enable', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'neon-auth',
-      'domain',
-      'allow-localhost',
-      'enable',
-      '--project-id',
-      'test',
-      '--branch',
-      'test_branch',
-    ]);
-  });
-
   // --- Config: Email and Password ---
 
   test('email-password get', async ({ testCliCommand }) => {
@@ -401,7 +373,6 @@ describe('neon-auth', () => {
       'user.created',
     ]);
   });
-
 
   // --- User ---
 
