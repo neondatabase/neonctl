@@ -421,7 +421,7 @@ const disable = async (props: AuthBranchProps & { deleteData: boolean }) => {
 // --- OAuth provider ---
 
 const SHARED_PROVIDER_DISCLAIMER =
-  'Caution: Shared keys are created by the Neon team for development only ' +
+  'Shared keys are created by the Neon team for development only ' +
   'and should not be used for production apps. It helps you get started, ' +
   'but will show Neon branding (logo and name) on the OAuth consent screen.';
 
@@ -437,7 +437,7 @@ const oauthProviderList = async (props: AuthBranchProps) => {
   );
   if (hasShared && props.output === 'table') {
     process.stdout.write(
-      `\n${chalk.yellow('Caution:')} ${SHARED_PROVIDER_DISCLAIMER.slice('Caution: '.length)}\n\n`,
+      `\n${chalk.yellow('Caution:')} ${SHARED_PROVIDER_DISCLAIMER}\n\n`,
     );
   }
 };
@@ -499,15 +499,33 @@ const oauthProviderUpdate = async (
   },
 ) => {
   const branchId = await resolveBranch(props);
-  const { data } = await props.apiClient.updateBranchNeonAuthOauthProvider(
-    props.projectId,
-    branchId,
-    props.providerId as NeonAuthOauthProviderId,
-    {
-      client_id: props.oauthClientId,
-      client_secret: props.oauthClientSecret,
-    },
-  );
+  let data: Awaited<
+    ReturnType<typeof props.apiClient.updateBranchNeonAuthOauthProvider>
+  >['data'];
+  try {
+    ({ data } = await props.apiClient.updateBranchNeonAuthOauthProvider(
+      props.projectId,
+      branchId,
+      props.providerId as NeonAuthOauthProviderId,
+      {
+        client_id: props.oauthClientId,
+        client_secret: props.oauthClientSecret,
+      },
+    ));
+  } catch (err) {
+    if (
+      isAxiosError(err) &&
+      (err.response?.data as { code?: string } | undefined)?.code ===
+        'INVALID_SHARED_OAUTH_PROVIDER'
+    ) {
+      throw new Error(
+        `The "${props.providerId}" provider requires your own OAuth app credentials.\n` +
+          `Re-run with --oauth-client-id and --oauth-client-secret to provide them.\n` +
+          `Create an OAuth app at your provider and use those credentials.`,
+      );
+    }
+    throw err;
+  }
   if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
   } else {
@@ -593,14 +611,17 @@ const domainList = async (props: AuthBranchProps) => {
 };
 
 const validateDomainUri = (domain: string) => {
+  let url: URL;
   try {
-    const url = new URL(domain);
-    if (!['http:', 'https:'].includes(url.protocol)) {
-      throw new Error();
-    }
+    url = new URL(domain);
   } catch {
     throw new Error(
-      `Invalid domain URI "${domain}". Must be a full URI including scheme, e.g. https://${domain.replace(/^https?:\/\//, '')}`,
+      `Invalid domain URI "${domain}". Must be a full URI including scheme, e.g. https://${domain}`,
+    );
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error(
+      `Invalid domain URI "${domain}". Must use http or https scheme, e.g. https://${url.host}`,
     );
   }
 };
