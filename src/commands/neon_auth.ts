@@ -294,7 +294,14 @@ export const builder = (argv: yargs.Argv) => {
         .command(
           'delete <user-id>',
           'Delete an auth user',
-          (yargs) => yargs,
+          (yargs) =>
+            yargs
+              .usage('$0 neon-auth user delete <user-id> [options]')
+              .positional('user-id', {
+                describe: 'ID of the user to delete',
+                type: 'string',
+                demandOption: true,
+              }),
           async (args) => {
             await userDelete(args as any);
           },
@@ -303,14 +310,21 @@ export const builder = (argv: yargs.Argv) => {
           'set-role <user-id>',
           'Set roles for an auth user',
           (yargs) =>
-            yargs.options({
-              roles: {
-                describe: 'Roles to assign',
+            yargs
+              .usage('$0 neon-auth user set-role <user-id> [options]')
+              .positional('user-id', {
+                describe: 'ID of the user to update',
                 type: 'string',
-                array: true,
                 demandOption: true,
-              },
-            }),
+              })
+              .options({
+                roles: {
+                  describe: 'Roles to assign',
+                  type: 'string',
+                  array: true,
+                  demandOption: true,
+                },
+              }),
           async (args) => {
             await userSetRole(args as any);
           },
@@ -431,6 +445,10 @@ const oauthProviderList = async (props: AuthBranchProps) => {
     props.projectId,
     branchId,
   );
+  if (data.providers.length === 0 && props.output === 'table') {
+    printMessage('No OAuth providers are configured for this branch.');
+    return;
+  }
   writer(props).end(data.providers, { fields: OAUTH_PROVIDER_FIELDS });
   const hasShared = data.providers.some(
     (p) => p.type === NeonAuthOauthProviderType.Shared,
