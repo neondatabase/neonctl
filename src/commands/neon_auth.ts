@@ -2,6 +2,8 @@ import {
   NeonAuthSupportedAuthProvider,
   NeonAuthCreateIntegrationResponse,
   NeonAuthIntegration,
+  NeonAuthOauthProviderId,
+  NeonAuthOauthProviderType,
 } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 import chalk from 'chalk';
@@ -44,6 +46,18 @@ const INTEGRATION_STATUS_FIELDS = [
   'created_at',
   'jwks_url',
 ] as const;
+
+const OAUTH_PROVIDER_FIELDS = ['id', 'type', 'client_id'] as const;
+
+const ALLOW_LOCALHOST_FIELDS = ['allow_localhost'] as const;
+
+const SUPPORTED_OAUTH_PROVIDERS = [
+  NeonAuthOauthProviderId.Google,
+  NeonAuthOauthProviderId.Github,
+  NeonAuthOauthProviderId.Vercel,
+] as const;
+
+const DOMAIN_FIELDS = ['domain'] as const;
 
 export const command = 'neon-auth';
 export const describe = 'Manage Neon Auth';
@@ -98,7 +112,224 @@ export const builder = (argv: yargs.Argv) => {
       async (args) => {
         await disable(args as any);
       },
-    );
+    )
+    .command('oauth-provider', 'Manage OAuth providers', (yargs) => {
+      return yargs
+        .usage('$0 neon-auth oauth-provider <sub-command> [options]')
+        .command(
+          'list',
+          'List OAuth providers',
+          (yargs) => yargs,
+          async (args) => {
+            await oauthProviderList(args as any);
+          },
+        )
+        .command(
+          'add',
+          'Add an OAuth provider',
+          (yargs) =>
+            yargs.options({
+              'provider-id': {
+                describe: `OAuth provider ID. Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
+                type: 'string',
+                choices: SUPPORTED_OAUTH_PROVIDERS,
+                demandOption: true,
+              },
+              'oauth-client-id': {
+                describe:
+                  "OAuth client ID from your provider app. Omit to use Neon's shared OAuth app.",
+                type: 'string',
+              },
+              'oauth-client-secret': {
+                describe:
+                  "OAuth client secret from your provider app. Omit to use Neon's shared OAuth app.",
+                type: 'string',
+              },
+            }),
+          async (args) => {
+            await oauthProviderAdd(args as any);
+          },
+        )
+        .command(
+          'update',
+          'Update an OAuth provider',
+          (yargs) =>
+            yargs.options({
+              'provider-id': {
+                describe: `OAuth provider ID. Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
+                type: 'string',
+                choices: SUPPORTED_OAUTH_PROVIDERS,
+                demandOption: true,
+              },
+              'oauth-client-id': {
+                describe:
+                  "OAuth client ID from your provider app. Omit to use Neon's shared OAuth app.",
+                type: 'string',
+              },
+              'oauth-client-secret': {
+                describe:
+                  "OAuth client secret from your provider app. Omit to use Neon's shared OAuth app.",
+                type: 'string',
+              },
+            }),
+          async (args) => {
+            await oauthProviderUpdate(args as any);
+          },
+        )
+        .command(
+          'delete',
+          'Delete an OAuth provider',
+          (yargs) =>
+            yargs.options({
+              'provider-id': {
+                describe: `OAuth provider ID. Supported values: ${SUPPORTED_OAUTH_PROVIDERS.join(', ')}`,
+                type: 'string',
+                choices: SUPPORTED_OAUTH_PROVIDERS,
+                demandOption: true,
+              },
+            }),
+          async (args) => {
+            await oauthProviderDelete(args as any);
+          },
+        );
+    })
+    .command('domain', 'Manage redirect URI trusted domains', (yargs) => {
+      return yargs
+        .usage('$0 neon-auth domain <sub-command> [options]')
+        .command(
+          'list',
+          'List trusted domains',
+          (yargs) => yargs,
+          async (args) => {
+            await domainList(args as any);
+          },
+        )
+        .command(
+          'add <domain>',
+          'Add a trusted domain',
+          (yargs) =>
+            yargs
+              .usage('$0 neon-auth domain add <domain> [options]')
+              .positional('domain', {
+                describe: 'Domain to add',
+                type: 'string',
+                demandOption: true,
+              }),
+          async (args) => {
+            await domainAdd(args as any);
+          },
+        )
+        .command(
+          'delete <domain>',
+          'Delete a trusted domain',
+          (yargs) =>
+            yargs
+              .usage('$0 neon-auth domain delete <domain> [options]')
+              .positional('domain', {
+                describe: 'Domain to delete',
+                type: 'string',
+                demandOption: true,
+              }),
+          async (args) => {
+            await domainDelete(args as any);
+          },
+        )
+        .command(
+          'allow-localhost',
+          'Manage localhost connection settings',
+          (yargs) =>
+            yargs
+              .usage(
+                '$0 neon-auth domain allow-localhost <sub-command> [options]',
+              )
+              .command(
+                'get',
+                'Get localhost connection setting',
+                (yargs) => yargs,
+                async (args) => {
+                  await allowLocalhostGet(args as any);
+                },
+              )
+              .command(
+                'enable',
+                'Allow localhost connections',
+                (yargs) => yargs,
+                async (args) => {
+                  await allowLocalhostEnable(args as any);
+                },
+              )
+              .command(
+                'disable',
+                'Restrict localhost connections',
+                (yargs) => yargs,
+                async (args) => {
+                  await allowLocalhostDisable(args as any);
+                },
+              ),
+        );
+    })
+    .command('user', 'Manage Neon Auth users', (yargs) => {
+      return yargs
+        .usage('$0 neon-auth user <sub-command> [options]')
+        .command(
+          'create',
+          'Create an auth user',
+          (yargs) =>
+            yargs.options({
+              email: {
+                describe: 'User email address',
+                type: 'string',
+                demandOption: true,
+              },
+              name: {
+                describe:
+                  'User display name (defaults to email if not provided)',
+                type: 'string',
+              },
+            }),
+          async (args) => {
+            await userCreate(args as any);
+          },
+        )
+        .command(
+          'delete <user-id>',
+          'Delete an auth user',
+          (yargs) =>
+            yargs
+              .usage('$0 neon-auth user delete <user-id> [options]')
+              .positional('user-id', {
+                describe: 'ID of the user to delete',
+                type: 'string',
+                demandOption: true,
+              }),
+          async (args) => {
+            await userDelete(args as any);
+          },
+        )
+        .command(
+          'set-role <user-id>',
+          'Set roles for an auth user',
+          (yargs) =>
+            yargs
+              .usage('$0 neon-auth user set-role <user-id> [options]')
+              .positional('user-id', {
+                describe: 'ID of the user to update',
+                type: 'string',
+                demandOption: true,
+              })
+              .options({
+                roles: {
+                  describe: 'Roles to assign',
+                  type: 'string',
+                  array: true,
+                  demandOption: true,
+                },
+              }),
+          async (args) => {
+            await userSetRole(args as any);
+          },
+        );
+    });
 };
 
 export const handler = (args: yargs.Argv) => {
@@ -199,4 +430,345 @@ const disable = async (props: AuthBranchProps & { deleteData: boolean }) => {
     }),
   );
   printMessage('Neon Auth has been disabled');
+};
+
+// --- OAuth provider ---
+
+const SHARED_PROVIDER_DISCLAIMER =
+  'Shared keys are created by the Neon team for development only ' +
+  'and should not be used for production apps. It helps you get started, ' +
+  'but will show Neon branding (logo and name) on the OAuth consent screen.';
+
+const oauthProviderList = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.listBranchNeonAuthOauthProviders(
+    props.projectId,
+    branchId,
+  );
+  if (data.providers.length === 0 && props.output === 'table') {
+    printMessage('No OAuth providers are configured for this branch.');
+    return;
+  }
+  writer(props).end(data.providers, { fields: OAUTH_PROVIDER_FIELDS });
+  const hasShared = data.providers.some(
+    (p) => p.type === NeonAuthOauthProviderType.Shared,
+  );
+  if (hasShared && props.output === 'table') {
+    process.stdout.write(
+      `\n${chalk.yellow('Caution:')} ${SHARED_PROVIDER_DISCLAIMER}\n\n`,
+    );
+  }
+};
+
+const oauthProviderAdd = async (
+  props: AuthBranchProps & {
+    providerId: string;
+    oauthClientId?: string;
+    oauthClientSecret?: string;
+  },
+) => {
+  const branchId = await resolveBranch(props);
+  let data: Awaited<
+    ReturnType<typeof props.apiClient.addBranchNeonAuthOauthProvider>
+  >['data'];
+  try {
+    ({ data } = await props.apiClient.addBranchNeonAuthOauthProvider(
+      props.projectId,
+      branchId,
+      {
+        id: props.providerId as NeonAuthOauthProviderId,
+        client_id: props.oauthClientId,
+        client_secret: props.oauthClientSecret,
+      },
+    ));
+  } catch (err) {
+    if (
+      isAxiosError(err) &&
+      (err.response?.data as { code?: string } | undefined)?.code ===
+        'INVALID_SHARED_OAUTH_PROVIDER'
+    ) {
+      throw new Error(
+        `The "${props.providerId}" provider requires your own OAuth app credentials.\n` +
+          `Re-run with --oauth-client-id and --oauth-client-secret to provide them.\n` +
+          `Create an OAuth app at your provider and use those credentials.`,
+      );
+    }
+    throw err;
+  }
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
+  } else {
+    printKvBlock('OAuth provider added', [
+      ['ID:         ', data.id],
+      ['Type:       ', data.type],
+      ...(data.client_id
+        ? [['Client ID:  ', data.client_id] as [string, string]]
+        : []),
+    ]);
+  }
+  await printCallbackInstructions(props, branchId, props.providerId);
+};
+
+const oauthProviderUpdate = async (
+  props: AuthBranchProps & {
+    providerId: string;
+    oauthClientId?: string;
+    oauthClientSecret?: string;
+  },
+) => {
+  const branchId = await resolveBranch(props);
+  let data: Awaited<
+    ReturnType<typeof props.apiClient.updateBranchNeonAuthOauthProvider>
+  >['data'];
+  try {
+    ({ data } = await props.apiClient.updateBranchNeonAuthOauthProvider(
+      props.projectId,
+      branchId,
+      props.providerId as NeonAuthOauthProviderId,
+      {
+        client_id: props.oauthClientId,
+        client_secret: props.oauthClientSecret,
+      },
+    ));
+  } catch (err) {
+    if (
+      isAxiosError(err) &&
+      (err.response?.data as { code?: string } | undefined)?.code ===
+        'INVALID_SHARED_OAUTH_PROVIDER'
+    ) {
+      throw new Error(
+        `The "${props.providerId}" provider requires your own OAuth app credentials.\n` +
+          `Re-run with --oauth-client-id and --oauth-client-secret to provide them.\n` +
+          `Create an OAuth app at your provider and use those credentials.`,
+      );
+    }
+    throw err;
+  }
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: OAUTH_PROVIDER_FIELDS });
+  } else {
+    printKvBlock('OAuth provider updated', [
+      ['ID:         ', data.id],
+      ['Type:       ', data.type],
+      ...(data.client_id
+        ? [['Client ID:  ', data.client_id] as [string, string]]
+        : []),
+    ]);
+  }
+  await printCallbackInstructions(props, branchId, props.providerId);
+};
+
+const CALLBACK_INSTRUCTIONS: Record<
+  string,
+  { lead: string; urlLabel: string }
+> = {
+  github: {
+    lead: 'Create an OAuth app in the GitHub Developer Portal and add the following authorization callback URL:',
+    urlLabel: 'callback/github',
+  },
+  vercel: {
+    lead: 'Create a Vercel App in your Vercel Dashboard and add the following authorization callback URL:',
+    urlLabel: 'callback/vercel',
+  },
+  google: {
+    lead: 'Get Google credentials by creating an OAuth client in Google Cloud Console > Credentials, and add the following authorized redirect URL:',
+    urlLabel: 'callback/google',
+  },
+};
+
+const printCallbackInstructions = async (
+  props: AuthBranchProps,
+  branchId: string,
+  providerId: string,
+) => {
+  const instructions = CALLBACK_INSTRUCTIONS[providerId];
+  if (!instructions) return;
+  if (props.output === 'json' || props.output === 'yaml') return;
+
+  let baseUrl: string | undefined;
+  try {
+    const { data } = await props.apiClient.getNeonAuth(
+      props.projectId,
+      branchId,
+    );
+    baseUrl = data.base_url;
+  } catch {
+    return;
+  }
+  if (!baseUrl) return;
+
+  const callbackUrl = `${baseUrl.replace(/\/$/, '')}/${instructions.urlLabel}`;
+  printKvBlock(instructions.lead, [['URL:  ', callbackUrl]]);
+};
+
+const oauthProviderDelete = async (
+  props: AuthBranchProps & { providerId: string },
+) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.deleteBranchNeonAuthOauthProvider(
+    props.projectId,
+    branchId,
+    props.providerId as NeonAuthOauthProviderId,
+  );
+  printMessage(`OAuth provider "${props.providerId}" deleted`);
+};
+
+// --- Domains ---
+
+const domainList = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.listBranchNeonAuthTrustedDomains(
+    props.projectId,
+    branchId,
+  );
+  if (data.domains.length === 0 && props.output === 'table') {
+    printMessage('No trusted domains are configured for this branch.');
+    return;
+  }
+  writer(props).end(data.domains, { fields: DOMAIN_FIELDS });
+};
+
+const validateDomainUri = (domain: string) => {
+  let url: URL;
+  try {
+    url = new URL(domain);
+  } catch {
+    throw new Error(
+      `Invalid domain URI "${domain}". Must be a full URI including scheme, e.g. https://${domain}`,
+    );
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error(
+      `Invalid domain URI "${domain}". Must use http or https scheme, e.g. https://${url.host}`,
+    );
+  }
+};
+
+const domainAdd = async (props: AuthBranchProps & { domain: string }) => {
+  validateDomainUri(props.domain);
+  const branchId = await resolveBranch(props);
+  await props.apiClient.addBranchNeonAuthTrustedDomain(
+    props.projectId,
+    branchId,
+    {
+      domain: props.domain,
+      auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
+    },
+  );
+  printMessage(`Domain "${props.domain}" added`);
+};
+
+const domainDelete = async (props: AuthBranchProps & { domain: string }) => {
+  validateDomainUri(props.domain);
+  const branchId = await resolveBranch(props);
+  const { data: existing } =
+    await props.apiClient.listBranchNeonAuthTrustedDomains(
+      props.projectId,
+      branchId,
+    );
+  if (!existing.domains.some((d) => d.domain === props.domain)) {
+    throw new Error(
+      `Domain "${props.domain}" is not in the trusted domains list.`,
+    );
+  }
+  await props.apiClient.deleteBranchNeonAuthTrustedDomain(
+    props.projectId,
+    branchId,
+    {
+      auth_provider: NeonAuthSupportedAuthProvider.BetterAuth,
+      domains: [{ domain: props.domain }],
+    },
+  );
+  printMessage(`Domain "${props.domain}" deleted`);
+};
+
+// --- Allow localhost ---
+
+const allowLocalhostGet = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.getNeonAuthAllowLocalhost(
+    props.projectId,
+    branchId,
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: ALLOW_LOCALHOST_FIELDS });
+    return;
+  }
+  printKvBlock('Localhost connection settings', [
+    ['Allow localhost:', String(data.allow_localhost)],
+  ]);
+};
+
+const allowLocalhostEnable = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.updateNeonAuthAllowLocalhost(
+    props.projectId,
+    branchId,
+    {
+      allow_localhost: true,
+    },
+  );
+  printMessage('Localhost connections allowed');
+};
+
+const allowLocalhostDisable = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.updateNeonAuthAllowLocalhost(
+    props.projectId,
+    branchId,
+    {
+      allow_localhost: false,
+    },
+  );
+  printMessage('Localhost connections restricted');
+};
+
+// --- User ---
+
+const userCreate = async (
+  props: AuthBranchProps & { email: string; name?: string },
+) => {
+  const branchId = await resolveBranch(props);
+  const requestBody = {
+    email: props.email,
+    name: props.name ?? props.email,
+  };
+  const { data } = await props.apiClient.createBranchNeonAuthNewUser(
+    props.projectId,
+    branchId,
+    requestBody,
+  );
+  const displayName =
+    requestBody.name !== props.email ? requestBody.name : undefined;
+  printKvBlock('User created', [
+    ['ID:    ', data.id],
+    ['Email: ', requestBody.email],
+    ...(displayName ? [['Name:  ', displayName] as [string, string]] : []),
+  ]);
+};
+
+const userDelete = async (props: AuthBranchProps & { userId: string }) => {
+  const branchId = await resolveBranch(props);
+  await props.apiClient.deleteBranchNeonAuthUser(
+    props.projectId,
+    branchId,
+    props.userId,
+  );
+  printMessage(`User "${props.userId}" deleted`);
+};
+
+const userSetRole = async (
+  props: AuthBranchProps & { userId: string; roles: string[] },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.updateNeonAuthUserRole(
+    props.projectId,
+    branchId,
+    props.userId,
+    { roles: props.roles },
+  );
+  printKvBlock('Roles updated', [
+    ['User ID: ', data.id],
+    ['Roles:   ', props.roles.join(', ')],
+  ]);
 };
