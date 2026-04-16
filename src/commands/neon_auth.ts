@@ -1031,8 +1031,11 @@ const printEmailPasswordConfig = (
   }
   const kv = (key: string, value: string) =>
     process.stdout.write(`  ${chalk.green(key)}  ${value}\n`);
-  if (title) process.stdout.write(`\n${chalk.green(title)}\n`);
-  process.stdout.write('\n');
+  if (title) {
+    process.stdout.write(`\n${chalk.green(title)}\n`);
+  } else {
+    process.stdout.write('\n');
+  }
   kv('Enabled:                    ', String(data.enabled));
   kv('Verification Method:        ', data.email_verification_method);
   kv('Require Verification:       ', String(data.require_email_verification));
@@ -1087,7 +1090,11 @@ const emailPasswordUpdate = async (
       disable_sign_up: props.disableSignUp,
     },
   );
-  printEmailPasswordConfig(props, data, 'Email password settings updated');
+  printEmailPasswordConfig(
+    props,
+    data,
+    'Email & password auth configuration updated',
+  );
 };
 
 // --- Email provider ---
