@@ -151,7 +151,6 @@ client_id: my-client-id
 exports[`neon-auth > organization get 1`] = `
 "enabled: true
 organization_limit: 5
-allow_user_to_create_organization: true
 creator_role: owner
 "
 `;
@@ -159,7 +158,6 @@ creator_role: owner
 exports[`neon-auth > organization update 1`] = `
 "enabled: true
 organization_limit: 10
-allow_user_to_create_organization: true
 creator_role: owner
 "
 `;

@@ -2,7 +2,6 @@
   "organization": {
     "enabled": true,
     "organization_limit": 5,
-    "allow_user_to_create_organization": true,
     "creator_role": "owner"
   },
   "email_provider": {
