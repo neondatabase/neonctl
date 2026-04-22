@@ -53,6 +53,45 @@ exports[`neon-auth > domain list 1`] = `
 "
 `;
 
+exports[`neon-auth > email-password get 1`] = `
+"enabled: true
+email_verification_method: link
+require_email_verification: false
+auto_sign_in_after_verification: true
+send_verification_email_on_sign_up: true
+send_verification_email_on_sign_in: false
+disable_sign_up: false
+"
+`;
+
+exports[`neon-auth > email-password update 1`] = `
+"enabled: true
+email_verification_method: link
+require_email_verification: true
+auto_sign_in_after_verification: true
+send_verification_email_on_sign_up: true
+send_verification_email_on_sign_in: false
+disable_sign_up: false
+"
+`;
+
+exports[`neon-auth > email-provider get 1`] = `
+"type: shared
+sender_email: noreply@example.com
+sender_name: My App
+"
+`;
+
+exports[`neon-auth > email-provider test 1`] = `
+"success: true
+"
+`;
+
+exports[`neon-auth > email-provider update 1`] = `
+"type: shared
+"
+`;
+
 exports[`neon-auth > enable 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
@@ -107,6 +146,20 @@ client_id: my-client-id
 "
 `;
 
+exports[`neon-auth > organization get 1`] = `
+"enabled: true
+organization_limit: 5
+creator_role: owner
+"
+`;
+
+exports[`neon-auth > organization update 1`] = `
+"enabled: true
+organization_limit: 10
+creator_role: owner
+"
+`;
+
 exports[`neon-auth > status 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
@@ -148,5 +201,22 @@ Roles updated
   User ID:   test-user-id
   Roles:     admin
 
+"
+`;
+
+exports[`neon-auth > webhook get 1`] = `
+"enabled: false
+webhook_url: ""
+enabled_events: []
+timeout_seconds: 5
+"
+`;
+
+exports[`neon-auth > webhook update 1`] = `
+"enabled: true
+webhook_url: https://hooks.test.com/webhook
+enabled_events:
+  - user.created
+timeout_seconds: 5
 "
 `;

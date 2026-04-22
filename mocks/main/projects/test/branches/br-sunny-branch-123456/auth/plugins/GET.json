@@ -1,0 +1,13 @@
+{
+  "organization": {
+    "enabled": true,
+    "organization_limit": 5,
+    "creator_role": "owner"
+  },
+  "email_provider": {
+    "type": "shared",
+    "sender_email": "noreply@example.com",
+    "sender_name": "My App"
+  },
+  "allow_localhost": true
+}

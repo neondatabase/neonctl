@@ -4,6 +4,7 @@ import {
   NeonAuthIntegration,
   NeonAuthOauthProviderId,
   NeonAuthOauthProviderType,
+  NeonAuthEmailVerificationMethod,
 } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 import chalk from 'chalk';
@@ -58,6 +59,40 @@ const SUPPORTED_OAUTH_PROVIDERS = [
 ] as const;
 
 const DOMAIN_FIELDS = ['domain'] as const;
+
+const EMAIL_PASSWORD_FIELDS = [
+  'enabled',
+  'email_verification_method',
+  'require_email_verification',
+  'auto_sign_in_after_verification',
+  'send_verification_email_on_sign_up',
+  'send_verification_email_on_sign_in',
+  'disable_sign_up',
+] as const;
+
+const EMAIL_PROVIDER_FIELDS = [
+  'type',
+  'host',
+  'port',
+  'username',
+  'sender_email',
+  'sender_name',
+] as const;
+
+const ORGANIZATION_FIELDS = [
+  'enabled',
+  'organization_limit',
+  'creator_role',
+] as const;
+
+const WEBHOOK_FIELDS = [
+  'enabled',
+  'webhook_url',
+  'enabled_events',
+  'timeout_seconds',
+] as const;
+
+const TEST_EMAIL_FIELDS = ['success', 'error_message'] as const;
 
 export const command = 'neon-auth';
 export const describe = 'Manage Neon Auth';
@@ -267,6 +302,258 @@ export const builder = (argv: yargs.Argv) => {
                 },
               ),
         );
+    })
+    .command('config', 'Manage Neon Auth configuration', (yargs) => {
+      return yargs
+        .usage('$0 neon-auth config <sub-command> [options]')
+        .command(
+          'email-password',
+          'Manage email and password authentication settings',
+          (yargs) => {
+            return yargs
+              .usage(
+                '$0 neon-auth config email-password <sub-command> [options]',
+              )
+              .command(
+                'get',
+                'Get email and password config',
+                (yargs) => yargs,
+                async (args) => {
+                  await emailPasswordGet(args as any);
+                },
+              )
+              .command(
+                'update',
+                'Update email and password config',
+                (yargs) =>
+                  yargs.options({
+                    enabled: {
+                      describe: 'Enable email and password authentication',
+                      type: 'boolean',
+                    },
+                    'email-verification-method': {
+                      describe: 'Email verification method',
+                      type: 'string',
+                      choices: Object.values(NeonAuthEmailVerificationMethod),
+                    },
+                    'require-email-verification': {
+                      describe:
+                        'Require email verification before users can sign in',
+                      type: 'boolean',
+                    },
+                    'auto-sign-in-after-verification': {
+                      describe:
+                        'Auto sign in users after verifying their email',
+                      type: 'boolean',
+                    },
+                    'send-verification-email-on-sign-up': {
+                      describe: 'Send verification email on sign up',
+                      type: 'boolean',
+                    },
+                    'send-verification-email-on-sign-in': {
+                      describe: 'Send verification email on sign in',
+                      type: 'boolean',
+                    },
+                    'disable-sign-up': {
+                      describe: 'Disable new user sign ups',
+                      type: 'boolean',
+                    },
+                  }),
+                async (args) => {
+                  await emailPasswordUpdate(args as any);
+                },
+              );
+          },
+        )
+        .command(
+          'email-provider',
+          'Manage email provider configuration',
+          (yargs) => {
+            return yargs
+              .usage(
+                '$0 neon-auth config email-provider <sub-command> [options]',
+              )
+              .command(
+                'get',
+                'Get email provider config',
+                (yargs) => yargs,
+                async (args) => {
+                  await emailProviderGet(args as any);
+                },
+              )
+              .command(
+                'update',
+                'Update email provider config',
+                (yargs) =>
+                  yargs.options({
+                    type: {
+                      describe: 'Email provider type',
+                      type: 'string',
+                      choices: ['standard', 'shared'] as const,
+                      demandOption: true,
+                    },
+                    host: {
+                      describe: 'SMTP host (required for standard)',
+                      type: 'string',
+                    },
+                    port: {
+                      describe: 'SMTP port (required for standard)',
+                      type: 'number',
+                    },
+                    username: {
+                      describe: 'SMTP username (required for standard)',
+                      type: 'string',
+                    },
+                    password: {
+                      describe: 'SMTP password (required for standard)',
+                      type: 'string',
+                    },
+                    'sender-email': {
+                      describe: 'Sender email address',
+                      type: 'string',
+                    },
+                    'sender-name': {
+                      describe: 'Sender display name',
+                      type: 'string',
+                    },
+                  }),
+                async (args) => {
+                  await emailProviderUpdate(args as any);
+                },
+              )
+              .command(
+                'test',
+                'Send a test email',
+                (yargs) =>
+                  yargs.options({
+                    'recipient-email': {
+                      describe: 'Email address to send test email to',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    host: {
+                      describe: 'SMTP host',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    port: {
+                      describe: 'SMTP port',
+                      type: 'number',
+                      demandOption: true,
+                    },
+                    username: {
+                      describe: 'SMTP username',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    password: {
+                      describe: 'SMTP password',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    'sender-email': {
+                      describe: 'Sender email address',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                    'sender-name': {
+                      describe: 'Sender display name',
+                      type: 'string',
+                      demandOption: true,
+                    },
+                  }),
+                async (args) => {
+                  await emailProviderTest(args as any);
+                },
+              );
+          },
+        )
+        .command(
+          'organization',
+          'Manage organization plugin settings',
+          (yargs) => {
+            return yargs
+              .usage('$0 neon-auth config organization <sub-command> [options]')
+              .command(
+                'get',
+                'Get organization plugin config',
+                (yargs) => yargs,
+                async (args) => {
+                  await organizationGet(args as any);
+                },
+              )
+              .command(
+                'update',
+                'Update organization plugin config',
+                (yargs) =>
+                  yargs.options({
+                    enabled: {
+                      describe: 'Enable the organization plugin',
+                      type: 'boolean',
+                    },
+                    limit: {
+                      describe:
+                        'Maximum number of organizations a user can create',
+                      type: 'number',
+                    },
+                    'creator-role': {
+                      describe: 'Role assigned to organization creator',
+                      type: 'string',
+                      choices: ['admin', 'owner'] as const,
+                    },
+                  }),
+                async (args) => {
+                  await organizationUpdate(args as any);
+                },
+              );
+          },
+        )
+        .command('webhook', 'Manage webhook configuration', (yargs) => {
+          return yargs
+            .usage('$0 neon-auth config webhook <sub-command> [options]')
+            .command(
+              'get',
+              'Get webhook config',
+              (yargs) => yargs,
+              async (args) => {
+                await webhookGet(args as any);
+              },
+            )
+            .command(
+              'update',
+              'Update webhook config',
+              (yargs) =>
+                yargs.options({
+                  enabled: {
+                    describe: 'Enable webhooks',
+                    type: 'boolean',
+                    demandOption: true,
+                  },
+                  url: {
+                    describe: 'Webhook endpoint URL',
+                    type: 'string',
+                  },
+                  'enabled-events': {
+                    describe: 'Events to enable',
+                    type: 'string',
+                    choices: [
+                      'user.before_create',
+                      'user.created',
+                      'send.otp',
+                      'send.magic_link',
+                    ] as const,
+                    array: true,
+                  },
+                  timeout: {
+                    describe: 'Webhook timeout in seconds (1-10)',
+                    type: 'number',
+                  },
+                }),
+              async (args) => {
+                await webhookUpdate(args as any);
+              },
+            );
+        });
     })
     .command('user', 'Manage Neon Auth users', (yargs) => {
       return yargs
@@ -721,6 +1008,344 @@ const allowLocalhostDisable = async (props: AuthBranchProps) => {
     },
   );
   printMessage('Localhost connections restricted');
+};
+
+// --- Email and password ---
+
+const printEmailPasswordEntries = (data: {
+  enabled: boolean;
+  email_verification_method: string;
+  require_email_verification: boolean;
+  auto_sign_in_after_verification: boolean;
+  send_verification_email_on_sign_up: boolean;
+  send_verification_email_on_sign_in: boolean;
+  disable_sign_up: boolean;
+}): [string, string][] => [
+  ['Enabled:                    ', String(data.enabled)],
+  ['Verification Method:        ', data.email_verification_method],
+  ['Require Verification:       ', String(data.require_email_verification)],
+  [
+    'Auto Sign In After Verify:  ',
+    String(data.auto_sign_in_after_verification),
+  ],
+  [
+    'Send Email On Sign Up:      ',
+    String(data.send_verification_email_on_sign_up),
+  ],
+  [
+    'Send Email On Sign In:      ',
+    String(data.send_verification_email_on_sign_in),
+  ],
+  ['Disable Sign Up:            ', String(data.disable_sign_up)],
+];
+
+const emailPasswordGet = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.getNeonAuthEmailAndPasswordConfig(
+    props.projectId,
+    branchId,
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: EMAIL_PASSWORD_FIELDS });
+    return;
+  }
+  printKvBlock(
+    'Email & password auth configuration',
+    printEmailPasswordEntries(data),
+  );
+};
+
+const emailPasswordUpdate = async (
+  props: AuthBranchProps & {
+    enabled?: boolean;
+    emailVerificationMethod?: string;
+    requireEmailVerification?: boolean;
+    autoSignInAfterVerification?: boolean;
+    sendVerificationEmailOnSignUp?: boolean;
+    sendVerificationEmailOnSignIn?: boolean;
+    disableSignUp?: boolean;
+  },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.updateNeonAuthEmailAndPasswordConfig(
+    props.projectId,
+    branchId,
+    {
+      enabled: props.enabled,
+      email_verification_method:
+        props.emailVerificationMethod as NeonAuthEmailVerificationMethod,
+      require_email_verification: props.requireEmailVerification,
+      auto_sign_in_after_verification: props.autoSignInAfterVerification,
+      send_verification_email_on_sign_up: props.sendVerificationEmailOnSignUp,
+      send_verification_email_on_sign_in: props.sendVerificationEmailOnSignIn,
+      disable_sign_up: props.disableSignUp,
+    },
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: EMAIL_PASSWORD_FIELDS });
+    return;
+  }
+  printKvBlock(
+    'Email & password auth configuration updated',
+    printEmailPasswordEntries(data),
+  );
+};
+
+// --- Email provider ---
+
+const printEmailProviderEntries = (data: {
+  type: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  sender_email?: string;
+  sender_name?: string;
+}): [string, string | undefined][] => [
+  ['Type:          ', data.type],
+  ...(data.type === 'standard'
+    ? ([
+        ['Host:          ', data.host],
+        ['Port:          ', data.port != null ? String(data.port) : undefined],
+        ['Username:      ', data.username],
+      ] as [string, string | undefined][])
+    : []),
+  ['Sender Email:  ', data.sender_email],
+  ['Sender Name:   ', data.sender_name],
+];
+
+const emailProviderGet = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.getNeonAuthEmailProvider(
+    props.projectId,
+    branchId,
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data as any, { fields: EMAIL_PROVIDER_FIELDS as any });
+    return;
+  }
+  printKvBlock(
+    'Email provider configuration',
+    printEmailProviderEntries(data as any),
+  );
+};
+
+const emailProviderUpdate = async (
+  props: AuthBranchProps & {
+    type: string;
+    host?: string;
+    port?: number;
+    username?: string;
+    password?: string;
+    senderEmail?: string;
+    senderName?: string;
+  },
+) => {
+  if (
+    props.type === 'standard' &&
+    (!props.host || !props.port || !props.username || !props.password)
+  ) {
+    throw new Error(
+      '--host, --port, --username, and --password are required for standard email provider',
+    );
+  }
+  const warnSharedSender =
+    props.type === 'shared' && (props.senderEmail || props.senderName);
+  const branchId = await resolveBranch(props);
+  let config: any;
+  if (props.type === 'standard') {
+    config = {
+      type: 'standard',
+      host: props.host,
+      port: props.port,
+      username: props.username,
+      password: props.password,
+      sender_email: props.senderEmail,
+      sender_name: props.senderName,
+    };
+  } else {
+    config = {
+      type: 'shared',
+    };
+  }
+  const { data } = await props.apiClient.updateNeonAuthEmailProvider(
+    props.projectId,
+    branchId,
+    config,
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data as any, { fields: EMAIL_PROVIDER_FIELDS as any });
+  } else {
+    printKvBlock(
+      'Email provider configuration updated',
+      printEmailProviderEntries(data as any),
+    );
+  }
+  if (warnSharedSender) {
+    process.stderr.write(
+      `${chalk.yellow('Warning:')} --sender-email and --sender-name are ignored for the shared email provider. ` +
+        `These values only take effect with --type standard.\n\n`,
+    );
+  }
+};
+
+const emailProviderTest = async (
+  props: AuthBranchProps & {
+    recipientEmail: string;
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    senderEmail: string;
+    senderName: string;
+  },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.sendNeonAuthTestEmail(
+    props.projectId,
+    branchId,
+    {
+      recipient_email: props.recipientEmail,
+      host: props.host,
+      port: props.port,
+      username: props.username,
+      password: props.password,
+      sender_email: props.senderEmail,
+      sender_name: props.senderName,
+    },
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: TEST_EMAIL_FIELDS });
+  } else if (data.success) {
+    printMessage('Test email sent successfully');
+  } else {
+    process.stdout.write(
+      `\n${chalk.red('Test email failed')}\n  ${data.error_message ?? 'Unknown error'}\n\n`,
+    );
+  }
+};
+
+// --- Organization plugin ---
+
+const printOrganizationEntries = (data: {
+  enabled: boolean;
+  organization_limit: number;
+  creator_role: string;
+}): [string, string][] => [
+  ['Enabled:          ', String(data.enabled)],
+  ['Org Limit:        ', String(data.organization_limit)],
+  ['Creator Role:     ', data.creator_role],
+];
+
+const organizationGet = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.getNeonAuthPluginConfigs(
+    props.projectId,
+    branchId,
+  );
+  const org = data.organization;
+  if (!org) {
+    if (props.output === 'json' || props.output === 'yaml') {
+      writer(props).end({} as any, { fields: ORGANIZATION_FIELDS as any });
+      return;
+    }
+    printMessage('No organization plugin config found.');
+    return;
+  }
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(org as any, { fields: ORGANIZATION_FIELDS as any });
+    return;
+  }
+  printKvBlock('Organization configuration', printOrganizationEntries(org));
+};
+
+const organizationUpdate = async (
+  props: AuthBranchProps & {
+    enabled?: boolean;
+    limit?: number;
+    creatorRole?: string;
+  },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.updateNeonAuthOrganizationPlugin(
+    props.projectId,
+    branchId,
+    {
+      enabled: props.enabled,
+      organization_limit: props.limit,
+      creator_role: props.creatorRole as 'admin' | 'owner',
+    },
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data as any, { fields: ORGANIZATION_FIELDS as any });
+    return;
+  }
+  printKvBlock(
+    'Organization configuration updated',
+    printOrganizationEntries(data),
+  );
+};
+
+// --- Webhook ---
+
+const printWebhookEntries = (data: {
+  enabled: boolean;
+  webhook_url?: string;
+  enabled_events?: string[];
+  timeout_seconds?: number;
+}): [string, string][] => [
+  ['Enabled:        ', String(data.enabled)],
+  ['URL:            ', data.webhook_url ?? ''],
+  ['Events:         ', (data.enabled_events ?? []).join(', ')],
+  [
+    'Timeout (sec):  ',
+    data.timeout_seconds != null ? String(data.timeout_seconds) : '',
+  ],
+];
+
+const webhookGet = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.getNeonAuthWebhookConfig(
+    props.projectId,
+    branchId,
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: WEBHOOK_FIELDS });
+    return;
+  }
+  printKvBlock('Webhook configuration', printWebhookEntries(data));
+};
+
+const webhookUpdate = async (
+  props: AuthBranchProps & {
+    enabled: boolean;
+    url?: string;
+    enabledEvents?: string[];
+    timeout?: number;
+  },
+) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.updateNeonAuthWebhookConfig(
+    props.projectId,
+    branchId,
+    {
+      enabled: props.enabled,
+      webhook_url: props.url,
+      enabled_events: props.enabledEvents as
+        | (
+            | 'user.before_create'
+            | 'user.created'
+            | 'send.otp'
+            | 'send.magic_link'
+          )[]
+        | undefined,
+      timeout_seconds: props.timeout,
+    },
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data, { fields: WEBHOOK_FIELDS });
+    return;
+  }
+  printKvBlock('Webhook configuration updated', printWebhookEntries(data));
 };
 
 // --- User ---
