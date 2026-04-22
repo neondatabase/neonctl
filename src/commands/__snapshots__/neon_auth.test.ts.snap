@@ -160,6 +160,45 @@ creator_role: owner
 "
 `;
 
+exports[`neon-auth > plugins get 1`] = `
+"enabled: true
+organization_limit: 5
+creator_role: owner
+"
+`;
+
+exports[`neon-auth > plugins list 1`] = `
+"organization:
+  enabled: true
+  organization_limit: 5
+  creator_role: owner
+email_provider:
+  type: shared
+  sender_email: noreply@example.com
+  sender_name: My App
+email_and_password:
+  enabled: true
+  email_verification_method: otp
+  require_email_verification: false
+  auto_sign_in_after_verification: true
+  send_verification_email_on_sign_up: false
+  send_verification_email_on_sign_in: false
+  disable_sign_up: false
+oauth_providers:
+  - id: google
+    type: shared
+    client_id: ""
+allow_localhost: true
+"
+`;
+
+exports[`neon-auth > plugins update 1`] = `
+"enabled: true
+organization_limit: 10
+creator_role: owner
+"
+`;
+
 exports[`neon-auth > status 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
