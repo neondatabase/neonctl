@@ -89,8 +89,6 @@ exports[`neon-auth > email-provider test 1`] = `
 
 exports[`neon-auth > email-provider update 1`] = `
 "type: shared
-sender_email: noreply@test.com
-sender_name: Test App
 "
 `;
 

@@ -1148,6 +1148,8 @@ const emailProviderUpdate = async (
       '--host, --port, --username, and --password are required for standard email provider',
     );
   }
+  const warnSharedSender =
+    props.type === 'shared' && (props.senderEmail || props.senderName);
   const branchId = await resolveBranch(props);
   let config: any;
   if (props.type === 'standard') {
@@ -1163,8 +1165,6 @@ const emailProviderUpdate = async (
   } else {
     config = {
       type: 'shared',
-      sender_email: props.senderEmail,
-      sender_name: props.senderName,
     };
   }
   const { data } = await props.apiClient.updateNeonAuthEmailProvider(
@@ -1174,12 +1174,18 @@ const emailProviderUpdate = async (
   );
   if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(data as any, { fields: EMAIL_PROVIDER_FIELDS as any });
-    return;
+  } else {
+    printKvBlock(
+      'Email provider configuration updated',
+      printEmailProviderEntries(data as any),
+    );
   }
-  printKvBlock(
-    'Email provider configuration updated',
-    printEmailProviderEntries(data as any),
-  );
+  if (warnSharedSender) {
+    process.stderr.write(
+      `${chalk.yellow('Warning:')} --sender-email and --sender-name are ignored for the shared email provider. ` +
+        `These values only take effect with --type standard.\n\n`,
+    );
+  }
 };
 
 const emailProviderTest = async (

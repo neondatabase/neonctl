@@ -235,10 +235,6 @@ describe('neon-auth', () => {
       'test_branch',
       '--type',
       'shared',
-      '--sender-email',
-      'noreply@test.com',
-      '--sender-name',
-      'Test App',
     ]);
   });
 
