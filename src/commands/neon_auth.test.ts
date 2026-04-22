@@ -370,6 +370,48 @@ describe('neon-auth', () => {
     ]);
   });
 
+  // --- Plugins ---
+
+  test('plugins list', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'plugins',
+      'list',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('plugins get', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'plugins',
+      'get',
+      'organization',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('plugins update', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'plugins',
+      'update',
+      'organization',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+      '--json',
+      '{"enabled": true, "organization_limit": 10}',
+    ]);
+  });
+
   // --- User ---
 
   test('user create', async ({ testCliCommand }) => {

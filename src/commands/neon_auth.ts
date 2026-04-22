@@ -555,6 +555,63 @@ export const builder = (argv: yargs.Argv) => {
             );
         });
     })
+    .command(
+      'plugins',
+      'View and update Neon Auth plugin configurations',
+      (yargs) => {
+        return yargs
+          .usage('$0 neon-auth plugins <sub-command> [options]')
+          .command(
+            'list',
+            'List all plugin configurations',
+            (yargs) => yargs,
+            async (args) => {
+              await pluginsList(args as any);
+            },
+          )
+          .command(
+            'get <plugin-name>',
+            'Get a specific plugin configuration',
+            (yargs) =>
+              yargs
+                .usage('$0 neon-auth plugins get <plugin-name> [options]')
+                .positional('plugin-name', {
+                  describe:
+                    'Plugin name (e.g. organization, email_provider, email_and_password, oauth_providers, allow_localhost)',
+                  type: 'string',
+                  demandOption: true,
+                }),
+            async (args) => {
+              await pluginsGet(args as any);
+            },
+          )
+          .command(
+            'update <plugin-name>',
+            'Update a plugin configuration using JSON',
+            (yargs) =>
+              yargs
+                .usage(
+                  '$0 neon-auth plugins update <plugin-name> --json \'{"key": "value"}\' [options]',
+                )
+                .positional('plugin-name', {
+                  describe:
+                    'Plugin name (e.g. organization, email_and_password, email_provider, allow_localhost, webhook)',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .options({
+                  json: {
+                    describe: 'JSON configuration to apply',
+                    type: 'string',
+                    demandOption: true,
+                  },
+                }),
+            async (args) => {
+              await pluginsUpdate(args as any);
+            },
+          );
+      },
+    )
     .command('user', 'Manage Neon Auth users', (yargs) => {
       return yargs
         .usage('$0 neon-auth user <sub-command> [options]')
@@ -1346,6 +1403,167 @@ const webhookUpdate = async (
     return;
   }
   printKvBlock('Webhook configuration updated', printWebhookEntries(data));
+};
+
+// --- Plugins ---
+
+const pluginTitle = (name: string): string =>
+  name.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase()) +
+  ' configuration';
+
+const formatValue = (v: unknown): string => {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  return JSON.stringify(v);
+};
+
+const PLUGIN_UPDATE_METHODS: Record<
+  string,
+  (props: AuthBranchProps, branchId: string, data: any) => Promise<any>
+> = {
+  organization: (props, branchId, data) =>
+    props.apiClient.updateNeonAuthOrganizationPlugin(
+      props.projectId,
+      branchId,
+      data,
+    ),
+  email_and_password: (props, branchId, data) =>
+    props.apiClient.updateNeonAuthEmailAndPasswordConfig(
+      props.projectId,
+      branchId,
+      data,
+    ),
+  email_provider: (props, branchId, data) =>
+    props.apiClient.updateNeonAuthEmailProvider(
+      props.projectId,
+      branchId,
+      data,
+    ),
+  allow_localhost: (props, branchId, data) =>
+    props.apiClient.updateNeonAuthAllowLocalhost(
+      props.projectId,
+      branchId,
+      data,
+    ),
+  webhook: (props, branchId, data) =>
+    props.apiClient.updateNeonAuthWebhookConfig(
+      props.projectId,
+      branchId,
+      data,
+    ),
+};
+
+const pluginsList = async (props: AuthBranchProps) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.getNeonAuthPluginConfigs(
+    props.projectId,
+    branchId,
+  );
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(data as any, {
+      fields: Object.keys(data) as any,
+    });
+    return;
+  }
+  const summarize = (value: unknown): string => {
+    if (value == null) return 'not configured';
+    if (typeof value === 'boolean') return String(value);
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number') return String(value);
+    if (Array.isArray(value))
+      return value.length === 1 ? '1 item' : `${String(value.length)} items`;
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      if ('enabled' in obj) return obj.enabled ? 'enabled' : 'disabled';
+      if ('type' in obj) return formatValue(obj.type);
+    }
+    return JSON.stringify(value);
+  };
+  const entries: [string, string][] = Object.entries(data).map(
+    ([key, value]) => [key.padEnd(24), summarize(value)],
+  );
+  printKvBlock('Neon Auth plugins', entries);
+};
+
+const pluginsGet = async (props: AuthBranchProps & { pluginName: string }) => {
+  const branchId = await resolveBranch(props);
+  const { data } = await props.apiClient.getNeonAuthPluginConfigs(
+    props.projectId,
+    branchId,
+  );
+  const plugin = (data as any)[props.pluginName];
+  if (plugin === undefined) {
+    const available = Object.keys(data).join(', ');
+    throw new Error(
+      `Unknown plugin "${props.pluginName}". Available plugins: ${available}`,
+    );
+  }
+  if (props.output === 'json' || props.output === 'yaml') {
+    const fields =
+      typeof plugin === 'object' && !Array.isArray(plugin)
+        ? Object.keys(plugin)
+        : [];
+    writer(props).end(plugin, { fields: fields as any });
+    return;
+  }
+  if (typeof plugin === 'object' && !Array.isArray(plugin) && plugin != null) {
+    const entries: [string, string][] = Object.entries(plugin).map(([k, v]) => [
+      `${k}:`.padEnd(18),
+      formatValue(v),
+    ]);
+    printKvBlock(pluginTitle(props.pluginName), entries);
+  } else if (Array.isArray(plugin)) {
+    const entries: [string, string][] = plugin.map((item, i) => [
+      `[${i}]:`.padEnd(18),
+      typeof item === 'object' ? JSON.stringify(item) : String(item),
+    ]);
+    printKvBlock(pluginTitle(props.pluginName), entries);
+  } else {
+    printKvBlock(pluginTitle(props.pluginName), [
+      ['Value:'.padEnd(18), String(plugin)],
+    ]);
+  }
+};
+
+const pluginsUpdate = async (
+  props: AuthBranchProps & { pluginName: string; json: string },
+) => {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(props.json);
+  } catch {
+    throw new Error('Invalid JSON. Please provide valid JSON with --json.');
+  }
+
+  const updateMethod = PLUGIN_UPDATE_METHODS[props.pluginName];
+  if (!updateMethod) {
+    const available = Object.keys(PLUGIN_UPDATE_METHODS).join(', ');
+    throw new Error(
+      `Unknown plugin "${props.pluginName}". Updatable plugins: ${available}`,
+    );
+  }
+
+  const branchId = await resolveBranch(props);
+  const { data } = await updateMethod(props, branchId, parsed);
+
+  if (props.output === 'json' || props.output === 'yaml') {
+    const fields =
+      typeof data === 'object' && !Array.isArray(data) ? Object.keys(data) : [];
+    writer(props).end(data, { fields: fields as any });
+    return;
+  }
+  if (typeof data === 'object' && !Array.isArray(data) && data != null) {
+    const entries: [string, string][] = Object.entries(data).map(([k, v]) => [
+      `${k}:`.padEnd(18),
+      formatValue(v),
+    ]);
+    printKvBlock(`${pluginTitle(props.pluginName)} updated`, entries);
+  } else {
+    printKvBlock(`${pluginTitle(props.pluginName)} updated`, [
+      ['Value:'.padEnd(18), String(data)],
+    ]);
+  }
 };
 
 // --- User ---
