@@ -13,3 +13,4 @@ bundle/
 coverage
 tmp/
 .history
+.env
