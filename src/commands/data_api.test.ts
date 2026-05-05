@@ -53,4 +53,27 @@ describe('data-api', () => {
       { mockDir: 'single_org', outputTable: true },
     );
   });
+
+  test('create', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'data-api',
+        'create',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+        '--database',
+        'db1',
+        '--auth-provider',
+        'neon_auth',
+        '--add-default-grants',
+        '--db-schemas',
+        'public,analytics',
+        '--db-max-rows',
+        '500',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
 });
