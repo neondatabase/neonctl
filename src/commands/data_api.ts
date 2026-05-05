@@ -8,6 +8,7 @@ import {
   resolveSingleDatabase,
 } from '../utils/enrichers.js';
 import { log } from '../log.js';
+import { writer } from '../writer.js';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const SETTINGS_FIELDS = [
@@ -162,9 +163,38 @@ const create = (_props: DataApiProps): Promise<void> => {
   throw new Error('Not yet implemented');
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const get = (_props: DataApiProps): Promise<void> => {
-  throw new Error('Not yet implemented');
+const GET_FIELDS = ['url', 'status', 'db_schemas'] as const;
+
+const get = async (props: DataApiProps): Promise<void> => {
+  const branchId = await branchIdFromProps(props);
+  const database = await resolveSingleDatabase({
+    apiClient: props.apiClient,
+    projectId: props.projectId,
+    branchId,
+    database: props.database,
+  });
+  const { data } = await props.apiClient.getProjectBranchDataApi(
+    props.projectId,
+    branchId,
+    database,
+  );
+
+  // Drop available_schemas from json/yaml output (not part of the public surface).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { available_schemas: _ignored, ...publicData } = data;
+
+  // For table output, flatten db_schemas onto the top-level for column rendering.
+  const tableRow = {
+    url: publicData.url,
+    status: publicData.status,
+    db_schemas: (publicData.settings?.db_schemas ?? []).join(', '),
+  };
+
+  if (props.output === 'json' || props.output === 'yaml') {
+    writer(props).end(publicData, { fields: GET_FIELDS });
+    return;
+  }
+  writer(props).end(tableRow, { fields: GET_FIELDS });
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

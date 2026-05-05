@@ -1,3 +1,26 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`data-api > delete 1`] = `""`;
+
+exports[`data-api > get 1`] = `
+"url: https://app-test.dataproxy.neon.tech
+status: active
+settings:
+  db_aggregates_enabled: true
+  db_anon_role: anonymous
+  db_schemas:
+    - public
+    - analytics
+  jwt_role_claim_key: .role
+  db_max_rows: 1000
+"
+`;
+
+exports[`data-api > get with table output 1`] = `
+"┌──────────────────────────────────────┬────────┬───────────────────┐
+│ Url                                  │ Status │ Db Schemas        │
+├──────────────────────────────────────┼────────┼───────────────────┤
+│ https://app-test.dataproxy.neon.tech │ active │ public, analytics │
+└──────────────────────────────────────┴────────┴───────────────────┘
+"
+`;

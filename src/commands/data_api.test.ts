@@ -21,4 +21,36 @@ describe('data-api', () => {
       },
     );
   });
+
+  test('get', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'data-api',
+        'get',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+        '--database',
+        'db1',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
+
+  test('get with table output', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'data-api',
+        'get',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+        '--database',
+        'db1',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
 });
