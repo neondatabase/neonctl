@@ -1,5 +1,10 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`data-api > create 1`] = `
+"url: https://app-test.dataproxy.neon.tech
+"
+`;
+
 exports[`data-api > delete 1`] = `""`;
 
 exports[`data-api > get 1`] = `

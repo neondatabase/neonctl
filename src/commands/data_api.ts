@@ -9,8 +9,11 @@ import {
 } from '../utils/enrichers.js';
 import { log } from '../log.js';
 import { writer } from '../writer.js';
+import type {
+  DataAPICreateRequest,
+  DataAPISettings,
+} from '@neondatabase/api-client';
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const SETTINGS_FIELDS = [
   'db_aggregates_enabled',
   'db_anon_role',
@@ -158,9 +161,71 @@ export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const create = (_props: DataApiProps): Promise<void> => {
-  throw new Error('Not yet implemented');
+const TOP_LEVEL_CREATE_FIELDS = [
+  'auth_provider',
+  'jwks_url',
+  'provider_name',
+  'jwt_audience',
+  'add_default_grants',
+  'skip_auth_schema',
+] as const;
+
+const argKey = (snake: string) => snake.replace(/_/g, '-');
+
+const buildSettings = (
+  args: Record<string, unknown>,
+): DataAPISettings | undefined => {
+  const settings: Record<string, unknown> = {};
+  for (const field of SETTINGS_FIELDS) {
+    const value = args[argKey(field)];
+    if (value === undefined) continue;
+    if (field === 'db_schemas' && typeof value === 'string') {
+      settings[field] = value
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    } else {
+      settings[field] = value;
+    }
+  }
+  return Object.keys(settings).length > 0
+    ? (settings as DataAPISettings)
+    : undefined;
+};
+
+const buildCreateBody = (
+  args: Record<string, unknown>,
+): DataAPICreateRequest => {
+  const body: Record<string, unknown> = {};
+  for (const field of TOP_LEVEL_CREATE_FIELDS) {
+    const value = args[argKey(field)];
+    if (value !== undefined) body[field] = value;
+  }
+  const settings = buildSettings(args);
+  if (settings) body.settings = settings;
+  return body as DataAPICreateRequest;
+};
+
+const create = async (
+  props: DataApiProps & Record<string, unknown>,
+): Promise<void> => {
+  const branchId = await branchIdFromProps(props);
+  const database = await resolveSingleDatabase({
+    apiClient: props.apiClient,
+    projectId: props.projectId,
+    branchId,
+    database: props.database,
+  });
+  const body = buildCreateBody(props);
+  const { data } = await retryOnLock(() =>
+    props.apiClient.createProjectBranchDataApi(
+      props.projectId,
+      branchId,
+      database,
+      body,
+    ),
+  );
+  writer(props).end(data, { fields: ['url'] });
 };
 
 const GET_FIELDS = ['url', 'status', 'db_schemas'] as const;
