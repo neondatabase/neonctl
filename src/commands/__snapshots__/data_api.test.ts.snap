@@ -7,6 +7,10 @@ exports[`data-api > create 1`] = `
 
 exports[`data-api > delete 1`] = `""`;
 
+exports[`data-api > delete fails with helpful error when multiple databases 1`] = `""`;
+
+exports[`data-api > delete with implicit database 1`] = `""`;
+
 exports[`data-api > get 1`] = `
 "url: https://app-test.dataproxy.neon.tech
 status: active
