@@ -1,4 +1,5 @@
 import yargs from 'yargs';
+import { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../api.js';
 import { BranchScopeProps } from '../types.js';
@@ -274,25 +275,56 @@ const update = async (
     database: props.database,
   });
 
+  const userSettings = buildSettings(props);
+
   let settings: DataAPISettings | undefined;
   if (props.replace) {
-    settings = buildSettings(props);
+    settings = userSettings;
   } else {
-    // Merge path implemented in Task 7
-    throw new Error('Merge mode not yet implemented — pass --replace for now');
+    let current: DataAPISettings | undefined;
+    try {
+      const { data } = await props.apiClient.getProjectBranchDataApi(
+        props.projectId,
+        branchId,
+        database,
+      );
+      current = data.settings ?? undefined;
+    } catch (err: unknown) {
+      if (isAxiosError(err) && err.response?.status === 404) {
+        throw new Error(
+          `Data API is not provisioned for ${database} on branch ${branchId}. Run \`neonctl data-api create\` first.`,
+        );
+      }
+      throw err;
+    }
+    if (!current) {
+      throw new Error(
+        `Could not read current Data API settings for ${database} on branch ${branchId}. Retry, or pass --replace to overwrite.`,
+      );
+    }
+    settings = { ...current, ...(userSettings ?? {}) };
   }
 
   const body: DataAPIUpdateRequest = {};
   if (settings) body.settings = settings;
 
-  await retryOnLock(() =>
-    props.apiClient.updateProjectBranchDataApi(
-      props.projectId,
-      branchId,
-      database,
-      body,
-    ),
-  );
+  try {
+    await retryOnLock(() =>
+      props.apiClient.updateProjectBranchDataApi(
+        props.projectId,
+        branchId,
+        database,
+        body,
+      ),
+    );
+  } catch (err: unknown) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      throw new Error(
+        `Data API is not provisioned for ${database} on branch ${branchId}. Run \`neonctl data-api create\` first.`,
+      );
+    }
+    throw err;
+  }
   log.info(`Data API settings updated for ${database} on branch ${branchId}`);
 };
 
