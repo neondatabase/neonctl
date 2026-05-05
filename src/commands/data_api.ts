@@ -153,6 +153,12 @@ export const builder = (argv: yargs.Argv) =>
       (args) => update(args as any),
     )
     .command(
+      'refresh-schema',
+      'Refresh the Data API schema cache without changing settings',
+      (yargs) => yargs,
+      (args) => refreshSchema(args as any),
+    )
+    .command(
       'delete',
       'Tear down the Neon Data API for a database',
       (yargs) => yargs,
@@ -277,6 +283,12 @@ const update = async (
 
   const userSettings = buildSettings(props);
 
+  if (!userSettings) {
+    throw new Error(
+      'No settings flags provided. Pass at least one setting flag to update, or use `data-api refresh-schema` to refresh the schema cache without changing settings.',
+    );
+  }
+
   let settings: DataAPISettings | undefined;
   if (props.replace) {
     settings = userSettings;
@@ -326,6 +338,36 @@ const update = async (
     throw err;
   }
   log.info(`Data API settings updated for ${database} on branch ${branchId}`);
+};
+
+const refreshSchema = async (props: DataApiProps): Promise<void> => {
+  const branchId = await branchIdFromProps(props);
+  const database = await resolveSingleDatabase({
+    apiClient: props.apiClient,
+    projectId: props.projectId,
+    branchId,
+    database: props.database,
+  });
+  try {
+    await retryOnLock(() =>
+      props.apiClient.updateProjectBranchDataApi(
+        props.projectId,
+        branchId,
+        database,
+        {},
+      ),
+    );
+  } catch (err: unknown) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      throw new Error(
+        `Data API is not provisioned for ${database} on branch ${branchId}. Run \`neonctl data-api create\` first.`,
+      );
+    }
+    throw err;
+  }
+  log.info(
+    `Data API schema cache refreshed for ${database} on branch ${branchId}`,
+  );
 };
 
 const deleteDataApi = async (props: DataApiProps): Promise<void> => {
