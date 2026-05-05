@@ -1,0 +1,24 @@
+import { describe } from 'vitest';
+import { test } from '../test_utils/fixtures';
+
+describe('data-api', () => {
+  test('delete', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'data-api',
+        'delete',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+        '--database',
+        'db1',
+      ],
+      {
+        mockDir: 'single_org',
+        stderr:
+          'INFO: Data API deleted for db1 on branch br-main-branch-123456',
+      },
+    );
+  });
+});

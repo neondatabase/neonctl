@@ -1,7 +1,13 @@
 import yargs from 'yargs';
 
+import { retryOnLock } from '../api.js';
 import { BranchScopeProps } from '../types.js';
-import { fillSingleProject } from '../utils/enrichers.js';
+import {
+  branchIdFromProps,
+  fillSingleProject,
+  resolveSingleDatabase,
+} from '../utils/enrichers.js';
+import { log } from '../log.js';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const SETTINGS_FIELDS = [
@@ -166,7 +172,20 @@ const update = (_props: DataApiProps & { replace: boolean }): Promise<void> => {
   throw new Error('Not yet implemented');
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const deleteDataApi = (_props: DataApiProps): Promise<void> => {
-  throw new Error('Not yet implemented');
+const deleteDataApi = async (props: DataApiProps): Promise<void> => {
+  const branchId = await branchIdFromProps(props);
+  const database = await resolveSingleDatabase({
+    apiClient: props.apiClient,
+    projectId: props.projectId,
+    branchId,
+    database: props.database,
+  });
+  await retryOnLock(() =>
+    props.apiClient.deleteProjectBranchDataApi(
+      props.projectId,
+      branchId,
+      database,
+    ),
+  );
+  log.info(`Data API deleted for ${database} on branch ${branchId}`);
 };
