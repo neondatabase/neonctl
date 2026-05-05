@@ -1,0 +1,12 @@
+{
+  "url": "https://app-test.dataproxy.neon.tech",
+  "status": "active",
+  "settings": {
+    "db_aggregates_enabled": true,
+    "db_anon_role": "anonymous",
+    "db_schemas": ["public", "analytics"],
+    "jwt_role_claim_key": ".role",
+    "db_max_rows": 1000
+  },
+  "available_schemas": ["public", "analytics", "private"]
+}
