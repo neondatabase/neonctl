@@ -29,3 +29,5 @@ exports[`data-api > get with table output 1`] = `
 └──────────────────────────────────────┴────────┴───────────────────┘
 "
 `;
+
+exports[`data-api > update --replace 1`] = `""`;
