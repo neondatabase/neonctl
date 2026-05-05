@@ -146,4 +146,45 @@ describe('data-api', () => {
       },
     );
   });
+
+  test('delete with implicit database', async ({ testCliCommand }) => {
+    // The single_org fixture has exactly one database (db1) on the main branch,
+    // so omitting --database should resolve it automatically.
+    await testCliCommand(
+      [
+        'data-api',
+        'delete',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        stderr:
+          'INFO: Data API deleted for db1 on branch br-main-branch-123456',
+      },
+    );
+  });
+
+  test('delete fails with helpful error when multiple databases', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'data-api',
+        'delete',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org_multidb',
+        code: 1,
+        stderr:
+          'ERROR: Multiple databases found for the branch, please provide one with the --database option: db1, db2',
+      },
+    );
+  });
 });
