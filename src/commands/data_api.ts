@@ -12,6 +12,7 @@ import { writer } from '../writer.js';
 import type {
   DataAPICreateRequest,
   DataAPISettings,
+  DataAPIUpdateRequest,
 } from '@neondatabase/api-client';
 
 const SETTINGS_FIELDS = [
@@ -262,9 +263,37 @@ const get = async (props: DataApiProps): Promise<void> => {
   writer(props).end(tableRow, { fields: GET_FIELDS });
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const update = (_props: DataApiProps & { replace: boolean }): Promise<void> => {
-  throw new Error('Not yet implemented');
+const update = async (
+  props: DataApiProps & { replace: boolean } & Record<string, unknown>,
+): Promise<void> => {
+  const branchId = await branchIdFromProps(props);
+  const database = await resolveSingleDatabase({
+    apiClient: props.apiClient,
+    projectId: props.projectId,
+    branchId,
+    database: props.database,
+  });
+
+  let settings: DataAPISettings | undefined;
+  if (props.replace) {
+    settings = buildSettings(props);
+  } else {
+    // Merge path implemented in Task 7
+    throw new Error('Merge mode not yet implemented — pass --replace for now');
+  }
+
+  const body: DataAPIUpdateRequest = {};
+  if (settings) body.settings = settings;
+
+  await retryOnLock(() =>
+    props.apiClient.updateProjectBranchDataApi(
+      props.projectId,
+      branchId,
+      database,
+      body,
+    ),
+  );
+  log.info(`Data API settings updated for ${database} on branch ${branchId}`);
 };
 
 const deleteDataApi = async (props: DataApiProps): Promise<void> => {

@@ -76,4 +76,27 @@ describe('data-api', () => {
       { mockDir: 'single_org' },
     );
   });
+
+  test('update --replace', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'data-api',
+        'update',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+        '--database',
+        'db1',
+        '--replace',
+        '--db-max-rows',
+        '250',
+      ],
+      {
+        mockDir: 'single_org',
+        stderr:
+          'INFO: Data API settings updated for db1 on branch br-main-branch-123456',
+      },
+    );
+  });
 });
