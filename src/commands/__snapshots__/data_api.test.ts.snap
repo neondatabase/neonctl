@@ -31,3 +31,7 @@ exports[`data-api > get with table output 1`] = `
 `;
 
 exports[`data-api > update --replace 1`] = `""`;
+
+exports[`data-api > update --replace with no flags refreshes schema cache 1`] = `""`;
+
+exports[`data-api > update merges with existing settings 1`] = `""`;
