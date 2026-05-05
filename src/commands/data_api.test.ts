@@ -122,11 +122,9 @@ describe('data-api', () => {
     );
   });
 
-  test('update --replace with no flags refreshes schema cache', async ({
+  test('update fails when no settings flags are passed', async ({
     testCliCommand,
   }) => {
-    // Server treats an empty body as a no-op settings update + schema cache
-    // refresh, so passing --replace alone is a valid (and useful) operation.
     await testCliCommand(
       [
         'data-api',
@@ -141,8 +139,29 @@ describe('data-api', () => {
       ],
       {
         mockDir: 'single_org',
+        code: 1,
         stderr:
-          'INFO: Data API settings updated for db1 on branch br-main-branch-123456',
+          'ERROR: No settings flags provided. Pass at least one setting flag to update, or use `data-api refresh-schema` to refresh the schema cache without changing settings.',
+      },
+    );
+  });
+
+  test('refresh-schema sends empty PATCH', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'data-api',
+        'refresh-schema',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+        '--database',
+        'db1',
+      ],
+      {
+        mockDir: 'single_org',
+        stderr:
+          'INFO: Data API schema cache refreshed for db1 on branch br-main-branch-123456',
       },
     );
   });
