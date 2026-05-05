@@ -186,6 +186,20 @@ describe('data-api', () => {
     );
   });
 
+  test('get with fully implicit resolution', async ({ testCliCommand }) => {
+    // single_org has one org, one project, one default branch (main), one
+    // database (db1) — all three should be auto-resolved when omitted.
+    await testCliCommand(['data-api', 'get'], { mockDir: 'single_org' });
+  });
+
+  test('update with fully implicit resolution', async ({ testCliCommand }) => {
+    await testCliCommand(['data-api', 'update', '--db-max-rows', '9999'], {
+      mockDir: 'single_org',
+      stderr:
+        'INFO: Data API settings updated for db1 on branch br-main-branch-123456',
+    });
+  });
+
   test('delete fails with helpful error when multiple databases', async ({
     testCliCommand,
   }) => {
