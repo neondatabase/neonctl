@@ -64,7 +64,8 @@ const settingsFlags = {
   },
   'openapi-mode': {
     type: 'string',
-    describe: 'OpenAPI mode (e.g., "ignore-privileges", "disabled")',
+    choices: ['ignore-privileges', 'disabled'],
+    describe: 'OpenAPI mode',
   },
   'server-cors-allowed-origins': {
     type: 'string',
@@ -378,12 +379,21 @@ const deleteDataApi = async (props: DataApiProps): Promise<void> => {
     branchId,
     database: props.database,
   });
-  await retryOnLock(() =>
-    props.apiClient.deleteProjectBranchDataApi(
-      props.projectId,
-      branchId,
-      database,
-    ),
-  );
+  try {
+    await retryOnLock(() =>
+      props.apiClient.deleteProjectBranchDataApi(
+        props.projectId,
+        branchId,
+        database,
+      ),
+    );
+  } catch (err: unknown) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      throw new Error(
+        `Data API is not provisioned for ${database} on branch ${branchId}.`,
+      );
+    }
+    throw err;
+  }
   log.info(`Data API deleted for ${database} on branch ${branchId}`);
 };
