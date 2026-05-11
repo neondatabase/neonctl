@@ -1,0 +1,32 @@
+version: 2
+enable-beta-ecosystems: true
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        # No update-types filter — every dev-dep bump (minor, patch, and
+        # major) goes into a single weekly PR.
+      prod-dependencies-patch:
+        dependency-type: production
+        update-types:
+          - patch
+        # Production minor and major bumps stay as individual PRs so each
+        # one gets focused review.
+    open-pull-requests-limit: 5
