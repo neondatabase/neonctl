@@ -140,6 +140,33 @@ Global options are supported with any Neon CLI command.
   neonctl branches create --help
   ```
 
+## Exit codes
+
+The CLI exits with a code that indicates the class of result. Use these in shell pipelines to branch without parsing error messages.
+
+| Code | Meaning                                                    |
+| :--- | :--------------------------------------------------------- |
+| `0`  | Success                                                    |
+| `1`  | Generic / unclassified error                               |
+| `2`  | Usage error (unknown command, missing or invalid argument) |
+| `3`  | Authentication or authorization failed (HTTP 401, 403)     |
+| `4`  | Resource not found (HTTP 404)                              |
+| `5`  | Conflict (HTTP 409 — e.g. resource already exists)         |
+| `6`  | Rate limited (HTTP 429)                                    |
+| `7`  | Network error or request timeout                           |
+
+Example:
+
+```bash
+neon projects get my-project
+case $? in
+  0) echo "ok" ;;
+  3) neon auth ;;
+  4) neon projects create --name my-project ;;
+  *) echo "unexpected failure" >&2; exit 1 ;;
+esac
+```
+
 ## Contribute
 
 To run the CLI locally, execute the build command after making changes:

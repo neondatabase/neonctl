@@ -31,7 +31,7 @@ import {
   trackEvent,
 } from './analytics.js';
 import { isAxiosError } from 'axios';
-import { matchErrorCode } from './errors.js';
+import { classifyError, ErrorCode, exitCodeForError } from './errors.js';
 import { showHelp } from './help.js';
 import { currentContextFile, enrichFromContext } from './context.js';
 
@@ -166,7 +166,12 @@ builder = builder
   .wrap(null)
   .fail(false);
 
-async function handleError(msg: string, err: unknown): Promise<boolean> {
+type HandleErrorResult = { retry: boolean; code: ErrorCode };
+
+async function handleError(
+  msg: string,
+  err: unknown,
+): Promise<HandleErrorResult> {
   if (process.argv.some((arg) => arg === '--help' || arg === '-h')) {
     await showHelp(builder);
     process.exit(0);
@@ -177,44 +182,51 @@ async function handleError(msg: string, err: unknown): Promise<boolean> {
     log.debug('Stack: %s', err.stack);
   }
 
+  const code = classifyError(err);
+
   if (isAxiosError(err)) {
-    if (err.code === 'ECONNABORTED') {
+    if (code === 'REQUEST_TIMEOUT') {
       log.error('Request timed out');
-      sendError(err, 'REQUEST_TIMEOUT');
-      return false;
-    } else if (err.response?.status === 401) {
-      sendError(err, 'AUTH_FAILED');
+      sendError(err, code);
+      return { retry: false, code };
+    }
+    // Only HTTP 401 indicates stale/invalid credentials worth wiping.
+    // 403 (also AUTH_FAILED for exit-code purposes) means the user is
+    // authenticated but lacks permission for the resource — deleting
+    // credentials would not help.
+    if (err.response?.status === 401) {
+      sendError(err, code);
       log.info('Authentication failed, deleting credentials...');
       try {
         deleteCredentials(defaultDir);
-        return true; // Allow retry for auth failures
+        return { retry: true, code };
       } catch (deleteErr) {
         log.debug(
           'Failed to delete credentials: %s',
           deleteErr instanceof Error ? deleteErr.message : 'unknown error',
         );
-        return false;
+        return { retry: false, code };
       }
-    } else {
-      if (err.response?.data?.message) {
-        log.error(err.response?.data?.message);
-      }
-      log.debug(
-        'status: %d %s | path: %s',
-        err.response?.status,
-        err.response?.statusText,
-        err.request?.path,
-      );
-      sendError(err, 'API_ERROR');
-      return false;
     }
-  } else {
-    const error =
-      err instanceof Error ? err : new Error(msg || 'Unknown error');
-    sendError(error, matchErrorCode(error.message));
-    log.error(error.message);
-    return false;
+    if (err.response?.data?.message) {
+      log.error(err.response.data.message);
+    } else if (code === 'NETWORK_ERROR') {
+      log.error(err.message);
+    }
+    log.debug(
+      'status: %d %s | path: %s',
+      err.response?.status,
+      err.response?.statusText,
+      err.request?.path,
+    );
+    sendError(err, code);
+    return { retry: false, code };
   }
+
+  const error = err instanceof Error ? err : new Error(msg || 'Unknown error');
+  sendError(error, code);
+  log.error(error.message);
+  return { retry: false, code };
 }
 
 void (async () => {
@@ -244,12 +256,12 @@ void (async () => {
       break;
     } catch (err) {
       attempts++;
-      const shouldRetry = await handleError('', err);
-      if (!shouldRetry || attempts >= MAX_ATTEMPTS) {
+      const { retry, code } = await handleError('', err);
+      if (!retry || attempts >= MAX_ATTEMPTS) {
         await closeAnalytics();
-        process.exit(1);
+        process.exit(exitCodeForError(code));
       }
-      // If shouldRetry is true and we haven't hit max attempts, loop continues
+      // If retry is true and we haven't hit max attempts, loop continues
     }
   }
 })();

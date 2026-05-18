@@ -118,7 +118,7 @@ describe('set_context', () => {
           overrideContextFile,
         ],
         {
-          code: 1,
+          code: 4,
           stderr: 'ERROR: Not Found',
         },
       );
