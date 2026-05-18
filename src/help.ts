@@ -177,9 +177,17 @@ const formatHelp = (help: string) => {
   return [...result, ...lines];
 };
 
+const EXIT_CODES_LINE =
+  'Exit codes: 0 ok | 2 usage | 3 auth | 4 not-found | 5 conflict | 6 rate-limit | 7 network/timeout | 1 unknown';
+
 export const showHelp = async (argv: yargs.Argv) => {
   // add wrap to ensure that there are no line breaks
   const help = await argv.getHelp();
-  process.stderr.write(formatHelp(help).join('\n') + '\n');
+  const lines = formatHelp(help);
+  // Surface the exit-code contract on every --help screen (root and sub-
+  // commands) so agents reading help on first contact learn it without
+  // needing to find the README. Documented in README under "Exit codes".
+  lines.push('', EXIT_CODES_LINE);
+  process.stderr.write(lines.join('\n') + '\n');
   process.exit(0);
 };
