@@ -1,0 +1,9 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`psql > psql connects to a branch 1`] = `"{"psql-cli-args":["postgresql://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require&channel_binding=require"]}"`;
+
+exports[`psql > psql forwards args after -- 1`] = `"{"psql-cli-args":["postgresql://test_role:test_pwd@ep-cool-king-930914.us-east-2.aws.neon.tech/test_db?sslmode=require&channel_binding=require","-c","SELECT 1"]}"`;
+
+exports[`psql > psql pooled 1`] = `"{"psql-cli-args":["postgresql://test_role:test_pwd@ep-cool-king-930914-pooler.us-east-2.aws.neon.tech/test_db?sslmode=require&channel_binding=require"]}"`;
+
+exports[`psql > psql without any args should pass 1`] = `"{"psql-cli-args":["postgresql://test_role:password@undefined/db1?sslmode=require&channel_binding=require"]}"`;
