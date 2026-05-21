@@ -11,7 +11,12 @@ import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
 import { parsePITBranch } from '../utils/point_in_time.js';
 
-const SSL_MODES = ['require', 'verify-ca', 'verify-full', 'omit'] as const;
+export const SSL_MODES = [
+  'require',
+  'verify-ca',
+  'verify-full',
+  'omit',
+] as const;
 
 export const command = 'connection-string [branch]';
 export const aliases = ['cs'];
