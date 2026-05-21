@@ -119,6 +119,8 @@ Global options are supported with any Neon CLI command.
 
   Analytics are enabled by default to gather information about the CLI commands and options that are used by our customers. This data collection assists in offering support, and allows for a better understanding of typical usage patterns so that we can improve user experience. Neon does not collect user-defined data, such as project IDs or command payloads. To opt-out of analytics data collection, specify `--no-analytics` or `--analytics false`.
 
+  Each event also includes presence-derived environment signals so we can recognize which agent runtimes (e.g. Claude Code, Cursor, Windsurf, Codex CLI) and CI / hosted environments (GitHub Actions, GitLab CI, Vercel, Codespaces, …) are using the CLI, and prioritize support accordingly. These environment signals are derived only from env vars the calling tooling already sets — they don't add any file reads, secret reads, or new argument inspection beyond what existing analytics already does — and `--no-analytics` disables them along with everything else. Two of the fields are strictly opt-in: `NEON_CLIENT_USER_AGENT` (a free-form identifier the calling tooling can set) and `TRACEPARENT` (a W3C trace-context header, captured as event properties only when present).
+
 - <a id="version"></a>`-v, --version`
 
   Shows the Neon CLI version number.
