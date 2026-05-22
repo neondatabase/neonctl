@@ -285,6 +285,105 @@ describe('link', () => {
     });
   });
 
+  describe('org-scoped API key behavior', () => {
+    test('agent mode with no orgs available and no projects emits orgKeyLimited needs_org', async ({
+      testCliCommand,
+      removeFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('orgkey_empty');
+      await testCliCommand(['link', '--agent', '--context-file', ctx], {
+        mockDir: 'org-key-empty',
+      });
+      removeFile(ctx);
+    });
+
+    test('agent mode auto-detects org from existing projects when org listing is forbidden', async ({
+      testCliCommand,
+      removeFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('orgkey_autodetect');
+      await testCliCommand(['link', '--agent', '--context-file', ctx], {
+        mockDir: 'org-key',
+      });
+      removeFile(ctx);
+    });
+
+    test('agent mode falls back to static regions when getActiveRegions is forbidden', async ({
+      testCliCommand,
+      removeFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('orgkey_regions_fallback');
+      await testCliCommand(
+        [
+          'link',
+          '--agent',
+          '--org-id',
+          'org-detected-99887766',
+          '--project-name',
+          'whatever',
+          '--context-file',
+          ctx,
+        ],
+        { mockDir: 'org-key' },
+      );
+      removeFile(ctx);
+    });
+  });
+
+  describe('agent error responses', () => {
+    test('invalid --params JSON yields error JSON, exit 1', async ({
+      runLinkInCi,
+      tmpContext,
+    }) => {
+      const result = await runLinkInCi([
+        'link',
+        '--agent',
+        '--params',
+        'not-valid-json',
+        '--context-file',
+        tmpContext('agent_bad_params'),
+      ]);
+      expect(result.code).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        status: string;
+        code: string;
+        message: string;
+      };
+      expect(parsed.status).toBe('error');
+      expect(parsed.code).toBe('INTERNAL_ERROR');
+      expect(parsed.message).toContain('Failed to parse --params JSON');
+    });
+
+    test('conflicting flags in agent mode yields error JSON, exit 1', async ({
+      runLinkInCi,
+      tmpContext,
+    }) => {
+      const result = await runLinkInCi([
+        'link',
+        '--agent',
+        '--org-id',
+        'org-2',
+        '--project-id',
+        'test',
+        '--project-name',
+        'x',
+        '--context-file',
+        tmpContext('agent_conflict'),
+      ]);
+      expect(result.code).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        status: string;
+        code: string;
+        message: string;
+      };
+      expect(parsed.status).toBe('error');
+      expect(parsed.message).toContain('Conflicting inputs');
+    });
+  });
+
   describe('CI guard', () => {
     test('errors out with helpful message when no inputs provided in CI', async ({
       runLinkInCi,

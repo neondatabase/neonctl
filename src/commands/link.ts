@@ -114,13 +114,13 @@ export const builder = (argv: yargs.Argv) =>
   });
 
 export const handler = async (props: LinkProps) => {
-  const inputs = parseInputs(props);
-  validateInputs(inputs);
-
   if (props.agent) {
-    await runAgent(props, inputs);
+    await runAgentSafely(props);
     return;
   }
+
+  const inputs = parseInputs(props);
+  validateInputs(inputs);
 
   if (hasEnoughForNonInteractive(inputs)) {
     await runNonInteractive(props, inputs);
@@ -256,7 +256,24 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
     await confirmRelinkIfNeeded(props);
   }
 
-  const orgId = inputs.orgId ?? (await promptOrg(props));
+  const orgResolution = await resolveOrg(props, inputs.orgId);
+  let orgId: string;
+  if (orgResolution.kind === 'resolved') {
+    orgId = orgResolution.orgId;
+    if (orgResolution.autoDetected) {
+      log.info(
+        `Detected organization ${orgId} from your existing projects (organization-scoped API key).`,
+      );
+    }
+  } else if (orgResolution.orgKeyLimited) {
+    throw new Error(
+      'This API key is organization-scoped, so the CLI cannot list your organizations, ' +
+        'and no existing project was found in this org to auto-detect the ID. ' +
+        'Re-run with `--org-id <your_org_id>` (find it in the Neon Console under Settings).',
+    );
+  } else {
+    orgId = await promptOrgFromList(orgResolution.orgs);
+  }
 
   if (inputs.projectId) {
     const branchId = await resolveDefaultBranchId(props, inputs.projectId);
@@ -363,8 +380,7 @@ const confirmRelinkIfNeeded = async (props: LinkProps): Promise<void> => {
   }
 };
 
-const promptOrg = async (props: LinkProps): Promise<string> => {
-  const orgs = await fetchOrganizations(props);
+const promptOrgFromList = async (orgs: Organization[]): Promise<string> => {
   if (!orgs.length) {
     throw new Error(
       `You don't belong to any organizations. Create one in the Neon Console first: https://console.neon.tech/`,
@@ -463,22 +479,26 @@ const promptRegion = async (props: LinkProps): Promise<string> => {
 // Agent mode (JSON state machine)
 // ----------------------------------------------------------------------------
 
-const runAgent = async (props: LinkProps, inputs: Inputs) => {
-  const { orgId, projectId, projectName, regionId } = inputs;
+const runAgentSafely = async (props: LinkProps) => {
+  try {
+    const inputs = parseInputs(props);
+    validateInputs(inputs);
+    await runAgent(props, inputs);
+  } catch (err) {
+    emitAgent(toAgentError(err));
+    process.exit(1);
+  }
+};
 
-  if (!orgId) {
-    const orgs = await fetchOrganizations(props);
-    emitAgent({
-      status: 'needs_org',
-      instruction:
-        orgs.length === 0
-          ? 'The user does not belong to any organizations. Ask them to create one in the Neon Console (https://console.neon.tech/) before linking.'
-          : `Ask the user which of these ${orgs.length} organization${orgs.length === 1 ? '' : 's'} they want to link the current directory to. After they pick one, re-run the next_command_template with the chosen --org-id value.`,
-      options: orgs.map((org) => ({ id: org.id, name: org.name })),
-      next_command_template: 'neonctl link --agent --org-id <org_id>',
-    });
+const runAgent = async (props: LinkProps, inputs: Inputs) => {
+  const { projectId, projectName, regionId } = inputs;
+
+  const orgResolution = await resolveOrg(props, inputs.orgId);
+  if (orgResolution.kind === 'needs_selection') {
+    emitAgent(buildNeedsOrgResponse(orgResolution));
     return;
   }
+  const orgId = orgResolution.orgId;
 
   if (projectId) {
     const branchId = await resolveDefaultBranchId(props, projectId);
@@ -567,11 +587,140 @@ const emitAgent = (response: AgentResponse) => {
 // API helpers
 // ----------------------------------------------------------------------------
 
+const ORG_KEY_LIMITED_FRAGMENT = 'not allowed for organization API keys';
+
+const isOrgKeyLimitedError = (err: unknown): boolean => {
+  if (!isAxiosError(err)) return false;
+  const data = err.response?.data;
+  if (data === undefined || data === null || typeof data !== 'object') {
+    return false;
+  }
+  const message = (data as { message?: unknown }).message;
+  return (
+    typeof message === 'string' && message.includes(ORG_KEY_LIMITED_FRAGMENT)
+  );
+};
+
 const fetchOrganizations = async (
   props: CommonProps,
 ): Promise<Organization[]> => {
   const { data } = await props.apiClient.getCurrentUserOrganizations();
   return data.organizations ?? [];
+};
+
+type OrgResolution =
+  | { kind: 'resolved'; orgId: string; autoDetected: boolean }
+  | {
+      kind: 'needs_selection';
+      orgs: Organization[];
+      orgKeyLimited: boolean;
+    };
+
+/**
+ * Resolves the org id from the explicit flag, falling back to listing user orgs.
+ *
+ * For organization-scoped API keys, `getCurrentUserOrganizations` is forbidden;
+ * in that case we try to auto-detect the org from the first existing project
+ * (since all projects of an org key live in the same org). If no project exists
+ * yet, we return `needs_selection` with `orgKeyLimited: true` so callers can
+ * give a precise instruction to the user.
+ */
+const resolveOrg = async (
+  props: CommonProps,
+  given: string | undefined,
+): Promise<OrgResolution> => {
+  if (given) {
+    return { kind: 'resolved', orgId: given, autoDetected: false };
+  }
+  try {
+    const orgs = await fetchOrganizations(props);
+    return { kind: 'needs_selection', orgs, orgKeyLimited: false };
+  } catch (err) {
+    if (!isOrgKeyLimitedError(err)) {
+      throw err;
+    }
+    log.debug(
+      'getCurrentUserOrganizations not allowed (org-scoped API key); attempting to derive org from existing projects.',
+    );
+  }
+  const detected = await detectOrgIdFromProjects(props);
+  if (detected) {
+    return { kind: 'resolved', orgId: detected, autoDetected: true };
+  }
+  return { kind: 'needs_selection', orgs: [], orgKeyLimited: true };
+};
+
+const detectOrgIdFromProjects = async (
+  props: CommonProps,
+): Promise<string | undefined> => {
+  try {
+    const { data } = await props.apiClient.listProjects({ limit: 1 });
+    return data.projects[0]?.org_id ?? undefined;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.debug('detectOrgIdFromProjects failed: %s', message);
+    return undefined;
+  }
+};
+
+const buildNeedsOrgResponse = (
+  resolution: Extract<OrgResolution, { kind: 'needs_selection' }>,
+): AgentResponse => {
+  if (resolution.orgKeyLimited) {
+    return {
+      status: 'needs_org',
+      instruction:
+        "This Neon API key is organization-scoped, so the CLI cannot list the user's organizations and no existing project was found to auto-detect the org ID. Ask the user for their Neon organization ID (visible in the Neon Console under the org's Settings page, formatted like `org-bitter-breeze-12345678`) and re-run the next_command_template with that --org-id.",
+      options: [],
+      next_command_template: 'neonctl link --agent --org-id <org_id>',
+    };
+  }
+  const orgs = resolution.orgs;
+  return {
+    status: 'needs_org',
+    instruction:
+      orgs.length === 0
+        ? 'The user does not belong to any organizations. Ask them to create one in the Neon Console (https://console.neon.tech/) before linking.'
+        : `Ask the user which of these ${orgs.length} organization${orgs.length === 1 ? '' : 's'} they want to link the current directory to. After they pick one, re-run the next_command_template with the chosen --org-id value.`,
+    options: orgs.map((org) => ({ id: org.id, name: org.name })),
+    next_command_template: 'neonctl link --agent --org-id <org_id>',
+  };
+};
+
+const toAgentError = (
+  err: unknown,
+): Extract<AgentResponse, { status: 'error' }> => {
+  if (isAxiosError(err)) {
+    const status = err.response?.status;
+    const data = err.response?.data;
+    const apiMessage =
+      typeof data === 'object' && data !== null
+        ? (data as { message?: unknown }).message
+        : undefined;
+    const message =
+      typeof apiMessage === 'string' && apiMessage.length > 0
+        ? apiMessage
+        : err.message;
+    let code = 'API_ERROR';
+    if (status === 401 || status === 403) {
+      code = 'AUTH_ERROR';
+    } else if (status !== undefined && status >= 400 && status < 500) {
+      code = 'CLIENT_ERROR';
+    } else if (status !== undefined && status >= 500) {
+      code = 'SERVER_ERROR';
+    } else if (err.code === 'ECONNABORTED') {
+      code = 'TIMEOUT';
+    }
+    return { status: 'error', code, message };
+  }
+  if (err instanceof Error) {
+    return { status: 'error', code: 'INTERNAL_ERROR', message: err.message };
+  }
+  return {
+    status: 'error',
+    code: 'INTERNAL_ERROR',
+    message: String(err),
+  };
 };
 
 const listAllProjects = async (
