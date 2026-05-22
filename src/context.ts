@@ -45,7 +45,7 @@ export const readContextFile = (file: string): Context => {
 export const enrichFromContext = (
   args: yargs.Arguments<{ contextFile: string }>,
 ) => {
-  if (args._[0] === 'set-context') {
+  if (args._[0] === 'set-context' || args._[0] === 'link') {
     return;
   }
   const context = readContextFile(args.contextFile);
@@ -67,4 +67,13 @@ export const enrichFromContext = (
 
 export const updateContextFile = (file: string, context: Context) => {
   writeFileSync(file, JSON.stringify(context, null, 2));
+};
+
+/**
+ * Shared primitive used by `set-context` and `link` to persist context.
+ * Mirrors the destructive write semantics of `updateContextFile` —
+ * any field not present in `context` is dropped from the file.
+ */
+export const applyContext = (file: string, context: Context) => {
+  updateContextFile(file, context);
 };
