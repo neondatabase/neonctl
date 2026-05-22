@@ -140,6 +140,22 @@ $ neonctl link --agent --org-id org-abc123 --project-id polished-snowflake-12345
 
 The agent flow also handles project creation. If the agent sends `--project-name` without `--region-id`, the next response is `needs_project_details` with the list of supported regions.
 
+**Organization-scoped API keys** (those created at the organization level rather than the user level) cannot list user organizations or call the regions endpoint. `link` handles this transparently:
+
+- If the API key is org-scoped and at least one project already exists in the org, the CLI auto-detects the `org_id` from the first project. In interactive mode it prints an informational message; in `--agent` mode it skips straight to `needs_project`.
+- If the API key is org-scoped and no projects exist yet, `--agent` returns a `needs_org` response with `options: []` and an instruction telling the user to find their org ID in the Neon Console. Interactive mode prints an error pointing to `--org-id`.
+- When the regions endpoint is not allowed, `link` falls back to a built-in static region list.
+
+**Agent error contract**: any unexpected failure in `--agent` mode is reported as JSON to stdout with exit code 1, so agents can always parse the response:
+
+```json
+{
+  "status": "error",
+  "code": "CLIENT_ERROR",
+  "message": "user has no access to projects"
+}
+```
+
 `link` is a thin wrapper around `set-context`: both write to the same `.neon` file via a shared `applyContext` helper, so anything `link` can write, `set-context` can write too (including the newly-supported `--branch-id` flag).
 
 ## Commands

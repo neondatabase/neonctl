@@ -186,6 +186,82 @@ exports[`link > non-interactive flag mode > link with --params JSON behaves like
 }"
 `;
 
+exports[`link > org-scoped API key behavior > agent mode auto-detects org from existing projects when org listing is forbidden 1`] = `
+"{
+  "status": "needs_project",
+  "instruction": "Ask the user whether to link to one of these 1 existing projects (use next_command_template with --project-id) or create a new project (use create_option.next_command_template).",
+  "options": [
+    {
+      "id": "detected-project-12345",
+      "name": "detected_project",
+      "region_id": "aws-us-east-2"
+    }
+  ],
+  "create_option": {
+    "instruction": "To create a new project, ask the user for a project name. The region can be omitted to receive a follow-up needs_project_details response that lists available regions.",
+    "next_command_template": "neonctl link --agent --org-id org-detected-99887766 --project-name <name> --region-id <region_id>"
+  },
+  "next_command_template": "neonctl link --agent --org-id org-detected-99887766 --project-id <project_id>"
+}
+"
+`;
+
+exports[`link > org-scoped API key behavior > agent mode falls back to static regions when getActiveRegions is forbidden 1`] = `
+"{
+  "status": "needs_project_details",
+  "instruction": "Ask the user which region to create project \\"whatever\\" in. After they pick one, re-run the next_command_template with the chosen --region-id value.",
+  "regions": [
+    {
+      "id": "aws-us-west-2",
+      "name": "aws-us-west-2",
+      "default": false
+    },
+    {
+      "id": "aws-ap-southeast-1",
+      "name": "aws-ap-southeast-1",
+      "default": false
+    },
+    {
+      "id": "aws-ap-southeast-2",
+      "name": "aws-ap-southeast-2",
+      "default": false
+    },
+    {
+      "id": "aws-eu-central-1",
+      "name": "aws-eu-central-1",
+      "default": false
+    },
+    {
+      "id": "aws-us-east-2",
+      "name": "aws-us-east-2",
+      "default": true
+    },
+    {
+      "id": "aws-us-east-1",
+      "name": "aws-us-east-1",
+      "default": false
+    },
+    {
+      "id": "azure-eastus2",
+      "name": "azure-eastus2",
+      "default": false
+    }
+  ],
+  "next_command_template": "neonctl link --agent --org-id org-detected-99887766 --project-name whatever --region-id <region_id>"
+}
+"
+`;
+
+exports[`link > org-scoped API key behavior > agent mode with no orgs available and no projects emits orgKeyLimited needs_org 1`] = `
+"{
+  "status": "needs_org",
+  "instruction": "This Neon API key is organization-scoped, so the CLI cannot list the user's organizations and no existing project was found to auto-detect the org ID. Ask the user for their Neon organization ID (visible in the Neon Console under the org's Settings page, formatted like \`org-bitter-breeze-12345678\`) and re-run the next_command_template with that --org-id.",
+  "options": [],
+  "next_command_template": "neonctl link --agent --org-id <org_id>"
+}
+"
+`;
+
 exports[`link > overwrites an existing .neon when re-linking non-interactively 1`] = `
 "Linked <TMP>/overwrite.neon:
   orgId:    org-2
