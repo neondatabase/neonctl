@@ -62,6 +62,86 @@ For information about obtaining an Neon API key, see [Authentication](https://ap
 
 The Neon CLI supports autocompletion, which you can configure in a few easy steps. See [Neon CLI commands — completion](https://neon.tech/docs/reference/cli-completion) for instructions.
 
+## Linking a project
+
+`neonctl link` is a Vercel-style command that binds the current directory to a Neon project. It picks (or creates) an organization, picks (or creates) a project, resolves the project's default branch, and writes a `.neon` file with `{ "orgId", "projectId", "branchId" }`. Subsequent commands run in this directory (or any sub-directory) automatically pick up that context.
+
+There are three modes:
+
+**Interactive (default)** — guided prompts for humans:
+
+```bash
+$ neonctl link
+? Which organization would you like to link? › Personal Org (org-abc123)
+? Which project would you like to link? › + Create new project
+? Name for the new project: › my-app
+? Which region should the new project run in? › AWS US East (Ohio) (aws-us-east-2)
+Created project polished-snowflake-12345678 ("my-app") in aws-us-east-2.
+Linked .neon:
+  orgId:    org-abc123
+  projectId: polished-snowflake-12345678
+  branchId:  br-main-branch-87654321
+```
+
+**Non-interactive (flags or `--params` JSON)** — for scripts and CI:
+
+```bash
+# Link to an existing project
+neonctl link --org-id org-abc123 --project-id polished-snowflake-12345678
+
+# Create a new project and link
+neonctl link --org-id org-abc123 --project-name my-app --region-id aws-us-east-2
+
+# Same payload, one JSON blob
+neonctl link --params '{"orgId":"org-abc123","projectName":"my-app","regionId":"aws-us-east-2"}'
+```
+
+**Agent mode (`--agent`)** — a JSON state machine designed for AI coding assistants. Each invocation returns a single JSON object with a `status` discriminator describing the next step, the available options, and the exact follow-up command to run.
+
+```bash
+$ neonctl link --agent
+{
+  "status": "needs_org",
+  "instruction": "Ask the user which of these 2 organizations they want to link the current directory to. After they pick one, re-run the next_command_template with the chosen --org-id value.",
+  "options": [
+    { "id": "org-abc123", "name": "Personal Org" },
+    { "id": "org-team",   "name": "Team Org" }
+  ],
+  "next_command_template": "neonctl link --agent --org-id <org_id>"
+}
+
+$ neonctl link --agent --org-id org-abc123
+{
+  "status": "needs_project",
+  "instruction": "Ask the user whether to link to one of these 1 existing projects (use next_command_template with --project-id) or create a new project (use create_option.next_command_template).",
+  "options": [
+    { "id": "polished-snowflake-12345678", "name": "my-app" }
+  ],
+  "create_option": {
+    "instruction": "To create a new project, ask the user for a project name. The region can be omitted to receive a follow-up needs_project_details response that lists available regions.",
+    "next_command_template": "neonctl link --agent --org-id org-abc123 --project-name <name> --region-id <region_id>"
+  },
+  "next_command_template": "neonctl link --agent --org-id org-abc123 --project-id <project_id>"
+}
+
+$ neonctl link --agent --org-id org-abc123 --project-id polished-snowflake-12345678
+{
+  "status": "linked",
+  "context_file": "/path/to/cwd/.neon",
+  "context": {
+    "orgId": "org-abc123",
+    "projectId": "polished-snowflake-12345678",
+    "branchId": "br-main-branch-87654321"
+  },
+  "project": { "id": "polished-snowflake-12345678" },
+  "message": "Linked /path/to/cwd/.neon to project polished-snowflake-12345678 (org org-abc123) on branch br-main-branch-87654321."
+}
+```
+
+The agent flow also handles project creation. If the agent sends `--project-name` without `--region-id`, the next response is `needs_project_details` with the list of supported regions.
+
+`link` is a thin wrapper around `set-context`: both write to the same `.neon` file via a shared `applyContext` helper, so anything `link` can write, `set-context` can write too (including the newly-supported `--branch-id` flag).
+
 ## Commands
 
 | Command                                                                    | Subcommands                                                                                 | Description                    |
@@ -77,6 +157,7 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 | [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                             | Get connection string          |
 | psql                                                                       |                                                                                             | Connect to a database via psql |
 | [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                             | Set context for session        |
+| [link](https://neon.com/docs/reference/cli-link)                           |                                                                                             | Link a directory to a project  |
 | [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                             | Generate a completion script   |
 
 ## Global options
