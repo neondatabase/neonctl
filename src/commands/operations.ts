@@ -1,5 +1,6 @@
 import yargs from 'yargs';
 import { fillSingleProject } from '../utils/enrichers.js';
+import { PROJECT_ID_DESC } from '../utils/help_text.js';
 
 import { ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
@@ -7,14 +8,14 @@ import { writer } from '../writer.js';
 const OPERATIONS_FIELDS = ['id', 'action', 'status', 'created_at'] as const;
 
 export const command = 'operations';
-export const describe = 'Manage operations';
+export const describe = 'View and inspect async background operations';
 export const aliases = ['operation'];
 export const builder = (argv: yargs.Argv) =>
   argv
     .usage('$0 operations <sub-command> [options]')
     .options({
       'project-id': {
-        describe: 'Project ID',
+        describe: PROJECT_ID_DESC,
         type: 'string',
       },
     })
@@ -22,7 +23,13 @@ export const builder = (argv: yargs.Argv) =>
     .command(
       'list',
       'List operations',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.options({
+          limit: {
+            describe: 'Maximum number of operations to return',
+            type: 'number',
+          },
+        }),
       (args) => list(args as any),
     );
 

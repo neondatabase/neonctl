@@ -26,7 +26,7 @@ type AuthProps = {
 
 export const command = 'auth';
 export const aliases = ['login'];
-export const describe = 'Authenticate';
+export const describe = 'Authenticate the CLI with your Neon account';
 export const builder = (yargs: yargs.Argv) =>
   yargs.option('context-file', {
     hidden: true,

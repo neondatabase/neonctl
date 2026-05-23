@@ -5,6 +5,7 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { Role } from '@neondatabase/api-client';
+import { PROJECT_ID_DESC } from '../utils/help_text.js';
 
 export const DATABASE_FIELDS = ['name', 'owner_name', 'created_at'] as const;
 
@@ -16,7 +17,7 @@ export const builder = (argv: yargs.Argv) =>
     .usage('$0 databases <sub-command> [options]')
     .options({
       'project-id': {
-        describe: 'Project ID',
+        describe: PROJECT_ID_DESC,
         type: 'string',
       },
       branch: {
@@ -42,7 +43,8 @@ export const builder = (argv: yargs.Argv) =>
             demandOption: true,
           },
           'owner-name': {
-            describe: 'Owner name',
+            describe:
+              'Role that owns the database. Auto-selected if only one role exists.',
             type: 'string',
           },
         }),
@@ -51,7 +53,11 @@ export const builder = (argv: yargs.Argv) =>
     .command(
       'delete <database>',
       'Delete a database',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.usage('$0 databases delete <database>').positional('database', {
+          describe: 'Database name',
+          type: 'string',
+        }),
       (args) => deleteDb(args as any),
     );
 

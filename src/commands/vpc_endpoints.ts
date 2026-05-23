@@ -10,6 +10,7 @@ import { writer } from '../writer.js';
 import { fillSingleProject, fillSingleOrg } from '../utils/enrichers.js';
 import { REGIONS } from './projects.js';
 import { log } from '../log.js';
+import { PROJECT_ID_DESC, ORG_SCOPE_DESC } from '../utils/help_text.js';
 
 const VPC_ENDPOINT_FIELDS = ['vpc_endpoint_id', 'label'] as const;
 
@@ -22,7 +23,7 @@ const VPC_ENDPOINT_DETAILS_FIELDS = [
 ] as const;
 
 export const command = 'vpc';
-export const describe = 'Manage VPC endpoints and project VPC restrictions';
+export const describe = 'Manage VPC endpoints and access restrictions';
 export const builder = (argv: yargs.Argv) => {
   return argv
     .usage('$0 vpc <sub-command> [options]')
@@ -37,7 +38,7 @@ export const builder = (argv: yargs.Argv) => {
         return yargs
           .options({
             'org-id': {
-              describe: 'Organization ID',
+              describe: ORG_SCOPE_DESC,
               type: 'string',
             },
             'region-id': {
@@ -100,7 +101,7 @@ export const builder = (argv: yargs.Argv) => {
         return yargs
           .options({
             'project-id': {
-              describe: 'Project ID',
+              describe: PROJECT_ID_DESC,
               type: 'string',
             },
           })
