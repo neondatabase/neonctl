@@ -158,6 +158,8 @@ The agent flow also handles project creation. If the agent sends `--project-name
 
 `link` is a thin wrapper around `set-context`: both write to the same `.neon` file via a shared `applyContext` helper, so anything `link` can write, `set-context` can write too (including the newly-supported `--branch-id` flag).
 
+**Where `.neon` lives**: `link` (and `set-context`) write `.neon` into the **current working directory** by default. If an existing `.neon` is found in any parent directory, that file is reused — so commands run from a sub-directory of a linked project still pick up the project's context. To pin the location explicitly, pass `--context-file <path>`.
+
 ## Commands
 
 | Command                                                                    | Subcommands                                                                                 | Description                    |
