@@ -160,6 +160,8 @@ The agent flow also handles project creation. If the agent sends `--project-name
 
 **Where `.neon` lives**: `link` (and `set-context`) write `.neon` into the **current working directory** by default. If an existing `.neon` is found in any parent directory, that file is reused — so commands run from a sub-directory of a linked project still pick up the project's context. To pin the location explicitly, pass `--context-file <path>`.
 
+**`.gitignore` scaffolding**: whenever `.neon` is written, the CLI also makes sure a `.gitignore` sits alongside it listing `.neon`. If `.gitignore` doesn't exist it's created with a single `.neon` line; if it does exist, `.neon` is appended only when missing (no duplicates, your other entries are left alone).
+
 ## Commands
 
 | Command                                                                    | Subcommands                                                                                 | Description                    |

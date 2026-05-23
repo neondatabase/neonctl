@@ -1,9 +1,19 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { currentContextFile } from './context.js';
+import {
+  applyContext,
+  currentContextFile,
+  ensureGitignored,
+} from './context.js';
 
 describe('currentContextFile', () => {
   let workspace: string;
@@ -42,5 +52,89 @@ describe('currentContextFile', () => {
     const sub = join(workspace, 'fresh-sub');
     mkdirSync(sub);
     expect(currentContextFile(sub)).toBe(join(sub, '.neon'));
+  });
+});
+
+describe('ensureGitignored', () => {
+  let workspace: string;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'neonctl-gi-'));
+  });
+
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  test('creates a .gitignore listing .neon when none exists', () => {
+    const contextFile = join(workspace, '.neon');
+    ensureGitignored(contextFile);
+    const gitignore = readFileSync(join(workspace, '.gitignore'), 'utf-8');
+    expect(gitignore).toBe('.neon\n');
+  });
+
+  test('appends .neon to an existing .gitignore that does not have it', () => {
+    const gi = join(workspace, '.gitignore');
+    writeFileSync(gi, 'node_modules\ndist\n');
+    ensureGitignored(join(workspace, '.neon'));
+    expect(readFileSync(gi, 'utf-8')).toBe('node_modules\ndist\n.neon\n');
+  });
+
+  test('does not duplicate .neon when already present', () => {
+    const gi = join(workspace, '.gitignore');
+    writeFileSync(gi, 'node_modules\n.neon\ndist\n');
+    ensureGitignored(join(workspace, '.neon'));
+    expect(readFileSync(gi, 'utf-8')).toBe('node_modules\n.neon\ndist\n');
+  });
+
+  test('tolerates a .gitignore that has no trailing newline', () => {
+    const gi = join(workspace, '.gitignore');
+    writeFileSync(gi, 'node_modules');
+    ensureGitignored(join(workspace, '.neon'));
+    expect(readFileSync(gi, 'utf-8')).toBe('node_modules\n.neon\n');
+  });
+
+  test('treats surrounding whitespace as part of the line', () => {
+    const gi = join(workspace, '.gitignore');
+    // Trailing spaces around the entry should still count as a match.
+    writeFileSync(gi, '  .neon  \n');
+    ensureGitignored(join(workspace, '.neon'));
+    expect(readFileSync(gi, 'utf-8')).toBe('  .neon  \n');
+  });
+
+  test('does NOT match partial entries like *.neon or foo/.neon', () => {
+    const gi = join(workspace, '.gitignore');
+    writeFileSync(gi, '*.neon\nfoo/.neon\n');
+    ensureGitignored(join(workspace, '.neon'));
+    expect(readFileSync(gi, 'utf-8')).toBe('*.neon\nfoo/.neon\n.neon\n');
+  });
+});
+
+describe('applyContext', () => {
+  let workspace: string;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'neonctl-apply-'));
+  });
+
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  test('writes the context file AND scaffolds .gitignore', () => {
+    const file = join(workspace, '.neon');
+    applyContext(file, {
+      orgId: 'org-x',
+      projectId: 'proj-y',
+      branchId: 'br-z',
+    });
+    expect(JSON.parse(readFileSync(file, 'utf-8'))).toEqual({
+      orgId: 'org-x',
+      projectId: 'proj-y',
+      branchId: 'br-z',
+    });
+    expect(readFileSync(join(workspace, '.gitignore'), 'utf-8')).toBe(
+      '.neon\n',
+    );
   });
 });
