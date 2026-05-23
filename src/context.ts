@@ -10,23 +10,37 @@ export type Context = {
 };
 
 const CONTEXT_FILE = '.neon';
-const CHECK_FILES = [CONTEXT_FILE, 'package.json', '.git'];
 
 const wrapWithContextFile = (dir: string) => resolve(dir, CONTEXT_FILE);
 
-export const currentContextFile = () => {
-  const cwd = process.cwd();
+/**
+ * Resolve the default `.neon` path for the current working directory.
+ *
+ * Walks UP from `cwd` looking ONLY for an already-existing `.neon` file so
+ * commands run from a sub-directory of a linked project still pick up the
+ * project's context. If no `.neon` is found, the path defaults to
+ * `<cwd>/.neon`, which makes `neonctl link` and `neonctl set-context`
+ * predictable: they always write the context file into the directory they
+ * were invoked from.
+ *
+ * Historically the walk also considered `package.json` and `.git` as project
+ * markers, but that led to surprising behaviour when running `link` from a
+ * fresh sub-directory inside an unrelated repo (the new link would land in
+ * the parent repo's root instead of the cwd).
+ *
+ * `cwd` is overridable so tests can exercise the walk-up without mutating
+ * `process.cwd()` (which would race with other tests running in parallel).
+ */
+export const currentContextFile = (cwd: string = process.cwd()) => {
   let currentDir = cwd;
   const root = normalize('/');
   const home = homedir();
   while (currentDir !== root && currentDir !== home) {
-    for (const file of CHECK_FILES) {
-      try {
-        accessSync(resolve(currentDir, file));
-        return wrapWithContextFile(currentDir);
-      } catch {
-        // ignore
-      }
+    try {
+      accessSync(resolve(currentDir, CONTEXT_FILE));
+      return wrapWithContextFile(currentDir);
+    } catch {
+      // ignore
     }
     currentDir = resolve(currentDir, '..');
   }
