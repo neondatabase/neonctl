@@ -1,5 +1,11 @@
 import { fork } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -70,9 +76,16 @@ const test = originalTest.extend<{
       }
     });
   },
+  // Each test gets its OWN sub-directory under TEST_TMP so the
+  // `.gitignore` scaffolded next to the `.neon` written by one test doesn't
+  // affect another test in the same file.
   // eslint-disable-next-line no-empty-pattern
   tmpContext: async ({}, use) => {
-    await use((label) => join(TEST_TMP, `${label}.neon`));
+    await use((label) => {
+      const dir = join(TEST_TMP, label);
+      mkdirSync(dir, { recursive: true });
+      return join(dir, '.neon');
+    });
   },
   runLinkInCi: async ({ runMockServer }, use) => {
     await use(async (args) => {
@@ -440,5 +453,72 @@ describe('link', () => {
       ctx,
     ]);
     expect(readFile(ctx)).toMatchSnapshot();
+  });
+
+  describe('gitignore scaffolding', () => {
+    test('creates a .gitignore listing .neon next to the context file', async ({
+      testCliCommand,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('gi_creates');
+      await testCliCommand([
+        'link',
+        '--org-id',
+        'org-2',
+        '--project-id',
+        'test',
+        '--context-file',
+        ctx,
+      ]);
+      const giPath = join(ctx, '..', '.gitignore');
+      expect(readFileSync(giPath, 'utf-8')).toBe('.neon\n');
+    });
+
+    test('appends .neon to an existing .gitignore without duplicating', async ({
+      testCliCommand,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('gi_appends');
+      const giPath = join(ctx, '..', '.gitignore');
+      writeFileSync(giPath, 'node_modules\ndist\n');
+      await testCliCommand([
+        'link',
+        '--org-id',
+        'org-2',
+        '--project-id',
+        'test',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFileSync(giPath, 'utf-8')).toBe('node_modules\ndist\n.neon\n');
+
+      // Re-link in the same dir must not produce a duplicate entry.
+      await testCliCommand([
+        'link',
+        '--org-id',
+        'org-2',
+        '--project-id',
+        'test',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFileSync(giPath, 'utf-8')).toBe('node_modules\ndist\n.neon\n');
+    });
+
+    test('set-context also scaffolds .gitignore via the shared applyContext', async ({
+      testCliCommand,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('gi_set_context');
+      await testCliCommand([
+        'set-context',
+        '--project-id',
+        'test',
+        '--context-file',
+        ctx,
+      ]);
+      const giPath = join(ctx, '..', '.gitignore');
+      expect(readFileSync(giPath, 'utf-8')).toBe('.neon\n');
+    });
   });
 });

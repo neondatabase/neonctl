@@ -3,7 +3,7 @@
 exports[`link > --agent mode > with full project details creates project and emits linked JSON 1`] = `
 "{
   "status": "linked",
-  "context_file": "<TMP>/agent_linked_create.neon",
+  "context_file": "<TMP>/agent_linked_create/.neon",
   "context": {
     "orgId": "org-2",
     "projectId": "new-project-789012",
@@ -13,7 +13,7 @@ exports[`link > --agent mode > with full project details creates project and emi
     "id": "new-project-789012",
     "name": "test_project"
   },
-  "message": "Created project new-project-789012 (\\"test_project\\") in aws-us-east-2 and linked <TMP>/agent_linked_create.neon."
+  "message": "Created project new-project-789012 (\\"test_project\\") in aws-us-east-2 and linked <TMP>/agent_linked_create/.neon."
 }
 "
 `;
@@ -79,7 +79,7 @@ exports[`link > --agent mode > with only --org-id emits needs_project JSON 1`] =
 exports[`link > --agent mode > with org+project emits linked JSON and writes .neon 1`] = `
 "{
   "status": "linked",
-  "context_file": "<TMP>/agent_linked_existing.neon",
+  "context_file": "<TMP>/agent_linked_existing/.neon",
   "context": {
     "orgId": "org-2",
     "projectId": "test",
@@ -88,7 +88,7 @@ exports[`link > --agent mode > with org+project emits linked JSON and writes .ne
   "project": {
     "id": "test"
   },
-  "message": "Linked <TMP>/agent_linked_existing.neon to project test (org org-2) on branch br-main-branch-123456."
+  "message": "Linked <TMP>/agent_linked_existing/.neon to project test (org org-2) on branch br-main-branch-123456."
 }
 "
 `;
@@ -132,11 +132,40 @@ exports[`link > --agent mode > with org+projectName but no region emits needs_pr
 "
 `;
 
+exports[`link > gitignore scaffolding > appends .neon to an existing .gitignore without duplicating 1`] = `
+"Linked <TMP>/gi_appends/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > gitignore scaffolding > appends .neon to an existing .gitignore without duplicating 2`] = `
+"Linked <TMP>/gi_appends/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > gitignore scaffolding > creates a .gitignore listing .neon next to the context file 1`] = `
+"Linked <TMP>/gi_creates/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > gitignore scaffolding > set-context also scaffolds .gitignore via the shared applyContext 1`] = `""`;
+
 exports[`link > non-interactive flag mode > conflicting inputs (--project-id with --project-name) fails 1`] = `""`;
 
 exports[`link > non-interactive flag mode > link creates a new project and writes .neon 1`] = `
 "Created project new-project-789012 ("test_project").
-Linked <TMP>/flag_create.neon:
+Linked <TMP>/flag_create/.neon:
   orgId:    org-2
   projectId: new-project-789012
   branchId:  br-test-branch-789012
@@ -153,7 +182,7 @@ exports[`link > non-interactive flag mode > link creates a new project and write
 `;
 
 exports[`link > non-interactive flag mode > link to existing project writes .neon with default branch id 1`] = `
-"Linked <TMP>/flag_existing.neon:
+"Linked <TMP>/flag_existing/.neon:
   orgId:    org-2
   projectId: test
   branchId:  br-main-branch-123456
@@ -170,7 +199,7 @@ exports[`link > non-interactive flag mode > link to existing project writes .neo
 `;
 
 exports[`link > non-interactive flag mode > link with --params JSON behaves like flags 1`] = `
-"Linked <TMP>/flag_params.neon:
+"Linked <TMP>/flag_params/.neon:
   orgId:    org-2
   projectId: test
   branchId:  br-main-branch-123456
@@ -263,7 +292,7 @@ exports[`link > org-scoped API key behavior > agent mode with no orgs available 
 `;
 
 exports[`link > overwrites an existing .neon when re-linking non-interactively 1`] = `
-"Linked <TMP>/overwrite.neon:
+"Linked <TMP>/overwrite/.neon:
   orgId:    org-2
   projectId: test
   branchId:  br-main-branch-123456

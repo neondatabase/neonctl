@@ -1,7 +1,9 @@
-import { accessSync, readFileSync, writeFileSync } from 'node:fs';
+import { accessSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { normalize, resolve } from 'node:path';
+import { dirname, normalize, resolve } from 'node:path';
 import yargs from 'yargs';
+
+import { log } from './log.js';
 
 export type Context = {
   orgId?: string;
@@ -10,6 +12,7 @@ export type Context = {
 };
 
 const CONTEXT_FILE = '.neon';
+const GITIGNORE_FILE = '.gitignore';
 
 const wrapWithContextFile = (dir: string) => resolve(dir, CONTEXT_FILE);
 
@@ -87,7 +90,54 @@ export const updateContextFile = (file: string, context: Context) => {
  * Shared primitive used by `set-context` and `link` to persist context.
  * Mirrors the destructive write semantics of `updateContextFile` —
  * any field not present in `context` is dropped from the file.
+ *
+ * After writing, ensures a `.gitignore` file sits alongside `.neon` and lists
+ * it, so the linked context doesn't accidentally end up in source control.
  */
 export const applyContext = (file: string, context: Context) => {
   updateContextFile(file, context);
+  ensureGitignored(file);
+};
+
+/**
+ * Make sure the `.gitignore` next to `file` lists the file's basename
+ * (currently always `.neon`). Creates the `.gitignore` if it doesn't exist,
+ * or appends `.neon` if it's missing — never duplicates an existing entry.
+ *
+ * Best-effort: a failure here (e.g. read-only filesystem) is logged at debug
+ * level and swallowed; persisting the context file is the primary goal and
+ * must not be blocked by a `.gitignore` write error.
+ */
+export const ensureGitignored = (file: string): void => {
+  try {
+    const dir = dirname(file);
+    const entry = basenameOf(file);
+    const gitignorePath = resolve(dir, GITIGNORE_FILE);
+
+    if (!existsSync(gitignorePath)) {
+      writeFileSync(gitignorePath, `${entry}\n`);
+      return;
+    }
+
+    const current = readFileSync(gitignorePath, 'utf-8');
+    if (hasGitignoreEntry(current, entry)) {
+      return;
+    }
+
+    const needsLeadingNewline = current.length > 0 && !current.endsWith('\n');
+    const addition = `${needsLeadingNewline ? '\n' : ''}${entry}\n`;
+    writeFileSync(gitignorePath, current + addition);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.debug('Failed to update .gitignore next to %s: %s', file, message);
+  }
+};
+
+const basenameOf = (file: string): string => {
+  const parts = file.split(/[\\/]/);
+  return parts[parts.length - 1] || CONTEXT_FILE;
+};
+
+const hasGitignoreEntry = (content: string, entry: string): boolean => {
+  return content.split(/\r?\n/).some((line) => line.trim() === entry);
 };
