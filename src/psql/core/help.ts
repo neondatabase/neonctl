@@ -8,10 +8,14 @@
  * object so that callers can wire them in without this module reaching into
  * `pset` directly.
  *
- * `helpSQL` is stubbed — the SQL command help table is generated at psql
- * build time from `sql_help.c`/`sql_help.h` and is large enough to warrant a
- * dedicated work package.
+ * `helpSQL` ships a curated subset of upstream's auto-generated `sql_help.h`
+ * — ~70 commands covering the everyday DML/DDL/transaction/role surface. See
+ * {@link ./sqlHelp.ts} for the data and lookup logic. Rarer commands resolve
+ * through the docs URL on each entry rather than being inlined here.
  */
+
+import { SQL_HELP, findMatches, formatEntry } from './sqlHelp.js';
+import type { SqlHelpEntry } from './sqlHelp.js';
 
 /** Default options shared by every help function. Mirrors upstream constants
  * (`DEFAULT_FIELD_SEP`, `DEFAULT_CSV_FIELD_SEP`, `DEFAULT_WATCH_INTERVAL`) and
@@ -754,37 +758,87 @@ export const helpVariables = (
 };
 
 /**
+ * Render the "Available help:" overview — every command name in the table,
+ * laid out in fixed-width columns that fit `screenWidth`. Mirrors upstream
+ * `print_topic_list` in `help.c`: 4-column default falling back to fewer
+ * columns on narrow terminals. Column width is `max(cmd.length) + 2` so the
+ * tallest CREATE * entries line up cleanly.
+ */
+const writeCommandList = (
+  out: NodeJS.WritableStream,
+  screenWidth: number,
+): void => {
+  out.write('Available help:\n');
+
+  const names = SQL_HELP.map((e) => e.cmd);
+  const maxLen = names.reduce((m, n) => Math.max(m, n.length), 0);
+  const colW = maxLen + 2;
+  // 2-space left margin per upstream; ensure at least one column fits.
+  const usable = Math.max(colW, screenWidth - 2);
+  const cols = Math.max(1, Math.floor(usable / colW));
+  const rows = Math.ceil(names.length / cols);
+
+  for (let r = 0; r < rows; r++) {
+    let line = '  ';
+    for (let c = 0; c < cols; c++) {
+      const i = c * rows + r;
+      if (i >= names.length) break;
+      const name = names[i];
+      // Last cell on the row: no trailing padding.
+      const isLast = c === cols - 1 || (c + 1) * rows + r >= names.length;
+      line += isLast ? name : name.padEnd(colW, ' ');
+    }
+    out.write(line.replace(/\s+$/u, '') + '\n');
+  }
+};
+
+/** Render a single matched entry; pure formatter, exported for tests. */
+const writeEntry = (out: NodeJS.WritableStream, entry: SqlHelpEntry): void => {
+  out.write(formatEntry(entry));
+};
+
+/**
  * `\h` SQL command help.
  *
- * TODO(WP-future): port the SQL command help table from upstream
- * `src/bin/psql/sql_help.c` / `sql_help.h`. The table is generated at psql
- * build time from the SGML documentation and is large (~hundreds of
- * commands). For Phase-0 this is a stub.
+ * Behaviour matches upstream psql:
+ *   - No topic        → list every command name in fixed-width columns.
+ *   - Unknown topic   → "No help available for ..." hint.
+ *   - Multiple matches → list the matching command names.
+ *   - Exactly one match → render its synopsis.
+ *
+ * Lookups are case-insensitive and prefix-matched per token. "create t"
+ * matches CREATE TABLE / CREATE TRIGGER / CREATE TYPE.
  *
  * @param out         output stream
  * @param topic       SQL command name (e.g. "SELECT"), or null/empty for the
  *                    "available help" overview
- * @param screenWidth column count, used by upstream for the multi-column
- *                    layout of the overview list
+ * @param screenWidth column count, used to lay out the overview list. Line
+ *                    wrapping of the synopsis itself is a follow-up.
  */
 export const helpSQL = (
   out: NodeJS.WritableStream,
   topic: string | null,
   screenWidth: number,
 ): void => {
-  // Suppress unused-param warnings; the parameters describe the future API.
-  void screenWidth;
-
-  if (!topic || topic.length === 0) {
-    out.write(
-      'Available help:\n' +
-        '  (SQL command help is not yet implemented in the embedded TypeScript psql.)\n',
-    );
+  if (topic === null || topic.length === 0 || topic.trim().length === 0) {
+    writeCommandList(out, screenWidth);
     return;
   }
 
-  out.write(
-    `No help available for "${topic}".\n` +
-      'Try \\h with no arguments to see available help.\n',
-  );
+  const matches = findMatches(topic);
+  if (matches.length === 0) {
+    out.write(
+      `No help available for "${topic}".\n` +
+        'Try \\h with no arguments to see available help.\n',
+    );
+    return;
+  }
+  if (matches.length === 1) {
+    writeEntry(out, matches[0]);
+    return;
+  }
+  out.write(`Several matches for "${topic}":\n`);
+  for (const m of matches) {
+    out.write(`  ${m.cmd}\n`);
+  }
 };

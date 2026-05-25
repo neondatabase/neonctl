@@ -1,5 +1,57 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`helpSQL > renders a column-formatted command list when no topic is given 1`] = `
+"Available help:
+  SELECT                    CREATE PUBLICATION        REVOKE
+  INSERT                    CREATE SUBSCRIPTION       BEGIN
+  UPDATE                    ALTER TABLE               COMMIT
+  DELETE                    ALTER INDEX               ROLLBACK
+  MERGE                     ALTER VIEW                SAVEPOINT
+  COPY                      ALTER MATERIALIZED VIEW   RELEASE SAVEPOINT
+  EXPLAIN                   ALTER FUNCTION            START TRANSACTION
+  ANALYZE                   ALTER EXTENSION           SET
+  VACUUM                    ALTER SCHEMA              SET ROLE
+  REINDEX                   ALTER DATABASE            RESET
+  TRUNCATE                  ALTER ROLE                SHOW
+  CREATE TABLE              ALTER USER                LISTEN
+  CREATE INDEX              ALTER TYPE                NOTIFY
+  CREATE VIEW               ALTER TRIGGER             UNLISTEN
+  CREATE MATERIALIZED VIEW  ALTER POLICY              LOCK
+  CREATE FUNCTION           DROP TABLE                PREPARE
+  CREATE PROCEDURE          DROP INDEX                EXECUTE
+  CREATE EXTENSION          DROP VIEW                 DEALLOCATE
+  CREATE SCHEMA             DROP MATERIALIZED VIEW    DECLARE
+  CREATE DATABASE           DROP FUNCTION             FETCH
+  CREATE ROLE               DROP EXTENSION            MOVE
+  CREATE USER               DROP SCHEMA               CLOSE
+  CREATE TYPE               DROP DATABASE             CALL
+  CREATE TRIGGER            DROP ROLE                 DO
+  CREATE POLICY             GRANT
+"
+`;
+
+exports[`helpSQL > renders the SELECT synopsis for \`\\h SELECT\` 1`] = `
+"Command:     SELECT
+Description: retrieve rows from a table or view
+Syntax:
+[ WITH [ RECURSIVE ] with_query [, ...] ]
+SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]
+    [ * | expression [ [ AS ] output_name ] [, ...] ]
+    [ FROM from_item [, ...] ]
+    [ WHERE condition ]
+    [ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]
+    [ HAVING condition ]
+    [ WINDOW window_name AS ( window_definition ) [, ...] ]
+    [ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] select ]
+    [ ORDER BY expression [ ASC | DESC | USING operator ] [ NULLS { FIRST | LAST } ] [, ...] ]
+    [ LIMIT { count | ALL } ]
+    [ OFFSET start [ ROW | ROWS ] ]
+    [ FOR { UPDATE | NO KEY UPDATE | SHARE | KEY SHARE } [ OF from_reference [, ...] ] [ NOWAIT | SKIP LOCKED ] [...] ]
+
+URL: https://www.postgresql.org/docs/current/sql-select.html
+"
+`;
+
 exports[`helpVariables > renders the default special-variables help 1`] = `
 "List of specially treated variables
 
