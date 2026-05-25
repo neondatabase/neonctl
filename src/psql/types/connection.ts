@@ -103,4 +103,20 @@ export type ConnectOptions = {
   connectTimeoutMs?: number;
   clientEncoding?: string;
   options?: string;
+  /**
+   * Open the connection in replication mode (walsender). Values:
+   *   - 'true': physical replication (libpq accepts 'true' / 'on' / 'yes' /
+   *     '1' and we normalise them to 'true' at the parsing layer).
+   *   - 'database': logical replication; the connection is associated with
+   *     the specified database and can run logical-decoding commands.
+   *
+   * In replication mode the server only accepts walsender commands
+   * (IDENTIFY_SYSTEM, START_REPLICATION, CREATE_REPLICATION_SLOT, etc.) —
+   * regular SQL is not accepted. We surface server responses as ResultSets
+   * (for commands that return rows) or as a thrown ConnectError (for
+   * invalid input). Full CopyBoth streaming after a successful
+   * START_REPLICATION is NOT implemented; this client supports the
+   * handshake + Query / ErrorResponse path only.
+   */
+  replication?: 'true' | 'database';
 };

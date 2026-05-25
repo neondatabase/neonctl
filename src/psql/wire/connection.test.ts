@@ -437,6 +437,115 @@ describe('PgConnection', () => {
     }
   });
 
+  test('threads opts.replication into the startup message parameters', async () => {
+    // Walsender (replication) mode is gated by a single startup-message
+    // parameter. The conformance test in 001_basic.spec.ts cares only
+    // that psql opens the connection and surfaces the server's
+    // ErrorResponse for `START_REPLICATION 0/1`; no CopyBoth streaming
+    // is exercised. Here we assert the wire-layer plumbing: the
+    // startup-message params dict must contain `replication=database`
+    // exactly as supplied.
+    let startupParams: Record<string, string> | null = null;
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        startupParams = msg.params as Record<string, string>;
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'alice',
+      database: 'postgres',
+      ssl: 'disable',
+      replication: 'database',
+    });
+    expect(startupParams).not.toBeNull();
+    expect(startupParams).toMatchObject({
+      user: 'alice',
+      database: 'postgres',
+      replication: 'database',
+    });
+    await conn.close();
+  });
+
+  test('omits replication parameter when not requested', async () => {
+    // Defence-in-depth: a regular connection must NOT carry a
+    // replication key in its startup message (the server would
+    // interpret an empty value as walsender mode and reject regular
+    // SQL otherwise).
+    let startupParams: Record<string, string> | null = null;
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        startupParams = msg.params as Record<string, string>;
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'alice',
+      database: 'postgres',
+      ssl: 'disable',
+    });
+    expect(startupParams).not.toBeNull();
+    expect(startupParams).not.toHaveProperty('replication');
+    await conn.close();
+  });
+
+  test('replication mode surfaces server ErrorResponse like a regular query', async () => {
+    // The negative path the conformance test asserts: START_REPLICATION
+    // with a bare LSN (no slot name) is a syntax error. The server
+    // replies via the regular Q / ErrorResponse / ReadyForQuery flow
+    // even though the connection is in walsender mode, so the Query
+    // path stays unchanged.
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(
+          errorResponse({
+            S: 'ERROR',
+            V: 'ERROR',
+            C: '42601',
+            M: 'syntax error',
+          }),
+        );
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'postgres',
+      ssl: 'disable',
+      replication: 'database',
+    });
+    await expect(
+      conn.execSimple('START_REPLICATION 0/1'),
+    ).rejects.toMatchObject({
+      severity: 'ERROR',
+      code: '42601',
+      message: 'syntax error',
+    });
+    await conn.close();
+  });
+
   test('connects with cleartext auth, captures ParameterStatus + key', async () => {
     server = await startFakeServer((msg, client) => {
       if (msg.type === 'Startup') {
@@ -1116,6 +1225,119 @@ describe('PgConnection', () => {
     expect(results[0].rows).toEqual([['1']]);
     expect(results[1].rows).toEqual([['2']]);
     expect(results[2].rows).toEqual([['3']]);
+    await conn.close();
+  });
+
+  // -------------------------------------------------------------------------
+  // COPY in a pipeline → fail fast + abort connection.
+  //
+  // libpq + PG 17 still reject CopyIn/CopyOutResponse mid-pipeline with the
+  // exact diagnostic "COPY in a pipeline is not supported, aborting
+  // connection". Upstream psql tears the connection down on receipt; we
+  // mirror that so the conformance tests at
+  // tests/psql-conformance/tap/001_basic.spec.ts (lines 920-974) see the
+  // expected behaviour.
+  // -------------------------------------------------------------------------
+
+  test('CopyInResponse during execSimple while pipeline active aborts the connection', async () => {
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '17.0'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        // Server replies with CopyInResponse — psql's job is to bail out.
+        client.send(copyInResponse([0]));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    // Simulate an active pipeline so the wire-layer guard fires. We don't
+    // have to actually drive the pipeline session here — the
+    // `_extPipelineActive` flag is what `handleQueryMessage` checks before
+    // the CopyInResponse branch.
+    (conn as unknown as { _extPipelineActive: boolean })._extPipelineActive =
+      true;
+
+    await expect(conn.execSimple('COPY t FROM STDIN')).rejects.toMatchObject({
+      message: 'COPY in a pipeline is not supported, aborting connection',
+    });
+    expect(conn.isClosed()).toBe(true);
+    // Cleanup: close() is a no-op once `isClosed()` is true.
+    await conn.close();
+  });
+
+  test('CopyOutResponse during execSimple while pipeline active aborts the connection', async () => {
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '17.0'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(copyOutResponse([0]));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    (conn as unknown as { _extPipelineActive: boolean })._extPipelineActive =
+      true;
+
+    await expect(conn.execSimple('COPY t TO STDOUT')).rejects.toMatchObject({
+      message: 'COPY in a pipeline is not supported, aborting connection',
+    });
+    expect(conn.isClosed()).toBe(true);
+    await conn.close();
+  });
+
+  test('startCopyIn during pipeline rejects synchronously and closes the connection', async () => {
+    // Defence-in-depth: if anything bypasses the `\copy` command's
+    // pre-check and reaches the wire layer, `startCopyIn` itself short-
+    // circuits before writing Query and tears the socket down.
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '17.0'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(copyInResponse([0]));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    (conn as unknown as { _extPipelineActive: boolean })._extPipelineActive =
+      true;
+
+    await expect(conn.startCopyIn('COPY t FROM STDIN')).rejects.toMatchObject({
+      message: 'COPY in a pipeline is not supported, aborting connection',
+    });
+    expect(conn.isClosed()).toBe(true);
     await conn.close();
   });
 });

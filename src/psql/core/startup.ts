@@ -45,6 +45,12 @@
 import type { ConnectOptions } from '../types/connection.js';
 import type { PsqlSettings } from '../types/settings.js';
 
+import {
+  looksLikeConnectionString,
+  parseConninfo,
+  parseConnectionUri,
+} from '../index.js';
+
 import { helpVariables, slashUsage, usage } from './help.js';
 
 // ---------------------------------------------------------------------------
@@ -65,6 +71,12 @@ export type ParsedArgs = {
   password?: string;
   promptPassword?: boolean;
   database?: string;
+  /**
+   * Walsender (replication) mode, derived from a conninfo-style `-d` value
+   * (e.g. `dbname=postgres replication=database`). The URI path threads
+   * `?replication=…` straight through `parseConnectionUri` instead.
+   */
+  replication?: 'true' | 'database';
 
   /** Initial actions ordered as (-c|-f) appear on the command line. */
   actions: readonly StartupAction[];
@@ -302,6 +314,51 @@ const pushVariable = (vars: StartupVariable[], raw: string): void => {
   vars.push({ name: raw.slice(0, eq), value: raw.slice(eq + 1) });
 };
 
+/**
+ * `-d VALUE` resolution. libpq accepts three shapes for the value:
+ *
+ *   1. Bare database name (no `=`, no `postgres[ql]://` prefix) — set
+ *      `args.database` directly. This is by far the common case.
+ *   2. Connection URI (`postgresql://…` / `postgres://…`) — parse it and
+ *      lift the fields it specifies onto `args` (host, port, user, etc.).
+ *   3. Conninfo key=value pairs separated by whitespace — same, but parsed
+ *      via `parseConninfo`.
+ *
+ * The test corpus for upstream `001_basic.pl` uses shape (3) to open a
+ * walsender connection: `-d "dbname=postgres replication=database"`. We
+ * fold any conninfo-only fields (currently only `replication`) onto a
+ * dedicated `args.replication` slot that `applyStartupArgs` threads into
+ * `ConnectOptions.replication`.
+ */
+const applyDashD = (args: ParsedArgs, value: string): void => {
+  if (!looksLikeConnectionString(value)) {
+    args.database = value;
+    return;
+  }
+  const parsed: Partial<ConnectOptions> =
+    value.startsWith('postgresql://') || value.startsWith('postgres://')
+      ? parseConnectionUri(value)
+      : parseConninfo(value);
+  if (parsed.host !== undefined && args.host === undefined) {
+    args.host = parsed.host;
+  }
+  if (parsed.port !== undefined && args.port === undefined) {
+    args.port = parsed.port;
+  }
+  if (parsed.user !== undefined && args.user === undefined) {
+    args.user = parsed.user;
+  }
+  if (parsed.password !== undefined && args.password === undefined) {
+    args.password = parsed.password;
+  }
+  if (parsed.database !== undefined && args.database === undefined) {
+    args.database = parsed.database;
+  }
+  if (parsed.replication !== undefined) {
+    args.replication = parsed.replication;
+  }
+};
+
 // ---------------------------------------------------------------------------
 // parseStartupArgs.
 // ---------------------------------------------------------------------------
@@ -372,7 +429,7 @@ export const parseStartupArgs = (argv: string[]): ParsedArgs | ParseError => {
         pushAction(actions, { kind: 'command', sql: value as string });
         return null;
       case 'd':
-        args.database = value;
+        applyDashD(args, value as string);
         return null;
       case 'e':
         args.echoQueries = true;
@@ -773,6 +830,9 @@ export const applyStartupArgs = (
     ...(username !== undefined ? { user: username } : {}),
     ...(dbname !== undefined ? { database: dbname } : {}),
     ...(args.password !== undefined ? { password: args.password } : {}),
+    ...(args.replication !== undefined
+      ? { replication: args.replication }
+      : {}),
   };
 
   return { connect, preActions: args.actions };

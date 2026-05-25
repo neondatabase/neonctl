@@ -629,6 +629,19 @@ export class PgConnection implements Connection {
 
   public startCopyIn(sql: string): Promise<CopyInStream> {
     this.ensureIdle();
+    // COPY mid-pipeline is rejected by libpq with a fixed diagnostic; we
+    // mirror that synchronously so callers don't need a round-trip to learn
+    // their command is invalid. The wire-level dispatch also guards this
+    // (see handleCopyStartMessage) for any path that bypasses this check.
+    if (this._extPipelineActive) {
+      this.abortForCopyInPipeline();
+      return Promise.reject(
+        Object.assign(
+          new Error('COPY in a pipeline is not supported, aborting connection'),
+          { severity: 'FATAL' as const },
+        ),
+      );
+    }
     // The driver waits in `in-query` state until CopyInResponse arrives — at
     // which point the protocol switches and we move to `in-copy-in`. The
     // server can also reply with an ErrorResponse (e.g. "no such table"),
@@ -653,6 +666,15 @@ export class PgConnection implements Connection {
 
   public startCopyOut(sql: string): Promise<CopyOutStream> {
     this.ensureIdle();
+    if (this._extPipelineActive) {
+      this.abortForCopyInPipeline();
+      return Promise.reject(
+        Object.assign(
+          new Error('COPY in a pipeline is not supported, aborting connection'),
+          { severity: 'FATAL' as const },
+        ),
+      );
+    }
     return new Promise<CopyOutStream>((resolve, reject) => {
       this.copyOut = {
         queue: [],
@@ -819,6 +841,17 @@ export class PgConnection implements Connection {
       }
       if (this.opts.options !== undefined) {
         params.options = this.opts.options;
+      }
+      // Walsender (replication) mode: the server enters a restricted
+      // command set (IDENTIFY_SYSTEM, START_REPLICATION, etc.) keyed off
+      // this startup parameter. Values mirror libpq's normalisation:
+      // 'true' for physical, 'database' for logical. We do not stream the
+      // CopyBoth phase — the Query path still surfaces ErrorResponse and
+      // any pre-streaming ResultSet, which is enough for the negative
+      // conformance test (`psql -c 'START_REPLICATION 0/1'` must exit
+      // non-zero with a syntax error from the server).
+      if (this.opts.replication !== undefined) {
+        params.replication = this.opts.replication;
       }
       this.startupResolve = resolve;
       this.startupReject = reject;
@@ -1126,6 +1159,15 @@ export class PgConnection implements Connection {
   private handleCopyStartMessage(msg: BackendMessage): void {
     switch (msg.type) {
       case 'CopyInResponse':
+        // COPY-in-pipeline: libpq aborts the connection with this exact
+        // diagnostic (matching upstream psql's behaviour). The `\copy`
+        // command layer detects pipeline-active and fails fast before
+        // reaching the wire, but if anything else slips through we abort
+        // here as a defence-in-depth.
+        if (this._extPipelineActive) {
+          this.abortForCopyInPipeline();
+          return;
+        }
         if (this.copyIn) {
           this.state = 'in-copy-in';
           const r = this.copyStartResolve;
@@ -1135,6 +1177,10 @@ export class PgConnection implements Connection {
         }
         return;
       case 'CopyOutResponse':
+        if (this._extPipelineActive) {
+          this.abortForCopyInPipeline();
+          return;
+        }
         if (this.copyOut) {
           this.state = 'in-copy-out';
           const r = this.copyStartResolve;
@@ -1384,13 +1430,23 @@ export class PgConnection implements Connection {
         return;
       }
       case 'CopyInResponse':
-      case 'CopyOutResponse':
+      case 'CopyOutResponse': {
+        // PG 17 added pipeline + COPY support but libpq still rejects the
+        // combination ("COPY in a pipeline is not supported, aborting
+        // connection"). Upstream psql surfaces that diagnostic and tears down
+        // the connection. We mirror the behaviour: if the user fires a COPY
+        // statement via execSimple while a pipeline is active, abort.
+        if (this._extPipelineActive) {
+          this.abortForCopyInPipeline();
+          return;
+        }
         q.error = {
           severity: 'ERROR',
           message:
             'COPY without an active CopyIn/CopyOut driver — call startCopyIn/startCopyOut instead of execSimple',
         };
         return;
+      }
       default:
         // Unknown messages during a query are protocol errors but not fatal
         // for the connection — record them.
@@ -1929,6 +1985,30 @@ export class PgConnection implements Connection {
 
   private protocolFail(err: Error): void {
     this.socketError = err;
+    this.failPending(err);
+    try {
+      this.socket.destroy();
+    } catch {
+      // ignore
+    }
+    this.state = 'closed';
+  }
+
+  /**
+   * Abort the connection because the server replied with CopyInResponse /
+   * CopyOutResponse while a pipeline (`_extPipelineActive`) was active.
+   * Upstream libpq emits the exact diagnostic
+   * `"COPY in a pipeline is not supported, aborting connection"` and tears
+   * the socket down — we mirror that. Pending operations are rejected; the
+   * connection is left in `closed` so subsequent commands fail cleanly
+   * (matching the "aborting connection" promise).
+   */
+  public abortForCopyInPipeline(): void {
+    const err: ConnectError = {
+      severity: 'FATAL',
+      message: 'COPY in a pipeline is not supported, aborting connection',
+    };
+    this.socketError = new Error(err.message);
     this.failPending(err);
     try {
       this.socket.destroy();

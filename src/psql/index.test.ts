@@ -21,7 +21,11 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { parseConnectionUri } from './index.js';
+import {
+  looksLikeConnectionString,
+  parseConninfo,
+  parseConnectionUri,
+} from './index.js';
 import type { ConnectOptions } from './types/connection.js';
 
 // Pin USER so empty-userinfo cases are deterministic across machines.
@@ -282,6 +286,37 @@ const cases: Case[] = [
     uri: 'postgresql://host?options=-c%20synchronous_commit%3Doff',
     expected: { host: 'host', options: '-c synchronous_commit=off' },
   },
+
+  // Replication mode (walsender). The URI parser threads `?replication=…`
+  // through `ConnectOptions.replication`, which the startup-message builder
+  // then sends as a literal parameter. Values are normalised to libpq's
+  // surface: 'database' for logical, 'true' for the physical-replication
+  // truthy-set ('on' / 'yes' / '1' / 'true').
+  {
+    name: '?replication=database (logical walsender)',
+    uri: 'postgresql://u@h/db?replication=database',
+    expected: {
+      host: 'h',
+      user: 'u',
+      database: 'db',
+      replication: 'database',
+    },
+  },
+  {
+    name: '?replication=true (physical walsender)',
+    uri: 'postgresql://u@h/db?replication=true',
+    expected: { host: 'h', database: 'db', replication: 'true' },
+  },
+  {
+    name: 'replication=on normalises to true',
+    uri: 'postgresql://u@h/db?replication=on',
+    expected: { host: 'h', database: 'db', replication: 'true' },
+  },
+  {
+    name: 'replication=1 normalises to true',
+    uri: 'postgresql://u@h/db?replication=1',
+    expected: { host: 'h', database: 'db', replication: 'true' },
+  },
 ];
 
 describe('parseConnectionUri — upstream 001_uri.pl conformance', () => {
@@ -297,6 +332,17 @@ describe('parseConnectionUri — upstream 001_uri.pl conformance', () => {
 // noted, accepts them deliberately).
 // ---------------------------------------------------------------------------
 describe('parseConnectionUri — error / malformed inputs', () => {
+  it('throws on unrecognised replication value', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://u@h/db?replication=bogus'),
+    ).toThrow(/invalid value.*replication/i);
+  });
+
+  it('does not set replication when omitted', () => {
+    const got = parseConnectionUri('postgresql://u@h/db');
+    expect(got.replication).toBeUndefined();
+  });
+
   it('throws on missing matching IPv6 bracket', () => {
     expect(() => parseConnectionUri('postgres://[::1')).toThrow(/IPv6/);
   });
@@ -320,6 +366,112 @@ describe('parseConnectionUri — error / malformed inputs', () => {
   it('rejects non-numeric port', () => {
     expect(() => parseConnectionUri('postgresql://host:abc')).toThrow(
       /invalid port/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// libpq strict-validation cases. These mirror upstream 001_uri.pl error rows
+// that we now reject. Messages aren't byte-identical with libpq — we only
+// assert that the parser throws (and that the message matches a stable
+// fragment, so regressions surface clearly).
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — libpq strict validation', () => {
+  // Unknown query keys (libpq's "invalid URI query parameter" rejection).
+  // Includes a percent-encoded form (u%7aer -> "uzer") to confirm we validate
+  // the *decoded* key.
+  it('rejects unknown query key (percent-encoded "uzer")', () => {
+    expect(() =>
+      parseConnectionUri(
+        'postgresql://host/db?u%7aer=someotheruser&port=12345',
+      ),
+    ).toThrow(/invalid URI query parameter: "uzer"/);
+  });
+
+  it('rejects unknown query key "uzer"', () => {
+    expect(() => parseConnectionUri('postgresql://host?uzer=')).toThrow(
+      /invalid URI query parameter: "uzer"/,
+    );
+  });
+
+  // Bare keys (no `=`) — `?zzz` and `?value1&value2` are upstream rows.
+  it('rejects bare query key (no "=")', () => {
+    expect(() => parseConnectionUri('postgresql://host?zzz')).toThrow(
+      /missing "="/,
+    );
+  });
+
+  it('rejects multiple bare query keys', () => {
+    expect(() => parseConnectionUri('postgresql://host?value1&value2')).toThrow(
+      /missing "="/,
+    );
+  });
+
+  // Extra `=` in a value: libpq treats the second `=` as a syntax error;
+  // we follow suit because the value would otherwise be ambiguous with the
+  // percent-encoded form `%3D`.
+  it('rejects extra "=" in query value', () => {
+    expect(() => parseConnectionUri('postgresql://host?key=key=value')).toThrow(
+      /extra "="/,
+    );
+  });
+
+  // Unknown scheme. libpq emits a specific "missing/unknown schema" error;
+  // we share the umbrella "unsupported scheme" with non-postgres URIs.
+  it('rejects "postgre://" scheme', () => {
+    expect(() => parseConnectionUri('postgre://')).toThrow(
+      /unsupported scheme/,
+    );
+  });
+
+  // Stretch: internal whitespace inside a query key. We already trim leading
+  // and trailing whitespace around `=` (see the passing
+  // "leading/trailing query whitespace" case), so `user user` survives the
+  // trim and is rejected by the strict-key check as a side effect.
+  it('rejects internal whitespace in query key (becomes unknown key)', () => {
+    expect(() =>
+      parseConnectionUri(
+        'postgresql://host?  user user  = uri  & port = 12345 12',
+      ),
+    ).toThrow(/invalid URI query parameter: "user user"/);
+  });
+
+  // Strict percent-encoding. decodeURIComponent throws on malformed escapes;
+  // we surface a clear Error. %00 is accepted by decodeURIComponent as \0 —
+  // we additionally guard against NUL.
+  it('rejects invalid percent-encoded token in query value (%XX)', () => {
+    expect(() => parseConnectionUri('postgres://host?dbname=%XXfoo')).toThrow(
+      /invalid percent-encoded token/,
+    );
+  });
+
+  it('rejects forbidden NUL byte (%00)', () => {
+    expect(() => parseConnectionUri('postgresql://a%00b')).toThrow(
+      /forbidden NUL byte/,
+    );
+  });
+
+  it('rejects invalid percent-encoded token (%zz)', () => {
+    expect(() => parseConnectionUri('postgresql://%zz')).toThrow(
+      /invalid percent-encoded token/,
+    );
+  });
+
+  it('rejects incomplete percent-encoded token (%1)', () => {
+    expect(() => parseConnectionUri('postgresql://%1')).toThrow(
+      /invalid percent-encoded token/,
+    );
+  });
+
+  it('rejects bare percent sign (%)', () => {
+    expect(() => parseConnectionUri('postgresql://%')).toThrow(
+      /invalid percent-encoded token/,
+    );
+  });
+
+  it('rejects empty IPv6 host', () => {
+    expect(() => parseConnectionUri('postgres://[]')).toThrow(
+      /IPv6 host address may not be empty/,
     );
   });
 });
@@ -350,31 +502,72 @@ describe('parseConnectionUri — upstream cases not supported', () => {
     'postgres://%2Fvar%2Flib%2Fpostgresql/dbname — unix socket in authority',
   );
 
-  // libpq surfaces specific stderr for malformed/invalid query keys. Our
-  // parser is lenient (decodes what it can, drops empty keys). We don't aim
-  // for byte-identical error messages.
-  it.todo(
-    'postgresql://host/db?u%7aer=someotheruser&port=12345 — rejects "uzer" key',
-  );
-  it.todo('postgresql://host?uzer= — rejects unknown query key');
-  it.todo(
-    'postgresql://host?  user user  = uri  & port = 12345 12 — internal whitespace',
-  );
+  // Internal whitespace inside a query value: handled by our port validator
+  // (the trimmed value is "12345 12" which fails `invalid port`), but the
+  // libpq stderr targets the whitespace itself. We don't attempt to match
+  // that more specific error, so it stays a todo.
   it.todo(
     'postgresql://host?  user  = uri-user  & port = 12345 12 — internal whitespace in value',
   );
-  it.todo('postgresql://host?zzz — missing "=" in query');
-  it.todo('postgresql://host?value1&value2 — multiple bare query keys');
-  it.todo('postgresql://host?key=key=value — extra "=" in value');
-  it.todo('postgre:// — unknown scheme libpq-style error');
+});
 
-  // libpq validates percent-encoding strictly: %XX must be two hex digits,
-  // %00 is forbidden. We rely on decodeURIComponent's behaviour and don't
-  // surface bespoke errors for these.
-  it.todo('postgres://host?dbname=%XXfoo — invalid percent-encoded token');
-  it.todo('postgresql://a%00b — forbidden %00');
-  it.todo('postgresql://%zz — invalid percent-encoded token');
-  it.todo('postgresql://%1 — incomplete percent-encoded token');
-  it.todo('postgresql://% — bare %');
-  it.todo('postgres://[] — empty IPv6 host');
+// ---------------------------------------------------------------------------
+// Conninfo string parser (libpq-style `key=value` pairs, whitespace separated).
+// Drives the `-d "dbname=… replication=…"` shape used by upstream's
+// walsender test in `001_basic.pl`.
+// ---------------------------------------------------------------------------
+describe('parseConninfo', () => {
+  it('parses dbname + replication=database', () => {
+    expect(parseConninfo('dbname=postgres replication=database')).toEqual({
+      database: 'postgres',
+      replication: 'database',
+    });
+  });
+
+  it('handles single-quoted values with embedded whitespace', () => {
+    expect(parseConninfo("user='alice bob' dbname=db1")).toEqual({
+      user: 'alice bob',
+      database: 'db1',
+    });
+  });
+
+  it('normalises replication=on to true', () => {
+    expect(parseConninfo('replication=on')).toEqual({ replication: 'true' });
+  });
+
+  it('rejects unknown conninfo keys', () => {
+    expect(() => parseConninfo('replicate=database')).toThrow(
+      /invalid conninfo key/,
+    );
+  });
+
+  it('rejects malformed input (missing =)', () => {
+    expect(() => parseConninfo('dbname')).toThrow(/missing "="/);
+  });
+
+  it('rejects unterminated quoted value', () => {
+    expect(() => parseConninfo("user='alice")).toThrow(/unterminated/);
+  });
+});
+
+describe('looksLikeConnectionString', () => {
+  it('detects URI prefixes', () => {
+    expect(looksLikeConnectionString('postgresql://host/db')).toBe(true);
+    expect(looksLikeConnectionString('postgres://host/db')).toBe(true);
+  });
+
+  it('detects key=value conninfo shape', () => {
+    expect(looksLikeConnectionString('dbname=postgres')).toBe(true);
+    expect(looksLikeConnectionString('host=h port=5432 dbname=d')).toBe(true);
+  });
+
+  it('treats bare database names as not-a-connection-string', () => {
+    expect(looksLikeConnectionString('mydb')).toBe(false);
+    expect(looksLikeConnectionString('db_with_underscore')).toBe(false);
+  });
+
+  it('treats a database name containing = (after space) as bare', () => {
+    // Heuristic: `=` must precede whitespace to count as conninfo.
+    expect(looksLikeConnectionString('weird name = value')).toBe(false);
+  });
 });
