@@ -109,4 +109,64 @@ describe('formatCandidates', () => {
     const out = formatCandidates(['select', 'savepoint'], 5);
     expect(out.split('\n').length).toBe(2);
   });
+
+  describe('candidate highlighting', () => {
+    it('omits ANSI codes when no highlight requested', () => {
+      const out = formatCandidates(['foo', 'bar', 'baz'], 80);
+      expect(out).not.toContain('\x1b[7m');
+      expect(out).not.toContain('\x1b[27m');
+    });
+
+    it('wraps the highlighted candidate in reverse video', () => {
+      const out = formatCandidates(['foo', 'bar', 'baz'], 80, 2);
+      // Third candidate (index 2) is "baz".
+      expect(out).toContain('\x1b[7mbaz\x1b[27m');
+      // Other candidates are NOT wrapped.
+      expect(out).not.toContain('\x1b[7mfoo\x1b[27m');
+      expect(out).not.toContain('\x1b[7mbar\x1b[27m');
+    });
+
+    it('silently ignores out-of-range highlight indices', () => {
+      const out = formatCandidates(['foo', 'bar', 'baz'], 80, 99);
+      expect(out).not.toContain('\x1b[7m');
+    });
+
+    it('silently ignores negative highlight indices', () => {
+      const out = formatCandidates(['foo', 'bar', 'baz'], 80, -1);
+      expect(out).not.toContain('\x1b[7m');
+    });
+  });
+});
+
+describe('CompletionState exposes cycle progress', () => {
+  it('getCycleIndex returns -1 before any cycle', () => {
+    const state = new CompletionState();
+    expect(state.getCycleIndex()).toBe(-1);
+  });
+
+  it('getCycleIndex tracks the active candidate during cycling', async () => {
+    const buf = new LineBuffer('s', 1);
+    const state = new CompletionState();
+    const completer = fixedCompleter(['select', 'show', 'set'], 's', 1);
+    await state.apply(buf, completer, 1000); // prefix insert
+    await state.apply(buf, completer, 1100); // list
+    await state.apply(buf, completer, 1200); // cycle → index 0
+    expect(state.getCycleIndex()).toBe(0);
+    await state.apply(buf, completer, 1300); // cycle → index 1
+    expect(state.getCycleIndex()).toBe(1);
+  });
+
+  it('getCandidates exposes the active candidate list', async () => {
+    const buf = new LineBuffer('s', 1);
+    const state = new CompletionState();
+    const completer = fixedCompleter(['select', 'show'], 's', 1);
+    await state.apply(buf, completer);
+    expect(Array.from(state.getCandidates())).toEqual(['select', 'show']);
+  });
+
+  it('getCandidates is empty after reset', () => {
+    const state = new CompletionState();
+    state.reset();
+    expect(Array.from(state.getCandidates())).toEqual([]);
+  });
 });

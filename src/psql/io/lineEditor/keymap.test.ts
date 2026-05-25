@@ -230,3 +230,237 @@ describe('keymap dispatch', () => {
     });
   });
 });
+
+describe('vi mode dispatch', () => {
+  const viState = (): ReturnType<typeof makeState> => makeState([], 'insert');
+
+  describe('mode transitions', () => {
+    it('starts in insert mode when constructed with insert', () => {
+      const s = viState();
+      expect(s.mode).toBe('insert');
+    });
+
+    it('Esc switches from insert to normal', () => {
+      const s = viState();
+      dispatch(s, printable('a'));
+      dispatch(s, printable('b'));
+      expect(s.mode).toBe('insert');
+      dispatch(s, press('escape'));
+      expect(s.mode).toBe('normal');
+      // Esc convention: cursor steps left onto last inserted char.
+      expect(s.buffer.cursor).toBe(1);
+    });
+
+    it('printable in insert inserts the char', () => {
+      const s = viState();
+      dispatch(s, printable('h'));
+      dispatch(s, printable('i'));
+      expect(s.buffer.text).toBe('hi');
+      expect(s.mode).toBe('insert');
+    });
+
+    it('i in normal switches back to insert', () => {
+      const s = viState();
+      dispatch(s, printable('a'));
+      dispatch(s, press('escape'));
+      expect(s.mode).toBe('normal');
+      dispatch(s, printable('i'));
+      expect(s.mode).toBe('insert');
+    });
+
+    it('a in normal moves right then enters insert', () => {
+      const s = viState();
+      dispatch(s, printable('a'));
+      dispatch(s, printable('b'));
+      // cursor=2, esc → cursor=1, mode=normal
+      dispatch(s, press('escape'));
+      expect(s.buffer.cursor).toBe(1);
+      dispatch(s, printable('a'));
+      expect(s.mode).toBe('insert');
+      expect(s.buffer.cursor).toBe(2);
+    });
+
+    it('I jumps to line start in insert', () => {
+      const s = viState();
+      dispatch(s, printable('h'));
+      dispatch(s, printable('i'));
+      dispatch(s, press('escape'));
+      dispatch(s, printable('I'));
+      expect(s.mode).toBe('insert');
+      expect(s.buffer.cursor).toBe(0);
+    });
+
+    it('A jumps to line end in insert', () => {
+      const s = viState();
+      dispatch(s, printable('h'));
+      dispatch(s, printable('i'));
+      dispatch(s, press('escape'));
+      dispatch(s, printable('0')); // go to start
+      dispatch(s, printable('A'));
+      expect(s.mode).toBe('insert');
+      expect(s.buffer.cursor).toBe(2);
+    });
+  });
+
+  describe('normal-mode movement', () => {
+    it('h and l move left and right', () => {
+      const s = viState();
+      s.buffer.setText('abc', 3);
+      s.mode = 'normal';
+      dispatch(s, printable('h'));
+      expect(s.buffer.cursor).toBe(2);
+      dispatch(s, printable('h'));
+      expect(s.buffer.cursor).toBe(1);
+      dispatch(s, printable('l'));
+      expect(s.buffer.cursor).toBe(2);
+    });
+
+    it('w moves word right, b moves word left', () => {
+      const s = viState();
+      s.buffer.setText('foo bar baz', 0);
+      s.mode = 'normal';
+      dispatch(s, printable('w'));
+      expect(s.buffer.text.slice(0, s.buffer.cursor)).toBe('foo');
+      dispatch(s, printable('w'));
+      expect(s.buffer.text.slice(0, s.buffer.cursor)).toBe('foo bar');
+      dispatch(s, printable('b'));
+      expect(s.buffer.text.slice(0, s.buffer.cursor)).toBe('foo ');
+    });
+
+    it('0 and $ jump to line bounds', () => {
+      const s = viState();
+      s.buffer.setText('hello', 2);
+      s.mode = 'normal';
+      dispatch(s, printable('0'));
+      expect(s.buffer.cursor).toBe(0);
+      dispatch(s, printable('$'));
+      expect(s.buffer.cursor).toBe(5);
+    });
+
+    it('^ jumps to first non-blank', () => {
+      const s = viState();
+      s.buffer.setText('   abc', 5);
+      s.mode = 'normal';
+      dispatch(s, printable('^'));
+      expect(s.buffer.cursor).toBe(3);
+    });
+  });
+
+  describe('normal-mode edits', () => {
+    it('x deletes the char at cursor', () => {
+      const s = viState();
+      s.buffer.setText('abc', 0);
+      s.mode = 'normal';
+      dispatch(s, printable('x'));
+      expect(s.buffer.text).toBe('bc');
+    });
+
+    it('X deletes the char to the left', () => {
+      const s = viState();
+      s.buffer.setText('abc', 2);
+      s.mode = 'normal';
+      dispatch(s, printable('X'));
+      expect(s.buffer.text).toBe('ac');
+    });
+
+    it('dd kills the whole line', () => {
+      const s = viState();
+      s.buffer.setText('hello world', 5);
+      s.mode = 'normal';
+      dispatch(s, printable('d'));
+      dispatch(s, printable('d'));
+      expect(s.buffer.text).toBe('');
+    });
+
+    it('D kills to end of line', () => {
+      const s = viState();
+      s.buffer.setText('hello world', 5);
+      s.mode = 'normal';
+      dispatch(s, printable('D'));
+      expect(s.buffer.text).toBe('hello');
+    });
+
+    it('cc kills line and enters insert', () => {
+      const s = viState();
+      s.buffer.setText('hello', 3);
+      s.mode = 'normal';
+      dispatch(s, printable('c'));
+      dispatch(s, printable('c'));
+      expect(s.buffer.text).toBe('');
+      expect(s.mode).toBe('insert');
+    });
+
+    it('cw changes a word and enters insert', () => {
+      const s = viState();
+      s.buffer.setText('foo bar', 0);
+      s.mode = 'normal';
+      dispatch(s, printable('c'));
+      dispatch(s, printable('w'));
+      expect(s.buffer.text).toBe(' bar');
+      expect(s.mode).toBe('insert');
+    });
+
+    it('r<char> replaces a single character', () => {
+      const s = viState();
+      s.buffer.setText('abc', 1);
+      s.mode = 'normal';
+      dispatch(s, printable('r'));
+      dispatch(s, printable('X'));
+      expect(s.buffer.text).toBe('aXc');
+      // Mode stays normal after r.
+      expect(s.mode).toBe('normal');
+    });
+
+    it('~ toggles case of char at cursor', () => {
+      const s = viState();
+      s.buffer.setText('abc', 0);
+      s.mode = 'normal';
+      dispatch(s, printable('~'));
+      expect(s.buffer.text).toBe('Abc');
+      expect(s.buffer.cursor).toBe(1);
+    });
+  });
+
+  describe('normal-mode history', () => {
+    it('j and k step history forward and back', () => {
+      const s = makeState(['first', 'second'], 'insert');
+      s.mode = 'normal';
+      dispatch(s, printable('k'));
+      expect(s.buffer.text).toBe('second');
+      dispatch(s, printable('k'));
+      expect(s.buffer.text).toBe('first');
+      dispatch(s, printable('j'));
+      expect(s.buffer.text).toBe('second');
+    });
+  });
+
+  describe('cancel works in either mode', () => {
+    it('^C cancels in insert mode', () => {
+      const s = viState();
+      const a = dispatch(s, ctrl('c'));
+      expect(a.kind).toBe('cancel');
+    });
+
+    it('^C cancels in normal mode', () => {
+      const s = viState();
+      s.mode = 'normal';
+      const a = dispatch(s, ctrl('c'));
+      expect(a.kind).toBe('cancel');
+    });
+  });
+
+  describe('emacs mode is unaffected by vi additions', () => {
+    it('default mode is emacs', () => {
+      const s = makeState();
+      expect(s.mode).toBe('emacs');
+    });
+
+    it('Esc in emacs mode is a noop, not a mode switch', () => {
+      const s = makeState();
+      s.buffer.setText('abc', 3);
+      const a = dispatch(s, press('escape'));
+      expect(a.kind).toBe('noop');
+      expect(s.mode).toBe('emacs');
+    });
+  });
+});

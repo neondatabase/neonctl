@@ -2,7 +2,12 @@ import { Readable, Writable } from 'node:stream';
 
 import { describe, it, expect } from 'vitest';
 
-import { LineEditor, SignalError } from './index.js';
+import {
+  LineEditor,
+  SignalError,
+  highlightMatch,
+  renderSearchLine,
+} from './index.js';
 
 /** A push-driven readable stream used as a fake TTY input. */
 class FakeStdin extends Readable {
@@ -237,6 +242,100 @@ describe('LineEditor on non-TTY stdin', () => {
     const p = editor.readLine('> ');
     stdin.feed('hi\r');
     expect(await p).toBe('hi');
+    editor.close();
+  });
+});
+
+describe('highlightMatch', () => {
+  it('returns text unchanged when pattern is empty', () => {
+    expect(highlightMatch('hello world', '')).toBe('hello world');
+  });
+
+  it('returns text unchanged when pattern is absent', () => {
+    expect(highlightMatch('hello world', 'xyz')).toBe('hello world');
+  });
+
+  it('wraps the matched span in reverse video', () => {
+    const out = highlightMatch('hello world', 'world');
+    expect(out).toBe('hello \x1b[7mworld\x1b[27m');
+  });
+
+  it('matches case-insensitively but preserves original case', () => {
+    const out = highlightMatch('HELLO WORLD', 'world');
+    expect(out).toBe('HELLO \x1b[7mWORLD\x1b[27m');
+  });
+
+  it('highlights only the first occurrence', () => {
+    const out = highlightMatch('foo bar foo', 'foo');
+    // The leading "foo" should be wrapped; the trailing one stays plain.
+    expect(out).toBe('\x1b[7mfoo\x1b[27m bar foo');
+  });
+});
+
+describe('renderSearchLine', () => {
+  it('includes the reverse-i-search preamble', () => {
+    const out = renderSearchLine('sel', 'SELECT 1');
+    expect(out).toContain("(reverse-i-search)`sel': ");
+  });
+
+  it('highlights the matched span inside the entry', () => {
+    const out = renderSearchLine('SEL', 'SELECT 1');
+    expect(out).toContain('\x1b[7mSEL\x1b[27mECT 1');
+  });
+
+  it('leaves the entry plain when pattern is not in it', () => {
+    const out = renderSearchLine('xyz', 'SELECT 1');
+    expect(out).toBe("(reverse-i-search)`xyz': SELECT 1");
+    expect(out).not.toContain('\x1b[7m');
+  });
+
+  it('leaves the entry plain on empty pattern', () => {
+    const out = renderSearchLine('', 'SELECT 1');
+    expect(out).toBe("(reverse-i-search)`': SELECT 1");
+  });
+});
+
+describe('LineEditor vi mode option', () => {
+  it('still resolves on Enter when constructed with mode: "vi"', async () => {
+    const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
+    const editor = new LineEditor({
+      stdin,
+      stdout,
+      mode: 'vi',
+      bracketedPaste: false,
+    });
+    const p = editor.readLine('> ');
+    stdin.feed('hello\r');
+    const result = await p;
+    expect(result).toBe('hello');
+    editor.close();
+  });
+
+  it('Esc fed in a separate chunk reaches normal mode and h moves left', async () => {
+    const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
+    const editor = new LineEditor({
+      stdin,
+      stdout,
+      mode: 'vi',
+      bracketedPaste: false,
+      // Disable Esc timeout so a lone Esc byte emits immediately.
+      escTimeoutMs: 0,
+    });
+    const p = editor.readLine('> ');
+    // Two chunks: typing "hi" with the Esc tacked on, then the rest. The Esc
+    // is the last byte of chunk 1 so `consumeEscape` sees a lone Esc and
+    // emits the escape event immediately. Chunk 2 then carries the normal-
+    // mode keys.
+    stdin.feed('hi\x1b');
+    // Yield to the event loop so the decoder drains before the next chunk.
+    await new Promise((r) => setImmediate(r));
+    stdin.feed('hx\r');
+    const result = await p;
+    // After "hi", cursor=2. Esc enters normal and steps cursor to 1 (onto 'i').
+    // h moves cursor to 0 (onto 'h'). x deletes char at cursor → "i".
+    expect(result).toBe('i');
     editor.close();
   });
 });

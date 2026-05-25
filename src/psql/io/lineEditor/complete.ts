@@ -65,6 +65,21 @@ export class CompletionState {
     this.lastTapAt = 0;
   }
 
+  /**
+   * Index of the candidate currently inserted in the buffer, or `-1` if no
+   * specific candidate is active (e.g. the user has only seen the common
+   * prefix). Used by the listing renderer to reverse-video the active
+   * candidate while cycling.
+   */
+  getCycleIndex(): number {
+    return this.cycleIndex;
+  }
+
+  /** Snapshot of the candidate list, for re-rendering during a cycle. */
+  getCandidates(): readonly string[] {
+    return this.result?.candidates ?? [];
+  }
+
   async apply(
     buffer: LineBuffer,
     completer: Completer,
@@ -139,22 +154,38 @@ const countCodePoints = (s: string): number => Array.from(s).length;
 // Listing helper: format candidates in column layout for display.
 // ---------------------------------------------------------------------------
 
+/** ANSI reverse-video escape (SGR 7) used to mark the active candidate. */
+const SGR_REVERSE = '\x1b[7m';
+const SGR_NO_REVERSE = '\x1b[27m';
+
 /**
  * Lay out candidates into a multi-column block. Returns the formatted
  * string (without a trailing newline — caller decides). Columns are sized
  * to fit `termWidth`; we use the longest candidate plus a 2-space gutter.
  *
  * Falls back to one-per-line if `termWidth` is too narrow.
+ *
+ * If `highlightIndex` is provided and points to a valid candidate, that
+ * candidate is wrapped in `\x1b[7m...\x1b[27m` (reverse video) so the user
+ * can see which entry is currently inserted in the line during a Tab cycle.
+ * Out-of-range indices are silently ignored.
  */
 export const formatCandidates = (
   candidates: readonly string[],
   termWidth: number,
+  highlightIndex?: number,
 ): string => {
   if (candidates.length === 0) return '';
   const maxLen = candidates.reduce((m, c) => Math.max(m, c.length), 0);
   const colWidth = maxLen + 2;
   const cols = Math.max(1, Math.floor(termWidth / colWidth));
   const rows = Math.ceil(candidates.length / cols);
+  const hl =
+    highlightIndex !== undefined &&
+    highlightIndex >= 0 &&
+    highlightIndex < candidates.length
+      ? highlightIndex
+      : -1;
   const lines: string[] = [];
   for (let r = 0; r < rows; r++) {
     const parts: string[] = [];
@@ -162,7 +193,19 @@ export const formatCandidates = (
       const idx = r * cols + c;
       if (idx >= candidates.length) break;
       const cand = candidates[idx];
-      parts.push(cand + ' '.repeat(colWidth - cand.length));
+      const padded = cand + ' '.repeat(colWidth - cand.length);
+      if (idx === hl) {
+        // Wrap only the candidate text, not the gutter spaces, so adjacent
+        // columns don't get a colored stripe between them.
+        parts.push(
+          SGR_REVERSE +
+            cand +
+            SGR_NO_REVERSE +
+            ' '.repeat(colWidth - cand.length),
+        );
+      } else {
+        parts.push(padded);
+      }
     }
     lines.push(parts.join('').trimEnd());
   }

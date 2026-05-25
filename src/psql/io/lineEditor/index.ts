@@ -73,6 +73,20 @@ export type LineEditorOptions = {
   history?: string[];
   completer?: Completer;
   bracketedPaste?: boolean;
+  /**
+   * Editing mode. `'emacs'` (default) keeps the editor in emacs dispatch for
+   * the whole readLine; `'vi'` starts each readLine in vi insert mode (Esc to
+   * normal). Mirrors upstream readline's `set editing-mode {emacs|vi}`.
+   */
+  mode?: 'emacs' | 'vi';
+  /**
+   * Timeout in milliseconds for the bare-Escape disambiguation. When a lone
+   * `Esc` byte arrives, the decoder waits up to this long for a follow-on
+   * byte before emitting the `escape` key event. Set to `0` to disable (Esc
+   * is emitted immediately, matching the pre-WP-24-polish behaviour).
+   * Default: 30ms.
+   */
+  escTimeoutMs?: number;
 };
 
 /** Thrown when ^C cancels the current line. */
@@ -102,9 +116,10 @@ export class LineEditor {
   private readonly stdout: NodeJS.WritableStream;
   private readonly bracketedPaste: boolean;
   private readonly completer?: Completer;
+  private readonly mode: 'emacs' | 'vi';
 
   private state: EditorState;
-  private decoder = new Vt100Decoder();
+  private decoder: Vt100Decoder;
   private completion = new CompletionState();
 
   /** Event queue; processed serially so async completion blocks subsequent keys. */
@@ -137,7 +152,20 @@ export class LineEditor {
     this.stdout = opts.stdout ?? process.stdout;
     this.bracketedPaste = opts.bracketedPaste ?? true;
     this.completer = opts.completer;
-    this.state = makeState(opts.history ?? []);
+    this.mode = opts.mode ?? 'emacs';
+    this.state = makeState(
+      opts.history ?? [],
+      this.mode === 'vi' ? 'insert' : 'emacs',
+    );
+    this.decoder = new Vt100Decoder({
+      // LineEditor default: 30ms is enough to disambiguate Alt-X without
+      // making bare Esc noticeably laggy. Callers can override (or set 0 to
+      // restore the legacy "emit Esc immediately" behaviour).
+      escTimeoutMs: opts.escTimeoutMs ?? 30,
+      onTimeoutEvent: (ev): void => {
+        this.handleDecoderTimeout(ev);
+      },
+    });
   }
 
   /** Read one line. Resolves on Enter; rejects on Ctrl-C. */
@@ -152,6 +180,11 @@ export class LineEditor {
       this.state.buffer = new LineBuffer();
       this.state.historyIndex = -1;
       this.state.liveSnapshot = null;
+      // Vi: every new readLine starts in insert mode (per upstream readline).
+      if (this.mode === 'vi') {
+        this.state.mode = 'insert';
+        this.state.viPending = null;
+      }
       this.completion.reset();
       this.active = {
         prompt,
@@ -261,6 +294,13 @@ export class LineEditor {
     if (this.active === null) return;
     const events = this.decoder.push(new Uint8Array(chunk));
     for (const ev of events) this.eventQueue.push(ev);
+    void this.drainQueue();
+  }
+
+  /** Called when the decoder's bare-Esc timer fires with a buffered event. */
+  private handleDecoderTimeout(ev: KeyEvent): void {
+    if (this.active === null) return;
+    this.eventQueue.push(ev);
     void this.drainQueue();
   }
 
@@ -391,9 +431,32 @@ export class LineEditor {
         this.stdout.write(BEL);
         return;
       case 'inserted':
-      case 'cycled':
         this.render();
         return;
+      case 'cycled': {
+        // Pragmatic compromise (see WP-24 polish notes): readline does an
+        // in-place rewrite of the listing as the cycle index advances; doing
+        // that correctly requires cursor-position bookkeeping for the listed
+        // block. For now we re-emit the listing under the prompt with the
+        // active candidate highlighted in reverse video, which is more
+        // verbose than upstream but visually clear.
+        const cands = this.completion.getCandidates();
+        const cycleIndex = this.completion.getCycleIndex();
+        if (cands.length > 0) {
+          this.moveCursorToEnd();
+          this.stdout.write(LF);
+          const w = this.termWidth();
+          const block = formatCandidates(cands, w, cycleIndex);
+          this.stdout.write(block + LF);
+          this.active.rowsDrawn = 0;
+          this.active.cursorRow = 0;
+          this.active.cursorCol = 0;
+          this.render(true);
+        } else {
+          this.render();
+        }
+        return;
+      }
       case 'list': {
         // Print listing on a new row, then redraw the prompt+line below it.
         this.moveCursorToEnd();
@@ -511,11 +574,20 @@ export class LineEditor {
       a.search === null
         ? a.prompt
         : `(reverse-i-search)\`${a.search.pattern}': `;
-    const renderText = this.state.buffer.text.replace(/\n/g, '⏎'); // newline glyph
+    const rawText = this.state.buffer.text.replace(/\n/g, '⏎'); // newline glyph
+    // For search rendering we highlight the matched pattern (case-insensitive)
+    // inside the matched entry; otherwise the buffer text renders as-is.
+    const renderText =
+      a.search !== null && a.search.pattern.length > 0
+        ? highlightMatch(rawText, a.search.pattern)
+        : rawText;
 
     const promptWidth = displayWidth(promptStr);
     const before = this.codePointsBeforeCursor();
-    const beforeText = renderText.slice(0, before.length);
+    // Cursor positioning uses the raw text length, NOT the rendered text
+    // length, because ANSI escapes have zero display width but non-zero
+    // string length.
+    const beforeText = rawText.slice(0, before.length);
     const allText = renderText;
 
     // Compute physical row/col for cursor.
@@ -525,7 +597,13 @@ export class LineEditor {
       width,
     );
     // Compute final row/col for the full block (so we know how many rows).
-    const { row: lastRow } = positionAfter(promptWidth, allText, width);
+    // Strip ANSI escape sequences from the geometry calculation since they
+    // have zero display width but non-zero string length.
+    const { row: lastRow } = positionAfter(
+      promptWidth,
+      stripAnsi(allText),
+      width,
+    );
     const rowsDrawn = lastRow + 1;
 
     // Write the line. We erase each row first so leftover chars from a longer
@@ -596,6 +674,53 @@ const isTtyReadStream = (
   s: NodeJS.ReadStream | NodeJS.ReadableStream,
 ): s is NodeJS.ReadStream =>
   typeof (s as NodeJS.ReadStream).setRawMode === 'function';
+
+// ---------------------------------------------------------------------------
+// Search-line rendering / highlighting
+// ---------------------------------------------------------------------------
+
+const SGR_REVERSE = '\x1b[7m';
+const SGR_NO_REVERSE = '\x1b[27m';
+
+/**
+ * Wrap the first case-insensitive occurrence of `pattern` inside `text`
+ * with the reverse-video SGR pair. Returns `text` unchanged when the
+ * pattern is empty or not found.
+ *
+ * Kept as a pure helper for unit-testing (the renderer calls it during
+ * search mode, but `renderSearchLine` is the unit-testable surface).
+ */
+export const highlightMatch = (text: string, pattern: string): string => {
+  if (pattern.length === 0) return text;
+  const lcText = text.toLowerCase();
+  const lcPat = pattern.toLowerCase();
+  const idx = lcText.indexOf(lcPat);
+  if (idx < 0) return text;
+  return (
+    text.slice(0, idx) +
+    SGR_REVERSE +
+    text.slice(idx, idx + pattern.length) +
+    SGR_NO_REVERSE +
+    text.slice(idx + pattern.length)
+  );
+};
+
+/**
+ * Render the search prompt + matched entry as a single string, with the
+ * matched pattern highlighted via reverse video. Exposed for unit tests.
+ * The real interactive renderer applies the same logic inline.
+ */
+export const renderSearchLine = (pattern: string, entry: string): string => {
+  const prefix = `(reverse-i-search)\`${pattern}': `;
+  return prefix + highlightMatch(entry, pattern);
+};
+
+/** Strip ANSI CSI escape sequences from `text` for display-width math. */
+const stripAnsi = (text: string): string =>
+  // Targets the SGR forms we emit (e.g. \x1b[7m, \x1b[27m). Kept narrow on
+  // purpose so it doesn't accidentally eat legitimate `[` characters.
+  // eslint-disable-next-line no-control-regex
+  text.replace(/\x1b\[[0-9;]*m/g, '');
 
 // ---------------------------------------------------------------------------
 // Display-width helpers (inlined copy of WP-09's tables; kept minimal).

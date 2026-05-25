@@ -59,18 +59,61 @@ const controlEvent = (b: number): KeyEvent => {
   return { key: 'char', char: letter, ctrl: true };
 };
 
+export type Vt100DecoderOptions = {
+  /**
+   * Bare-Escape timeout in milliseconds. When a single `Esc` byte sits at the
+   * head of the pending buffer with no follow-on byte, the decoder waits up
+   * to this long before emitting a bare `escape` event. Set to `0` to
+   * disable (Esc is emitted immediately, matching the pre-WP-24-polish
+   * behaviour). Default: 0 (off; the editor wrapper can override).
+   *
+   * Real-world Alt-X sequences (`Esc` + `<letter>`) arrive as two bytes in
+   * the same read on every modern terminal, so a small grace period (~30ms)
+   * is enough to disambiguate without making the user wait.
+   */
+  escTimeoutMs?: number;
+  /**
+   * Called when the bare-Esc timer fires with a synthetic key event. The
+   * caller is expected to push the event into its own queue, since `push()`
+   * has long returned by the time the timer runs.
+   */
+  onTimeoutEvent?: (ev: KeyEvent) => void;
+};
+
 /** Streaming decoder. Owns a small pending-byte buffer. */
 export class Vt100Decoder {
   private pending: number[] = [];
   /** UTF-8 continuation accumulator. */
   private utf8Bytes: number[] = [];
   private utf8Expect = 0;
+  /** Esc-disambiguation timeout in ms; 0 disables. */
+  private readonly escTimeoutMs: number;
+  /** Callback for timer-driven events. */
+  private readonly onTimeoutEvent?: (ev: KeyEvent) => void;
+  /** Active bare-Esc timer, if one is pending. */
+  private escTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True while we're sitting on a buffered Esc waiting for follow-on. */
+  private escPending = false;
+
+  constructor(opts: Vt100DecoderOptions = {}) {
+    this.escTimeoutMs = opts.escTimeoutMs ?? 0;
+    this.onTimeoutEvent = opts.onTimeoutEvent;
+  }
 
   /** Reset internal state. Useful before re-entering raw mode after a fork. */
   reset(): void {
     this.pending.length = 0;
     this.utf8Bytes.length = 0;
     this.utf8Expect = 0;
+    this.clearEscTimer();
+    this.escPending = false;
+  }
+
+  private clearEscTimer(): void {
+    if (this.escTimer !== null) {
+      clearTimeout(this.escTimer);
+      this.escTimer = null;
+    }
   }
 
   /**
@@ -78,6 +121,12 @@ export class Vt100Decoder {
    * form an incomplete sequence are buffered until the next call.
    */
   push(chunk: Uint8Array): KeyEvent[] {
+    // A follow-on byte arrived: cancel any pending Esc timer; the standard
+    // sequence consumption path will see the Esc + byte together.
+    if (chunk.length > 0 && this.escPending) {
+      this.clearEscTimer();
+      this.escPending = false;
+    }
     for (const b of chunk) this.pending.push(b);
     const out: KeyEvent[] = [];
     // Drain as long as we can make progress.
@@ -186,20 +235,36 @@ export class Vt100Decoder {
    * Called when the head byte is 0x1b. Tries to consume an escape
    * sequence; returns `null` if more bytes are needed.
    *
-   * If we see `Esc` followed by nothing within the same chunk, we
-   * pessimistically emit a bare `escape` event so a lone Escape press is
-   * responsive. The chance of splitting a real CSI across chunks at byte
-   * 0 is real but rare; users wanting reliable Alt-X with low latency
-   * should set TTY in raw mode (which we do).
+   * When only the Esc byte sits in the buffer we have two strategies:
+   *
+   *   1) `escTimeoutMs === 0` (default for non-LineEditor callers): emit
+   *      the bare `escape` immediately. Matches the pre-polish behaviour.
+   *   2) `escTimeoutMs > 0`: park the Esc byte, arm a `setTimeout`. If a
+   *      follow-on byte arrives within the window, `push()` cancels the
+   *      timer and the normal Esc-prefix path runs. Otherwise the timer
+   *      fires and we synthesise an `escape` event into the host queue.
    */
   private consumeEscape(): KeyEvent | null {
     if (this.pending.length === 1) {
-      // ESC alone — only one byte buffered. We can't tell if more is
-      // coming. Wait for one more chunk; if a small grace window passes
-      // upstream and nothing arrives, the editor should treat the bare
-      // ESC as the editor-cancel key. The caller layer decides timing.
-      this.pending.shift();
-      return { key: 'escape' };
+      if (this.escTimeoutMs === 0) {
+        this.pending.shift();
+        return { key: 'escape' };
+      }
+      // Already waiting? Don't re-arm the timer.
+      if (this.escPending) return null;
+      this.escPending = true;
+      this.escTimer = setTimeout(() => {
+        this.escTimer = null;
+        // If the buffer head is still a lone Esc, drain it as a bare escape.
+        if (this.escPending && this.pending[0] === 0x1b) {
+          this.pending.shift();
+          this.escPending = false;
+          this.onTimeoutEvent?.({ key: 'escape' });
+        } else {
+          this.escPending = false;
+        }
+      }, this.escTimeoutMs);
+      return null;
     }
     const b1 = this.pending[1];
 

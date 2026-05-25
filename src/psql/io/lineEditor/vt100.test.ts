@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { Vt100Decoder, type KeyEvent } from './vt100.js';
 
@@ -135,6 +135,96 @@ describe('Vt100Decoder', () => {
         'left:',
         'char:x',
       ]);
+    });
+  });
+
+  describe('bare-Esc timeout', () => {
+    it('escTimeoutMs: 0 emits Escape immediately (default)', () => {
+      const d = new Vt100Decoder({ escTimeoutMs: 0 });
+      expect(d.push(bytes(0x1b))).toEqual([{ key: 'escape' }]);
+    });
+
+    it('omitting the option keeps legacy immediate behaviour', () => {
+      const d = new Vt100Decoder();
+      expect(d.push(bytes(0x1b))).toEqual([{ key: 'escape' }]);
+    });
+
+    it('bare Esc with no follow-on fires the timeout and emits Escape', () => {
+      vi.useFakeTimers();
+      try {
+        const events: KeyEvent[] = [];
+        const d = new Vt100Decoder({
+          escTimeoutMs: 30,
+          onTimeoutEvent: (ev) => events.push(ev),
+        });
+        // Initial push: nothing emitted yet (timer parked).
+        expect(d.push(bytes(0x1b))).toEqual([]);
+        expect(events).toEqual([]);
+        // Advance time past the threshold.
+        vi.advanceTimersByTime(30);
+        expect(events).toEqual([{ key: 'escape' }]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('Esc followed by a byte within the window decodes as meta-X', () => {
+      vi.useFakeTimers();
+      try {
+        const events: KeyEvent[] = [];
+        const d = new Vt100Decoder({
+          escTimeoutMs: 30,
+          onTimeoutEvent: (ev) => events.push(ev),
+        });
+        // Esc alone → no emit, timer parked.
+        expect(d.push(bytes(0x1b))).toEqual([]);
+        // Follow-on 'f' arrives well before the timer fires.
+        vi.advanceTimersByTime(10);
+        const out = d.push(ascii('f'));
+        expect(out).toEqual([{ key: 'char', char: 'f', meta: true }]);
+        // Advance past what would have been the timeout: no extra event.
+        vi.advanceTimersByTime(50);
+        expect(events).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('custom timeout value is respected', () => {
+      vi.useFakeTimers();
+      try {
+        const events: KeyEvent[] = [];
+        const d = new Vt100Decoder({
+          escTimeoutMs: 100,
+          onTimeoutEvent: (ev) => events.push(ev),
+        });
+        d.push(bytes(0x1b));
+        // Not enough time elapsed yet.
+        vi.advanceTimersByTime(50);
+        expect(events).toEqual([]);
+        // Now advance past the threshold.
+        vi.advanceTimersByTime(50);
+        expect(events).toEqual([{ key: 'escape' }]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reset() cancels a pending Esc timer', () => {
+      vi.useFakeTimers();
+      try {
+        const events: KeyEvent[] = [];
+        const d = new Vt100Decoder({
+          escTimeoutMs: 30,
+          onTimeoutEvent: (ev) => events.push(ev),
+        });
+        d.push(bytes(0x1b));
+        d.reset();
+        vi.advanceTimersByTime(100);
+        expect(events).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
