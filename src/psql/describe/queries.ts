@@ -2023,3 +2023,219 @@ export const showView = (opts: {
   const sql = `SELECT pg_catalog.pg_get_viewdef('${opts.name.replace(/'/g, "''")}'::pg_catalog.regclass, true) AS def;`;
   return { sql, params: [], description: 'View definition' };
 };
+
+/* ------------------------------------------------------------------ */
+/* Per-relation follow-up queries used by describeOneTableDetails.    */
+/* Each builder takes a relation oid and returns a DescribeQuery the  */
+/* formatter executes after the columns table. These mirror the      */
+/* PSQLexec calls in upstream `describe.c` for the same sections.    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Per-relation table-info query. Returns one row carrying the flags
+ * the formatter needs for the optional footer sections: RLS toggles
+ * (relrowsecurity, relforcerowsecurity), replica-identity char,
+ * partition flag, tablespace oid, access-method oid and pre-joined
+ * pg_tablespace.spcname / pg_am.amname so the formatter doesn't have
+ * to fan out for those.
+ *
+ * Columns: relrowsecurity, relforcerowsecurity, relreplident,
+ *          relispartition, reltablespace, relam, spcname, amname.
+ *
+ * Pre-PG 9.5 servers don't expose `relrowsecurity` /
+ * `relforcerowsecurity` / `relispartition`; we synthesize false there.
+ * Pre-PG 12 doesn't carry table AMs in pg_class.relam, so we leave the
+ * amname slot null on those servers.
+ */
+export const fetchTableInfo = (opts: {
+  oid: number;
+  serverVersion: ServerVersion;
+}): DescribeQuery => {
+  const { oid, serverVersion } = opts;
+  const hasRowSec = serverAtLeast(serverVersion, PG_9_5);
+  const hasIsPart = serverAtLeast(serverVersion, PG_10);
+  const hasRelAm = serverAtLeast(serverVersion, PG_12);
+  const rowSec = hasRowSec
+    ? 'c.relrowsecurity, c.relforcerowsecurity'
+    : 'false AS relrowsecurity, false AS relforcerowsecurity';
+  const isPart = hasIsPart ? 'c.relispartition' : 'false AS relispartition';
+  const amCol = hasRelAm ? 'c.relam' : '0::oid AS relam';
+  const amName = hasRelAm ? 'am.amname' : 'NULL::name AS amname';
+  const amJoin = hasRelAm
+    ? '  LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam\n'
+    : '';
+  const sql =
+    'SELECT ' +
+    rowSec +
+    ',\n  c.relreplident,\n  ' +
+    isPart +
+    ',\n  c.reltablespace,\n  ' +
+    amCol +
+    ',\n  ts.spcname,\n  ' +
+    amName +
+    '\nFROM pg_catalog.pg_class c\n' +
+    '  LEFT JOIN pg_catalog.pg_tablespace ts ON ts.oid = c.reltablespace\n' +
+    amJoin +
+    `WHERE c.oid = '${oid}';`;
+  return { sql, params: [], description: 'Relation footer info' };
+};
+
+/**
+ * RLS policies for a relation. Output columns mirror upstream:
+ *   polname, polpermissive, roles (CSV or NULL), polqual, polwithcheck,
+ *   polcmd (mapped to text).
+ *
+ * The polcmd→keyword mapping matches upstream: 'r'→SELECT, 'a'→INSERT,
+ * 'w'→UPDATE, 'd'→DELETE, '*'→NULL (i.e. ALL — emitted as no FOR clause).
+ */
+export const fetchPolicies = (opts: {
+  oid: number;
+  serverVersion: ServerVersion;
+}): DescribeQuery => {
+  const { oid, serverVersion } = opts;
+  const permissive = serverAtLeast(serverVersion, PG_10)
+    ? 'pol.polpermissive'
+    : "'t' AS polpermissive";
+  const sql =
+    'SELECT pol.polname,\n  ' +
+    permissive +
+    ",\n  CASE WHEN pol.polroles = '{0}' THEN NULL ELSE pg_catalog.array_to_string(array(SELECT rolname FROM pg_catalog.pg_roles WHERE oid = ANY (pol.polroles) ORDER BY 1), ', ') END AS roles,\n" +
+    '  pg_catalog.pg_get_expr(pol.polqual, pol.polrelid) AS qual,\n' +
+    '  pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid) AS withcheck,\n' +
+    '  CASE pol.polcmd\n' +
+    "    WHEN 'r' THEN 'SELECT'\n" +
+    "    WHEN 'a' THEN 'INSERT'\n" +
+    "    WHEN 'w' THEN 'UPDATE'\n" +
+    "    WHEN 'd' THEN 'DELETE'\n" +
+    '    END AS cmd\n' +
+    'FROM pg_catalog.pg_policy pol\n' +
+    `WHERE pol.polrelid = '${oid}'\n` +
+    'ORDER BY pol.polname;';
+  return { sql, params: [], description: 'Relation policies' };
+};
+
+/**
+ * Parents from `pg_inherits`. We exclude partitioned parents so
+ * "Inherits:" only lists genuine inheritance (partition parents go in
+ * "Partition of:" instead). Output: one column with a regclass-formatted
+ * parent name per row.
+ */
+export const fetchInherits = (opts: { oid: number }): DescribeQuery => {
+  const { oid } = opts;
+  const sql =
+    'SELECT c.oid::pg_catalog.regclass\n' +
+    'FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n' +
+    `WHERE c.oid = i.inhparent AND i.inhrelid = '${oid}'\n` +
+    "  AND c.relkind NOT IN ('p', 'I')\n" +
+    'ORDER BY inhseqno;';
+  return { sql, params: [], description: 'Inherited-from relations' };
+};
+
+/**
+ * Child tables / partitions from `pg_inherits`. Output columns:
+ *   relname (regclass), relkind, inhdetachpending, partition-bound (or NULL).
+ *
+ * Pre-PG 10 servers don't expose `relpartbound`; pre-PG 14 don't have
+ * `inhdetachpending`. We synthesize NULL / false there.
+ */
+export const fetchInheritedBy = (opts: {
+  oid: number;
+  serverVersion: ServerVersion;
+}): DescribeQuery => {
+  const { oid, serverVersion } = opts;
+  const hasDetach = serverAtLeast(serverVersion, PG_14);
+  const hasPartBound = serverAtLeast(serverVersion, PG_10);
+  const detachCol = hasDetach
+    ? 'i.inhdetachpending'
+    : 'false AS inhdetachpending';
+  const boundCol = hasPartBound
+    ? 'pg_catalog.pg_get_expr(c.relpartbound, c.oid)'
+    : 'NULL::text';
+  const orderBy = hasPartBound
+    ? "pg_catalog.pg_get_expr(c.relpartbound, c.oid) = 'DEFAULT'," +
+      ' c.oid::pg_catalog.regclass::pg_catalog.text'
+    : 'c.oid::pg_catalog.regclass::pg_catalog.text';
+  const sql =
+    'SELECT c.oid::pg_catalog.regclass, c.relkind,\n  ' +
+    detachCol +
+    ',\n  ' +
+    boundCol +
+    '\nFROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n' +
+    `WHERE c.oid = i.inhrelid AND i.inhparent = '${oid}'\n` +
+    `ORDER BY ${orderBy};`;
+  return { sql, params: [], description: 'Inheriting / child relations' };
+};
+
+/**
+ * Partition-of details for a child partition (`relispartition = true`).
+ * Returns parent regclass + partition bound (+ partition constraint when
+ * verbose is requested by the caller). Per upstream, this is invoked
+ * unconditionally for child partitions regardless of verbose, with the
+ * partition-constraint column conditionally selected.
+ */
+export const fetchPartitionOf = (opts: {
+  oid: number;
+  serverVersion: ServerVersion;
+  withConstraint: boolean;
+}): DescribeQuery => {
+  const { oid, serverVersion, withConstraint } = opts;
+  const detachCol = serverAtLeast(serverVersion, PG_14)
+    ? 'i.inhdetachpending'
+    : 'false AS inhdetachpending';
+  let sql =
+    'SELECT inhparent::pg_catalog.regclass,\n' +
+    '  pg_catalog.pg_get_expr(c.relpartbound, c.oid),\n  ' +
+    detachCol;
+  if (withConstraint) {
+    sql += ',\n  pg_catalog.pg_get_partition_constraintdef(c.oid)';
+  }
+  sql +=
+    '\nFROM pg_catalog.pg_class c\n' +
+    '  JOIN pg_catalog.pg_inherits i ON c.oid = i.inhrelid\n' +
+    `WHERE c.oid = '${oid}';`;
+  return { sql, params: [], description: 'Partition-of details' };
+};
+
+/**
+ * Partition-key definition for a partitioned-table parent
+ * (`relkind = 'p'`). One row, one text column.
+ */
+export const fetchPartitionKey = (opts: { oid: number }): DescribeQuery => {
+  const sql = `SELECT pg_catalog.pg_get_partkeydef('${opts.oid}'::pg_catalog.oid);`;
+  return { sql, params: [], description: 'Partition key' };
+};
+
+/**
+ * Foreign-table footer info: server name + ftoptions as a pre-formatted
+ * "key 'val', key 'val'" string. Two-column single-row result; an empty
+ * options string means no FDW options.
+ */
+export const fetchForeignTableInfo = (opts: { oid: number }): DescribeQuery => {
+  const { oid } = opts;
+  const sql =
+    'SELECT s.srvname,\n' +
+    '  pg_catalog.array_to_string(ARRAY(\n' +
+    "    SELECT pg_catalog.quote_ident(option_name) || ' ' || pg_catalog.quote_literal(option_value)\n" +
+    "    FROM pg_catalog.pg_options_to_table(ftoptions)),  ', ') AS ftoptions\n" +
+    'FROM pg_catalog.pg_foreign_table f,\n' +
+    '     pg_catalog.pg_foreign_server s\n' +
+    `WHERE f.ftrelid = '${oid}' AND s.oid = f.ftserver;`;
+  return { sql, params: [], description: 'Foreign-table footer info' };
+};
+
+/**
+ * Pull `indexrelid::regclass` for the index marked as REPLICA IDENTITY
+ * on this relation. Returns at most one row when relreplident = 'i'.
+ */
+export const fetchReplicaIdentityIndex = (opts: {
+  oid: number;
+}): DescribeQuery => {
+  const { oid } = opts;
+  const sql =
+    'SELECT c2.relname\n' +
+    'FROM pg_catalog.pg_index i\n' +
+    '  JOIN pg_catalog.pg_class c2 ON c2.oid = i.indexrelid\n' +
+    `WHERE i.indrelid = '${oid}' AND i.indisreplident\n` +
+    'LIMIT 1;';
+  return { sql, params: [], description: 'Replica-identity index' };
+};

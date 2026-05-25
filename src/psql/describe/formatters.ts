@@ -43,6 +43,16 @@ import type { PrintQueryOpts } from '../types/printer.js';
 import { alignedPrinter } from '../print/aligned.js';
 
 import type { DescribeQuery } from './queries.js';
+import {
+  fetchForeignTableInfo,
+  fetchInheritedBy,
+  fetchInherits,
+  fetchPartitionKey,
+  fetchPartitionOf,
+  fetchPolicies,
+  fetchReplicaIdentityIndex,
+  fetchTableInfo,
+} from './queries.js';
 import { applyPattern, type NamePatternResult } from './processNamePattern.js';
 
 /**
@@ -201,7 +211,6 @@ export const describeOneTableDetails = async (
   popt: PrintQueryOpts,
 ): Promise<void> => {
   const title = headerForRelkind(relkind, schema, name);
-  void verbose; // verbose adds columns to Indexes/triggers rendering — TODO.
 
   // ----- Columns -----
   const colSql =
@@ -266,6 +275,22 @@ export const describeOneTableDetails = async (
     out,
   );
 
+  // ----- One-shot relation footer info (RLS flags, replica identity,
+  //       partition flag, tablespace, access method). Fetched after
+  //       columns so existing rendering ordering is unchanged for the
+  //       header table. -----
+  const relInfo = await fetchRelationInfo(conn, oid);
+
+  // ----- Partition-key (partitioned-table parent only) -----
+  if (relkind === 'p') {
+    await renderPartitionKeySection(conn, oid, out);
+  }
+
+  // ----- Partition-of (child partition only) -----
+  if (relInfo.relispartition) {
+    await renderPartitionOfSection(conn, oid, verbose, out);
+  }
+
   // ----- Indexes (only for tables / matviews / partitioned tables) -----
   if (relkind === 'r' || relkind === 'm' || relkind === 'p') {
     await renderIndexesSection(conn, oid, out);
@@ -287,9 +312,384 @@ export const describeOneTableDetails = async (
     await renderTriggersSection(conn, oid, out);
   }
 
-  // TODO(post-WP-20): RLS policies, replica identity, partition bounds,
-  // tablespace, access method, inheritance children, view definition
-  // (for v/m), foreign-table options.
+  // ----- RLS policies (regular + partitioned tables) -----
+  if (relkind === 'r' || relkind === 'p') {
+    await renderPoliciesSection(conn, oid, relInfo, out);
+  }
+
+  // ----- Foreign-table footer: Server + FDW options -----
+  if (relkind === 'f') {
+    await renderForeignTableFooter(conn, oid, out);
+  }
+
+  // ----- Inherits: (parents) — for tables, partitioned tables, foreign -----
+  if (relkind === 'r' || relkind === 'p' || relkind === 'f') {
+    await renderInheritsSection(conn, oid, out);
+  }
+
+  // ----- Inherited by / Partitions / Number of [child tables|partitions] -----
+  if (relkind === 'r' || relkind === 'p' || relkind === 'f') {
+    await renderInheritedBySection(conn, oid, relkind, verbose, out);
+  }
+
+  // ----- Replica Identity (verbose, non-default, regular & matview) -----
+  if (verbose && (relkind === 'r' || relkind === 'm')) {
+    await renderReplicaIdentitySection(conn, oid, schema, relInfo, out);
+  }
+
+  // ----- Tablespace footer (verbose: explicit tablespace only) -----
+  if (verbose) {
+    renderTablespaceFooter(relkind, relInfo, out);
+  }
+
+  // ----- Access method footer (verbose: relkind r/m/p with relam set) -----
+  if (verbose && (relkind === 'r' || relkind === 'm' || relkind === 'p')) {
+    renderAccessMethodFooter(relInfo, out);
+  }
+};
+
+/**
+ * Parsed footer-relevant fields for the relation under inspection. The
+ * names mirror the C struct in upstream `describe.c`.
+ */
+type RelationInfo = {
+  rowsecurity: boolean;
+  forcerowsecurity: boolean;
+  relreplident: string;
+  relispartition: boolean;
+  reltablespace: number;
+  relam: number;
+  spcname: string | null;
+  amname: string | null;
+};
+
+/**
+ * Helper that runs {@link fetchTableInfo} and parses the resulting row
+ * into a {@link RelationInfo}. Returns sensible falsy defaults when the
+ * row is missing (shouldn't happen given the caller already looked up
+ * the relation, but we don't want to throw mid-render).
+ */
+const fetchRelationInfo = async (
+  conn: Connection,
+  oid: number,
+): Promise<RelationInfo> => {
+  const q = fetchTableInfo({ oid, serverVersion: conn.serverVersion });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) {
+    return {
+      rowsecurity: false,
+      forcerowsecurity: false,
+      relreplident: 'd',
+      relispartition: false,
+      reltablespace: 0,
+      relam: 0,
+      spcname: null,
+      amname: null,
+    };
+  }
+  const r = rs.rows[0];
+  return {
+    rowsecurity: parseBool(r[0]),
+    forcerowsecurity: parseBool(r[1]),
+    relreplident: cellToString(r[2] ?? 'd') || 'd',
+    relispartition: parseBool(r[3]),
+    reltablespace: Number(cellToString(r[4] ?? '0')) || 0,
+    relam: Number(cellToString(r[5] ?? '0')) || 0,
+    spcname: r[6] === null || r[6] === undefined ? null : cellToString(r[6]),
+    amname: r[7] === null || r[7] === undefined ? null : cellToString(r[7]),
+  };
+};
+
+/** Coerce a Postgres "t"/"f" text-mode boolean (or a real bool) to JS. */
+const parseBool = (v: unknown): boolean =>
+  v === true || (typeof v === 'string' && (v === 't' || v === 'true'));
+
+/**
+ * Render `Partition key: <partkeydef>` for partitioned-table parents.
+ */
+const renderPartitionKeySection = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchPartitionKey({ oid });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  const def = cellToString(rs.rows[0][0] ?? '');
+  if (def === '') return;
+  out.write(`Partition key: ${def}\n`);
+};
+
+/**
+ * Render the "Partition of: <parent> <bound>[ DETACH PENDING]" line and
+ * the verbose-only "Partition constraint:" follow-up for a child
+ * partition (`relispartition = true`).
+ */
+const renderPartitionOfSection = async (
+  conn: Connection,
+  oid: number,
+  verbose: boolean,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchPartitionOf({
+    oid,
+    serverVersion: conn.serverVersion,
+    withConstraint: verbose,
+  });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  const row = rs.rows[0];
+  const parent = cellToString(row[0] ?? '');
+  const bound = cellToString(row[1] ?? '');
+  const detached = parseBool(row[2]);
+  const tail = detached ? ' DETACH PENDING' : '';
+  out.write(`Partition of: ${parent} ${bound}${tail}\n`);
+  if (verbose) {
+    const constraintdef =
+      row[3] === null || row[3] === undefined ? '' : cellToString(row[3]);
+    if (constraintdef === '') {
+      out.write('No partition constraint\n');
+    } else {
+      out.write(`Partition constraint: ${constraintdef}\n`);
+    }
+  }
+};
+
+/**
+ * Render the `Policies[...]:` header + one POLICY line per row. The
+ * exact header text encodes (rowsecurity, forcerowsecurity, has-policies)
+ * the same way upstream does, including the "(none)" tail for the
+ * enabled-but-no-policies cases.
+ */
+const renderPoliciesSection = async (
+  conn: Connection,
+  oid: number,
+  relInfo: RelationInfo,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchPolicies({ oid, serverVersion: conn.serverVersion });
+  const rs = await conn.query(q.sql, q.params);
+  const tuples = rs.rows.length;
+  const { rowsecurity, forcerowsecurity } = relInfo;
+
+  let header: string | null = null;
+  if (rowsecurity && !forcerowsecurity && tuples > 0) {
+    header = 'Policies:';
+  } else if (rowsecurity && forcerowsecurity && tuples > 0) {
+    header = 'Policies (forced row security enabled):';
+  } else if (rowsecurity && !forcerowsecurity && tuples === 0) {
+    header = 'Policies (row security enabled): (none)';
+  } else if (rowsecurity && forcerowsecurity && tuples === 0) {
+    header = 'Policies (forced row security enabled): (none)';
+  } else if (!rowsecurity && tuples > 0) {
+    header = 'Policies (row security disabled):';
+  }
+
+  if (header === null) return;
+  out.write(`${header}\n`);
+
+  for (const r of rs.rows) {
+    const polname = cellToString(r[0]);
+    const permissive = parseBool(r[1]);
+    const roles =
+      r[2] === null || r[2] === undefined ? null : cellToString(r[2]);
+    const qual =
+      r[3] === null || r[3] === undefined ? null : cellToString(r[3]);
+    const withcheck =
+      r[4] === null || r[4] === undefined ? null : cellToString(r[4]);
+    const cmd = r[5] === null || r[5] === undefined ? null : cellToString(r[5]);
+    let line = `    POLICY "${polname}"`;
+    if (!permissive) line += ' AS RESTRICTIVE';
+    if (cmd !== null && cmd !== '') line += ` FOR ${cmd}`;
+    if (roles !== null) line += `\n      TO ${roles}`;
+    if (qual !== null) line += `\n      USING (${qual})`;
+    if (withcheck !== null) line += `\n      WITH CHECK (${withcheck})`;
+    out.write(`${line}\n`);
+  }
+};
+
+/**
+ * Render the foreign-table footer: `Server: <name>` + optional
+ * `FDW options: (key 'val', key 'val')`. Upstream pulls these in a
+ * single follow-up query; we mirror that shape via
+ * {@link fetchForeignTableInfo}.
+ */
+const renderForeignTableFooter = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchForeignTableInfo({ oid });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  const row = rs.rows[0];
+  const server = cellToString(row[0] ?? '');
+  const ftoptions =
+    row[1] === null || row[1] === undefined ? '' : cellToString(row[1]);
+  if (server !== '') out.write(`Server: ${server}\n`);
+  if (ftoptions !== '') out.write(`FDW options: (${ftoptions})\n`);
+};
+
+/**
+ * Render `Inherits: <parent>[, ...]` for relations with parents in
+ * `pg_inherits`. Partition parents are excluded (they're rendered via
+ * `Partition of:` instead) inside the query builder.
+ */
+const renderInheritsSection = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchInherits({ oid });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  const label = 'Inherits';
+  const indent = ' '.repeat(label.length);
+  rs.rows.forEach((r, idx) => {
+    const parent = cellToString(r[0]);
+    const prefix = idx === 0 ? `${label}: ` : `${indent}  `;
+    const trailing = idx < rs.rows.length - 1 ? ',' : '';
+    out.write(`${prefix}${parent}${trailing}\n`);
+  });
+};
+
+/**
+ * Render the child-relation footer for inheritance / partition parents.
+ *
+ * - Partitioned parents always emit a `Number of partitions: N` footer
+ *   (even when zero, even in verbose mode); when verbose=false and N>0
+ *   the footer adds the `(Use \d+ to list them.)` hint. Verbose mode
+ *   replaces the count with a full `Partitions:` list including bounds.
+ * - Non-partition parents (regular tables) emit `Number of child
+ *   tables: N (Use \d+ to list them.)` (non-verbose) or `Child tables:`
+ *   list (verbose).
+ */
+const renderInheritedBySection = async (
+  conn: Connection,
+  oid: number,
+  relkind: string,
+  verbose: boolean,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const isPartitioned = relkind === 'p' || relkind === 'I';
+  const q = fetchInheritedBy({ oid, serverVersion: conn.serverVersion });
+  const rs = await conn.query(q.sql, q.params);
+  const tuples = rs.rows.length;
+
+  if (isPartitioned && tuples === 0) {
+    out.write('Number of partitions: 0\n');
+    return;
+  }
+
+  if (!verbose) {
+    if (tuples === 0) return;
+    if (isPartitioned) {
+      out.write(`Number of partitions: ${tuples} (Use \\d+ to list them.)\n`);
+    } else {
+      out.write(`Number of child tables: ${tuples} (Use \\d+ to list them.)\n`);
+    }
+    return;
+  }
+
+  // Verbose mode: list each child with its bound (for partitions) and
+  // child-relkind annotations.
+  const label = isPartitioned ? 'Partitions' : 'Child tables';
+  const indent = ' '.repeat(label.length);
+  rs.rows.forEach((r, idx) => {
+    const relname = cellToString(r[0]);
+    const childKind = cellToString(r[1] ?? '');
+    const detached = parseBool(r[2]);
+    const bound = r[3] === null || r[3] === undefined ? '' : cellToString(r[3]);
+    const prefix = idx === 0 ? `${label}: ` : `${indent}  `;
+    let line = `${prefix}${relname}`;
+    if (bound !== '') line += ` ${bound}`;
+    if (childKind === 'p' || childKind === 'I') line += ', PARTITIONED';
+    else if (childKind === 'f') line += ', FOREIGN';
+    if (detached) line += ' (DETACH PENDING)';
+    if (idx < rs.rows.length - 1) line += ',';
+    out.write(`${line}\n`);
+  });
+};
+
+/**
+ * Render `Replica Identity: <value>` when the relation's `relreplident`
+ * is non-default. Upstream skips this footer entirely for the default
+ * value ('d' in user schemas, 'n' for pg_catalog relations) and for
+ * 'i' (INDEX) since the index footer already carries the marker.
+ */
+const renderReplicaIdentitySection = async (
+  conn: Connection,
+  oid: number,
+  schema: string,
+  relInfo: RelationInfo,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const ri = relInfo.relreplident;
+  if (ri === 'i') {
+    // INDEX replica identity — fetch the index name and render that
+    // explicitly; upstream surfaces this on the corresponding index
+    // line but for our extracted detail it's helpful to also emit a
+    // header line.
+    const q = fetchReplicaIdentityIndex({ oid });
+    const rs = await conn.query(q.sql, q.params);
+    if (rs.rows.length > 0) {
+      const idxName = cellToString(rs.rows[0][0] ?? '');
+      if (idxName !== '') {
+        out.write(`Replica Identity: INDEX "${idxName}"\n`);
+      }
+    }
+    return;
+  }
+  // pg_catalog relations default to 'n', user relations to 'd' — both
+  // suppress the footer when the value matches the schema default.
+  const isCatalog = schema === 'pg_catalog';
+  if (!isCatalog && ri === 'd') return;
+  if (isCatalog && ri === 'n') return;
+  const label =
+    ri === 'f'
+      ? 'FULL'
+      : ri === 'd'
+        ? 'NOTHING'
+        : ri === 'n'
+          ? 'NOTHING'
+          : '???';
+  out.write(`Replica Identity: ${label}\n`);
+};
+
+/**
+ * Emit `Tablespace: "<name>"` when the relation has an explicit
+ * (non-default) tablespace. Only meaningful for relkinds that support
+ * tablespaces — caller enforces the relkind filter.
+ */
+const renderTablespaceFooter = (
+  relkind: string,
+  relInfo: RelationInfo,
+  out: NodeJS.WritableStream,
+): void => {
+  const tsSupported =
+    relkind === 'r' ||
+    relkind === 'm' ||
+    relkind === 'i' ||
+    relkind === 'I' ||
+    relkind === 'p' ||
+    relkind === 't';
+  if (!tsSupported) return;
+  if (relInfo.reltablespace === 0 || !relInfo.spcname) return;
+  out.write(`Tablespace: "${relInfo.spcname}"\n`);
+};
+
+/**
+ * Emit `Access method: <name>` when the relation has an explicit table
+ * access method (PG 12+). Indexes have their AM rendered inline within
+ * the index definition string, so this footer covers only
+ * tables / materialized views / partitioned tables.
+ */
+const renderAccessMethodFooter = (
+  relInfo: RelationInfo,
+  out: NodeJS.WritableStream,
+): void => {
+  if (relInfo.relam === 0 || !relInfo.amname) return;
+  out.write(`Access method: ${relInfo.amname}\n`);
 };
 
 /**
