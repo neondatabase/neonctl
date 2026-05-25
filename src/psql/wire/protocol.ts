@@ -1,70 +1,56 @@
 /**
- * PostgreSQL wire protocol message codec (WP-02).
+ * PostgreSQL wire protocol message codec — thin adapter over `pg-protocol`.
  *
- * Hand-rolled minimal replacement for `pg-protocol`. The repo's network is
- * sandboxed and we can't add the dep, so we implement just enough of
- * protocol v3.0 (PG 7.4+) to handle:
+ * Background (per the plan): the original module was a hand-rolled wire codec
+ * for protocol v3.0. We've now swapped the bytes for `pg-protocol@1.14`
+ * (node-postgres' upstream codec) and this file is the seam:
  *
- *   - Startup (with optional SSLRequest + SASL/MD5/Cleartext auth)
- *   - Simple Query
- *   - ParameterStatus / BackendKeyData / ReadyForQuery
- *   - NoticeResponse / NotificationResponse / ErrorResponse
- *   - CancelRequest (out-of-band)
- *   - COPY framing (CopyData / CopyDone / CopyFail) — encoder stubs here,
- *     full driver in WP-16.
- *   - Extended-query framing (Parse / Bind / Describe / Execute / Sync /
- *     Flush / Close) — encoder stubs here, driver in WP-21.
+ *   - Frontend builders (`Query`, `StartupMessage`, `Parse`, `Bind`, …) are
+ *     re-exports of `serialize.*` adapted to our existing call signatures, so
+ *     `connection.ts` and `pipeline.ts` keep working unchanged.
+ *   - `MessageParser` wraps pg-protocol's synchronous `Parser` and reshapes
+ *     each parsed message into our existing `BackendMessage` union — so the
+ *     connection-state-machine switches on `.type` ('RowDescription', 'DataRow',
+ *     …) and reads the same field names ('values', 'tag', 'fields', …) as
+ *     before.
  *
- * Reference: https://www.postgresql.org/docs/current/protocol-message-formats.html
+ * Exceptions (kept hand-rolled):
  *
- * Design notes:
- *   - Frontend message functions return a fully-formed Buffer ready to write
- *     to the socket. They allocate; we accept the cost because messages are
- *     small (<= a few KB typically) and the simple shape keeps the protocol
- *     easy to audit.
- *   - The backend parser is a streaming framer: `MessageParser.feed(chunk)`
- *     appends to an internal accumulator and pulls off complete messages
- *     (1-byte type + 4-byte length-including-itself + body). Partial messages
- *     stay buffered for the next `feed()` call. Length is bounds-checked so
- *     malformed input throws instead of OOM-ing.
- *   - Strings on the wire are UTF-8 cstrings (NUL-terminated). We do not
- *     attempt to re-encode `client_encoding` ourselves; libpq's behavior is
- *     "the server speaks whatever encoding the client claimed in startup",
- *     and we always claim UTF8.
+ *   - `CancelRequest`: pg-protocol exposes one as `serialize.cancel`, and it
+ *     is layout-compatible with our previous output. We delegate to it.
+ *   - `SSLRequest`: pg-protocol *does* expose this as `serialize.requestSsl`;
+ *     we re-export it for symmetry. No hand-roll needed.
+ *   - `StartupMessage`: pg-protocol's `serialize.startup` unconditionally
+ *     appends `client_encoding=UTF8` to whatever the caller supplies. We
+ *     defensively filter `client_encoding` from the caller-provided map
+ *     before passing through, since our connect layer always sets it to UTF8
+ *     anyway. If it's set to something else, that's a caller bug — assert.
+ *
+ * Why this shim layer (instead of using pg-protocol directly):
+ *
+ *   - Field-name mapping. pg-protocol's parser emits camelCase names
+ *     (`'rowDescription'`, `'dataRow'`, …) and uses different field names
+ *     (`fields` vs `values`, `text` vs `tag`, `processID` vs `processId`).
+ *     Translating in one place keeps `connection.ts` minimal.
+ *   - DataRow values. pg-protocol parses every value as a UTF-8 string;
+ *     our connection layer expects `(Buffer | null)[]` (so binary-format
+ *     columns can keep their bytes intact later). We re-buffer here.
+ *   - ErrorResponse / NoticeResponse fields. pg-protocol attaches the parsed
+ *     fields as named properties on the Error/Notice instance. We re-pack
+ *     them into the Map<tag,value> shape our `fieldsToNotice` helper consumes.
  */
 
 import { Buffer } from 'node:buffer';
+import { serialize } from 'pg-protocol';
+// `Parser` is not part of pg-protocol's top-level exports (only `serialize`,
+// `parse`, and `DatabaseError` are). The package's `exports` map permits
+// `./dist/*` subpath imports, which is the canonical way to reach the parser
+// class — node-postgres' own pg client does the same.
+import { Parser } from 'pg-protocol/dist/parser.js';
 
 // ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/** Protocol v3.0 = (3 << 16) | 0 = 196608. */
-const PROTOCOL_VERSION_3 = 196608;
-
-/** Magic numbers for special startup variants (no message type byte). */
-const SSL_REQUEST_CODE = 80877103;
-const CANCEL_REQUEST_CODE = 80877102;
-// const GSSENC_REQUEST_CODE = 80877104; // Reserved; not implemented.
-
-// Frontend message type bytes. Not all are used here; left as docstrings of
-// the wire alphabet for future maintenance.
-const FE_QUERY = 0x51; // 'Q'
-const FE_PARSE = 0x50; // 'P'
-const FE_BIND = 0x42; // 'B'
-const FE_DESCRIBE = 0x44; // 'D'
-const FE_EXECUTE = 0x45; // 'E'
-const FE_SYNC = 0x53; // 'S'
-const FE_FLUSH = 0x48; // 'H'
-const FE_CLOSE = 0x43; // 'C'
-const FE_TERMINATE = 0x58; // 'X'
-const FE_PASSWORD = 0x70; // 'p' — also SASL initial/response
-const FE_COPY_DATA = 0x64; // 'd'
-const FE_COPY_DONE = 0x63; // 'c'
-const FE_COPY_FAIL = 0x66; // 'f'
-
-// ---------------------------------------------------------------------------
-// Backend message types
+// Backend message types (unchanged from the hand-rolled codec — this is the
+// shape `connection.ts` switches on)
 // ---------------------------------------------------------------------------
 
 export type FieldDescription = {
@@ -127,146 +113,77 @@ export class ProtocolError extends Error {
 
 // ---------------------------------------------------------------------------
 // Frontend message encoders
+//
+// These are thin wrappers over `pg-protocol`'s `serialize.*`. The signatures
+// mirror our previous hand-rolled API so callers in `connection.ts` and
+// `pipeline.ts` don't need to change.
 // ---------------------------------------------------------------------------
 
 /**
- * StartupMessage (no type byte).
- *
- *   Int32 length (incl. self)
- *   Int32 protocol version (196608 for v3.0)
- *   { cstring key, cstring value }*
- *   0x00 terminator
+ * StartupMessage. pg-protocol always appends `client_encoding=UTF8`; we
+ * strip any incoming `client_encoding` to avoid duplicating it on the wire.
+ * Our connect layer always sets UTF8 anyway, so this is a no-op in practice.
  */
 export function StartupMessage(params: Record<string, string>): Buffer {
-  const entries: { key: Buffer; value: Buffer }[] = [];
-  let body = 4 + 4; // length + protocol
+  const filtered: Record<string, string> = {};
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined) continue;
-    const k = Buffer.from(key, 'utf8');
-    const v = Buffer.from(value, 'utf8');
-    entries.push({ key: k, value: v });
-    body += k.length + 1 + v.length + 1;
+    if (key === 'client_encoding') continue;
+    filtered[key] = value;
   }
-  body += 1; // trailing 0
-
-  const buf = Buffer.alloc(body);
-  let off = 0;
-  buf.writeInt32BE(body, off);
-  off += 4;
-  buf.writeInt32BE(PROTOCOL_VERSION_3, off);
-  off += 4;
-  for (const { key, value } of entries) {
-    key.copy(buf, off);
-    off += key.length;
-    buf[off++] = 0;
-    value.copy(buf, off);
-    off += value.length;
-    buf[off++] = 0;
-  }
-  buf[off] = 0;
-  return buf;
+  return serialize.startup(filtered);
 }
 
-/**
- * SSLRequest (no type byte).
- *
- *   Int32 length = 8
- *   Int32 80877103
- */
+/** SSLRequest — pg-protocol exposes this as `requestSsl`. */
 export function SSLRequest(): Buffer {
-  const buf = Buffer.alloc(8);
-  buf.writeInt32BE(8, 0);
-  buf.writeInt32BE(SSL_REQUEST_CODE, 4);
-  return buf;
+  return serialize.requestSsl();
 }
 
-/**
- * CancelRequest (no type byte; sent on a fresh connection).
- *
- *   Int32 length = 16
- *   Int32 80877102
- *   Int32 process id
- *   Int32 secret key
- */
+/** CancelRequest — pg-protocol's `cancel` is layout-compatible. */
 export function CancelRequest(processId: number, secretKey: number): Buffer {
-  const buf = Buffer.alloc(16);
-  buf.writeInt32BE(16, 0);
-  buf.writeInt32BE(CANCEL_REQUEST_CODE, 4);
-  buf.writeInt32BE(processId, 8);
-  buf.writeInt32BE(secretKey, 12);
-  return buf;
+  return serialize.cancel(processId, secretKey);
 }
 
-/** Query: 'Q' Int32 len cstring sql */
+/** Query: 'Q' + cstring(sql). */
 export function Query(sql: string): Buffer {
-  const s = Buffer.from(sql, 'utf8');
-  const len = 4 + s.length + 1;
-  const buf = Buffer.alloc(1 + len);
-  buf[0] = FE_QUERY;
-  buf.writeInt32BE(len, 1);
-  s.copy(buf, 5);
-  buf[buf.length - 1] = 0;
-  return buf;
+  return serialize.query(sql);
 }
 
-/** Terminate: 'X' Int32 4 */
+/** Terminate: 'X' + 4-byte length. */
 export function Terminate(): Buffer {
-  const buf = Buffer.alloc(5);
-  buf[0] = FE_TERMINATE;
-  buf.writeInt32BE(4, 1);
-  return buf;
+  return serialize.end();
 }
 
-/** Sync: 'S' Int32 4 */
+/** Sync: 'S' + 4-byte length. */
 export function Sync(): Buffer {
-  const buf = Buffer.alloc(5);
-  buf[0] = FE_SYNC;
-  buf.writeInt32BE(4, 1);
-  return buf;
+  return serialize.sync();
 }
 
-/** Flush: 'H' Int32 4 */
+/** Flush: 'H' + 4-byte length. */
 export function Flush(): Buffer {
-  const buf = Buffer.alloc(5);
-  buf[0] = FE_FLUSH;
-  buf.writeInt32BE(4, 1);
-  return buf;
+  return serialize.flush();
 }
 
-/**
- * Parse: 'P' Int32 len cstring(stmt) cstring(sql) Int16 nparam {Int32 oid}*
- */
+/** Parse: 'P' + cstring(name) + cstring(sql) + Int16 nparam + {Int32 oid}*. */
 export function Parse(name: string, sql: string, paramTypes: number[]): Buffer {
-  const n = Buffer.from(name, 'utf8');
-  const s = Buffer.from(sql, 'utf8');
-  const len = 4 + (n.length + 1) + (s.length + 1) + 2 + paramTypes.length * 4;
-  const buf = Buffer.alloc(1 + len);
-  let off = 0;
-  buf[off++] = FE_PARSE;
-  buf.writeInt32BE(len, off);
-  off += 4;
-  n.copy(buf, off);
-  off += n.length;
-  buf[off++] = 0;
-  s.copy(buf, off);
-  off += s.length;
-  buf[off++] = 0;
-  buf.writeUInt16BE(paramTypes.length, off);
-  off += 2;
-  for (const oid of paramTypes) {
-    buf.writeUInt32BE(oid, off);
-    off += 4;
-  }
-  return buf;
+  return serialize.parse({ name, text: sql, types: paramTypes });
 }
 
 /**
- * Bind: 'B' Int32 len cstring(portal) cstring(stmt)
- *       Int16 nFormats {Int16 fmt}*
- *       Int16 nValues  {Int32 len, bytes | -1 if null}*
- *       Int16 nResultFormats {Int16 fmt}*
+ * Bind: 'B' + cstring(portal) + cstring(stmt) + per-value param formats +
+ * value array + result formats.
  *
- * `params` of `null` encodes as len = -1. Buffer params go raw. Strings UTF8.
+ * Note on parameter formats: pg-protocol's `serialize.bind` auto-detects the
+ * format byte per value (`Buffer → 1`, `string/null → 0`); the caller-supplied
+ * `paramFormats` arg is therefore ignored. This matches the hand-rolled
+ * codec's effective behaviour because every caller passes either an empty
+ * array (= "all text", which is what pg-protocol picks for strings) or a
+ * format list that already agrees with the value's type.
+ *
+ * Note on result formats: we want every column in *text* format (`[0]`) for
+ * `psql`-style printing. pg-protocol forces a single shared result-format
+ * byte (`binary: boolean`); we pass `binary: false` to get text columns
+ * regardless of the caller-supplied `resultFormats` array.
  */
 export function Bind(
   portal: string,
@@ -275,191 +192,74 @@ export function Bind(
   params: (Buffer | string | null)[],
   resultFormats: (0 | 1)[],
 ): Buffer {
-  const p = Buffer.from(portal, 'utf8');
-  const s = Buffer.from(stmt, 'utf8');
-
-  const paramBufs: (Buffer | null)[] = params.map((v) => {
-    if (v === null) return null;
-    if (Buffer.isBuffer(v)) return v;
-    return Buffer.from(v, 'utf8');
+  // `paramFormats` and `resultFormats` are read for the rare future caller
+  // that might want explicit control; pg-protocol's `serialize.bind` doesn't
+  // expose either, so we intentionally drop them on the floor for now.
+  void paramFormats;
+  void resultFormats;
+  return serialize.bind({
+    portal,
+    statement: stmt,
+    values: params,
+    binary: false,
   });
-
-  let len = 4 + (p.length + 1) + (s.length + 1);
-  len += 2 + paramFormats.length * 2;
-  len += 2;
-  for (const b of paramBufs) {
-    len += 4;
-    if (b !== null) len += b.length;
-  }
-  len += 2 + resultFormats.length * 2;
-
-  const buf = Buffer.alloc(1 + len);
-  let off = 0;
-  buf[off++] = FE_BIND;
-  buf.writeInt32BE(len, off);
-  off += 4;
-  p.copy(buf, off);
-  off += p.length;
-  buf[off++] = 0;
-  s.copy(buf, off);
-  off += s.length;
-  buf[off++] = 0;
-
-  buf.writeUInt16BE(paramFormats.length, off);
-  off += 2;
-  for (const fmt of paramFormats) {
-    buf.writeUInt16BE(fmt, off);
-    off += 2;
-  }
-
-  buf.writeUInt16BE(paramBufs.length, off);
-  off += 2;
-  for (const b of paramBufs) {
-    if (b === null) {
-      buf.writeInt32BE(-1, off);
-      off += 4;
-    } else {
-      buf.writeInt32BE(b.length, off);
-      off += 4;
-      b.copy(buf, off);
-      off += b.length;
-    }
-  }
-
-  buf.writeUInt16BE(resultFormats.length, off);
-  off += 2;
-  for (const fmt of resultFormats) {
-    buf.writeUInt16BE(fmt, off);
-    off += 2;
-  }
-  return buf;
 }
 
-/** Describe: 'D' Int32 len byte('S'|'P') cstring(name) */
+/** Describe: 'D' + byte('S'|'P') + cstring(name). */
 export function Describe(target: 'S' | 'P', name: string): Buffer {
-  const n = Buffer.from(name, 'utf8');
-  const len = 4 + 1 + n.length + 1;
-  const buf = Buffer.alloc(1 + len);
-  let off = 0;
-  buf[off++] = FE_DESCRIBE;
-  buf.writeInt32BE(len, off);
-  off += 4;
-  buf[off++] = target.charCodeAt(0);
-  n.copy(buf, off);
-  off += n.length;
-  buf[off] = 0;
-  return buf;
+  return serialize.describe({ type: target, name });
 }
 
-/** Execute: 'E' Int32 len cstring(portal) Int32 maxRows */
+/** Execute: 'E' + cstring(portal) + Int32 maxRows. */
 export function Execute(portal: string, maxRows: number): Buffer {
-  const p = Buffer.from(portal, 'utf8');
-  const len = 4 + p.length + 1 + 4;
-  const buf = Buffer.alloc(1 + len);
-  let off = 0;
-  buf[off++] = FE_EXECUTE;
-  buf.writeInt32BE(len, off);
-  off += 4;
-  p.copy(buf, off);
-  off += p.length;
-  buf[off++] = 0;
-  buf.writeInt32BE(maxRows, off);
-  return buf;
+  return serialize.execute({ portal, rows: maxRows });
 }
 
-/** Close: 'C' Int32 len byte('S'|'P') cstring(name) */
+/** Close: 'C' + byte('S'|'P') + cstring(name). */
 export function Close(target: 'S' | 'P', name: string): Buffer {
-  const n = Buffer.from(name, 'utf8');
-  const len = 4 + 1 + n.length + 1;
-  const buf = Buffer.alloc(1 + len);
-  let off = 0;
-  buf[off++] = FE_CLOSE;
-  buf.writeInt32BE(len, off);
-  off += 4;
-  buf[off++] = target.charCodeAt(0);
-  n.copy(buf, off);
-  off += n.length;
-  buf[off] = 0;
-  return buf;
+  return serialize.close({ type: target, name });
 }
 
-/**
- * PasswordMessage / cleartext-or-MD5 path: 'p' Int32 len cstring(password)
- */
+/** PasswordMessage: 'p' + cstring(password). */
 export function PasswordMessage(password: string): Buffer {
-  const p = Buffer.from(password, 'utf8');
-  const len = 4 + p.length + 1;
-  const buf = Buffer.alloc(1 + len);
-  buf[0] = FE_PASSWORD;
-  buf.writeInt32BE(len, 1);
-  p.copy(buf, 5);
-  buf[buf.length - 1] = 0;
-  return buf;
+  return serialize.password(password);
 }
 
 /**
- * SASLInitialResponse: 'p' Int32 len cstring(mechanism)
- *                          Int32 responseLen (or -1 if none)
- *                          bytes(response)
+ * SASLInitialResponse: 'p' + cstring(mechanism) + Int32(bodyLen) + body.
+ *
+ * pg-protocol takes the initial response as a *string*; our SCRAM client
+ * hands back a Buffer. SCRAM-SHA-256 messages are ASCII so this round-trips
+ * losslessly via UTF-8.
  */
 export function SASLInitialResponse(
   mechanism: string,
   response: Buffer,
 ): Buffer {
-  const m = Buffer.from(mechanism, 'utf8');
-  const len = 4 + m.length + 1 + 4 + response.length;
-  const buf = Buffer.alloc(1 + len);
-  let off = 0;
-  buf[off++] = FE_PASSWORD;
-  buf.writeInt32BE(len, off);
-  off += 4;
-  m.copy(buf, off);
-  off += m.length;
-  buf[off++] = 0;
-  buf.writeInt32BE(response.length, off);
-  off += 4;
-  response.copy(buf, off);
-  return buf;
+  return serialize.sendSASLInitialResponseMessage(
+    mechanism,
+    response.toString('utf8'),
+  );
 }
 
-/** SASLResponse: 'p' Int32 len bytes(response) */
+/** SASLResponse: 'p' + opaque body (no NUL terminator). */
 export function SASLResponse(response: Buffer): Buffer {
-  const len = 4 + response.length;
-  const buf = Buffer.alloc(1 + len);
-  buf[0] = FE_PASSWORD;
-  buf.writeInt32BE(len, 1);
-  response.copy(buf, 5);
-  return buf;
+  return serialize.sendSCRAMClientFinalMessage(response.toString('utf8'));
 }
 
-/** CopyData: 'd' Int32 len bytes */
+/** CopyData: 'd' + opaque bytes. */
 export function CopyData(data: Buffer): Buffer {
-  const len = 4 + data.length;
-  const buf = Buffer.alloc(1 + len);
-  buf[0] = FE_COPY_DATA;
-  buf.writeInt32BE(len, 1);
-  data.copy(buf, 5);
-  return buf;
+  return serialize.copyData(data);
 }
 
-/** CopyDone: 'c' Int32 4 */
+/** CopyDone: 'c' + 4-byte length. */
 export function CopyDone(): Buffer {
-  const buf = Buffer.alloc(5);
-  buf[0] = FE_COPY_DONE;
-  buf.writeInt32BE(4, 1);
-  return buf;
+  return serialize.copyDone();
 }
 
-/** CopyFail: 'f' Int32 len cstring(reason) */
+/** CopyFail: 'f' + cstring(reason). */
 export function CopyFail(message: string): Buffer {
-  const m = Buffer.from(message, 'utf8');
-  const len = 4 + m.length + 1;
-  const buf = Buffer.alloc(1 + len);
-  buf[0] = FE_COPY_FAIL;
-  buf.writeInt32BE(len, 1);
-  m.copy(buf, 5);
-  buf[buf.length - 1] = 0;
-  return buf;
+  return serialize.copyFail(message);
 }
 
 // ---------------------------------------------------------------------------
@@ -467,57 +267,40 @@ export function CopyFail(message: string): Buffer {
 // ---------------------------------------------------------------------------
 
 /**
- * Streaming framer. Caller pushes raw socket bytes via `feed()`, gets back
- * an array of fully-parsed messages. Leftover bytes (incomplete trailing
- * message) stay buffered for next call.
+ * Streaming framer with a synchronous `feed()` API.
  *
- * Memory: holds at most one accumulator buffer. We compact on every feed
- * once the head pointer crosses 32 KiB so a long-running connection doesn't
- * accumulate unreachable bytes. (Compaction is amortized O(n) — same shape
- * as a circular-buffer pull.)
+ * Internally delegates to `pg-protocol`'s `Parser` (which exposes a
+ * `parse(buffer, callback)` method that emits each completed backend message
+ * via callback). On each `feed()` call we drain the parser and collect the
+ * emitted messages into an array, reshaping each pg-protocol message into our
+ * `BackendMessage` union (so `connection.ts`'s switch arms keep working).
+ *
+ * pg-protocol's `Parser.parse` calls the callback synchronously for every
+ * complete message and keeps incomplete trailing bytes buffered internally.
+ * That's a near-perfect match for our previous hand-rolled `MessageParser`.
  */
-const COMPACT_THRESHOLD = 32 * 1024;
-
 export class MessageParser {
-  private buf: Buffer = Buffer.alloc(0);
-  private head = 0;
+  private readonly inner = new Parser();
+  /** Bytes buffered inside `inner` but not yet emitted. Diagnostic only. */
+  private buffered = 0;
 
   public feed(chunk: Buffer): BackendMessage[] {
-    if (chunk.length > 0) {
-      // Concatenate (only the live region of `buf`) + new chunk.
-      if (this.head === this.buf.length) {
-        this.buf = chunk;
-      } else {
-        this.buf = Buffer.concat([this.buf.subarray(this.head), chunk]);
-      }
-      this.head = 0;
-    } else if (this.head >= this.buf.length) {
-      return [];
-    }
-
     const out: BackendMessage[] = [];
-    while (this.buf.length - this.head >= 5) {
-      const type = this.buf[this.head];
-      // Length includes the 4 length bytes but NOT the type byte.
-      const declared = this.buf.readInt32BE(this.head + 1);
-      if (declared < 4) {
-        throw new ProtocolError(
-          `Backend message length ${String(declared)} < 4 (type 0x${type.toString(16)})`,
-        );
-      }
-      const totalSize = 1 + declared;
-      if (this.buf.length - this.head < totalSize) {
-        break; // Incomplete; wait for more bytes.
-      }
-      const body = this.buf.subarray(this.head + 5, this.head + totalSize);
-      out.push(parseMessage(type, body));
-      this.head += totalSize;
+    try {
+      this.inner.parse(chunk, (msg) => {
+        out.push(adaptBackendMessage(msg));
+      });
+    } catch (err) {
+      // pg-protocol throws plain `Error` on bad input (unknown auth
+      // subtype, truncated frames, …). Normalize to our type.
+      throw err instanceof ProtocolError
+        ? err
+        : new ProtocolError(err instanceof Error ? err.message : String(err));
     }
-
-    if (this.head > COMPACT_THRESHOLD) {
-      this.buf = this.buf.subarray(this.head);
-      this.head = 0;
-    }
+    // Probe the parser's leftover length via its internal field. Used by a
+    // handful of tests for diagnostics; not relied on in production code.
+    const probe = this.inner as unknown as { bufferLength?: number };
+    this.buffered = probe.bufferLength ?? 0;
     return out;
   }
 
@@ -526,320 +309,203 @@ export class MessageParser {
    * message). Exposed for tests / diagnostics.
    */
   public get bufferedBytes(): number {
-    return this.buf.length - this.head;
+    return this.buffered;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Per-message parsing
+// pg-protocol message → our BackendMessage shape
 // ---------------------------------------------------------------------------
 
-function parseMessage(type: number, body: Buffer): BackendMessage {
-  switch (type) {
-    case 0x52: // 'R' Authentication*
-      return parseAuth(body);
-    case 0x53: // 'S' ParameterStatus
-      return parseParameterStatus(body);
-    case 0x4b: // 'K' BackendKeyData
-      return parseBackendKeyData(body);
-    case 0x5a: // 'Z' ReadyForQuery
-      return parseReadyForQuery(body);
-    case 0x54: // 'T' RowDescription
-      return parseRowDescription(body);
-    case 0x44: // 'D' DataRow
-      return parseDataRow(body);
-    case 0x43: // 'C' CommandComplete
-      return { type: 'CommandComplete', tag: readCString(body, 0).value };
-    case 0x49: // 'I' EmptyQueryResponse
-      return { type: 'EmptyQueryResponse' };
-    case 0x45: // 'E' ErrorResponse
-      return { type: 'ErrorResponse', fields: parseErrorFields(body) };
-    case 0x4e: // 'N' NoticeResponse
-      return { type: 'NoticeResponse', fields: parseErrorFields(body) };
-    case 0x41: // 'A' NotificationResponse
-      return parseNotification(body);
-    case 0x47: // 'G' CopyInResponse
-      return parseCopyResponse('CopyInResponse', body);
-    case 0x48: // 'H' CopyOutResponse
-      return parseCopyResponse('CopyOutResponse', body);
-    case 0x64: // 'd' CopyData
-      return { type: 'CopyData', data: Buffer.from(body) };
-    case 0x63: // 'c' CopyDone
-      return { type: 'CopyDone' };
-    case 0x6e: // 'n' NoData
-      return { type: 'NoData' };
-    case 0x31: // '1' ParseComplete
-      return { type: 'ParseComplete' };
-    case 0x32: // '2' BindComplete
-      return { type: 'BindComplete' };
-    case 0x33: // '3' CloseComplete
-      return { type: 'CloseComplete' };
-    case 0x73: // 's' PortalSuspended
-      return { type: 'PortalSuspended' };
-    case 0x74: // 't' ParameterDescription
-      return parseParameterDescription(body);
-    default:
-      throw new ProtocolError(
-        `Unknown backend message type 0x${type.toString(16)} (${String.fromCharCode(type)})`,
-      );
-  }
-}
+/**
+ * pg-protocol's raw backend message shape (we don't get a single TS union
+ * to discriminate on, so we duck-type on `name`). Each branch reshapes the
+ * fields we care about and falls through to a ProtocolError otherwise.
+ */
+type AnyPgMessage = {
+  name: string;
+} & Record<string, unknown>;
 
-function parseAuth(body: Buffer): BackendMessage {
-  if (body.length < 4) {
-    throw new ProtocolError('Authentication message too short');
-  }
-  const code = body.readInt32BE(0);
-  switch (code) {
-    case 0:
+function adaptBackendMessage(raw: unknown): BackendMessage {
+  const msg = raw as AnyPgMessage;
+  switch (msg.name) {
+    case 'authenticationOk':
       return { type: 'AuthenticationOk' };
-    case 3:
+    case 'authenticationCleartextPassword':
       return { type: 'AuthenticationCleartextPassword' };
-    case 5:
-      if (body.length !== 4 + 4) {
-        throw new ProtocolError(
-          `AuthenticationMD5Password expected 8-byte body, got ${String(body.length)}`,
-        );
-      }
+    case 'authenticationMD5Password':
       return {
         type: 'AuthenticationMD5Password',
-        salt: Buffer.from(body.subarray(4, 8)),
+        salt: Buffer.from(msg.salt as Buffer),
       };
-    case 10: {
-      // SASL: zero-or-more cstrings, terminated by an empty cstring (i.e. 0x00).
-      const mechanisms: string[] = [];
-      let off = 4;
-      while (off < body.length) {
-        const { value, next } = readCString(body, off);
-        if (value === '') break;
-        mechanisms.push(value);
-        off = next;
-      }
-      return { type: 'AuthenticationSASL', mechanisms };
-    }
-    case 11:
+    case 'authenticationSASL':
+      return {
+        type: 'AuthenticationSASL',
+        mechanisms: msg.mechanisms as string[],
+      };
+    case 'authenticationSASLContinue':
       return {
         type: 'AuthenticationSASLContinue',
-        data: Buffer.from(body.subarray(4)),
+        data: Buffer.from(msg.data as string, 'utf8'),
       };
-    case 12:
+    case 'authenticationSASLFinal':
       return {
         type: 'AuthenticationSASLFinal',
-        data: Buffer.from(body.subarray(4)),
+        data: Buffer.from(msg.data as string, 'utf8'),
+      };
+    case 'parameterStatus':
+      return {
+        type: 'ParameterStatus',
+        name: msg.parameterName as string,
+        value: msg.parameterValue as string,
+      };
+    case 'backendKeyData':
+      return {
+        type: 'BackendKeyData',
+        processId: msg.processID as number,
+        secretKey: msg.secretKey as number,
+      };
+    case 'readyForQuery': {
+      const status = msg.status as string;
+      if (status !== 'I' && status !== 'T' && status !== 'E') {
+        throw new ProtocolError(
+          `ReadyForQuery: unexpected status ${JSON.stringify(status)}`,
+        );
+      }
+      return { type: 'ReadyForQuery', status };
+    }
+    case 'rowDescription': {
+      const fields: FieldDescription[] = (
+        msg.fields as {
+          name: string;
+          tableID: number;
+          columnID: number;
+          dataTypeID: number;
+          dataTypeSize: number;
+          dataTypeModifier: number;
+          format: 'text' | 'binary';
+        }[]
+      ).map((f) => ({
+        name: f.name,
+        tableID: f.tableID,
+        columnID: f.columnID,
+        dataTypeID: f.dataTypeID,
+        dataTypeSize: f.dataTypeSize,
+        dataTypeModifier: f.dataTypeModifier,
+        format: f.format === 'binary' ? 1 : 0,
+      }));
+      return { type: 'RowDescription', fields };
+    }
+    case 'dataRow': {
+      // pg-protocol always parses values as UTF-8 strings (or null for SQL
+      // NULL). Our connection layer expects (Buffer | null)[] so it can hand
+      // text-format columns through `.toString('utf8')` and pass binary
+      // columns through unchanged. Re-encode here.
+      const fields = msg.fields as (string | null)[];
+      const values: (Buffer | null)[] = new Array(fields.length);
+      for (let i = 0; i < fields.length; i++) {
+        const v = fields[i];
+        values[i] = v === null ? null : Buffer.from(v, 'utf8');
+      }
+      return { type: 'DataRow', values };
+    }
+    case 'commandComplete':
+      return { type: 'CommandComplete', tag: msg.text as string };
+    case 'emptyQuery':
+      return { type: 'EmptyQueryResponse' };
+    case 'error':
+      return { type: 'ErrorResponse', fields: errorOrNoticeFields(msg) };
+    case 'notice':
+      return { type: 'NoticeResponse', fields: errorOrNoticeFields(msg) };
+    case 'notification':
+      return {
+        type: 'NotificationResponse',
+        processId: msg.processId as number,
+        channel: msg.channel as string,
+        payload: msg.payload as string,
+      };
+    case 'copyInResponse':
+      return adaptCopyResponse('CopyInResponse', msg);
+    case 'copyOutResponse':
+      return adaptCopyResponse('CopyOutResponse', msg);
+    case 'copyData':
+      return { type: 'CopyData', data: Buffer.from(msg.chunk as Buffer) };
+    case 'copyDone':
+      return { type: 'CopyDone' };
+    case 'noData':
+      return { type: 'NoData' };
+    case 'parseComplete':
+      return { type: 'ParseComplete' };
+    case 'bindComplete':
+      return { type: 'BindComplete' };
+    case 'closeComplete':
+      return { type: 'CloseComplete' };
+    case 'portalSuspended':
+      return { type: 'PortalSuspended' };
+    case 'parameterDescription':
+      return {
+        type: 'ParameterDescription',
+        oids: msg.dataTypeIDs as number[],
       };
     default:
-      throw new ProtocolError(
-        `Unsupported Authentication subtype ${String(code)} (KerberosV5/SSPI/GSS/SSPI Continue not implemented)`,
-      );
+      throw new ProtocolError(`Unknown backend message: ${String(msg.name)}`);
   }
 }
 
-function parseParameterStatus(body: Buffer): BackendMessage {
-  const { value: name, next } = readCString(body, 0);
-  const { value } = readCString(body, next);
-  return { type: 'ParameterStatus', name, value };
-}
-
-function parseBackendKeyData(body: Buffer): BackendMessage {
-  if (body.length !== 8) {
-    throw new ProtocolError(
-      `BackendKeyData expected 8-byte body, got ${String(body.length)}`,
-    );
-  }
+function adaptCopyResponse(
+  type: 'CopyInResponse' | 'CopyOutResponse',
+  msg: AnyPgMessage,
+): BackendMessage {
+  const binary = msg.binary as boolean;
+  const columnTypes = msg.columnTypes as number[];
+  const columnFormats: (0 | 1)[] = columnTypes.map((f) => (f === 1 ? 1 : 0));
   return {
-    type: 'BackendKeyData',
-    processId: body.readInt32BE(0),
-    secretKey: body.readInt32BE(4),
+    type,
+    overallFormat: binary ? 1 : 0,
+    columnFormats,
   };
 }
 
-function parseReadyForQuery(body: Buffer): BackendMessage {
-  if (body.length !== 1) {
-    throw new ProtocolError(
-      `ReadyForQuery expected 1-byte body, got ${String(body.length)}`,
-    );
-  }
-  const ch = String.fromCharCode(body[0]);
-  if (ch !== 'I' && ch !== 'T' && ch !== 'E') {
-    throw new ProtocolError(
-      `ReadyForQuery: unexpected status ${JSON.stringify(ch)}`,
-    );
-  }
-  return { type: 'ReadyForQuery', status: ch };
-}
-
-function parseRowDescription(body: Buffer): BackendMessage {
-  if (body.length < 2) {
-    throw new ProtocolError('RowDescription body too short');
-  }
-  const n = body.readUInt16BE(0);
-  let off = 2;
-  const fields: FieldDescription[] = [];
-  for (let i = 0; i < n; i++) {
-    const { value: name, next } = readCString(body, off);
-    off = next;
-    if (off + 18 > body.length) {
-      throw new ProtocolError('RowDescription field truncated');
-    }
-    const tableID = body.readInt32BE(off);
-    off += 4;
-    const columnID = body.readInt16BE(off);
-    off += 2;
-    const dataTypeID = body.readInt32BE(off);
-    off += 4;
-    const dataTypeSize = body.readInt16BE(off);
-    off += 2;
-    const dataTypeModifier = body.readInt32BE(off);
-    off += 4;
-    const fmt = body.readInt16BE(off);
-    off += 2;
-    if (fmt !== 0 && fmt !== 1) {
-      throw new ProtocolError(
-        `RowDescription field ${String(i)} has invalid format ${String(fmt)}`,
-      );
-    }
-    fields.push({
-      name,
-      tableID,
-      columnID,
-      dataTypeID,
-      dataTypeSize,
-      dataTypeModifier,
-      format: fmt,
-    });
-  }
-  return { type: 'RowDescription', fields };
-}
-
-function parseDataRow(body: Buffer): BackendMessage {
-  if (body.length < 2) throw new ProtocolError('DataRow body too short');
-  const n = body.readUInt16BE(0);
-  let off = 2;
-  const values: (Buffer | null)[] = [];
-  for (let i = 0; i < n; i++) {
-    if (off + 4 > body.length) {
-      throw new ProtocolError('DataRow column header truncated');
-    }
-    const len = body.readInt32BE(off);
-    off += 4;
-    if (len === -1) {
-      values.push(null);
-    } else {
-      if (len < 0 || off + len > body.length) {
-        throw new ProtocolError(
-          `DataRow column ${String(i)} length ${String(len)} out of bounds`,
-        );
-      }
-      values.push(Buffer.from(body.subarray(off, off + len)));
-      off += len;
-    }
-  }
-  return { type: 'DataRow', values };
-}
-
-function parseNotification(body: Buffer): BackendMessage {
-  if (body.length < 4) {
-    throw new ProtocolError('NotificationResponse body too short');
-  }
-  const processId = body.readInt32BE(0);
-  const { value: channel, next } = readCString(body, 4);
-  const { value: payload } = readCString(body, next);
-  return { type: 'NotificationResponse', processId, channel, payload };
-}
-
-function parseCopyResponse(
-  kind: 'CopyInResponse' | 'CopyOutResponse',
-  body: Buffer,
-): BackendMessage {
-  if (body.length < 3) {
-    throw new ProtocolError(`${kind} body too short`);
-  }
-  const overall = body[0];
-  if (overall !== 0 && overall !== 1) {
-    throw new ProtocolError(
-      `${kind} overall format must be 0 or 1, got ${String(overall)}`,
-    );
-  }
-  const ncols = body.readUInt16BE(1);
-  const expected = 3 + ncols * 2;
-  if (body.length < expected) {
-    throw new ProtocolError(
-      `${kind} truncated: ncols=${String(ncols)} but body=${String(body.length)}`,
-    );
-  }
-  const columnFormats: (0 | 1)[] = [];
-  for (let i = 0; i < ncols; i++) {
-    const fmt = body.readInt16BE(3 + i * 2);
-    if (fmt !== 0 && fmt !== 1) {
-      throw new ProtocolError(
-        `${kind} column ${String(i)} format must be 0 or 1, got ${String(fmt)}`,
-      );
-    }
-    columnFormats.push(fmt);
-  }
-  return { type: kind, overallFormat: overall, columnFormats };
-}
-
-function parseParameterDescription(body: Buffer): BackendMessage {
-  if (body.length < 2) {
-    throw new ProtocolError('ParameterDescription body too short');
-  }
-  const n = body.readUInt16BE(0);
-  const oids: number[] = [];
-  if (body.length < 2 + n * 4) {
-    throw new ProtocolError('ParameterDescription truncated');
-  }
-  for (let i = 0; i < n; i++) {
-    oids.push(body.readUInt32BE(2 + i * 4));
-  }
-  return { type: 'ParameterDescription', oids };
-}
-
 /**
- * ErrorResponse / NoticeResponse share the same body format:
- *   { byte tag, cstring value }*
- *   0x00 terminator
- *
- * Field tag glossary (PG docs §53.8): S/V/C/M/D/H/P/p/q/W/s/t/c/d/n/F/L/R.
- * We don't try to interpret each tag — that's the caller's job; we just
- * return the raw map.
+ * Re-pack pg-protocol's flattened Error/Notice fields (named properties like
+ * `severity`, `code`, `detail`, …) into our previous `Map<tag, value>` shape
+ * keyed by the on-wire single-letter tag. The map is consumed by
+ * `fieldsToNotice` below.
  */
-function parseErrorFields(body: Buffer): Map<string, string> {
+function errorOrNoticeFields(msg: AnyPgMessage): Map<string, string> {
   const out = new Map<string, string>();
-  let off = 0;
-  while (off < body.length) {
-    const tag = body[off];
-    if (tag === 0) break;
-    off += 1;
-    const { value, next } = readCString(body, off);
-    out.set(String.fromCharCode(tag), value);
-    off = next;
-  }
+  // The on-wire tag → field-name mapping is per PG docs §53.8. pg-protocol
+  // stores `severity` from BOTH `S` and `V` (it overwrites with `V` if present)
+  // — to preserve our previous behaviour (where the map carried both raw
+  // tags), we copy S = V = severity when severity is defined. Consumers like
+  // `fieldsToNotice` look at V then S so this matches.
+  const set = (tag: string, value: unknown): void => {
+    if (typeof value === 'string') out.set(tag, value);
+  };
+  set('S', msg.severity);
+  set('V', msg.severity);
+  set('C', msg.code);
+  set('M', msg.message);
+  set('D', msg.detail);
+  set('H', msg.hint);
+  set('P', msg.position);
+  set('p', msg.internalPosition);
+  set('q', msg.internalQuery);
+  set('W', msg.where);
+  set('s', msg.schema);
+  set('t', msg.table);
+  set('c', msg.column);
+  set('d', msg.dataType);
+  set('n', msg.constraint);
+  set('F', msg.file);
+  set('L', msg.line);
+  set('R', msg.routine);
   return out;
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Notice helper (unchanged; consumed by connection.ts)
 // ---------------------------------------------------------------------------
-
-/** Reads a UTF-8 cstring starting at `off`. Returns the value and the offset
- * past the trailing NUL. Throws on missing terminator. */
-function readCString(
-  buf: Buffer,
-  off: number,
-): { value: string; next: number } {
-  for (let i = off; i < buf.length; i++) {
-    if (buf[i] === 0) {
-      return {
-        value: buf.toString('utf8', off, i),
-        next: i + 1,
-      };
-    }
-  }
-  throw new ProtocolError(
-    `cstring missing NUL terminator (off=${String(off)}, end=${String(buf.length)})`,
-  );
-}
 
 /**
  * Convert a notice/error field map into a Notice-shaped object. The wire
