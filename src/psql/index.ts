@@ -16,6 +16,8 @@ import {
 } from './core/mainloop.js';
 import { applyStartupArgs, parseStartupArgs } from './core/startup.js';
 import { executeInputString, loadPsqlrc } from './io/psqlrc.js';
+import { loadPgPass } from './io/pgpass.js';
+import { loadPgServices } from './io/pgservice.js';
 import { promises as fs } from 'node:fs';
 
 /**
@@ -40,9 +42,17 @@ export const runPsql = async (
     return EXIT_FAILURE;
   }
 
-  let baseConnectOpts: ConnectOptions;
+  // Parse the URI as both:
+  //   - a fully-defaulted ConnectOptions (legacy surface; preserves byte-exact
+  //     behaviour for paths that don't yet route through env/pgpass/service)
+  //   - a Partial<ConnectOptions> with ONLY the fields the URI explicitly
+  //     supplied, plus an extracted `service` name. The partial is what the
+  //     new layered resolver consumes.
+  let uriPartial: Partial<ConnectOptions>;
+  let uriService: string | undefined;
   try {
-    baseConnectOpts = parseConnectionUri(connectionUri);
+    uriPartial = parseConnectionUriPartial(connectionUri);
+    uriService = parseConnectionUriService(connectionUri);
   } catch (err) {
     stderr.write(`psql: error: ${(err as Error).message}\n`);
     return EXIT_BADCONN;
@@ -67,10 +77,27 @@ export const runPsql = async (
   // Track interactive-ness from the actual stdin we'll read.
   settings.notty = !(stdin as NodeJS.ReadStream).isTTY;
 
+  // Resolve external configuration sources (pgpass, pg_service.conf) before
+  // running the layered merge. Both loaders gracefully degrade to empty
+  // results when files are missing or unreadable — `applyStartupArgs` will
+  // just not find a match and fall through to the next layer.
+  const pgpassEntries = await loadPgPass(undefined, {
+    env: process.env,
+    stderr,
+  });
+  const services = await loadPgServices();
+
   const { connect: connectOpts, preActions } = applyStartupArgs(
     parsed,
     settings,
-    baseConnectOpts,
+    undefined,
+    {
+      env: process.env,
+      uriPartial,
+      serviceName: uriService,
+      pgpassEntries,
+      services,
+    },
   );
 
   let connection: PgConnection;
@@ -311,6 +338,13 @@ type RawUri = {
   password?: string;
   host?: string;
   port?: string;
+  /**
+   * Authority-side multi-host tuples (`h1:5432,h2,h3:5434`). Empty unless the
+   * authority contained one or more commas. The single-host `host` / `port`
+   * fields above remain populated with the FIRST entry so existing
+   * single-host callers see no surface change.
+   */
+  hosts?: { host: string; port?: string }[];
   database?: string;
   query: Map<string, string>;
 };
@@ -414,39 +448,109 @@ const tokenizeConnectionUri = (uri: string): RawUri => {
     }
   }
 
-  // hostport: either [ipv6]:port, [ipv6], host:port, or host.
+  // hostport: either [ipv6]:port, [ipv6], host:port, or host. With multi-host
+  // (libpq 10+), the authority may be a comma-separated list:
+  //   `h1:5432,h2,[::1]:5433`
+  // We split on commas at the top level (i.e. not inside `[...]` IPv6
+  // brackets) and parse each segment using the single-host grammar.
+  const tuples = splitAuthorityTuples(rest, uri);
+
   let host: string | undefined;
   let port: string | undefined;
-  if (rest.startsWith('[')) {
-    const closeIdx = rest.indexOf(']');
-    if (closeIdx < 0) {
-      throw new Error(`missing matching "]" in IPv6 host address: ${uri}`);
+  const hosts: { host: string; port?: string }[] = [];
+  for (const tuple of tuples) {
+    const parsed = parseAuthorityTuple(tuple, uri);
+    if (parsed.host !== undefined) {
+      hosts.push({ host: parsed.host, port: parsed.port });
     }
-    host = rest.slice(1, closeIdx);
-    if (host === '') {
-      throw new Error(`IPv6 host address may not be empty: ${uri}`);
-    }
-    const after = rest.slice(closeIdx + 1);
-    if (after.startsWith(':')) {
-      port = after.slice(1);
-    } else if (after !== '') {
-      throw new Error(
-        `unexpected characters after IPv6 host address in URI: ${uri}`,
-      );
-    }
-  } else if (rest !== '') {
-    const colon = rest.indexOf(':');
-    if (colon >= 0) {
-      host = decodePercent(rest.slice(0, colon));
-      port = rest.slice(colon + 1);
-    } else {
-      host = decodePercent(rest);
-    }
+  }
+  if (hosts.length > 0) {
+    host = hosts[0].host;
+    port = hosts[0].port;
   }
 
   const queryMap = parseQuery(query);
 
-  return { user, password, host, port, database, query: queryMap };
+  return {
+    user,
+    password,
+    host,
+    port,
+    ...(hosts.length > 1 ? { hosts } : {}),
+    database,
+    query: queryMap,
+  };
+};
+
+/**
+ * Split a multi-host authority string into one tuple per top-level comma.
+ * IPv6 bracket regions are atomic — commas inside `[…]` don't split.
+ *
+ * Examples:
+ *   `h1:5432,h2,h3:5434`         -> ['h1:5432','h2','h3:5434']
+ *   `[::1]:5432,[2001:db8::1]`   -> ['[::1]:5432','[2001:db8::1]']
+ *   `h1`                          -> ['h1']
+ *   ``                            -> ['']    (single empty tuple — caller may
+ *                                              treat as no-host)
+ */
+const splitAuthorityTuples = (rest: string, uri: string): string[] => {
+  if (rest === '') return [''];
+  const tuples: string[] = [];
+  let start = 0;
+  let i = 0;
+  while (i < rest.length) {
+    const ch = rest[i];
+    if (ch === '[') {
+      const closeIdx = rest.indexOf(']', i);
+      if (closeIdx < 0) {
+        throw new Error(`missing matching "]" in IPv6 host address: ${uri}`);
+      }
+      i = closeIdx + 1;
+      continue;
+    }
+    if (ch === ',') {
+      tuples.push(rest.slice(start, i));
+      i += 1;
+      start = i;
+      continue;
+    }
+    i += 1;
+  }
+  tuples.push(rest.slice(start));
+  return tuples;
+};
+
+const parseAuthorityTuple = (
+  tuple: string,
+  uri: string,
+): { host?: string; port?: string } => {
+  if (tuple === '') return {};
+  if (tuple.startsWith('[')) {
+    const closeIdx = tuple.indexOf(']');
+    if (closeIdx < 0) {
+      throw new Error(`missing matching "]" in IPv6 host address: ${uri}`);
+    }
+    const host = tuple.slice(1, closeIdx);
+    if (host === '') {
+      throw new Error(`IPv6 host address may not be empty: ${uri}`);
+    }
+    const after = tuple.slice(closeIdx + 1);
+    if (after === '') return { host };
+    if (after.startsWith(':')) {
+      return { host, port: after.slice(1) };
+    }
+    throw new Error(
+      `unexpected characters after IPv6 host address in URI: ${uri}`,
+    );
+  }
+  const colon = tuple.indexOf(':');
+  if (colon >= 0) {
+    return {
+      host: decodePercent(tuple.slice(0, colon)),
+      port: tuple.slice(colon + 1),
+    };
+  }
+  return { host: decodePercent(tuple) };
 };
 
 const parseQuery = (raw: string): Map<string, string> => {
@@ -515,22 +619,26 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   const queryDbname = raw.query.get('dbname');
   const queryHost = raw.query.get('host');
 
-  const host =
-    queryHost !== undefined && queryHost !== ''
-      ? queryHost
-      : raw.host !== undefined && raw.host !== ''
-        ? raw.host
-        : 'localhost';
+  // Multi-host: either from the authority (`h1,h2,h3:5434`) or from
+  // `?host=h1,h2,h3&port=5432,5433,5434`. Query-string overrides authority
+  // (matching libpq: query params take precedence over URI structural
+  // components). Both `host=` and `port=` lists must be the same length OR
+  // a single value (broadcast).
+  const hostsTuples = computeHostsTuples({
+    rawHost: raw.host,
+    rawPort: raw.port,
+    rawAuthorityHosts: raw.hosts,
+    queryHost,
+    queryPort,
+  });
 
-  const portStr = queryPort ?? raw.port;
-  let port = 5432;
-  if (portStr !== undefined && portStr !== '') {
-    const parsed = Number.parseInt(portStr, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
-      throw new Error(`invalid port: ${portStr}`);
-    }
-    port = parsed;
-  }
+  // Single-host fallbacks (preserve current behaviour for the `host` / `port`
+  // surface — the wire layer prefers `hosts` when set).
+  const host =
+    hostsTuples.length > 0 && hostsTuples[0].host !== ''
+      ? hostsTuples[0].host
+      : 'localhost';
+  const port = hostsTuples.length > 0 ? hostsTuples[0].port : 5432;
 
   const user =
     queryUser !== undefined && queryUser !== ''
@@ -547,10 +655,26 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   );
 
   const options = raw.query.get('options');
-  const applicationName = raw.query.get('application_name') ?? 'neonctl-psql';
+  // Match upstream psql: default `application_name` to `'psql'` so users see
+  // the expected value in `pg_stat_activity`. The neonctl-specific identifier
+  // is still discoverable via the User-Agent the protocol layer sends.
+  const applicationName = raw.query.get('application_name') ?? 'psql';
   const replication = normalizeReplication(
     raw.query.get('replication') ?? null,
   );
+  const targetSessionAttrs = normalizeTargetSessionAttrs(
+    raw.query.get('target_session_attrs') ?? null,
+  );
+  const loadBalanceHosts = normalizeLoadBalanceHosts(
+    raw.query.get('load_balance_hosts') ?? null,
+  );
+
+  // libpq PEM file paths. Empty string is treated as "not set" so a URI
+  // like `?sslcert=` doesn't surface as an attempt to load `""` from disk.
+  const sslcert = nonEmpty(raw.query.get('sslcert'));
+  const sslkey = nonEmpty(raw.query.get('sslkey'));
+  const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
+  const sslcrl = nonEmpty(raw.query.get('sslcrl'));
 
   return {
     host,
@@ -563,7 +687,116 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     applicationName,
     options,
     ...(replication !== undefined ? { replication } : {}),
+    ...(hostsTuples.length > 1
+      ? { hosts: hostsTuples.map((t) => ({ host: t.host, port: t.port })) }
+      : {}),
+    ...(targetSessionAttrs !== undefined ? { targetSessionAttrs } : {}),
+    ...(loadBalanceHosts !== undefined ? { loadBalanceHosts } : {}),
+    ...(sslcert !== undefined ? { sslcert } : {}),
+    ...(sslkey !== undefined ? { sslkey } : {}),
+    ...(sslrootcert !== undefined ? { sslrootcert } : {}),
+    ...(sslcrl !== undefined ? { sslcrl } : {}),
   };
+};
+
+const nonEmpty = (v: string | undefined): string | undefined =>
+  v === undefined || v === '' ? undefined : v;
+
+/**
+ * Resolve the final {host, port}[] list for a URI:
+ *
+ *  1. Start from the authority. `?host=`/`?port=` query overrides take
+ *     precedence (libpq semantics).
+ *  2. If `host=h1,h2,…` is supplied, parse the comma-list. Ports come from
+ *     `port=p1,p2,…`; must match the host count or be a single value
+ *     (broadcast to all hosts).
+ *  3. If only the authority had multi-host tuples (`postgresql://h1,h2/db`),
+ *     use those.
+ *  4. Otherwise fall back to single-host.
+ *
+ * Validates every port is in 1..65535 and surfaces a clear error otherwise.
+ */
+const computeHostsTuples = (input: {
+  rawHost: string | undefined;
+  rawPort: string | undefined;
+  rawAuthorityHosts: { host: string; port?: string }[] | undefined;
+  queryHost: string | undefined;
+  queryPort: string | undefined;
+}): { host: string; port: number }[] => {
+  const { rawHost, rawPort, rawAuthorityHosts, queryHost, queryPort } = input;
+
+  // Case A: ?host=… overrides the authority host(s). Port resolution still
+  // prefers `?port=` (if supplied), but falls back to the authority port so
+  // e.g. `postgres://:12345?host=/path/to/socket` keeps `port=12345`.
+  if (queryHost !== undefined && queryHost !== '') {
+    const hosts = queryHost.split(',').map((h) => h.trim());
+    const portList =
+      queryPort !== undefined && queryPort !== ''
+        ? queryPort.split(',').map((p) => p.trim())
+        : null;
+    if (
+      portList !== null &&
+      portList.length !== 1 &&
+      portList.length !== hosts.length
+    ) {
+      throw new Error(
+        `could not match ${String(portList.length)} port numbers to ${String(hosts.length)} hosts`,
+      );
+    }
+    return hosts.map((h, idx) => {
+      let portStr: string | undefined;
+      if (portList !== null) {
+        portStr = portList.length === 1 ? portList[0] : portList[idx];
+      } else {
+        // Fall back to the authority port. Multi-host without an explicit
+        // ?port= list shares the authority port across all hosts.
+        portStr = rawPort;
+      }
+      return { host: h, port: parsePort(portStr) };
+    });
+  }
+
+  // Case B: authority carried a comma-list (`postgresql://h1,h2:5433/db`).
+  // Query-string `?port=` can still broadcast or pair with this list.
+  if (rawAuthorityHosts !== undefined && rawAuthorityHosts.length > 0) {
+    const portList =
+      queryPort !== undefined && queryPort !== ''
+        ? queryPort.split(',').map((p) => p.trim())
+        : null;
+    if (
+      portList !== null &&
+      portList.length !== 1 &&
+      portList.length !== rawAuthorityHosts.length
+    ) {
+      throw new Error(
+        `could not match ${String(portList.length)} port numbers to ${String(rawAuthorityHosts.length)} hosts`,
+      );
+    }
+    return rawAuthorityHosts.map((t, idx) => ({
+      host: t.host,
+      port: parsePort(
+        portList !== null
+          ? portList.length === 1
+            ? portList[0]
+            : portList[idx]
+          : t.port,
+      ),
+    }));
+  }
+
+  // Case C: single-host. Honour `?port=` (single value) if provided.
+  const portStr = queryPort ?? rawPort;
+  const host = rawHost !== undefined && rawHost !== '' ? rawHost : '';
+  return [{ host, port: parsePort(portStr) }];
+};
+
+const parsePort = (raw: string | undefined): number => {
+  if (raw === undefined || raw === '') return 5432;
+  const p = Number.parseInt(raw, 10);
+  if (!Number.isFinite(p) || p <= 0 || p > 65535) {
+    throw new Error(`invalid port: ${raw}`);
+  }
+  return p;
 };
 
 /**
@@ -585,7 +818,10 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
  * `service` resolution from `pg_service.conf`, `passfile` resolution.
  */
 export const parseConninfo = (input: string): Partial<ConnectOptions> => {
-  const out: Partial<ConnectOptions> = {};
+  const out: Partial<ConnectOptions> & {
+    _hostList?: string[];
+    _portList?: string[];
+  } = {};
   let i = 0;
   const n = input.length;
   while (i < n) {
@@ -634,24 +870,70 @@ export const parseConninfo = (input: string): Partial<ConnectOptions> => {
     }
     applyConninfoPair(out, key, value);
   }
+  // Materialise multi-host list. The scalar `host`/`port` already hold the
+  // first entry (so single-host callers see no surface change); we only
+  // surface `hosts` when the comma-list had ≥2 entries.
+  const hostList = out._hostList;
+  const portList = out._portList;
+  if (hostList !== undefined && hostList.length > 0) {
+    if (
+      portList !== undefined &&
+      portList.length !== 1 &&
+      portList.length !== hostList.length
+    ) {
+      throw new Error(
+        `could not match ${String(portList.length)} port numbers to ${String(hostList.length)} hosts`,
+      );
+    }
+    if (hostList.length > 1) {
+      out.hosts = hostList.map((h, idx) => ({
+        host: h,
+        port:
+          portList === undefined
+            ? (out.port ?? 5432)
+            : portList.length === 1
+              ? parsePort(portList[0])
+              : parsePort(portList[idx]),
+      }));
+    }
+  }
+  // Drop the private staging fields before returning to the caller.
+  delete out._hostList;
+  delete out._portList;
   return out;
 };
 
 const applyConninfoPair = (
-  out: Partial<ConnectOptions>,
+  out: Partial<ConnectOptions> & {
+    _hostList?: string[];
+    _portList?: string[];
+  },
   key: string,
   value: string,
 ): void => {
   switch (key) {
-    case 'host':
-      out.host = value;
-      return;
-    case 'port': {
-      const p = Number.parseInt(value, 10);
-      if (!Number.isFinite(p) || p <= 0 || p > 65535) {
-        throw new Error(`invalid port in conninfo: "${value}"`);
+    case 'host': {
+      // Multi-host: `host=h1,h2,h3`. Store the list aside; the post-pass
+      // (finalizeConninfo) materialises it into `hosts` + matches up against
+      // any `port=p1,p2,p3` list.
+      if (value.includes(',')) {
+        out._hostList = value.split(',').map((h) => h.trim());
+        out.host = out._hostList[0];
+      } else {
+        out.host = value;
+        out._hostList = undefined;
       }
-      out.port = p;
+      return;
+    }
+    case 'port': {
+      if (value.includes(',')) {
+        out._portList = value.split(',').map((p) => p.trim());
+        // First port still goes into the scalar slot for back-compat.
+        out.port = parsePort(out._portList[0]);
+      } else {
+        out.port = parsePort(value);
+        out._portList = undefined;
+      }
       return;
     }
     case 'user':
@@ -692,17 +974,34 @@ const applyConninfoPair = (
       if (rep !== undefined) out.replication = rep;
       return;
     }
+    case 'target_session_attrs': {
+      const tsa = normalizeTargetSessionAttrs(value);
+      if (tsa !== undefined) out.targetSessionAttrs = tsa;
+      return;
+    }
+    case 'load_balance_hosts': {
+      const lbh = normalizeLoadBalanceHosts(value);
+      if (lbh !== undefined) out.loadBalanceHosts = lbh;
+      return;
+    }
+    case 'sslcert':
+      if (value !== '') out.sslcert = value;
+      return;
+    case 'sslkey':
+      if (value !== '') out.sslkey = value;
+      return;
+    case 'sslrootcert':
+      if (value !== '') out.sslrootcert = value;
+      return;
+    case 'sslcrl':
+      if (value !== '') out.sslcrl = value;
+      return;
     // Recognised libpq keys that we don't model — accept silently so we
     // don't reject legitimate connection strings (matches the URI
-    // allowlist's "known but not honored" entries like hostaddr / sslcert
-    // / target_session_attrs).
+    // allowlist's "known but not honored" entries like hostaddr).
     case 'hostaddr':
     case 'passfile':
     case 'sslcompression':
-    case 'sslcert':
-    case 'sslkey':
-    case 'sslrootcert':
-    case 'sslcrl':
     case 'sslsni':
     case 'requirepeer':
     case 'ssl_min_protocol_version':
@@ -710,8 +1009,6 @@ const applyConninfoPair = (
     case 'krbsrvname':
     case 'gsslib':
     case 'service':
-    case 'target_session_attrs':
-    case 'load_balance_hosts':
     case 'fallback_application_name':
     case 'keepalives':
     case 'keepalives_idle':
@@ -769,6 +1066,48 @@ const normalizeChannelBinding = (
 };
 
 /**
+ * Accept the libpq-spec set for `target_session_attrs`. Aliases `read-write`/
+ * `primary` and `read-only`/`standby` are kept distinct because the wire
+ * layer treats the canonical four values identically — we only normalise
+ * unknown / empty inputs to `undefined` so the wire-layer default ('any')
+ * applies. Throws on unrecognised values, matching libpq behaviour.
+ */
+const normalizeTargetSessionAttrs = (
+  raw: string | null,
+): ConnectOptions['targetSessionAttrs'] | undefined => {
+  if (raw === null || raw === '') return undefined;
+  const value = raw.toLowerCase();
+  switch (value) {
+    case 'any':
+    case 'read-write':
+    case 'read-only':
+    case 'primary':
+    case 'standby':
+    case 'prefer-standby':
+      return value;
+    default:
+      throw new Error(`invalid value for "target_session_attrs": "${raw}"`);
+  }
+};
+
+/**
+ * Accept the libpq-spec set for `load_balance_hosts`:
+ *   - `disable` (default) — preserve list order
+ *   - `random`            — shuffle before iteration
+ *
+ * Unknown values throw; empty / unset returns `undefined` so the wire layer
+ * default ('disable') applies.
+ */
+const normalizeLoadBalanceHosts = (
+  raw: string | null,
+): ConnectOptions['loadBalanceHosts'] | undefined => {
+  if (raw === null || raw === '') return undefined;
+  const value = raw.toLowerCase();
+  if (value === 'disable' || value === 'random') return value;
+  throw new Error(`invalid value for "load_balance_hosts": "${raw}"`);
+};
+
+/**
  * libpq accepts a wide set of "truthy" values for `replication`:
  *   - `true` / `on` / `yes` / `1`     → physical replication (mapped to `true`)
  *   - `false` / `off` / `no` / `0`    → not a walsender (no replication mode)
@@ -792,4 +1131,405 @@ const normalizeReplication = (
     return undefined;
   }
   throw new Error(`invalid value for "replication": "${raw}"`);
+};
+
+// ---------------------------------------------------------------------------
+// Layered connection-parameter resolution.
+//
+// Vanilla psql consults several sources in priority order when filling in
+// connection parameters. Order (highest → lowest):
+//
+//   1. Explicit URI / conninfo (what the user passed on the command line)
+//   2. Argv flags (`-h`, `-p`, etc.)
+//   3. PG* env vars
+//   4. ~/.pgpass (password only; matched against host/port/db/user)
+//   5. pg_service.conf (when PGSERVICE / ?service= is set)
+//   6. libpq compiled-in defaults (localhost / 5432 / USER / database=user)
+//
+// The historical `parseConnectionUri` bakes (1) and (6) into a single
+// `ConnectOptions`, which makes layering impossible. `parseConnectionUriPartial`
+// gives the same parser surface but returns ONLY the fields the URI
+// explicitly set — leaving env / pgpass / service / defaults to fill the
+// gaps via `mergeConnectOptions`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Service name extracted from a connection URI's `?service=` query
+ * parameter, if any. Surfaced alongside `parseConnectionUriPartial` so the
+ * caller can route the lookup into `applyStartupArgs` without re-parsing
+ * the URI.
+ */
+export const parseConnectionUriService = (uri: string): string | undefined => {
+  const raw = tokenizeConnectionUri(uri);
+  const value = raw.query.get('service');
+  return value === undefined || value === '' ? undefined : value;
+};
+
+/**
+ * Parse a URI into a `Partial<ConnectOptions>` containing only the fields
+ * the URI explicitly supplied. Returned shape:
+ *
+ *   - missing fields are absent (no `undefined` placeholders)
+ *   - `host`/`port` are populated only when the URI authority or `?host=`
+ *     specified them
+ *   - `user`/`password`/`database`/`ssl`/`channelBinding`/... follow the
+ *     same rule — present iff explicitly set
+ *
+ * This is the building block for the layered merge in `applyStartupArgs`.
+ * The full-defaults variant `parseConnectionUri` remains the right choice
+ * for callers that want a complete `ConnectOptions` (e.g. the existing
+ * `-d URI` path); it's kept untouched for back-compat.
+ */
+export const parseConnectionUriPartial = (
+  uri: string,
+): Partial<ConnectOptions> => {
+  const raw = tokenizeConnectionUri(uri);
+
+  const queryUser = raw.query.get('user');
+  const queryPassword = raw.query.get('password');
+  const queryPort = raw.query.get('port');
+  const queryDbname = raw.query.get('dbname');
+  const queryHost = raw.query.get('host');
+
+  // Multi-host: same resolution as the full parser, but we treat its absence
+  // as "URI didn't say anything about hosts" rather than synthesising a
+  // localhost default.
+  const hostsTuples = computeHostsTuples({
+    rawHost: raw.host,
+    rawPort: raw.port,
+    rawAuthorityHosts: raw.hosts,
+    queryHost,
+    queryPort,
+  });
+
+  const out: Partial<ConnectOptions> = {};
+
+  if (hostsTuples.length > 0) {
+    // First tuple drives the single-host surface; the full multi-host list
+    // is included only when the URI specified more than one. An empty-host
+    // tuple (e.g. `postgres://:12345/`) means "explicit port, no host" —
+    // we record the port but leave host to the next layer.
+    if (hostsTuples[0].host !== '') out.host = hostsTuples[0].host;
+    if (hostsTuples[0].port !== 0) out.port = hostsTuples[0].port;
+    if (hostsTuples.length > 1) {
+      out.hosts = hostsTuples.map((t) => ({ host: t.host, port: t.port }));
+    }
+  }
+
+  const userExplicit =
+    queryUser !== undefined && queryUser !== ''
+      ? queryUser
+      : raw.user !== undefined && raw.user !== ''
+        ? raw.user
+        : undefined;
+  if (userExplicit !== undefined) out.user = userExplicit;
+
+  const password = queryPassword ?? raw.password;
+  if (password !== undefined) out.password = password;
+
+  const database = queryDbname ?? raw.database;
+  if (database !== undefined) out.database = database;
+
+  const sslRaw = raw.query.get('sslmode');
+  if (sslRaw !== undefined && sslRaw !== '') {
+    out.ssl = normalizeSslMode(sslRaw);
+  }
+
+  const cb = normalizeChannelBinding(raw.query.get('channel_binding') ?? null);
+  if (cb !== undefined) out.channelBinding = cb;
+
+  const options = raw.query.get('options');
+  if (options !== undefined && options !== '') out.options = options;
+
+  const appName = raw.query.get('application_name');
+  if (appName !== undefined && appName !== '') out.applicationName = appName;
+
+  const replication = normalizeReplication(
+    raw.query.get('replication') ?? null,
+  );
+  if (replication !== undefined) out.replication = replication;
+
+  const targetSessionAttrs = normalizeTargetSessionAttrs(
+    raw.query.get('target_session_attrs') ?? null,
+  );
+  if (targetSessionAttrs !== undefined) {
+    out.targetSessionAttrs = targetSessionAttrs;
+  }
+
+  const loadBalanceHosts = normalizeLoadBalanceHosts(
+    raw.query.get('load_balance_hosts') ?? null,
+  );
+  if (loadBalanceHosts !== undefined) out.loadBalanceHosts = loadBalanceHosts;
+
+  const sslcert = nonEmpty(raw.query.get('sslcert'));
+  if (sslcert !== undefined) out.sslcert = sslcert;
+  const sslkey = nonEmpty(raw.query.get('sslkey'));
+  if (sslkey !== undefined) out.sslkey = sslkey;
+  const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
+  if (sslrootcert !== undefined) out.sslrootcert = sslrootcert;
+  const sslcrl = nonEmpty(raw.query.get('sslcrl'));
+  if (sslcrl !== undefined) out.sslcrl = sslcrl;
+
+  const connectTimeoutSec = raw.query.get('connect_timeout');
+  if (connectTimeoutSec !== undefined && connectTimeoutSec !== '') {
+    const t = Number.parseInt(connectTimeoutSec, 10);
+    if (Number.isFinite(t) && t >= 0) out.connectTimeoutMs = t * 1000;
+  }
+
+  const clientEncoding = raw.query.get('client_encoding');
+  if (clientEncoding !== undefined && clientEncoding !== '') {
+    out.clientEncoding = clientEncoding;
+  }
+
+  return out;
+};
+
+// Field map for PG* env vars. Order in the table is documentation; resolution
+// only depends on whether the var is set.
+const PG_ENV_FIELD_MAP: Readonly<Record<string, keyof ConnectOptions>> = {
+  PGHOST: 'host',
+  PGPORT: 'port',
+  PGUSER: 'user',
+  PGDATABASE: 'database',
+  PGPASSWORD: 'password',
+  PGAPPNAME: 'applicationName',
+  PGOPTIONS: 'options',
+  PGCLIENTENCODING: 'clientEncoding',
+  PGSSLMODE: 'ssl',
+  PGSSLROOTCERT: 'sslrootcert',
+  PGSSLCERT: 'sslcert',
+  PGSSLKEY: 'sslkey',
+  PGCHANNELBINDING: 'channelBinding',
+};
+
+/**
+ * Resolve the PG* env vars into a `Partial<ConnectOptions>`. Only set keys
+ * end up in the result; unset / empty env vars are skipped so the caller
+ * can layer this between URI overrides and pgpass / service / libpq
+ * defaults without clobbering anything.
+ *
+ * Validation: any malformed value (e.g. `PGPORT=abc`) is silently dropped.
+ * libpq behaves the same — the connection then fails later with a clearer
+ * "could not parse" message, but the env-var lookup itself does not throw.
+ *
+ * Notes:
+ *   - `PGHOSTADDR` is intentionally NOT consulted. The neonctl-psql TCP
+ *     client resolves names via Node's DNS; we don't surface a separate
+ *     "bypass DNS" path.
+ *   - `PGCONNECT_TIMEOUT` is in seconds; we convert to milliseconds.
+ *   - `PGCHANNELBINDING` accepts disable/prefer/require.
+ *   - `PGSERVICE` is consumed by the caller (it drives the
+ *     pg_service.conf lookup) and is NOT a direct ConnectOptions field.
+ *   - `PGSERVICEFILE`, `PGSYSCONFDIR`, `PGPASSFILE` are likewise consumed
+ *     by the loaders, not surfaced here.
+ */
+export const envConnectionDefaults = (
+  env: NodeJS.ProcessEnv,
+): Partial<ConnectOptions> => {
+  const out: Partial<ConnectOptions> = {};
+  const get = (k: string): string | undefined => {
+    const v = env[k];
+    return v !== undefined && v !== '' ? v : undefined;
+  };
+
+  for (const [envName, field] of Object.entries(PG_ENV_FIELD_MAP)) {
+    const value = get(envName);
+    if (value === undefined) continue;
+    applyEnvValue(out, field, value);
+  }
+
+  const timeoutRaw = get('PGCONNECT_TIMEOUT');
+  if (timeoutRaw !== undefined) {
+    const t = Number.parseInt(timeoutRaw, 10);
+    if (Number.isFinite(t) && t >= 0) out.connectTimeoutMs = t * 1000;
+  }
+
+  return out;
+};
+
+const applyEnvValue = (
+  out: Partial<ConnectOptions>,
+  field: keyof ConnectOptions,
+  value: string,
+): void => {
+  switch (field) {
+    case 'host':
+      out.host = value;
+      return;
+    case 'port': {
+      const p = Number.parseInt(value, 10);
+      if (Number.isFinite(p) && p > 0 && p <= 65535) out.port = p;
+      return;
+    }
+    case 'user':
+      out.user = value;
+      return;
+    case 'database':
+      out.database = value;
+      return;
+    case 'password':
+      out.password = value;
+      return;
+    case 'applicationName':
+      out.applicationName = value;
+      return;
+    case 'options':
+      out.options = value;
+      return;
+    case 'clientEncoding':
+      out.clientEncoding = value;
+      return;
+    case 'ssl':
+      out.ssl = normalizeSslMode(value);
+      return;
+    case 'sslrootcert':
+      out.sslrootcert = value;
+      return;
+    case 'sslcert':
+      out.sslcert = value;
+      return;
+    case 'sslkey':
+      out.sslkey = value;
+      return;
+    case 'channelBinding': {
+      const cb = normalizeChannelBinding(value);
+      if (cb !== undefined) out.channelBinding = cb;
+      return;
+    }
+    default:
+      // Unhandled field — silently drop. Tightening this would require
+      // narrowing the field-map type; not worth the complexity.
+      return;
+  }
+};
+
+/**
+ * libpq compiled-in defaults. The lowest-priority layer in the merge chain.
+ *
+ *   - host: 'localhost'
+ *   - port: 5432
+ *   - user: $USER ?? '' (the wire layer surfaces a clear error if the user
+ *     is still empty at connect time)
+ *   - database: deferred — libpq defaults dbname to the user; we wire that
+ *     in `mergeConnectOptions` after layering so a `PGUSER` env can flow
+ *     into `database` when the user didn't specify one.
+ *   - ssl: 'prefer'
+ *   - applicationName: 'psql' — matches upstream so `pg_stat_activity` shows
+ *     the value users expect.
+ */
+export const libpqConnectionDefaults = (
+  env: NodeJS.ProcessEnv,
+): ConnectOptions => ({
+  host: 'localhost',
+  port: 5432,
+  user: env.USER ?? '',
+  database: '',
+  ssl: 'prefer',
+  applicationName: 'psql',
+});
+
+/**
+ * Translate a `pg_service.conf` entry into a `Partial<ConnectOptions>`.
+ * Unknown keys are silently dropped — the service file format admits
+ * arbitrary keys but only the libpq-spec subset maps to ConnectOptions.
+ *
+ * Numeric / enum validation mirrors `parseConninfo` so an out-of-range
+ * port or bogus sslmode in the service file fails the same way (silently
+ * dropped here, since libpq itself only warns on invalid service values).
+ */
+export const serviceEntryToConnectOptions = (
+  entry: Readonly<Record<string, string>>,
+): Partial<ConnectOptions> => {
+  const out: Partial<ConnectOptions> = {};
+  for (const [k, v] of Object.entries(entry)) {
+    const key = k.toLowerCase();
+    switch (key) {
+      case 'host':
+        if (v !== '') out.host = v;
+        break;
+      case 'port': {
+        const p = Number.parseInt(v, 10);
+        if (Number.isFinite(p) && p > 0 && p <= 65535) out.port = p;
+        break;
+      }
+      case 'user':
+        if (v !== '') out.user = v;
+        break;
+      case 'dbname':
+        if (v !== '') out.database = v;
+        break;
+      case 'password':
+        out.password = v;
+        break;
+      case 'application_name':
+        if (v !== '') out.applicationName = v;
+        break;
+      case 'sslmode':
+        if (v !== '') out.ssl = normalizeSslMode(v);
+        break;
+      case 'channel_binding': {
+        const cb = normalizeChannelBinding(v);
+        if (cb !== undefined) out.channelBinding = cb;
+        break;
+      }
+      case 'options':
+        if (v !== '') out.options = v;
+        break;
+      case 'client_encoding':
+        if (v !== '') out.clientEncoding = v;
+        break;
+      case 'sslcert':
+        if (v !== '') out.sslcert = v;
+        break;
+      case 'sslkey':
+        if (v !== '') out.sslkey = v;
+        break;
+      case 'sslrootcert':
+        if (v !== '') out.sslrootcert = v;
+        break;
+      case 'sslcrl':
+        if (v !== '') out.sslcrl = v;
+        break;
+      case 'connect_timeout': {
+        const t = Number.parseInt(v, 10);
+        if (Number.isFinite(t) && t >= 0) out.connectTimeoutMs = t * 1000;
+        break;
+      }
+      // Recognised but not mapped — service files may contain `hostaddr`,
+      // `passfile`, etc. We drop silently rather than complain.
+      default:
+        break;
+    }
+  }
+  return out;
+};
+
+/**
+ * Merge layered partial ConnectOptions into a complete ConnectOptions.
+ *
+ * Layers are listed in PRIORITY order (highest first). For each output
+ * field, the first layer that supplies a value wins. The implementation
+ * walks the layers in reverse so the spread-into semantics match.
+ *
+ * `database` has a libpq-specific fallback: if every layer omits it, the
+ * default is the resolved `user` (so `psql -U alice` connects to a
+ * database named `alice`). We apply this AFTER all layers have run.
+ */
+export const mergeConnectOptions = (
+  layers: readonly Partial<ConnectOptions>[],
+  defaults: ConnectOptions,
+): ConnectOptions => {
+  let out: ConnectOptions = { ...defaults };
+  // Apply layers from LOWEST → HIGHEST so higher-priority layers overwrite.
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const layer = layers[i];
+    out = { ...out, ...layer };
+  }
+  // libpq: database defaults to the resolved user when no layer set it.
+  // The default `database: ''` from `libpqConnectionDefaults` is the
+  // sentinel for "nothing supplied".
+  if (out.database === '') {
+    out.database = out.user;
+  }
+  return out;
 };

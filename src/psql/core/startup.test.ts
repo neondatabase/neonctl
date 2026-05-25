@@ -428,3 +428,235 @@ describe('applyStartupArgs', () => {
     expect(connect.user).toBe('alice');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Layered resolution: env vars + pgpass + pg_service.conf.
+//
+// These exercise the new `resolution` parameter to `applyStartupArgs`, which
+// activates the vanilla-psql connection-lookup chain:
+//
+//   argv > URI partial > PG* env > pgpass (password only) > service > libpq defaults
+//
+// Existing tests above use the legacy path (no `resolution`) so they remain
+// stable; the new fixtures construct everything explicitly so they don't
+// depend on the test runner's ambient environment.
+// ---------------------------------------------------------------------------
+describe('applyStartupArgs — layered resolution', () => {
+  const buildBaseSettings = (): ReturnType<typeof defaultSettings> => {
+    const v = createVarStore();
+    return defaultSettings(v);
+  };
+
+  test('PG* env vars fill in missing fields', () => {
+    const parsed = ok(parseStartupArgs([]));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: {
+        PGHOST: 'envhost',
+        PGPORT: '7777',
+        PGUSER: 'envuser',
+        PGDATABASE: 'envdb',
+        PGPASSWORD: 'envpass',
+        PGSSLMODE: 'require',
+        PGAPPNAME: 'envapp',
+      },
+    });
+    expect(connect.host).toBe('envhost');
+    expect(connect.port).toBe(7777);
+    expect(connect.user).toBe('envuser');
+    expect(connect.database).toBe('envdb');
+    expect(connect.password).toBe('envpass');
+    expect(connect.ssl).toBe('require');
+    expect(connect.applicationName).toBe('envapp');
+  });
+
+  test('argv flags override PG* env vars', () => {
+    const parsed = ok(
+      parseStartupArgs(['-h', 'argvhost', '-p', '5555', '-U', 'argvuser']),
+    );
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: {
+        PGHOST: 'envhost',
+        PGPORT: '7777',
+        PGUSER: 'envuser',
+        PGDATABASE: 'envdb',
+      },
+    });
+    expect(connect.host).toBe('argvhost');
+    expect(connect.port).toBe(5555);
+    expect(connect.user).toBe('argvuser');
+    // PGDATABASE still fills in dbname since argv didn't set it.
+    expect(connect.database).toBe('envdb');
+  });
+
+  test('URI partial overrides PG* env vars but argv still wins', () => {
+    const parsed = ok(parseStartupArgs(['-h', 'argvhost']));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      uriPartial: { host: 'urihost', port: 6543, user: 'uriuser' },
+      env: {
+        PGHOST: 'envhost',
+        PGPORT: '7777',
+        PGUSER: 'envuser',
+      },
+    });
+    expect(connect.host).toBe('argvhost'); // argv > URI > env
+    expect(connect.port).toBe(6543); // URI > env (no argv)
+    expect(connect.user).toBe('uriuser'); // URI > env (no argv)
+  });
+
+  test('falls back to libpq defaults when nothing else is supplied', () => {
+    const parsed = ok(parseStartupArgs([]));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: { USER: 'osuser' },
+    });
+    expect(connect.host).toBe('localhost');
+    expect(connect.port).toBe(5432);
+    expect(connect.user).toBe('osuser');
+    // database defaults to the resolved user when no layer supplies it.
+    expect(connect.database).toBe('osuser');
+    expect(connect.ssl).toBe('prefer');
+  });
+
+  test('pg_service.conf lookup fills in fields when serviceName is set', () => {
+    const parsed = ok(parseStartupArgs([]));
+    const settings = buildBaseSettings();
+    const services = new Map([
+      [
+        'prod',
+        {
+          host: 'svc-host',
+          port: '6543',
+          dbname: 'svcdb',
+          user: 'svcuser',
+        },
+      ],
+    ]);
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: {},
+      services,
+      serviceName: 'prod',
+    });
+    expect(connect.host).toBe('svc-host');
+    expect(connect.port).toBe(6543);
+    expect(connect.database).toBe('svcdb');
+    expect(connect.user).toBe('svcuser');
+  });
+
+  test('PGSERVICE env activates a service lookup', () => {
+    const parsed = ok(parseStartupArgs([]));
+    const settings = buildBaseSettings();
+    const services = new Map([
+      ['from-env', { host: 'envsvc-host', port: '5555' }],
+    ]);
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: { PGSERVICE: 'from-env' },
+      services,
+    });
+    expect(connect.host).toBe('envsvc-host');
+    expect(connect.port).toBe(5555);
+  });
+
+  test('env vars override service entry (env is higher priority)', () => {
+    const parsed = ok(parseStartupArgs([]));
+    const settings = buildBaseSettings();
+    const services = new Map([
+      ['svc', { host: 'svc-host', port: '6543', user: 'svc-user' }],
+    ]);
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: { PGHOST: 'env-host', PGSERVICE: 'svc' },
+      services,
+    });
+    expect(connect.host).toBe('env-host'); // env > service
+    expect(connect.port).toBe(6543); // env didn't set port → service wins
+    expect(connect.user).toBe('svc-user');
+  });
+
+  test('explicit serviceName beats $PGSERVICE', () => {
+    const parsed = ok(parseStartupArgs([]));
+    const settings = buildBaseSettings();
+    const services = new Map([
+      ['envsvc', { host: 'env-svc-host' }],
+      ['explicit', { host: 'explicit-host' }],
+    ]);
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: { PGSERVICE: 'envsvc' },
+      services,
+      serviceName: 'explicit',
+    });
+    expect(connect.host).toBe('explicit-host');
+  });
+
+  test('.pgpass supplies password only when not otherwise set', () => {
+    const parsed = ok(parseStartupArgs(['-h', 'myhost', '-U', 'alice']));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: { PGDATABASE: 'mydb' },
+      pgpassEntries: [
+        {
+          host: 'myhost',
+          port: '5432',
+          database: 'mydb',
+          user: 'alice',
+          password: 'pgpass-secret',
+        },
+      ],
+    });
+    expect(connect.password).toBe('pgpass-secret');
+  });
+
+  test('.pgpass does NOT override an env-supplied password', () => {
+    const parsed = ok(parseStartupArgs(['-h', 'myhost', '-U', 'alice']));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: { PGPASSWORD: 'env-pw', PGDATABASE: 'mydb' },
+      pgpassEntries: [
+        {
+          host: 'myhost',
+          port: '5432',
+          database: 'mydb',
+          user: 'alice',
+          password: 'pgpass-secret',
+        },
+      ],
+    });
+    expect(connect.password).toBe('env-pw');
+  });
+
+  test('.pgpass wildcards match', () => {
+    const parsed = ok(parseStartupArgs(['-h', 'random.host', '-U', 'alice']));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, undefined, {
+      env: { PGDATABASE: 'somedb' },
+      pgpassEntries: [
+        {
+          host: '*',
+          port: '*',
+          database: '*',
+          user: 'alice',
+          password: 'wildcard-pw',
+        },
+      ],
+    });
+    expect(connect.password).toBe('wildcard-pw');
+  });
+
+  test('legacy baseConnectOpts path is unaffected by resolution absence', () => {
+    // Without a resolution arg, applyStartupArgs uses the legacy "base +
+    // argv overrides" semantic. This test pins that contract.
+    const parsed = ok(parseStartupArgs(['-h', 'argv']));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, {
+      host: 'legacy',
+      port: 5432,
+      user: 'legacy-user',
+      database: 'legacy-db',
+      ssl: 'prefer',
+    });
+    expect(connect.host).toBe('argv');
+    expect(connect.user).toBe('legacy-user');
+    expect(connect.database).toBe('legacy-db');
+  });
+});

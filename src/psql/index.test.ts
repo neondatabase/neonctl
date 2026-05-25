@@ -282,6 +282,11 @@ const cases: Case[] = [
     expected: { host: 'host', applicationName: 'foo' },
   },
   {
+    name: 'application_name defaults to "psql" (matches upstream)',
+    uri: 'postgresql://host/db',
+    expected: { host: 'host', database: 'db', applicationName: 'psql' },
+  },
+  {
     name: 'options=-c synchronous_commit=off (percent-encoded)',
     uri: 'postgresql://host?options=-c%20synchronous_commit%3Doff',
     expected: { host: 'host', options: '-c synchronous_commit=off' },
@@ -323,6 +328,92 @@ describe('parseConnectionUri — upstream 001_uri.pl conformance', () => {
   it.each(cases)('$name', ({ uri, expected }) => {
     const got = parseConnectionUri(uri);
     expect(got).toMatchObject(expected);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-host authority + ?host=/?port= list. libpq 10+ accepts comma-
+// separated host[:port] tuples in the authority and comma-separated host=/
+// port= lists in the query string. Single-host callers continue to see
+// `opts.host`/`opts.port` only; multi-host populates `opts.hosts`.
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — multi-host', () => {
+  it('parses comma-separated authority tuples (mixed explicit / default ports)', () => {
+    const got = parseConnectionUri('postgresql://h1:5432,h2,h3:5434/db');
+    // Scalar host/port retain the FIRST entry so single-host callers see no
+    // surface change.
+    expect(got.host).toBe('h1');
+    expect(got.port).toBe(5432);
+    expect(got.hosts).toEqual([
+      { host: 'h1', port: 5432 },
+      { host: 'h2', port: 5432 },
+      { host: 'h3', port: 5434 },
+    ]);
+  });
+
+  it('parses ?host=h1,h2,h3 with ?port=5432,5433,5434', () => {
+    const got = parseConnectionUri(
+      'postgresql:///db?host=h1,h2,h3&port=5432,5433,5434',
+    );
+    expect(got.host).toBe('h1');
+    expect(got.port).toBe(5432);
+    expect(got.hosts).toEqual([
+      { host: 'h1', port: 5432 },
+      { host: 'h2', port: 5433 },
+      { host: 'h3', port: 5434 },
+    ]);
+  });
+
+  it('broadcasts a single ?port= to every host in ?host=h1,h2', () => {
+    const got = parseConnectionUri('postgresql:///db?host=h1,h2&port=6543');
+    expect(got.hosts).toEqual([
+      { host: 'h1', port: 6543 },
+      { host: 'h2', port: 6543 },
+    ]);
+  });
+
+  it('rejects mismatched host/port list lengths', () => {
+    expect(() =>
+      parseConnectionUri('postgresql:///db?host=h1,h2,h3&port=5432,5433'),
+    ).toThrow(/could not match 2 port numbers to 3 hosts/);
+  });
+
+  it('does not set opts.hosts for a single host (single-host call site stays unchanged)', () => {
+    const got = parseConnectionUri('postgresql://h1:5432/db');
+    expect(got.host).toBe('h1');
+    expect(got.port).toBe(5432);
+    expect(got.hosts).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// target_session_attrs + load_balance_hosts URI params.
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — target_session_attrs / load_balance_hosts', () => {
+  it('threads ?target_session_attrs=read-write into ConnectOptions', () => {
+    const got = parseConnectionUri(
+      'postgresql://h1,h2/db?target_session_attrs=read-write',
+    );
+    expect(got.targetSessionAttrs).toBe('read-write');
+  });
+
+  it('threads ?load_balance_hosts=random into ConnectOptions', () => {
+    const got = parseConnectionUri(
+      'postgresql://h1,h2/db?load_balance_hosts=random',
+    );
+    expect(got.loadBalanceHosts).toBe('random');
+  });
+
+  it('rejects unrecognised target_session_attrs value', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://h/db?target_session_attrs=bogus'),
+    ).toThrow(/invalid value for "target_session_attrs"/);
+  });
+
+  it('rejects unrecognised load_balance_hosts value', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://h/db?load_balance_hosts=roundrobin'),
+    ).toThrow(/invalid value for "load_balance_hosts"/);
   });
 });
 
@@ -477,6 +568,131 @@ describe('parseConnectionUri — libpq strict validation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Unix-domain socket URI conformance. libpq permits the socket directory to
+// appear either as the `host=` query override (libpq's documented form) or
+// percent-encoded in the authority slot (`postgresql://%2Fvar%2Flib%2Fpg/`).
+// We surface the directory in `ConnectOptions.host` and let the wire layer
+// turn it into `<dir>/.s.PGSQL.<port>` at connect time.
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — unix-domain socket conformance', () => {
+  it('postgresql://?host=/path/to/socket/dir', () => {
+    const got = parseConnectionUri('postgresql://?host=/path/to/socket/dir');
+    expect(got).toMatchObject({ host: '/path/to/socket/dir', port: 5432 });
+  });
+
+  it('postgres://otheruser@?host=/no/such/directory', () => {
+    const got = parseConnectionUri(
+      'postgres://otheruser@?host=/no/such/directory',
+    );
+    expect(got).toMatchObject({
+      user: 'otheruser',
+      host: '/no/such/directory',
+    });
+  });
+
+  it('postgres://otheruser@/?host=/no/such/directory', () => {
+    const got = parseConnectionUri(
+      'postgres://otheruser@/?host=/no/such/directory',
+    );
+    expect(got).toMatchObject({
+      user: 'otheruser',
+      host: '/no/such/directory',
+    });
+  });
+
+  it('postgres://otheruser@:12345?host=/no/such/socket/path', () => {
+    const got = parseConnectionUri(
+      'postgres://otheruser@:12345?host=/no/such/socket/path',
+    );
+    expect(got).toMatchObject({
+      user: 'otheruser',
+      host: '/no/such/socket/path',
+      port: 12345,
+    });
+  });
+
+  it('postgres://otheruser@:12345/db?host=/path/to/socket', () => {
+    const got = parseConnectionUri(
+      'postgres://otheruser@:12345/db?host=/path/to/socket',
+    );
+    expect(got).toMatchObject({
+      user: 'otheruser',
+      database: 'db',
+      host: '/path/to/socket',
+      port: 12345,
+    });
+  });
+
+  it('postgres://:12345/db?host=/path/to/socket', () => {
+    const got = parseConnectionUri('postgres://:12345/db?host=/path/to/socket');
+    expect(got).toMatchObject({
+      database: 'db',
+      host: '/path/to/socket',
+      port: 12345,
+    });
+  });
+
+  it('postgres://:12345?host=/path/to/socket', () => {
+    const got = parseConnectionUri('postgres://:12345?host=/path/to/socket');
+    expect(got).toMatchObject({
+      host: '/path/to/socket',
+      port: 12345,
+    });
+  });
+
+  it('postgres://%2Fvar%2Flib%2Fpostgresql/dbname (percent-encoded authority)', () => {
+    const got = parseConnectionUri(
+      'postgres://%2Fvar%2Flib%2Fpostgresql/dbname',
+    );
+    expect(got).toMatchObject({
+      host: '/var/lib/postgresql',
+      database: 'dbname',
+    });
+  });
+
+  // The query parser already percent-decodes values, so a literal `%2Fpath`
+  // in `?host=` should land identically to the unencoded form above.
+  it('postgresql://?host=%2Fvar%2Frun%2Fpostgresql (percent-encoded query)', () => {
+    const got = parseConnectionUri(
+      'postgresql://?host=%2Fvar%2Frun%2Fpostgresql',
+    );
+    expect(got).toMatchObject({ host: '/var/run/postgresql' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// libpq PEM file paths threaded through the URI query string.
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — TLS PEM file paths', () => {
+  it('threads sslcert / sslkey / sslrootcert / sslcrl into ConnectOptions', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslcert=/etc/pg/client.crt' +
+        '&sslkey=/etc/pg/client.key' +
+        '&sslrootcert=/etc/pg/ca.pem' +
+        '&sslcrl=/etc/pg/crl.pem',
+    );
+    expect(got).toMatchObject({
+      sslcert: '/etc/pg/client.crt',
+      sslkey: '/etc/pg/client.key',
+      sslrootcert: '/etc/pg/ca.pem',
+      sslcrl: '/etc/pg/crl.pem',
+    });
+  });
+
+  it('omits sslcert when the query parameter is empty', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslcert=');
+    expect(got).not.toHaveProperty('sslcert');
+  });
+
+  it('accepts percent-encoded paths (sslrootcert=%2Fetc%2Fpg%2Fca.pem)', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslrootcert=%2Fetc%2Fpg%2Fca.pem',
+    );
+    expect(got).toMatchObject({ sslrootcert: '/etc/pg/ca.pem' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Upstream cases we deliberately do NOT cover. Kept here so the gap is
 // documented next to the conformance corpus rather than buried in a README.
 // ---------------------------------------------------------------------------
@@ -486,21 +702,6 @@ describe('parseConnectionUri — upstream cases not supported', () => {
   // libpq-specific knob.
   it.todo('postgresql://?hostaddr=127.0.0.1 — hostaddr not modelled');
   it.todo('postgresql://example.com?hostaddr=63.1.2.4 — hostaddr not modelled');
-
-  // libpq permits unix-domain sockets via percent-encoded paths in the host
-  // slot or via `host=/path/to/socket` overrides. We're a TCP-only client.
-  it.todo('postgresql://?host=/path/to/socket/dir — unix socket');
-  it.todo('postgres://otheruser@?host=/no/such/directory — unix socket');
-  it.todo('postgres://otheruser@/?host=/no/such/directory — unix socket');
-  it.todo(
-    'postgres://otheruser@:12345?host=/no/such/socket/path — unix socket',
-  );
-  it.todo('postgres://otheruser@:12345/db?host=/path/to/socket — unix socket');
-  it.todo('postgres://:12345/db?host=/path/to/socket — unix socket');
-  it.todo('postgres://:12345?host=/path/to/socket — unix socket');
-  it.todo(
-    'postgres://%2Fvar%2Flib%2Fpostgresql/dbname — unix socket in authority',
-  );
 
   // Internal whitespace inside a query value: handled by our port validator
   // (the trimmed value is "12345 12" which fails `invalid port`), but the
@@ -547,6 +748,45 @@ describe('parseConninfo', () => {
 
   it('rejects unterminated quoted value', () => {
     expect(() => parseConninfo("user='alice")).toThrow(/unterminated/);
+  });
+
+  // Multi-host conninfo: `host=h1,h2,h3` and `port=p1,p2,p3` (or single
+  // broadcast port).
+  it('parses host=h1,h2,h3 with broadcast port', () => {
+    const got = parseConninfo('host=h1,h2,h3 port=5432');
+    expect(got.host).toBe('h1');
+    expect(got.port).toBe(5432);
+    expect(got.hosts).toEqual([
+      { host: 'h1', port: 5432 },
+      { host: 'h2', port: 5432 },
+      { host: 'h3', port: 5432 },
+    ]);
+  });
+
+  it('parses host=h1,h2 with paired port=5432,5433', () => {
+    const got = parseConninfo('host=h1,h2 port=5432,5433');
+    expect(got.hosts).toEqual([
+      { host: 'h1', port: 5432 },
+      { host: 'h2', port: 5433 },
+    ]);
+  });
+
+  it('rejects mismatched host/port list lengths', () => {
+    expect(() => parseConninfo('host=h1,h2,h3 port=5432,5433')).toThrow(
+      /could not match 2 port numbers to 3 hosts/,
+    );
+  });
+
+  it('threads target_session_attrs into ConnectOptions', () => {
+    expect(parseConninfo('target_session_attrs=read-write')).toEqual({
+      targetSessionAttrs: 'read-write',
+    });
+  });
+
+  it('threads load_balance_hosts into ConnectOptions', () => {
+    expect(parseConninfo('load_balance_hosts=random')).toEqual({
+      loadBalanceHosts: 'random',
+    });
   });
 });
 

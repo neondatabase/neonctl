@@ -44,12 +44,19 @@
 
 import type { ConnectOptions } from '../types/connection.js';
 import type { PsqlSettings } from '../types/settings.js';
+import type { PgPassEntry } from '../io/pgpass.js';
+import type { ServiceEntry } from '../io/pgservice.js';
 
 import {
+  envConnectionDefaults,
+  libpqConnectionDefaults,
   looksLikeConnectionString,
+  mergeConnectOptions,
   parseConninfo,
   parseConnectionUri,
+  serviceEntryToConnectOptions,
 } from '../index.js';
+import { lookupPgPass } from '../io/pgpass.js';
 
 import { helpVariables, slashUsage, usage } from './help.js';
 
@@ -713,10 +720,46 @@ export const parseStartupArgs = (argv: string[]): ParsedArgs | ParseError => {
 // applyStartupArgs.
 // ---------------------------------------------------------------------------
 
+/**
+ * Optional inputs to the vanilla-psql connection-lookup chain. When ANY of
+ * these are supplied, `applyStartupArgs` switches from the legacy "base +
+ * argv overrides" semantic to the full layered merge:
+ *
+ *   argv > URI partial (`uriPartial`) > env (`env`) > pgpass > service > libpq defaults
+ *
+ * Legacy callers (existing tests) pass `baseConnectOpts` only and skip
+ * `resolution`; they get the same shape as before.
+ *
+ * Notes on the loading split:
+ *   - pgpass and service files are async to load; doing it inside
+ *     `applyStartupArgs` would force the function async. Instead, callers
+ *     load them upstream and pass the parsed result in. The new flow in
+ *     `runPsql` does exactly this; tests can build fixtures cheaply.
+ *   - The `service name` decision (which entry to apply) is made here so the
+ *     caller doesn't need to know whether `?service=…` came from the URI
+ *     or `PGSERVICE` from env.
+ */
+export type ConnectResolution = {
+  /** ConnectOptions fields explicitly set by the URI/conninfo. */
+  uriPartial?: Partial<ConnectOptions>;
+  /** Process env (defaults to `process.env`). */
+  env?: NodeJS.ProcessEnv;
+  /** Parsed `.pgpass` entries (defaults to `[]`). */
+  pgpassEntries?: readonly PgPassEntry[];
+  /** Parsed `pg_service.conf` map (defaults to empty). */
+  services?: ReadonlyMap<string, ServiceEntry>;
+  /**
+   * Explicit service-name override (e.g. from `?service=` in the URI). When
+   * omitted, falls back to `$PGSERVICE`.
+   */
+  serviceName?: string;
+};
+
 export const applyStartupArgs = (
   args: ParsedArgs,
   settings: PsqlSettings,
   baseConnectOpts?: ConnectOptions,
+  resolution?: ConnectResolution,
 ): { connect: ConnectOptions; preActions: readonly StartupAction[] } => {
   // -------- 1) Variable assignments. -------------------------------------
   for (const v of args.variables) {
@@ -815,27 +858,103 @@ export const applyStartupArgs = (
   if (args.positional[0] && !dbname) dbname = args.positional[0];
   if (args.positional[1] && !username) username = args.positional[1];
 
-  const base: ConnectOptions = baseConnectOpts ?? {
-    host: 'localhost',
-    port: 5432,
-    user: '',
-    database: '',
-    ssl: 'prefer',
-  };
+  // The argv flag layer mirrors the highest-priority CLI inputs (`-h`/`-p`
+  // / positional DBNAME / etc). Only populated entries end up in the layer
+  // so they don't accidentally clobber URI/env values.
+  const argvLayer: Partial<ConnectOptions> = {};
+  if (args.host !== undefined) argvLayer.host = args.host;
+  if (args.port !== undefined) argvLayer.port = args.port;
+  if (username !== undefined) argvLayer.user = username;
+  if (dbname !== undefined) argvLayer.database = dbname;
+  if (args.password !== undefined) argvLayer.password = args.password;
+  if (args.replication !== undefined) argvLayer.replication = args.replication;
 
-  const connect: ConnectOptions = {
-    ...base,
-    ...(args.host !== undefined ? { host: args.host } : {}),
-    ...(args.port !== undefined ? { port: args.port } : {}),
-    ...(username !== undefined ? { user: username } : {}),
-    ...(dbname !== undefined ? { database: dbname } : {}),
-    ...(args.password !== undefined ? { password: args.password } : {}),
-    ...(args.replication !== undefined
-      ? { replication: args.replication }
-      : {}),
-  };
+  // Two modes:
+  //  - LEGACY: no `resolution` provided → behave exactly like before, with
+  //    `baseConnectOpts` supplying every default and argv overriding it.
+  //  - LAYERED: `resolution` provided → run the full vanilla-psql chain.
+  let connect: ConnectOptions;
+  if (resolution === undefined) {
+    const base: ConnectOptions = baseConnectOpts ?? {
+      host: 'localhost',
+      port: 5432,
+      user: '',
+      database: '',
+      ssl: 'prefer',
+    };
+    connect = { ...base, ...argvLayer };
+  } else {
+    connect = resolveLayeredConnect(argvLayer, resolution, baseConnectOpts);
+  }
 
   return { connect, preActions: args.actions };
+};
+
+/**
+ * Run the layered connection-parameter merge.
+ *
+ *   argv > URI partial > PG* env > .pgpass (password only) > service > libpq defaults
+ *
+ * `baseConnectOpts` (the legacy `ConnectOptions` argument) is treated as a
+ * pre-baked URI partial when the resolution path is used WITHOUT an explicit
+ * `uriPartial`. This keeps the door open for callers that still want to
+ * pass a fully-defaulted URI shape from `parseConnectionUri`.
+ */
+const resolveLayeredConnect = (
+  argvLayer: Partial<ConnectOptions>,
+  resolution: ConnectResolution,
+  legacyBase: ConnectOptions | undefined,
+): ConnectOptions => {
+  const env = resolution.env ?? {};
+  const uriPartial =
+    resolution.uriPartial ??
+    (legacyBase !== undefined ? (legacyBase as Partial<ConnectOptions>) : {});
+
+  // Pick the service entry: explicit `serviceName` argument first, else fall
+  // back to `$PGSERVICE`. The URI parser threads `?service=` through to its
+  // caller via this same field, so callers should populate `serviceName`
+  // from there before invoking us.
+  const serviceName = resolution.serviceName ?? env.PGSERVICE;
+  const serviceEntry =
+    serviceName !== undefined && serviceName !== ''
+      ? resolution.services?.get(serviceName)
+      : undefined;
+  const serviceLayer: Partial<ConnectOptions> =
+    serviceEntry !== undefined
+      ? serviceEntryToConnectOptions(serviceEntry)
+      : {};
+
+  // Build the layer stack (highest priority first).
+  const envLayer = envConnectionDefaults(env);
+  const defaults = libpqConnectionDefaults(env);
+  const layers: Partial<ConnectOptions>[] = [
+    argvLayer,
+    uriPartial,
+    envLayer,
+    serviceLayer,
+  ];
+
+  // First-pass merge (without pgpass) so we know what host/port/db/user
+  // ended up as. pgpass is a password-only layer that depends on the
+  // resolved target.
+  let merged = mergeConnectOptions(layers, defaults);
+
+  if (merged.password === undefined) {
+    const pgpassPwd = lookupPgPass(resolution.pgpassEntries ?? [], {
+      host: merged.host,
+      port: merged.port,
+      database: merged.database !== '' ? merged.database : merged.user,
+      user: merged.user,
+    });
+    if (pgpassPwd !== undefined) {
+      // Re-merge with pgpass slotted in just above libpq defaults so any
+      // explicit `password=` in env / service still wins.
+      const pgpassLayer: Partial<ConnectOptions> = { password: pgpassPwd };
+      merged = mergeConnectOptions([...layers, pgpassLayer], defaults);
+    }
+  }
+
+  return merged;
 };
 
 // ---------------------------------------------------------------------------
