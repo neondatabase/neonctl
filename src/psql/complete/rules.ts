@@ -16,7 +16,8 @@
  *   - Backslash command name completion: `\` → list of commands.
  *   - Backslash arg completion for the high-traffic commands: `\c[onnect]`,
  *     `\dt`/`\d`/`\dv`/`\dm`/`\di`/`\ds`, `\df`, `\dn`, `\du`/`\dg`,
- *     `\dx`, `\dL`, `\dT`, `\encoding`, `\pset`, `\set`.
+ *     `\dx`, `\dL`, `\dT`, `\do` (operators), `\dC` (casts), `\encoding`,
+ *     `\pset`, `\set`.
  *   - Top-level SQL keyword set (SELECT/INSERT/UPDATE/DELETE/etc).
  *   - Mid-statement object completion in the most common contexts:
  *       FROM            → tables/views/matviews/foreign tables.
@@ -24,8 +25,20 @@
  *       JOIN            → tables/views/matviews.
  *       UPDATE          → tables.
  *       DELETE FROM     → tables.
- *       ALTER TABLE     → tables.
- *       ALTER VIEW      → views.
+ *       ALTER TABLE     → tables, then sub-action (ADD/DROP/…),
+ *                         then sub-action continuation (COLUMN/CONSTRAINT/…).
+ *       ALTER VIEW      → views + sub-actions.
+ *       ALTER MATERIALIZED VIEW → mat-views + sub-actions.
+ *       ALTER INDEX     → indexes + sub-actions.
+ *       ALTER SEQUENCE  → sequences + sub-actions.
+ *       ALTER FUNCTION / PROCEDURE / ROUTINE → functions + sub-actions.
+ *       ALTER TYPE      → types + sub-actions.
+ *       ALTER ROLE/USER → roles + sub-actions.
+ *       ALTER DATABASE  → databases + sub-actions.
+ *       ALTER SCHEMA    → schemas + sub-actions.
+ *       ALTER EXTENSION → extensions + sub-actions.
+ *       ALTER POLICY    → ON <table>, rename/owner.
+ *       ALTER PUBLICATION / SUBSCRIPTION → sub-actions.
  *       DROP TABLE      → tables.
  *       DROP VIEW       → views.
  *       DROP INDEX      → indexes.
@@ -37,28 +50,48 @@
  *       DROP ROLE / USER → roles.
  *       DROP DATABASE   → databases.
  *       DROP FUNCTION   → functions.
+ *       CREATE INDEX    → CONCURRENTLY / IF NOT EXISTS / ON / USING (access methods).
  *       GRANT / REVOKE … ON … → tables.
  *       TRUNCATE [TABLE] → tables.
  *       LOCK TABLE      → tables.
  *       COPY            → tables.
  *       ANALYZE / VACUUM → tables.
  *       REINDEX         → indexes/tables/databases (limited).
+ *       SET <guc>       → list of GUC names from pg_settings.
  *       SET ROLE        → roles.
  *       SET SCHEMA      → schemas.
+ *       SHOW <guc>      → list of GUC names from pg_settings.
+ *       RESET <guc>     → list of GUC names from pg_settings.
  *
+ *   - Window-function clauses: `OVER (` → PARTITION BY / ORDER BY / RANGE /
+ *     ROWS / GROUPS.
+ *   - Generic post-FROM/JOIN tail keywords: JOIN, WHERE, GROUP BY, ORDER BY,
+ *     LIMIT, OFFSET, UNION, INTERSECT, EXCEPT, etc.
+ *   - WHERE-expression continuations: AND / OR / IS / IN / NOT / BETWEEN.
  *   - `\set`/`\unset`: completion of psql variable names.
  *   - Variable expansion `:NAME` completion (inside any line).
  *
- * What's intentionally stubbed:
+ * Upstream coverage notes (psql `tab-complete.in.c`):
+ *   - We ported the ALTER-OBJECT arms around lines 2050-2700 (sub-actions
+ *     for TABLE/VIEW/MV/INDEX/SEQUENCE/FUNCTION/TYPE/ROLE/DB/SCHEMA/
+ *     EXTENSION/POLICY/PUBLICATION/SUBSCRIPTION) but elided the deep
+ *     option-value continuations (e.g. ALTER TABLE … ADD CONSTRAINT …
+ *     CHECK (…)) and partition-bound clauses.
+ *   - We ported the post-FROM / JOIN tail-keyword set from lines ~4500-4700.
+ *   - We ported the SET/SHOW/RESET GUC lookup from lines ~5500-5700, using
+ *     a live pg_settings query rather than a static list.
+ *   - We ported the CREATE INDEX block at ~3000-3100.
+ *   - Skipped: ALTER-system fine-grained options, COMMENT ON full grammar,
+ *     CREATE STATISTICS, CREATE EVENT TRIGGER bodies, FDW/USER MAPPING
+ *     argument grammar, and most GRANT/REVOKE class continuations beyond
+ *     the table object form.
  *
- *   - Most ALTER … sub-keywords (ADD COLUMN, RENAME TO, …). We surface a
- *     small set for ALTER TABLE/VIEW only.
- *   - CREATE INDEX … ON … USING …, partition-key syntax, generated columns.
- *   - Window-function clauses, GROUPING SETS, etc.
- *   - GUC option name completion for `SET <guc>` (would need a static GUC
- *     list to be useful; we leave it to the user).
+ * What's intentionally still stubbed:
+ *
  *   - psql `\h` SQL help index — exists in psql proper, would need the
  *     help index data.
+ *   - Column-name completion after `SELECT … FROM t WHERE` (we don't carry
+ *     a parsed alias→relation map; upstream parses the FROM clause).
  *
  * The shape mirrors the C source closely enough that adding new rules is
  * mechanical: drop a new `if (TailMatches(...))` arm in the right region.
@@ -69,16 +102,23 @@ import type { PsqlSettings } from '../types/settings.js';
 
 import { HeadMatches, MatchAny, TailMatches } from './matcher.js';
 import {
+  Query_for_list_of_casts,
   Query_for_list_of_databases,
+  Query_for_list_of_datatypes,
   Query_for_list_of_extensions,
   Query_for_list_of_functions,
+  Query_for_list_of_index_access_methods,
   Query_for_list_of_indexes,
   Query_for_list_of_languages,
   Query_for_list_of_matviews,
+  Query_for_list_of_operators,
+  Query_for_list_of_publications,
   Query_for_list_of_relations_in_schema,
   Query_for_list_of_roles,
   Query_for_list_of_schemas,
   Query_for_list_of_sequences,
+  Query_for_list_of_set_vars,
+  Query_for_list_of_subscriptions,
   Query_for_list_of_tables,
   Query_for_list_of_tables_views,
   Query_for_list_of_tablespaces,
@@ -411,7 +451,7 @@ export const ALTER_OBJECTS: readonly string[] = [
   'VIEW',
 ];
 
-/** Few common sub-actions for ALTER TABLE. */
+/** Sub-actions for ALTER TABLE. */
 export const ALTER_TABLE_ACTIONS: readonly string[] = [
   'ADD',
   'ALTER',
@@ -423,11 +463,334 @@ export const ALTER_TABLE_ACTIONS: readonly string[] = [
   'ENABLE',
   'INHERIT',
   'NO INHERIT',
+  'OF',
+  'NOT OF',
+  'OWNER TO',
+  'RENAME',
+  'REPLICA IDENTITY',
+  'RESET',
+  'SET',
+  'VALIDATE CONSTRAINT',
+];
+
+/** Continuation after `ALTER TABLE x ADD`. */
+export const ALTER_TABLE_ADD: readonly string[] = [
+  'COLUMN',
+  'CONSTRAINT',
+  'CHECK',
+  'FOREIGN KEY',
+  'PRIMARY KEY',
+  'UNIQUE',
+  'EXCLUDE',
+];
+
+/** Continuation after `ALTER TABLE x ALTER [COLUMN] y`. */
+export const ALTER_TABLE_ALTER_COLUMN: readonly string[] = [
+  'ADD GENERATED',
+  'DROP DEFAULT',
+  'DROP EXPRESSION',
+  'DROP IDENTITY',
+  'DROP NOT NULL',
+  'RESET',
+  'RESTART',
+  'SET',
+  'SET DATA TYPE',
+  'SET DEFAULT',
+  'SET EXPRESSION',
+  'SET GENERATED',
+  'SET NOT NULL',
+  'SET STATISTICS',
+  'SET STORAGE',
+  'TYPE',
+];
+
+/** Continuation after `ALTER TABLE x DROP`. */
+export const ALTER_TABLE_DROP: readonly string[] = [
+  'COLUMN',
+  'CONSTRAINT',
+  'IF EXISTS',
+];
+
+/** Continuation after `ALTER TABLE x RENAME`. */
+export const ALTER_TABLE_RENAME: readonly string[] = [
+  'COLUMN',
+  'CONSTRAINT',
+  'TO',
+];
+
+/** Continuation after `ALTER TABLE x SET`. */
+export const ALTER_TABLE_SET: readonly string[] = [
+  '(',
+  'LOGGED',
+  'SCHEMA',
+  'TABLESPACE',
+  'UNLOGGED',
+  'WITHOUT CLUSTER',
+  'WITHOUT OIDS',
+];
+
+/** Continuation after `ALTER TABLE x ENABLE`. */
+export const ALTER_TABLE_ENABLE: readonly string[] = [
+  'ALWAYS',
+  'REPLICA',
+  'ROW LEVEL SECURITY',
+  'RULE',
+  'TRIGGER',
+];
+
+/** Continuation after `ALTER TABLE x DISABLE`. */
+export const ALTER_TABLE_DISABLE: readonly string[] = [
+  'ROW LEVEL SECURITY',
+  'RULE',
+  'TRIGGER',
+];
+
+/** Continuation after `ALTER TABLE x REPLICA IDENTITY`. */
+export const ALTER_TABLE_REPLICA_IDENTITY: readonly string[] = [
+  'DEFAULT',
+  'FULL',
+  'NOTHING',
+  'USING INDEX',
+];
+
+/** Sub-actions for ALTER VIEW. */
+export const ALTER_VIEW_ACTIONS: readonly string[] = [
+  'ALTER',
   'OWNER TO',
   'RENAME',
   'RESET',
   'SET',
-  'VALIDATE CONSTRAINT',
+];
+
+/** Sub-actions for ALTER MATERIALIZED VIEW. */
+export const ALTER_MATVIEW_ACTIONS: readonly string[] = [
+  'ALTER',
+  'CLUSTER ON',
+  'DEPENDS ON EXTENSION',
+  'NO DEPENDS ON EXTENSION',
+  'OWNER TO',
+  'RENAME',
+  'RESET',
+  'SET',
+];
+
+/** Sub-actions for ALTER INDEX. */
+export const ALTER_INDEX_ACTIONS: readonly string[] = [
+  'ALTER COLUMN',
+  'ATTACH PARTITION',
+  'DEPENDS ON EXTENSION',
+  'NO DEPENDS ON EXTENSION',
+  'OWNER TO',
+  'RENAME',
+  'RESET',
+  'SET',
+];
+
+/** Sub-actions for ALTER SEQUENCE. */
+export const ALTER_SEQUENCE_ACTIONS: readonly string[] = [
+  'AS',
+  'CACHE',
+  'CYCLE',
+  'INCREMENT BY',
+  'MAXVALUE',
+  'MINVALUE',
+  'NO CYCLE',
+  'NO MAXVALUE',
+  'NO MINVALUE',
+  'OWNED BY',
+  'OWNER TO',
+  'RENAME TO',
+  'RESTART',
+  'SET SCHEMA',
+  'START WITH',
+];
+
+/** Sub-actions for ALTER FUNCTION / PROCEDURE / ROUTINE. */
+export const ALTER_FUNCTION_ACTIONS: readonly string[] = [
+  'CALLED ON NULL INPUT',
+  'COST',
+  'DEPENDS ON EXTENSION',
+  'IMMUTABLE',
+  'LEAKPROOF',
+  'NO DEPENDS ON EXTENSION',
+  'NOT LEAKPROOF',
+  'OWNER TO',
+  'PARALLEL',
+  'RENAME TO',
+  'RESET',
+  'RETURNS NULL ON NULL INPUT',
+  'ROWS',
+  'SECURITY DEFINER',
+  'SECURITY INVOKER',
+  'SET',
+  'SET SCHEMA',
+  'STABLE',
+  'STRICT',
+  'SUPPORT',
+  'VOLATILE',
+];
+
+/** Sub-actions for ALTER TYPE. */
+export const ALTER_TYPE_ACTIONS: readonly string[] = [
+  'ADD ATTRIBUTE',
+  'ADD VALUE',
+  'ALTER ATTRIBUTE',
+  'DROP ATTRIBUTE',
+  'OWNER TO',
+  'RENAME',
+  'RENAME ATTRIBUTE',
+  'RENAME VALUE',
+  'SET SCHEMA',
+  'SET',
+];
+
+/** Sub-actions for ALTER ROLE / USER. */
+export const ALTER_ROLE_ACTIONS: readonly string[] = [
+  'BYPASSRLS',
+  'CONNECTION LIMIT',
+  'CREATEDB',
+  'CREATEROLE',
+  'ENCRYPTED PASSWORD',
+  'IN DATABASE',
+  'INHERIT',
+  'LOGIN',
+  'NOBYPASSRLS',
+  'NOCREATEDB',
+  'NOCREATEROLE',
+  'NOINHERIT',
+  'NOLOGIN',
+  'NOREPLICATION',
+  'NOSUPERUSER',
+  'PASSWORD',
+  'RENAME TO',
+  'REPLICATION',
+  'RESET',
+  'SET',
+  'SUPERUSER',
+  'VALID UNTIL',
+  'WITH',
+];
+
+/** Sub-actions for ALTER DATABASE. */
+export const ALTER_DATABASE_ACTIONS: readonly string[] = [
+  'ALLOW_CONNECTIONS',
+  'CONNECTION LIMIT',
+  'IS_TEMPLATE',
+  'OWNER TO',
+  'REFRESH COLLATION VERSION',
+  'RENAME TO',
+  'RESET',
+  'SET',
+  'SET TABLESPACE',
+  'WITH',
+];
+
+/** Sub-actions for ALTER SCHEMA. */
+export const ALTER_SCHEMA_ACTIONS: readonly string[] = [
+  'OWNER TO',
+  'RENAME TO',
+];
+
+/** Sub-actions for ALTER EXTENSION. */
+export const ALTER_EXTENSION_ACTIONS: readonly string[] = [
+  'ADD',
+  'DROP',
+  'SET SCHEMA',
+  'UPDATE',
+];
+
+/** Sub-actions for ALTER POLICY. */
+export const ALTER_POLICY_ACTIONS: readonly string[] = ['ON', 'RENAME TO'];
+
+/** Sub-actions for ALTER PUBLICATION. */
+export const ALTER_PUBLICATION_ACTIONS: readonly string[] = [
+  'ADD',
+  'DROP',
+  'OWNER TO',
+  'RENAME TO',
+  'SET',
+];
+
+/** Sub-actions for ALTER SUBSCRIPTION. */
+export const ALTER_SUBSCRIPTION_ACTIONS: readonly string[] = [
+  'ADD PUBLICATION',
+  'CONNECTION',
+  'DISABLE',
+  'DROP PUBLICATION',
+  'ENABLE',
+  'OWNER TO',
+  'REFRESH PUBLICATION',
+  'RENAME TO',
+  'SET',
+  'SET PUBLICATION',
+  'SKIP',
+];
+
+/** CREATE INDEX top-level options. */
+export const CREATE_INDEX_OPTIONS: readonly string[] = [
+  'CONCURRENTLY',
+  'IF NOT EXISTS',
+  'ON',
+  'UNIQUE',
+];
+
+/** Window frame clauses after `OVER (`. */
+export const WINDOW_FRAME_KEYWORDS: readonly string[] = [
+  'GROUPS',
+  'ORDER BY',
+  'PARTITION BY',
+  'RANGE',
+  'ROWS',
+];
+
+/** Tail keywords that follow a `FROM <table>` clause in a query. */
+export const POST_FROM_KEYWORDS: readonly string[] = [
+  'AS',
+  'CROSS JOIN',
+  'EXCEPT',
+  'FETCH',
+  'FOR',
+  'FULL JOIN',
+  'FULL OUTER JOIN',
+  'GROUP BY',
+  'HAVING',
+  'INNER JOIN',
+  'INTERSECT',
+  'JOIN',
+  'LATERAL',
+  'LEFT JOIN',
+  'LEFT OUTER JOIN',
+  'LIMIT',
+  'NATURAL JOIN',
+  'OFFSET',
+  'ON',
+  'ORDER BY',
+  'RIGHT JOIN',
+  'RIGHT OUTER JOIN',
+  'TABLESAMPLE',
+  'UNION',
+  'USING',
+  'WHERE',
+  'WINDOW',
+];
+
+/** Continuations within a WHERE expression. */
+export const WHERE_CONTINUATIONS: readonly string[] = [
+  'AND',
+  'BETWEEN',
+  'IN',
+  'IS',
+  'LIKE',
+  'NOT',
+  'OR',
+];
+
+/** Boolean-style values used with `\set` for AUTOCOMMIT etc. (extends ON_OFF). */
+export const DATESTYLE_VALUES: readonly string[] = [
+  'GERMAN',
+  'ISO',
+  'POSTGRES',
+  'SQL',
 ];
 
 /** GRANT / REVOKE privileges. */
@@ -707,6 +1070,37 @@ const backslashArgRules = async (
     return { candidates: [] };
   }
 
+  // \do → operators.
+  if (
+    cmd === '\\do' ||
+    cmd === '\\do+' ||
+    cmd === '\\doS' ||
+    cmd === '\\doS+'
+  ) {
+    if (prevWords.length === 1 && conn) {
+      const rows = await runCatalogQuery(
+        conn,
+        Query_for_list_of_operators,
+        currentWord,
+      );
+      return { candidates: rows };
+    }
+    return { candidates: [] };
+  }
+
+  // \dC → casts (free-form pattern of "src AS tgt").
+  if (cmd === '\\dC' || cmd === '\\dC+') {
+    if (prevWords.length === 1 && conn) {
+      const rows = await runCatalogQuery(
+        conn,
+        Query_for_list_of_casts,
+        currentWord,
+      );
+      return { candidates: rows };
+    }
+    return { candidates: [] };
+  }
+
   // \dt / \dtv / \d / \dv / \dm / \di / \ds → relations of various kinds.
   if (
     cmd === '\\dt' ||
@@ -909,34 +1303,223 @@ const sqlRules = async (
   if (TailMatches(prevWords, ['JOIN'])) {
     return completeTables(Query_for_list_of_tables_views);
   }
-  // After JOIN x, suggest ON. Cheap rule.
+  // After JOIN x, suggest ON or USING.
   if (TailMatches(prevWords, ['JOIN', MatchAny])) {
     return {
       candidates: filterAndCase(['ON', 'USING'], currentWord, ctx.settings),
     };
   }
 
-  // ALTER TABLE — table name.
-  if (TailMatches(prevWords, ['ALTER', 'TABLE'])) return completeTables();
-  // ALTER TABLE x — sub-actions.
+  // After `FROM table_name <TAB>` (or `FROM table AS alias <TAB>`) — offer
+  // the post-FROM tail keywords. Only fire when the statement starts with
+  // SELECT/INSERT/UPDATE/DELETE (i.e. a SELECT-list-friendly context), so
+  // we don't trample more specific rules like `ALTER TABLE x` or
+  // `INSERT INTO x` which look "FROM-like" structurally.
+  const inSelectContext =
+    HeadMatches(prevWords, ['SELECT']) ||
+    HeadMatches(prevWords, ['INSERT']) ||
+    HeadMatches(prevWords, ['UPDATE']) ||
+    HeadMatches(prevWords, ['DELETE']) ||
+    HeadMatches(prevWords, ['WITH']) ||
+    HeadMatches(prevWords, ['EXPLAIN']);
+  if (
+    inSelectContext &&
+    (TailMatches(prevWords, ['FROM', MatchAny]) ||
+      TailMatches(prevWords, ['FROM', MatchAny, MatchAny]))
+  ) {
+    // `FROM x` or `FROM x alias` → post-FROM continuations.
+    return {
+      candidates: filterAndCase(POST_FROM_KEYWORDS, currentWord, ctx.settings),
+    };
+  }
+
+  // Window-function frame clause: `OVER (` then `<TAB>`. The tokenizer
+  // emits the `(` as its own token, so prevWords ends with '('.
+  if (TailMatches(prevWords, ['OVER', '('])) {
+    return {
+      candidates: filterAndCase(
+        WINDOW_FRAME_KEYWORDS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  // `OVER <name>` (named window reference) is free-form; no completion.
+
+  // After a WHERE clause has been started (any `WHERE … <expr> <TAB>`),
+  // suggest boolean continuations. We trigger on the simple case
+  // `WHERE <ident>` and `WHERE … AND/OR <ident>`.
+  if (
+    inSelectContext &&
+    TailMatches(prevWords, ['WHERE', MatchAny]) &&
+    !TailMatches(prevWords, ['WHERE'])
+  ) {
+    return {
+      candidates: filterAndCase(WHERE_CONTINUATIONS, currentWord, ctx.settings),
+    };
+  }
+
+  // ---- ALTER TABLE block ----
+  // Deep ALTER TABLE sub-action continuations must be checked BEFORE the
+  // 3-token fallback `ALTER TABLE x` (which lists generic sub-actions).
+  // The deeper rules use HeadMatches so they survive an arbitrary trailing
+  // option list like `ALTER TABLE foo ADD CONSTRAINT bar CHECK (...)`.
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    TailMatches(prevWords, ['ADD'])
+  ) {
+    return {
+      candidates: filterAndCase(ALTER_TABLE_ADD, currentWord, ctx.settings),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    TailMatches(prevWords, ['DROP'])
+  ) {
+    return {
+      candidates: filterAndCase(ALTER_TABLE_DROP, currentWord, ctx.settings),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    TailMatches(prevWords, ['RENAME'])
+  ) {
+    return {
+      candidates: filterAndCase(ALTER_TABLE_RENAME, currentWord, ctx.settings),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    (TailMatches(prevWords, ['ALTER']) ||
+      TailMatches(prevWords, ['ALTER', 'COLUMN', MatchAny]))
+  ) {
+    return {
+      candidates: filterAndCase(
+        ALTER_TABLE_ALTER_COLUMN,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    TailMatches(prevWords, ['SET'])
+  ) {
+    return {
+      candidates: filterAndCase(ALTER_TABLE_SET, currentWord, ctx.settings),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    TailMatches(prevWords, ['ENABLE'])
+  ) {
+    return {
+      candidates: filterAndCase(ALTER_TABLE_ENABLE, currentWord, ctx.settings),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    TailMatches(prevWords, ['DISABLE'])
+  ) {
+    return {
+      candidates: filterAndCase(ALTER_TABLE_DISABLE, currentWord, ctx.settings),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    TailMatches(prevWords, ['REPLICA', 'IDENTITY'])
+  ) {
+    return {
+      candidates: filterAndCase(
+        ALTER_TABLE_REPLICA_IDENTITY,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  // ALTER TABLE x — sub-actions (must come AFTER the deep continuations above).
   if (TailMatches(prevWords, ['ALTER', 'TABLE', MatchAny])) {
     return {
       candidates: filterAndCase(ALTER_TABLE_ACTIONS, currentWord, ctx.settings),
     };
   }
+  // ALTER TABLE — table name.
+  if (TailMatches(prevWords, ['ALTER', 'TABLE'])) return completeTables();
 
-  // ALTER VIEW — view names.
+  // ---- ALTER VIEW / MATERIALIZED VIEW ----
+  if (TailMatches(prevWords, ['ALTER', 'VIEW', MatchAny])) {
+    return {
+      candidates: filterAndCase(ALTER_VIEW_ACTIONS, currentWord, ctx.settings),
+    };
+  }
   if (TailMatches(prevWords, ['ALTER', 'VIEW'])) {
     return completeTables(Query_for_list_of_views);
+  }
+  if (TailMatches(prevWords, ['ALTER', 'MATERIALIZED', 'VIEW', MatchAny])) {
+    return {
+      candidates: filterAndCase(
+        ALTER_MATVIEW_ACTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
   }
   if (TailMatches(prevWords, ['ALTER', 'MATERIALIZED', 'VIEW'])) {
     return completeTables(Query_for_list_of_matviews);
   }
+
+  // ---- ALTER INDEX ----
+  if (TailMatches(prevWords, ['ALTER', 'INDEX', MatchAny])) {
+    return {
+      candidates: filterAndCase(ALTER_INDEX_ACTIONS, currentWord, ctx.settings),
+    };
+  }
   if (TailMatches(prevWords, ['ALTER', 'INDEX'])) {
     return completeTables(Query_for_list_of_indexes);
   }
+
+  // ---- ALTER SEQUENCE ----
+  if (TailMatches(prevWords, ['ALTER', 'SEQUENCE', MatchAny])) {
+    return {
+      candidates: filterAndCase(
+        ALTER_SEQUENCE_ACTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
   if (TailMatches(prevWords, ['ALTER', 'SEQUENCE'])) {
     return completeTables(Query_for_list_of_sequences);
+  }
+
+  // ---- ALTER FUNCTION / PROCEDURE / ROUTINE ----
+  if (
+    TailMatches(prevWords, ['ALTER', 'FUNCTION|PROCEDURE|ROUTINE', MatchAny])
+  ) {
+    return {
+      candidates: filterAndCase(
+        ALTER_FUNCTION_ACTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  if (TailMatches(prevWords, ['ALTER', 'FUNCTION|PROCEDURE|ROUTINE'])) {
+    if (!conn) return { candidates: [] };
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_functions,
+        currentWord,
+      ),
+    };
+  }
+
+  // ---- ALTER TYPE ----
+  if (TailMatches(prevWords, ['ALTER', 'TYPE', MatchAny])) {
+    return {
+      candidates: filterAndCase(ALTER_TYPE_ACTIONS, currentWord, ctx.settings),
+    };
   }
   if (TailMatches(prevWords, ['ALTER', 'TYPE'])) {
     if (!conn) return { candidates: [] };
@@ -948,24 +1531,11 @@ const sqlRules = async (
       ),
     };
   }
-  if (TailMatches(prevWords, ['ALTER', 'EXTENSION'])) {
-    if (!conn) return { candidates: [] };
+
+  // ---- ALTER ROLE / USER / GROUP ----
+  if (TailMatches(prevWords, ['ALTER', 'ROLE|USER|GROUP', MatchAny])) {
     return {
-      candidates: await runCatalogQuery(
-        conn,
-        Query_for_list_of_extensions,
-        currentWord,
-      ),
-    };
-  }
-  if (TailMatches(prevWords, ['ALTER', 'SCHEMA'])) {
-    if (!conn) return { candidates: [] };
-    return {
-      candidates: await runCatalogQuery(
-        conn,
-        Query_for_list_of_schemas,
-        currentWord,
-      ),
+      candidates: filterAndCase(ALTER_ROLE_ACTIONS, currentWord, ctx.settings),
     };
   }
   if (TailMatches(prevWords, ['ALTER', 'ROLE|USER|GROUP'])) {
@@ -975,6 +1545,17 @@ const sqlRules = async (
         conn,
         Query_for_list_of_roles,
         currentWord,
+      ),
+    };
+  }
+
+  // ---- ALTER DATABASE ----
+  if (TailMatches(prevWords, ['ALTER', 'DATABASE', MatchAny])) {
+    return {
+      candidates: filterAndCase(
+        ALTER_DATABASE_ACTIONS,
+        currentWord,
+        ctx.settings,
       ),
     };
   }
@@ -988,6 +1569,112 @@ const sqlRules = async (
       ),
     };
   }
+
+  // ---- ALTER SCHEMA ----
+  if (TailMatches(prevWords, ['ALTER', 'SCHEMA', MatchAny])) {
+    return {
+      candidates: filterAndCase(
+        ALTER_SCHEMA_ACTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  if (TailMatches(prevWords, ['ALTER', 'SCHEMA'])) {
+    if (!conn) return { candidates: [] };
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_schemas,
+        currentWord,
+      ),
+    };
+  }
+
+  // ---- ALTER EXTENSION ----
+  if (TailMatches(prevWords, ['ALTER', 'EXTENSION', MatchAny])) {
+    return {
+      candidates: filterAndCase(
+        ALTER_EXTENSION_ACTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  if (TailMatches(prevWords, ['ALTER', 'EXTENSION'])) {
+    if (!conn) return { candidates: [] };
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_extensions,
+        currentWord,
+      ),
+    };
+  }
+
+  // ---- ALTER POLICY <name> ON <table> ----
+  if (TailMatches(prevWords, ['ALTER', 'POLICY', MatchAny])) {
+    return {
+      candidates: filterAndCase(
+        ALTER_POLICY_ACTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['ALTER', 'POLICY']) &&
+    TailMatches(prevWords, ['ON'])
+  ) {
+    return completeTables();
+  }
+  if (TailMatches(prevWords, ['ALTER', 'POLICY'])) {
+    // Free-form policy name.
+    return { candidates: [] };
+  }
+
+  // ---- ALTER PUBLICATION ----
+  if (TailMatches(prevWords, ['ALTER', 'PUBLICATION', MatchAny])) {
+    return {
+      candidates: filterAndCase(
+        ALTER_PUBLICATION_ACTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  if (TailMatches(prevWords, ['ALTER', 'PUBLICATION'])) {
+    if (!conn) return { candidates: [] };
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_publications,
+        currentWord,
+      ),
+    };
+  }
+
+  // ---- ALTER SUBSCRIPTION ----
+  if (TailMatches(prevWords, ['ALTER', 'SUBSCRIPTION', MatchAny])) {
+    return {
+      candidates: filterAndCase(
+        ALTER_SUBSCRIPTION_ACTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  if (TailMatches(prevWords, ['ALTER', 'SUBSCRIPTION'])) {
+    if (!conn) return { candidates: [] };
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_subscriptions,
+        currentWord,
+      ),
+    };
+  }
+
   // Bare ALTER — sub-object keywords.
   if (TailMatches(prevWords, ['ALTER'])) {
     return {
@@ -1096,6 +1783,78 @@ const sqlRules = async (
     };
   }
 
+  // ---- CREATE INDEX deep handling (specific arms BEFORE generic CREATE). ----
+  // CREATE INDEX <TAB> → CONCURRENTLY, IF NOT EXISTS, ON (no name = use ON
+  // directly), or a free-form index name.
+  if (TailMatches(prevWords, ['CREATE', 'INDEX'])) {
+    return {
+      candidates: filterAndCase(
+        CREATE_INDEX_OPTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  if (TailMatches(prevWords, ['CREATE', 'UNIQUE', 'INDEX'])) {
+    return {
+      candidates: filterAndCase(
+        CREATE_INDEX_OPTIONS,
+        currentWord,
+        ctx.settings,
+      ),
+    };
+  }
+  // CREATE INDEX <name> <TAB> → ON.
+  if (
+    TailMatches(prevWords, ['CREATE', 'INDEX', MatchAny]) ||
+    TailMatches(prevWords, ['CREATE', 'UNIQUE', 'INDEX', MatchAny])
+  ) {
+    return { candidates: filterAndCase(['ON'], currentWord, ctx.settings) };
+  }
+  // CREATE INDEX ... ON <TAB> → tables.
+  if (
+    TailMatches(prevWords, ['CREATE', 'INDEX', MatchAny, 'ON']) ||
+    TailMatches(prevWords, ['CREATE', 'INDEX', 'ON']) ||
+    TailMatches(prevWords, ['CREATE', 'UNIQUE', 'INDEX', MatchAny, 'ON']) ||
+    TailMatches(prevWords, ['CREATE', 'UNIQUE', 'INDEX', 'ON'])
+  ) {
+    return completeTables();
+  }
+  // CREATE INDEX ... ON <table> <TAB> → USING / (.
+  if (
+    (HeadMatches(prevWords, ['CREATE', 'INDEX']) ||
+      HeadMatches(prevWords, ['CREATE', 'UNIQUE', 'INDEX'])) &&
+    TailMatches(prevWords, ['ON', MatchAny])
+  ) {
+    return {
+      candidates: filterAndCase(['USING', '('], currentWord, ctx.settings),
+    };
+  }
+  // CREATE INDEX ... USING <TAB> → access methods.
+  if (
+    (HeadMatches(prevWords, ['CREATE', 'INDEX']) ||
+      HeadMatches(prevWords, ['CREATE', 'UNIQUE', 'INDEX'])) &&
+    TailMatches(prevWords, ['USING'])
+  ) {
+    if (!conn) {
+      // Even without a connection, offer the built-in AMs as a fallback.
+      return {
+        candidates: filterAndCase(
+          ['btree', 'hash', 'gist', 'gin', 'spgist', 'brin'],
+          currentWord,
+          ctx.settings,
+        ),
+      };
+    }
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_index_access_methods,
+        currentWord,
+      ),
+    };
+  }
+
   // CREATE ... — first sub-object keyword.
   if (TailMatches(prevWords, ['CREATE'])) {
     return {
@@ -1106,8 +1865,19 @@ const sqlRules = async (
     // Free-form table name; no completion.
     return { candidates: [] };
   }
-  if (TailMatches(prevWords, ['CREATE', 'INDEX', MatchAny, 'ON'])) {
-    return completeTables();
+  // Inside CREATE TABLE column-list parens: `<col_name> <TAB>` → types.
+  if (
+    HeadMatches(prevWords, ['CREATE', 'TABLE']) &&
+    TailMatches(prevWords, ['(|,', MatchAny])
+  ) {
+    if (!conn) return { candidates: [] };
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_datatypes,
+        currentWord,
+      ),
+    };
   }
   if (TailMatches(prevWords, ['CREATE', 'OR', 'REPLACE'])) {
     return {
@@ -1276,43 +2046,92 @@ const sqlRules = async (
       ),
     };
   }
-  if (TailMatches(prevWords, ['SET'])) {
+  // `SET <name> TO|= <TAB>` — for DateStyle we can suggest the formats.
+  if (
+    TailMatches(prevWords, ['SET', 'DateStyle', 'TO|=']) ||
+    TailMatches(prevWords, ['SET', 'DATESTYLE', 'TO|=']) ||
+    TailMatches(prevWords, ['SET', 'datestyle', 'TO|='])
+  ) {
     return {
-      candidates: filterAndCase(
-        [
-          'ROLE',
-          'SCHEMA',
-          'SESSION',
-          'LOCAL',
-          'TRANSACTION',
-          'TIME ZONE',
-          'CONSTRAINTS',
-        ],
-        currentWord,
-        ctx.settings,
-      ),
+      candidates: filterAndCase(DATESTYLE_VALUES, currentWord, ctx.settings),
     };
   }
-
-  // SHOW … — most GUC names, common ones.
-  if (TailMatches(prevWords, ['SHOW'])) {
+  // `SET <name> <TAB>` (no operator yet) → TO / =.
+  if (TailMatches(prevWords, ['SET', MatchAny])) {
     return {
-      candidates: filterAndCase(
-        [
-          'ALL',
-          'search_path',
-          'role',
-          'session_authorization',
-          'transaction_isolation',
-          'client_encoding',
-          'server_encoding',
-          'server_version',
-          'timezone',
-        ],
-        currentWord,
-        ctx.settings,
-      ),
+      candidates: filterAndCase(['TO', '='], currentWord, ctx.settings),
     };
+  }
+  // Bare SET <TAB>: GUC name OR top-level SET sub-keywords (ROLE, SCHEMA, …).
+  if (TailMatches(prevWords, ['SET'])) {
+    const staticKw = filterAndCase(
+      [
+        'CONSTRAINTS',
+        'LOCAL',
+        'ROLE',
+        'SCHEMA',
+        'SESSION',
+        'TIME ZONE',
+        'TRANSACTION',
+      ],
+      currentWord,
+      ctx.settings,
+    );
+    if (!conn) return { candidates: staticKw };
+    const guc = await runCatalogQuery(
+      conn,
+      Query_for_list_of_set_vars,
+      currentWord,
+    );
+    return { candidates: [...staticKw, ...guc] };
+  }
+
+  // SHOW <TAB> — ALL keyword plus the live GUC list.
+  if (TailMatches(prevWords, ['SHOW'])) {
+    const staticKw = filterAndCase(['ALL'], currentWord, ctx.settings);
+    if (!conn) {
+      return {
+        candidates: [
+          ...staticKw,
+          ...filterAndCase(
+            [
+              'search_path',
+              'role',
+              'session_authorization',
+              'transaction_isolation',
+              'client_encoding',
+              'server_encoding',
+              'server_version',
+              'timezone',
+            ],
+            currentWord,
+            ctx.settings,
+          ),
+        ],
+      };
+    }
+    const guc = await runCatalogQuery(
+      conn,
+      Query_for_list_of_set_vars,
+      currentWord,
+    );
+    return { candidates: [...staticKw, ...guc] };
+  }
+
+  // RESET <TAB> — ALL or the live GUC list.
+  if (TailMatches(prevWords, ['RESET'])) {
+    const staticKw = filterAndCase(
+      ['ALL', 'SESSION AUTHORIZATION', 'ROLE'],
+      currentWord,
+      ctx.settings,
+    );
+    if (!conn) return { candidates: staticKw };
+    const guc = await runCatalogQuery(
+      conn,
+      Query_for_list_of_set_vars,
+      currentWord,
+    );
+    return { candidates: [...staticKw, ...guc] };
   }
 
   // START / BEGIN [TRANSACTION] …

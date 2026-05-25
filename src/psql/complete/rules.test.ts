@@ -322,6 +322,449 @@ describe('findCompletions: variable expansion', () => {
 // psqlCompleter integration.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Deep ALTER sub-action completions.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: ALTER TABLE deep sub-actions', () => {
+  it('ALTER TABLE foo → list of sub-actions', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'TABLE', 'foo'], '', ctx);
+    expect(r.candidates).toContain('add');
+    expect(r.candidates).toContain('drop');
+    expect(r.candidates).toContain('rename');
+    expect(r.candidates).toContain('set');
+    expect(r.candidates).toContain('owner to');
+    expect(r.candidates).toContain('replica identity');
+    expect(r.candidates).toContain('validate constraint');
+  });
+
+  it('ALTER TABLE foo ADD → COLUMN, CONSTRAINT, CHECK', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'TABLE', 'foo', 'ADD'], '', ctx);
+    expect(r.candidates).toContain('column');
+    expect(r.candidates).toContain('constraint');
+    expect(r.candidates).toContain('check');
+    expect(r.candidates).toContain('foreign key');
+  });
+
+  it('ALTER TABLE foo DROP → COLUMN/CONSTRAINT/IF EXISTS', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'TABLE', 'foo', 'DROP'], '', ctx);
+    expect(r.candidates).toContain('column');
+    expect(r.candidates).toContain('constraint');
+    expect(r.candidates).toContain('if exists');
+  });
+
+  it('ALTER TABLE foo ALTER → alter-column sub-actions', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['ALTER', 'TABLE', 'foo', 'ALTER'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('set default');
+    expect(r.candidates).toContain('drop not null');
+    expect(r.candidates).toContain('set data type');
+  });
+
+  it('ALTER TABLE foo RENAME → TO/COLUMN/CONSTRAINT', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['ALTER', 'TABLE', 'foo', 'RENAME'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('column');
+    expect(r.candidates).toContain('to');
+  });
+
+  it('ALTER TABLE foo ENABLE → ROW LEVEL SECURITY, TRIGGER, RULE', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['ALTER', 'TABLE', 'foo', 'ENABLE'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('row level security');
+    expect(r.candidates).toContain('trigger');
+    expect(r.candidates).toContain('rule');
+  });
+
+  it('ALTER TABLE foo REPLICA IDENTITY → DEFAULT/FULL/NOTHING/USING INDEX', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['ALTER', 'TABLE', 'foo', 'REPLICA', 'IDENTITY'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('default');
+    expect(r.candidates).toContain('full');
+    expect(r.candidates).toContain('nothing');
+    expect(r.candidates).toContain('using index');
+  });
+});
+
+describe('findCompletions: ALTER other objects deep sub-actions', () => {
+  it('ALTER VIEW foo → ALTER/RENAME/SET/OWNER TO', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'VIEW', 'foo'], '', ctx);
+    expect(r.candidates).toContain('alter');
+    expect(r.candidates).toContain('rename');
+    expect(r.candidates).toContain('set');
+    expect(r.candidates).toContain('owner to');
+  });
+
+  it('ALTER MATERIALIZED VIEW foo → CLUSTER ON/RENAME etc.', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['ALTER', 'MATERIALIZED', 'VIEW', 'foo'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('cluster on');
+    expect(r.candidates).toContain('rename');
+    expect(r.candidates).toContain('owner to');
+  });
+
+  it('ALTER INDEX foo → RENAME/SET/ATTACH PARTITION', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'INDEX', 'foo'], '', ctx);
+    expect(r.candidates).toContain('rename');
+    expect(r.candidates).toContain('set');
+    expect(r.candidates).toContain('attach partition');
+  });
+
+  it('ALTER SEQUENCE foo → INCREMENT BY/RESTART/OWNED BY', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'SEQUENCE', 'foo'], '', ctx);
+    expect(r.candidates).toContain('increment by');
+    expect(r.candidates).toContain('restart');
+    expect(r.candidates).toContain('owned by');
+  });
+
+  it('ALTER FUNCTION foo → COST/IMMUTABLE/VOLATILE/STABLE', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'FUNCTION', 'foo'], '', ctx);
+    expect(r.candidates).toContain('cost');
+    expect(r.candidates).toContain('immutable');
+    expect(r.candidates).toContain('volatile');
+    expect(r.candidates).toContain('stable');
+  });
+
+  it('ALTER TYPE foo → ADD VALUE/RENAME ATTRIBUTE', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'TYPE', 'foo'], '', ctx);
+    expect(r.candidates).toContain('add value');
+    expect(r.candidates).toContain('rename attribute');
+    expect(r.candidates).toContain('set schema');
+  });
+
+  it('ALTER ROLE alice → PASSWORD/SUPERUSER/RENAME TO', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'ROLE', 'alice'], '', ctx);
+    expect(r.candidates).toContain('password');
+    expect(r.candidates).toContain('superuser');
+    expect(r.candidates).toContain('rename to');
+  });
+
+  it('ALTER USER alice → equivalent to ROLE', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'USER', 'alice'], '', ctx);
+    expect(r.candidates).toContain('password');
+    expect(r.candidates).toContain('login');
+  });
+
+  it('ALTER DATABASE mydb → OWNER TO/RENAME TO/CONNECTION LIMIT', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'DATABASE', 'mydb'], '', ctx);
+    expect(r.candidates).toContain('owner to');
+    expect(r.candidates).toContain('rename to');
+    expect(r.candidates).toContain('connection limit');
+  });
+
+  it('ALTER SCHEMA public → OWNER TO/RENAME TO', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'SCHEMA', 'public'], '', ctx);
+    expect(r.candidates).toEqual(['owner to', 'rename to']);
+  });
+
+  it('ALTER EXTENSION pg_trgm → ADD/DROP/UPDATE/SET SCHEMA', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'EXTENSION', 'pg_trgm'], '', ctx);
+    expect(r.candidates).toContain('add');
+    expect(r.candidates).toContain('drop');
+    expect(r.candidates).toContain('set schema');
+    expect(r.candidates).toContain('update');
+  });
+
+  it('ALTER POLICY mypol → ON/RENAME TO', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'POLICY', 'mypol'], '', ctx);
+    expect(r.candidates).toEqual(['on', 'rename to']);
+  });
+
+  it('ALTER PUBLICATION mypub → ADD/DROP/SET/RENAME', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['ALTER', 'PUBLICATION', 'mypub'], '', ctx);
+    expect(r.candidates).toContain('add');
+    expect(r.candidates).toContain('drop');
+    expect(r.candidates).toContain('set');
+    expect(r.candidates).toContain('rename to');
+  });
+
+  it('ALTER SUBSCRIPTION mysub → ENABLE/DISABLE/CONNECTION', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['ALTER', 'SUBSCRIPTION', 'mysub'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('enable');
+    expect(r.candidates).toContain('disable');
+    expect(r.candidates).toContain('connection');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GUC-name completion for SET / SHOW / RESET.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: GUC names via pg_settings', () => {
+  it('SET <prefix> → GUC names', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_settings': ['work_mem', 'maintenance_work_mem'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SET'], 'work', ctx);
+    expect(r.candidates).toContain('work_mem');
+  });
+
+  it('SET w → mixes built-in SET sub-keywords with GUCs', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_settings': ['work_mem'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SET'], 'w', ctx);
+    expect(r.candidates).toContain('work_mem');
+  });
+
+  it('SHOW <prefix> → GUC names + ALL', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_settings': ['client_encoding', 'client_min_messages'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SHOW'], 'client_', ctx);
+    expect(r.candidates).toContain('client_encoding');
+    expect(r.candidates).toContain('client_min_messages');
+  });
+
+  it('SHOW A → includes ALL', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_settings': [],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SHOW'], 'A', ctx);
+    expect(r.candidates).toContain('ALL');
+  });
+
+  it('RESET <prefix> → GUC names + ALL', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_settings': ['statement_timeout'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['RESET'], 'state', ctx);
+    expect(r.candidates).toContain('statement_timeout');
+  });
+
+  it('SET work_mem → TO / =', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['SET', 'work_mem'], '', ctx);
+    expect(r.candidates).toContain('to');
+    expect(r.candidates).toContain('=');
+  });
+
+  it('SET DateStyle TO → ISO/GERMAN/SQL/POSTGRES', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['SET', 'DateStyle', 'TO'], '', ctx);
+    expect(r.candidates).toContain('iso');
+    expect(r.candidates).toContain('german');
+    expect(r.candidates).toContain('sql');
+    expect(r.candidates).toContain('postgres');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CREATE INDEX deep handling.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: CREATE INDEX', () => {
+  it('CREATE INDEX → CONCURRENTLY/IF NOT EXISTS/ON', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['CREATE', 'INDEX'], '', ctx);
+    expect(r.candidates).toContain('concurrently');
+    expect(r.candidates).toContain('if not exists');
+    expect(r.candidates).toContain('on');
+  });
+
+  it('CREATE INDEX myidx → ON', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['CREATE', 'INDEX', 'myidx'], '', ctx);
+    expect(r.candidates).toEqual(['on']);
+  });
+
+  it('CREATE INDEX myidx ON → tables', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_class': ['users', 'orders'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(
+      ['CREATE', 'INDEX', 'myidx', 'ON'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('users');
+    expect(r.candidates).toContain('orders');
+  });
+
+  it('CREATE INDEX myidx ON t USING → access methods (with conn)', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_am': ['btree', 'hash', 'gist', 'gin'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(
+      ['CREATE', 'INDEX', 'myidx', 'ON', 't', 'USING'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('btree');
+    expect(r.candidates).toContain('hash');
+    expect(r.candidates).toContain('gist');
+    expect(r.candidates).toContain('gin');
+  });
+
+  it('CREATE INDEX myidx ON t USING → fallback to built-in AMs without conn', async () => {
+    const ctx = { settings: makeSettings(null) };
+    const r = await findCompletions(
+      ['CREATE', 'INDEX', 'myidx', 'ON', 't', 'USING'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('btree');
+    expect(r.candidates).toContain('hash');
+    expect(r.candidates).toContain('gist');
+    expect(r.candidates).toContain('gin');
+    expect(r.candidates).toContain('brin');
+  });
+
+  it('CREATE UNIQUE INDEX → CONCURRENTLY/IF NOT EXISTS/ON', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['CREATE', 'UNIQUE', 'INDEX'], '', ctx);
+    expect(r.candidates).toContain('concurrently');
+    expect(r.candidates).toContain('on');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Post-FROM tail keywords and JOIN ON/USING.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: post-FROM tail keywords', () => {
+  it('SELECT * FROM t → JOIN, WHERE, GROUP BY, ORDER BY, LIMIT', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['SELECT', '*', 'FROM', 'users'], '', ctx);
+    expect(r.candidates).toContain('join');
+    expect(r.candidates).toContain('where');
+    expect(r.candidates).toContain('group by');
+    expect(r.candidates).toContain('order by');
+    expect(r.candidates).toContain('limit');
+  });
+
+  it('SELECT … FROM t W → completes WHERE', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['SELECT', '*', 'FROM', 'users'], 'W', ctx);
+    expect(r.candidates).toContain('WHERE');
+    expect(r.candidates).toContain('WINDOW');
+  });
+
+  it('JOIN users → ON / USING', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['SELECT', '*', 'FROM', 'orders', 'JOIN', 'users'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toEqual(['on', 'using']);
+  });
+
+  it('SELECT … FROM t WHERE id → AND/OR/IS/IN/LIKE/NOT/BETWEEN', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['SELECT', '*', 'FROM', 'users', 'WHERE', 'id'],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('and');
+    expect(r.candidates).toContain('or');
+    expect(r.candidates).toContain('is');
+    expect(r.candidates).toContain('in');
+    expect(r.candidates).toContain('like');
+    expect(r.candidates).toContain('between');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Window function clauses.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: window functions', () => {
+  it('… OVER ( → PARTITION BY / ORDER BY / ROWS / RANGE / GROUPS', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['SELECT', 'ROW_NUMBER', '(', ')', 'OVER', '('],
+      '',
+      ctx,
+    );
+    expect(r.candidates).toContain('partition by');
+    expect(r.candidates).toContain('order by');
+    expect(r.candidates).toContain('rows');
+    expect(r.candidates).toContain('range');
+    expect(r.candidates).toContain('groups');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// \do and \dC operator/cast completion.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: \\do / \\dC', () => {
+  it('\\do <prefix> → operators', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_operator': ['||', '!='],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['\\do'], '', ctx);
+    expect(r.candidates).toContain('||');
+    expect(r.candidates).toContain('!=');
+  });
+
+  it('\\dC <prefix> → cast pairs', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_cast': ['integer AS bigint', 'text AS varchar'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['\\dC'], '', ctx);
+    expect(r.candidates).toContain('integer AS bigint');
+    expect(r.candidates).toContain('text AS varchar');
+  });
+
+  it('\\do without connection returns empty', async () => {
+    const ctx = { settings: makeSettings(null) };
+    const r = await findCompletions(['\\do'], '', ctx);
+    expect(r.candidates).toEqual([]);
+  });
+});
+
 describe('psqlCompleter wrapper', () => {
   it('returns the WP-24 CompletionResult shape', async () => {
     const conn = makeMockConn({

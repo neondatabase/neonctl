@@ -463,4 +463,123 @@ describe('vi mode dispatch', () => {
       expect(s.mode).toBe('emacs');
     });
   });
+
+  describe('ex-prompt mode (`:`-commands)', () => {
+    const viNormal = (): ReturnType<typeof makeState> => {
+      const s = makeState([], 'insert');
+      s.mode = 'normal';
+      return s;
+    };
+
+    it('`:` from normal mode enters ex with empty buffer', () => {
+      const s = viNormal();
+      const a = dispatch(s, printable(':'));
+      expect(s.mode).toBe('ex');
+      expect(s.exBuffer).toBe('');
+      expect(a.kind).toBe('ex-update');
+    });
+
+    it('printable chars accumulate in exBuffer', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      dispatch(s, printable('q'));
+      expect(s.mode).toBe('ex');
+      expect(s.exBuffer).toBe('q');
+      const a = dispatch(s, printable('u'));
+      expect(s.exBuffer).toBe('qu');
+      expect(a.kind).toBe('ex-update');
+    });
+
+    it('Esc aborts ex and returns to normal mode (empty buffer)', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      dispatch(s, printable('q'));
+      const a = dispatch(s, press('escape'));
+      expect(a.kind).toBe('redraw');
+      expect(s.mode).toBe('normal');
+      expect(s.exBuffer).toBe('');
+    });
+
+    it('`:q` Enter cancels the readLine', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      dispatch(s, printable('q'));
+      const a = dispatch(s, press('enter'));
+      expect(a.kind).toBe('cancel');
+      // After cancel the state still flips back to normal + empty exBuffer.
+      expect(s.mode).toBe('normal');
+      expect(s.exBuffer).toBe('');
+    });
+
+    it('`:quit` Enter cancels the readLine', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      for (const c of 'quit') dispatch(s, printable(c));
+      const a = dispatch(s, press('enter'));
+      expect(a.kind).toBe('cancel');
+    });
+
+    it('`:q!` Enter cancels the readLine', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      dispatch(s, printable('q'));
+      dispatch(s, printable('!'));
+      const a = dispatch(s, press('enter'));
+      expect(a.kind).toBe('cancel');
+    });
+
+    it('`:w` Enter bells (we have no file to write)', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      dispatch(s, printable('w'));
+      const a = dispatch(s, press('enter'));
+      expect(a.kind).toBe('bell');
+      // And falls back to normal mode.
+      expect(s.mode).toBe('normal');
+      expect(s.exBuffer).toBe('');
+    });
+
+    it('unknown command + Enter bells and returns to normal', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      dispatch(s, printable('z'));
+      const a = dispatch(s, press('enter'));
+      expect(a.kind).toBe('bell');
+      expect(s.mode).toBe('normal');
+    });
+
+    it('Backspace shrinks the ex buffer', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      dispatch(s, printable('q'));
+      dispatch(s, printable('u'));
+      const a = dispatch(s, press('backspace'));
+      expect(a.kind).toBe('ex-update');
+      expect(s.exBuffer).toBe('q');
+    });
+
+    it('Backspace at empty exBuffer returns to normal', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      const a = dispatch(s, press('backspace'));
+      expect(a.kind).toBe('redraw');
+      expect(s.mode).toBe('normal');
+    });
+
+    it('^C in ex mode cancels (handled at top-level dispatch)', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      dispatch(s, printable('q'));
+      const a = dispatch(s, ctrl('c'));
+      expect(a.kind).toBe('cancel');
+    });
+
+    it('bare `:` then Enter returns to normal silently', () => {
+      const s = viNormal();
+      dispatch(s, printable(':'));
+      const a = dispatch(s, press('enter'));
+      expect(a.kind).toBe('redraw');
+      expect(s.mode).toBe('normal');
+    });
+  });
 });

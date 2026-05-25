@@ -218,6 +218,68 @@ export const Query_for_list_of_casts = `
   LIMIT ${LIMIT}
 `;
 
+/** Configuration parameter (GUC) names — `pg_settings`. */
+export const Query_for_list_of_set_vars = `
+  SELECT pg_catalog.lower(name)
+  FROM pg_catalog.pg_settings
+  WHERE name LIKE $1
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/** Access methods (index AMs primarily). */
+export const Query_for_list_of_access_methods = `
+  SELECT pg_catalog.quote_ident(amname)
+  FROM pg_catalog.pg_am
+  WHERE amname LIKE $1
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/** Index access methods only (`amtype = 'i'`). */
+export const Query_for_list_of_index_access_methods = `
+  SELECT pg_catalog.quote_ident(amname)
+  FROM pg_catalog.pg_am
+  WHERE amname LIKE $1
+    AND amtype = 'i'
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/** Built-in type names — for CREATE TABLE column-type completion. */
+export const Query_for_list_of_datatypes = `
+  SELECT pg_catalog.format_type(t.oid, NULL)
+  FROM pg_catalog.pg_type t
+  WHERE (t.typrelid = 0 OR
+         (SELECT c.relkind = 'c' FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid))
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_type el
+      WHERE el.typarray = t.oid
+    )
+    AND pg_catalog.format_type(t.oid, NULL) LIKE $1
+    AND pg_catalog.pg_type_is_visible(t.oid)
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/** Publications. */
+export const Query_for_list_of_publications = `
+  SELECT pg_catalog.quote_ident(pubname)
+  FROM pg_catalog.pg_publication
+  WHERE pubname LIKE $1
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/** Subscriptions. */
+export const Query_for_list_of_subscriptions = `
+  SELECT pg_catalog.quote_ident(subname)
+  FROM pg_catalog.pg_subscription
+  WHERE subname LIKE $1
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
 /**
  * Relations qualified by an explicit schema. The caller passes the schema
  * name as $1 and the LIKE prefix as $2 — this lets `SELECT * FROM pg_catalog.x`

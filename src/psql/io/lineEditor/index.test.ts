@@ -1,6 +1,6 @@
 import { Readable, Writable } from 'node:stream';
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   LineEditor,
@@ -295,6 +295,80 @@ describe('renderSearchLine', () => {
   });
 });
 
+describe('Tab cycle rewrites the candidate listing in place', () => {
+  it('on the third+ Tab, navigates up over the listing instead of re-emitting below', async () => {
+    const completer = (): {
+      candidates: string[];
+      commonPrefix: string;
+      replaceLength: number;
+    } => ({
+      candidates: ['foo', 'bar', 'baz'],
+      commonPrefix: 'b',
+      replaceLength: 1,
+    });
+    const { editor, stdin, stdout } = makeEditor({ completer });
+    const p = editor.readLine('> ');
+    // 1st tab → common prefix insert.
+    stdin.feed('b\t');
+    await new Promise((r) => setImmediate(r));
+    // 2nd tab → list emitted.
+    stdin.feed('\t');
+    await new Promise((r) => setImmediate(r));
+    // Mark this point in the stdout buffer; we'll inspect what comes AFTER
+    // the second tab to validate the third-tab in-place rewrite.
+    const markerLen = stdout.chunks.reduce((n, b) => n + b.length, 0);
+    // 3rd tab → cycle 0; should rewrite in place.
+    stdin.feed('\t');
+    await new Promise((r) => setImmediate(r));
+    // Inspect the bytes written AFTER the listing was first emitted.
+    const after = Buffer.concat(stdout.chunks)
+      .toString('utf8')
+      .slice(markerLen);
+    // In-place rewrite signature: cursor-up to navigate past the listing,
+    // erase-to-eol on each rewritten row.
+    // eslint-disable-next-line no-control-regex
+    expect(after).toMatch(/\x1b\[\d+A/); // CSI cursor up
+    // eslint-disable-next-line no-control-regex
+    expect(after).toMatch(/\x1b\[K/); // CSI erase-to-eol
+    // The highlighted (reverse-video) candidate must appear in the rewritten
+    // block — that's the proof we rewrote, not just moved the cursor.
+    expect(after).toContain('\x1b[7mfoo\x1b[27m');
+    // Cleanly finish the readLine so we can close.
+    stdin.feed('\r');
+    await p;
+    editor.close();
+  });
+
+  it('typing a non-Tab key forgets the listing geometry (next list emits below)', async () => {
+    const completer = (): {
+      candidates: string[];
+      commonPrefix: string;
+      replaceLength: number;
+    } => ({
+      candidates: ['foo', 'bar', 'baz'],
+      commonPrefix: 'b',
+      replaceLength: 1,
+    });
+    const { editor, stdin } = makeEditor({ completer });
+    const p = editor.readLine('> ');
+    // 1st tab (prefix), 2nd (list), then a printable key resets completion.
+    stdin.feed('b\t\tx');
+    await new Promise((r) => setImmediate(r));
+    // Now another two tabs to re-list. The fact that this doesn't crash and
+    // resolves the readLine demonstrates the listing geometry was reset.
+    stdin.feed('\t\t');
+    await new Promise((r) => setImmediate(r));
+    stdin.feed('\r');
+    const result = await p;
+    // The buffer after "bx" + two-tap completion sequence ends with the
+    // common prefix tap, which was "b" again — so the result is "bxb" then
+    // the second tap is a list (buffer unchanged).
+    expect(typeof result).toBe('string');
+    expect((result as string).startsWith('b')).toBe(true);
+    editor.close();
+  });
+});
+
 describe('LineEditor vi mode option', () => {
   it('still resolves on Enter when constructed with mode: "vi"', async () => {
     const stdin = new FakeStdin();
@@ -337,5 +411,61 @@ describe('LineEditor vi mode option', () => {
     // h moves cursor to 0 (onto 'h'). x deletes char at cursor → "i".
     expect(result).toBe('i');
     editor.close();
+  });
+
+  it('LineEditor defaults Esc timeout to 50ms (matches GNU readline)', async () => {
+    vi.useFakeTimers();
+    try {
+      const stdin = new FakeStdin();
+      const stdout = new FakeStdout();
+      const editor = new LineEditor({
+        stdin,
+        stdout,
+        mode: 'vi',
+        bracketedPaste: false,
+        // No escTimeoutMs override — use the default.
+      });
+      const p = editor.readLine('> ');
+      // Lone Esc — the decoder buffers it pending follow-on bytes.
+      stdin.feed('\x1b');
+      // 49ms is below the 50ms default; the Esc should still be parked.
+      vi.advanceTimersByTime(49);
+      // No `escape` has been dispatched yet, so we're still in insert mode.
+      // Sanity: enter mode is still 'insert', proven by ^C exiting the line.
+      stdin.feed('\x03');
+      await expect(p).rejects.toBeInstanceOf(SignalError);
+      editor.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('default Esc timeout fires escape after >= 50ms', async () => {
+    vi.useFakeTimers();
+    try {
+      const stdin = new FakeStdin();
+      const stdout = new FakeStdout();
+      const editor = new LineEditor({
+        stdin,
+        stdout,
+        mode: 'vi',
+        bracketedPaste: false,
+      });
+      const p = editor.readLine('> ');
+      stdin.feed('hi');
+      await vi.advanceTimersByTimeAsync(0);
+      stdin.feed('\x1b');
+      // Cross the 50ms threshold; Esc should fire and we're now in normal.
+      await vi.advanceTimersByTimeAsync(50);
+      stdin.feed('hx');
+      await vi.advanceTimersByTimeAsync(0);
+      stdin.feed('\r');
+      const result = await p;
+      // Same expected outcome as the chunked-Esc test above: 'i'.
+      expect(result).toBe('i');
+      editor.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

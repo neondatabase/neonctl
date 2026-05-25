@@ -84,7 +84,7 @@ export type LineEditorOptions = {
    * `Esc` byte arrives, the decoder waits up to this long for a follow-on
    * byte before emitting the `escape` key event. Set to `0` to disable (Esc
    * is emitted immediately, matching the pre-WP-24-polish behaviour).
-   * Default: 30ms.
+   * Default: 50ms (matches GNU readline's `keyseq-timeout` default).
    */
   escTimeoutMs?: number;
 };
@@ -139,6 +139,13 @@ export class LineEditor {
     cursorCol: number;
     /** Search mode state, when active. */
     search: SearchState | null;
+    /**
+     * Number of terminal rows occupied by a candidate listing currently drawn
+     * BELOW the prompt block. `0` when no listing is on screen. Used to do
+     * in-place rewrites on Tab cycle (cursor up by this much, redraw with the
+     * new highlight, move back).
+     */
+    listingRowsDrawn: number;
   } | null = null;
 
   /** Listeners attached to stdin while readLine is active. */
@@ -158,10 +165,11 @@ export class LineEditor {
       this.mode === 'vi' ? 'insert' : 'emacs',
     );
     this.decoder = new Vt100Decoder({
-      // LineEditor default: 30ms is enough to disambiguate Alt-X without
-      // making bare Esc noticeably laggy. Callers can override (or set 0 to
-      // restore the legacy "emit Esc immediately" behaviour).
-      escTimeoutMs: opts.escTimeoutMs ?? 30,
+      // LineEditor default: 50ms matches GNU readline's `keyseq-timeout`
+      // default — enough to disambiguate Alt-X across all modern terminals
+      // without making bare Esc noticeably laggy. Callers can override (or
+      // set 0 to restore the legacy "emit Esc immediately" behaviour).
+      escTimeoutMs: opts.escTimeoutMs ?? 50,
       onTimeoutEvent: (ev): void => {
         this.handleDecoderTimeout(ev);
       },
@@ -194,6 +202,7 @@ export class LineEditor {
         cursorRow: 0,
         cursorCol: 0,
         search: null,
+        listingRowsDrawn: 0,
       };
       try {
         this.enterRaw();
@@ -242,6 +251,8 @@ export class LineEditor {
     a.rowsDrawn = 0;
     a.cursorRow = 0;
     a.cursorCol = 0;
+    // Interjected text overwrites any candidate listing that was on screen.
+    a.listingRowsDrawn = 0;
     this.render(true);
   }
 
@@ -372,6 +383,17 @@ export class LineEditor {
     await this.applyAction(action, ev);
   }
 
+  /**
+   * Reset the completion engine and forget any listing geometry: the next Tab
+   * will request a fresh result, and the next `list` / `cycled` will emit a
+   * new block on a fresh row instead of trying to overwrite a stale listing
+   * whose coordinates are no longer valid.
+   */
+  private resetCompletion(): void {
+    this.completion.reset();
+    if (this.active !== null) this.active.listingRowsDrawn = 0;
+  }
+
   private async applyAction(action: EditorAction, ev: KeyEvent): Promise<void> {
     if (this.active === null) return;
     const a = this.active;
@@ -379,14 +401,14 @@ export class LineEditor {
       case 'noop':
         return;
       case 'redraw':
-        this.completion.reset();
+        this.resetCompletion();
         this.render();
         return;
       case 'bell':
         this.stdout.write(BEL);
         return;
       case 'submit': {
-        this.completion.reset();
+        this.resetCompletion();
         const text = this.state.buffer.text;
         // Move cursor past the end of the rendered block and emit a newline.
         this.moveCursorToEnd();
@@ -400,7 +422,7 @@ export class LineEditor {
       case 'cancel': {
         // Upstream psql doesn't echo `^C` to the screen on Ctrl-C — it just
         // breaks to the next prompt line silently. Match that behaviour.
-        this.completion.reset();
+        this.resetCompletion();
         this.moveCursorToEnd();
         this.stdout.write(LF);
         const reject = a.reject;
@@ -410,7 +432,7 @@ export class LineEditor {
         return;
       }
       case 'eof': {
-        this.completion.reset();
+        this.resetCompletion();
         this.moveCursorToEnd();
         this.stdout.write(LF);
         const resolve = a.resolve;
@@ -428,7 +450,7 @@ export class LineEditor {
         return;
       }
       case 'clear-screen':
-        this.completion.reset();
+        this.resetCompletion();
         this.stdout.write(csiClearScreen());
         a.rowsDrawn = 0;
         a.cursorRow = 0;
@@ -436,7 +458,7 @@ export class LineEditor {
         this.render(true);
         return;
       case 'search-start':
-        this.completion.reset();
+        this.resetCompletion();
         a.search = {
           pattern: '',
           matchIndex: null,
@@ -448,6 +470,12 @@ export class LineEditor {
       case 'paste-end':
         // Bracketed paste markers are otherwise transparent.
         void ev;
+        return;
+      case 'ex-update':
+        // Vi `:`-ex prompt text changed (entered/typed/backspaced). The
+        // renderer reads `state.mode === 'ex'` and swaps in a `: <buf>` line.
+        this.resetCompletion();
+        this.render();
         return;
     }
   }
@@ -468,24 +496,23 @@ export class LineEditor {
         this.render();
         return;
       case 'cycled': {
-        // Pragmatic compromise (see WP-24 polish notes): readline does an
-        // in-place rewrite of the listing as the cycle index advances; doing
-        // that correctly requires cursor-position bookkeeping for the listed
-        // block. For now we re-emit the listing under the prompt with the
-        // active candidate highlighted in reverse video, which is more
-        // verbose than upstream but visually clear.
+        // In-place rewrite of the candidate listing with the new highlight.
+        // If we already have a listing on screen (placed above the current
+        // prompt block by an earlier `list` or `cycled`), navigate up to its
+        // first row, erase each row, and reprint with the cycled highlight.
+        // Otherwise fall back to the "print listing below" path, matching
+        // first-time `list` behaviour.
         const cands = this.completion.getCandidates();
         const cycleIndex = this.completion.getCycleIndex();
         if (cands.length > 0) {
-          this.moveCursorToEnd();
-          this.stdout.write(LF);
           const w = this.termWidth();
           const block = formatCandidates(cands, w, cycleIndex);
-          this.stdout.write(block + LF);
-          this.active.rowsDrawn = 0;
-          this.active.cursorRow = 0;
-          this.active.cursorCol = 0;
-          this.render(true);
+          const blockRows = block.split('\n').length;
+          if (this.active.listingRowsDrawn > 0) {
+            this.rewriteListingInPlace(block, blockRows);
+          } else {
+            this.emitListingBelow(block, blockRows);
+          }
         } else {
           this.render();
         }
@@ -493,18 +520,84 @@ export class LineEditor {
       }
       case 'list': {
         // Print listing on a new row, then redraw the prompt+line below it.
-        this.moveCursorToEnd();
-        this.stdout.write(LF);
         const w = this.termWidth();
         const block = formatCandidates(step.candidates, w);
-        this.stdout.write(block + LF);
-        this.active.rowsDrawn = 0;
-        this.active.cursorRow = 0;
-        this.active.cursorCol = 0;
-        this.render(true);
+        const blockRows = block.split('\n').length;
+        this.emitListingBelow(block, blockRows);
         return;
       }
     }
+  }
+
+  /**
+   * Print `block` on fresh rows below the prompt block, then redraw the
+   * prompt + buffer below it. Remembers how many rows the listing occupies
+   * in `listingRowsDrawn` so a subsequent cycle can rewrite it in place.
+   */
+  private emitListingBelow(block: string, blockRows: number): void {
+    if (this.active === null) return;
+    this.moveCursorToEnd();
+    this.stdout.write(LF);
+    this.stdout.write(block + LF);
+    this.active.rowsDrawn = 0;
+    this.active.cursorRow = 0;
+    this.active.cursorCol = 0;
+    this.active.listingRowsDrawn = blockRows;
+    this.render(true);
+  }
+
+  /**
+   * Rewrite the candidate listing in place. Pre-condition: a listing of
+   * `this.active.listingRowsDrawn` rows is currently drawn just above the
+   * prompt block.
+   *
+   *   1) Step up to the FIRST row of the listing (past the prompt block).
+   *   2) Erase + reprint each listing row.
+   *   3) Move back down past any trailing erase, then redraw prompt + buffer.
+   *
+   * If `block` has a different row count from the old listing the difference
+   * is absorbed by clearing extra rows (shrinking) or by accepting some
+   * scroll (growing — rare in practice because the candidate list is fixed
+   * for the duration of a cycle).
+   */
+  private rewriteListingInPlace(block: string, blockRows: number): void {
+    if (this.active === null) return;
+    const a = this.active;
+    const oldRows = a.listingRowsDrawn;
+    // 1. Cursor is somewhere inside the prompt block. Anchor to row 0 of the
+    //    prompt block first.
+    this.stdout.write(CR);
+    if (a.cursorRow > 0) this.stdout.write(csiUp(a.cursorRow));
+    // 2. Step up `oldRows` more rows so the cursor sits on the first row of
+    //    the listing.
+    this.stdout.write(csiUp(oldRows));
+    // 3. Erase each listing row and write the new block. We treat the listing
+    //    as `blockRows` lines separated by LF; on the last line we DON'T emit
+    //    a trailing LF (otherwise we'd push the prompt down by one row).
+    const newLines = block.split('\n');
+    for (let i = 0; i < newLines.length; i++) {
+      this.stdout.write(csiEraseToEol());
+      this.stdout.write(newLines[i]);
+      if (i < newLines.length - 1) this.stdout.write(LF + CR);
+    }
+    // 4. If the new block is shorter than the old one, clear the leftover
+    //    rows below.
+    if (blockRows < oldRows) {
+      const extra = oldRows - blockRows;
+      for (let i = 0; i < extra; i++) {
+        this.stdout.write(LF + CR + csiEraseToEol());
+      }
+      // Step back up so the cursor sits right under the last listing line.
+      this.stdout.write(csiUp(extra));
+    }
+    // 5. Move past the listing onto the row where the prompt should start.
+    this.stdout.write(LF + CR);
+    // 6. The prompt's geometry needs to be redrawn fresh below the listing.
+    a.rowsDrawn = 0;
+    a.cursorRow = 0;
+    a.cursorCol = 0;
+    a.listingRowsDrawn = blockRows;
+    this.render(true);
   }
 
   // -------------------------------------------------------------------------
@@ -604,24 +697,35 @@ export class LineEditor {
     // Compose the output: prompt + buffer text, with line wrapping computed
     // virtually so we know where the cursor ends up.
     const width = Math.max(1, this.termWidth());
-    const promptStr =
-      a.search === null
+    // Pick the prompt + rendered text for the three render flavours:
+    //   - vi ex-mode (`:`-prompt): `: <exBuffer>`, cursor at the end.
+    //   - reverse-i-search:        the `(reverse-i-search)\`pat':` preamble,
+    //                              with the matched pattern highlighted.
+    //   - default editing:         the caller-supplied prompt + buffer text.
+    const inExMode = this.state.mode === 'ex';
+    const promptStr = inExMode
+      ? ':'
+      : a.search === null
         ? a.prompt
         : `(reverse-i-search)\`${a.search.pattern}': `;
-    const rawText = this.state.buffer.text.replace(/\n/g, '⏎'); // newline glyph
+    const rawText = inExMode
+      ? this.state.exBuffer
+      : this.state.buffer.text.replace(/\n/g, '⏎'); // newline glyph
     // For search rendering we highlight the matched pattern (case-insensitive)
-    // inside the matched entry; otherwise the buffer text renders as-is.
+    // inside the matched entry; otherwise the rendered text equals the raw text.
     const renderText =
-      a.search !== null && a.search.pattern.length > 0
+      !inExMode && a.search !== null && a.search.pattern.length > 0
         ? highlightMatch(rawText, a.search.pattern)
         : rawText;
 
     const promptWidth = displayWidth(promptStr);
-    const before = this.codePointsBeforeCursor();
     // Cursor positioning uses the raw text length, NOT the rendered text
     // length, because ANSI escapes have zero display width but non-zero
-    // string length.
-    const beforeText = rawText.slice(0, before.length);
+    // string length. In ex mode the cursor always sits at the end of the
+    // ex buffer.
+    const beforeText = inExMode
+      ? rawText
+      : rawText.slice(0, this.codePointsBeforeCursor().length);
     const allText = renderText;
 
     // Compute physical row/col for cursor.

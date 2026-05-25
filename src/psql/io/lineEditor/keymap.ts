@@ -26,18 +26,22 @@ export type EditorAction =
   | { kind: 'clear-screen' }
   | { kind: 'search-start' } // ^R pressed (driver enters i-search loop)
   | { kind: 'paste-start' }
-  | { kind: 'paste-end' };
+  | { kind: 'paste-end' }
+  | { kind: 'ex-update' }; // vi ex-mode prompt buffer changed; redraw the `:` line
 
 /**
  * Editor mode:
  *   - 'emacs'  — the default; emacs-only dispatch (no vi modal behavior).
  *   - 'insert' — vi insert mode: printable keys insert, Esc switches to normal.
  *   - 'normal' — vi command mode: motions and edits.
+ *   - 'ex'     — vi ex-command mode: a `:` prompt line. Printable keys append
+ *                to `exBuffer`; Enter executes; Esc aborts back to normal.
  *
- * `'insert'` and `'normal'` are only used when the LineEditor was constructed
- * with `mode: 'vi'`; in that case each new readLine starts in `'insert'`.
+ * `'insert'`, `'normal'`, and `'ex'` are only used when the LineEditor was
+ * constructed with `mode: 'vi'`; in that case each new readLine starts in
+ * `'insert'`.
  */
-export type EditorMode = 'emacs' | 'insert' | 'normal';
+export type EditorMode = 'emacs' | 'insert' | 'normal' | 'ex';
 
 /**
  * Multi-key vi command prefix awaiting its next byte. `null` when no operator
@@ -68,6 +72,11 @@ export type EditorState = {
   mode: EditorMode;
   /** Pending vi operator awaiting its next byte. */
   viPending: ViPending;
+  /**
+   * Buffer for the vi `:`-ex command line. Populated while `mode === 'ex'`;
+   * cleared on exit. The leading `:` is implicit (rendered by the driver).
+   */
+  exBuffer: string;
 };
 
 export const makeState = (
@@ -82,6 +91,7 @@ export const makeState = (
   pasting: false,
   mode,
   viPending: null,
+  exBuffer: '',
 });
 
 /**
@@ -118,6 +128,9 @@ export const dispatch = (state: EditorState, ev: KeyEvent): EditorAction => {
   }
 
   // Route to vi dispatch when in vi modes.
+  if (state.mode === 'ex') {
+    return dispatchViEx(state, ev);
+  }
   if (state.mode === 'normal') {
     return dispatchViNormal(state, ev);
   }
@@ -571,9 +584,98 @@ const handleViNormalChar = (state: EditorState, ev: KeyEvent): EditorAction => {
       return { kind: 'noop' };
 
     case ':':
-      // Stretch goal — stubbed out; ring the bell so the user knows.
-      return { kind: 'bell' };
+      // Enter ex-prompt mode. The renderer draws a `:` line; printable keys
+      // accumulate in `exBuffer`; Enter executes; Esc returns to normal.
+      state.mode = 'ex';
+      state.exBuffer = '';
+      return { kind: 'ex-update' };
 
+    default:
+      return { kind: 'bell' };
+  }
+};
+
+/**
+ * Vi ex-prompt dispatch (`:`-line). Mirrors a tiny slice of vim's ex grammar:
+ *
+ *   - `q`, `quit`, `q!` — abort the current readLine (same as ^C).
+ *   - `w` (no arg)     — bell + ignore (we don't have a file to write to).
+ *   - Esc              — abort ex; return to normal mode.
+ *   - Enter            — execute the accumulated command.
+ *
+ * Printable characters extend `state.exBuffer`; Backspace shrinks it. Anything
+ * else bells. The renderer is responsible for drawing `: ` + exBuffer on its
+ * own row; we expose `ex-update` actions so it knows when to redraw.
+ */
+const dispatchViEx = (state: EditorState, ev: KeyEvent): EditorAction => {
+  switch (ev.key) {
+    case 'escape':
+      // Abort ex; back to normal without executing anything.
+      state.mode = 'normal';
+      state.exBuffer = '';
+      return { kind: 'redraw' };
+
+    case 'enter':
+      return executeExCommand(state);
+
+    case 'backspace':
+      if (state.exBuffer.length === 0) {
+        // Backspace through the implicit `:` returns to normal mode (matches
+        // vim's "backspace at column 1 of ex line").
+        state.mode = 'normal';
+        return { kind: 'redraw' };
+      }
+      state.exBuffer = state.exBuffer.slice(0, -1);
+      return { kind: 'ex-update' };
+
+    case 'char': {
+      const ch = ev.char ?? '';
+      // Ctrl/Meta combos aren't bound in ex.
+      if (ch.length === 0 || ev.ctrl || ev.meta) return { kind: 'bell' };
+      state.exBuffer += ch;
+      return { kind: 'ex-update' };
+    }
+
+    case 'paste-start':
+    case 'paste-end':
+    case 'tab':
+    case 'delete':
+    case 'left':
+    case 'right':
+    case 'up':
+    case 'down':
+    case 'home':
+    case 'end':
+    case 'pageup':
+    case 'pagedown':
+    case 'unknown':
+      return { kind: 'bell' };
+  }
+};
+
+/**
+ * Interpret the accumulated ex buffer. Returns the action the driver should
+ * apply (cancel = abort current readLine; bell = unknown command; redraw =
+ * fall back to normal mode without side effects).
+ */
+const executeExCommand = (state: EditorState): EditorAction => {
+  const cmd = state.exBuffer.trim();
+  // Always leave ex mode after Enter, even on unknown commands.
+  state.exBuffer = '';
+  state.mode = 'normal';
+
+  switch (cmd) {
+    case 'q':
+    case 'q!':
+    case 'quit':
+      // Abort the readLine. Same outcome as ^C — driver throws SignalError.
+      return { kind: 'cancel' };
+    case 'w':
+      // We don't have a file to write to; bell and return to normal.
+      return { kind: 'bell' };
+    case '':
+      // Bare `:` then Enter — just return to normal silently.
+      return { kind: 'redraw' };
     default:
       return { kind: 'bell' };
   }
