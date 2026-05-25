@@ -117,7 +117,7 @@ describe('PipelineSession', () => {
     const pipe = new PipelineSession(host);
     const p = pipe.parse('s1', 'SELECT 1', []);
     expect(rec.frames).toEqual(['P']);
-    rec.parses[0].resolve();
+    rec.parses[0].resolve(undefined);
     await p;
   });
 
@@ -126,7 +126,7 @@ describe('PipelineSession', () => {
     const pipe = new PipelineSession(host);
     const p = pipe.bind('s1', ['x', 42]);
     expect(rec.frames).toEqual(['B']);
-    rec.binds[0].resolve();
+    rec.binds[0].resolve(undefined);
     await p;
   });
 
@@ -145,7 +145,7 @@ describe('PipelineSession', () => {
     const endP = pipe.end();
     // end() writes the terminating Sync.
     expect(rec.frames[rec.frames.length - 1]).toBe('S');
-    rec.syncs[rec.syncs.length - 1].resolve();
+    rec.syncs[rec.syncs.length - 1].resolve(undefined);
     const results = await endP;
     expect(results.map((r) => r.rows)).toEqual([[['a']], [['b']]]);
     expect(host._extPipelineActive).toBe(false);
@@ -164,7 +164,7 @@ describe('PipelineSession', () => {
     const pipe = new PipelineSession(host);
     const sp = pipe.sync();
     expect(rec.frames).toEqual(['S']);
-    rec.syncs[0].resolve();
+    rec.syncs[0].resolve(undefined);
     await sp;
   });
 
@@ -173,7 +173,7 @@ describe('PipelineSession', () => {
     const pipe = new PipelineSession(host);
     const cp = pipe.close('s1');
     expect(rec.frames).toEqual(['C']);
-    rec.closes[0].resolve();
+    rec.closes[0].resolve(undefined);
     await cp;
   });
 
@@ -188,7 +188,7 @@ describe('PipelineSession', () => {
     rec.executes[2].resolve(fakeResult([['c']]));
     rec.executes[0].resolve(fakeResult([['a']]));
     const endP = pipe.end();
-    rec.syncs[rec.syncs.length - 1].resolve();
+    rec.syncs[rec.syncs.length - 1].resolve(undefined);
     const results = await endP;
     expect(results.map((r) => r.rows)).toEqual([[['a']], [['b']], [['c']]]);
   });

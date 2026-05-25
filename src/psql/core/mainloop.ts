@@ -53,6 +53,17 @@ import {
   cmdEndif,
   cmdIf,
 } from '../command/cmd_cond.js';
+import { consumeNext as consumeQueuedInput } from '../command/inputQueue.js';
+import { consumeBindState } from '../command/cmd_pipeline.js';
+import {
+  appendHistory,
+  defaultHistoryPath,
+  loadHistory,
+  resolveHistSize,
+  truncateHistory,
+} from '../io/history.js';
+import type { HistControl } from '../types/settings.js';
+import { LineEditor } from '../io/lineEditor/index.js';
 
 // ---------------------------------------------------------------------------
 // Exit codes — mirror psql's `EXIT_*` constants.
@@ -76,19 +87,29 @@ const COND_COMMANDS: ReadonlyMap<string, BackslashCmdSpec> = new Map([
 ]);
 
 // ---------------------------------------------------------------------------
-// Line source abstraction.
+// Line reader abstraction.
 //
-// For test ergonomics we accept any NodeJS.ReadableStream. We layer a small
-// async-iterator over readline so callers can pass `process.stdin` or a
-// `stream.Readable.from([...])` and get the same behaviour. Readline handles
-// CRLF and EOF for us.
+// Two backends:
+//   - notty (file / pipe stdin): a `readline` async-iterator. Prompts are
+//     suppressed by the surrounding caller; we just stream lines.
+//   - interactive TTY: the WP-24 LineEditor (raw-mode VT100 with emacs
+//     keybindings + reverse-i-search) plus WP-25 history persistence loaded
+//     from / appended to $PSQL_HISTORY (default `~/.psql_history`).
+//
+// We expose `readLine(prompt)` so the caller decides what prompt to render
+// per turn (the prompt string is computed against the current scanner /
+// transaction state by `buildPromptContext`).
 // ---------------------------------------------------------------------------
 
-type LineSource = AsyncIterableIterator<string> & {
-  close(): void;
+type LineReader = {
+  /** Resolve next line; null on EOF. */
+  readLine(prompt: string): Promise<string | null>;
+  /** Record a submitted line in the live history (in-memory + on-disk). */
+  pushHistory(line: string): void;
+  close(): Promise<void>;
 };
 
-const makeLineSource = (input: NodeJS.ReadableStream): LineSource => {
+const makeStreamLineReader = (input: NodeJS.ReadableStream): LineReader => {
   const rl = readline.createInterface({
     input,
     crlfDelay: Infinity,
@@ -96,14 +117,76 @@ const makeLineSource = (input: NodeJS.ReadableStream): LineSource => {
   });
   const iter = rl[Symbol.asyncIterator]();
   return {
-    next: (): Promise<IteratorResult<string>> => iter.next(),
-    [Symbol.asyncIterator](): AsyncIterableIterator<string> {
-      return this;
+    readLine: async (): Promise<string | null> => {
+      const r = await iter.next();
+      return r.done ? null : r.value;
     },
-    close: (): void => {
+    pushHistory: (): void => undefined,
+    close: (): Promise<void> => {
       rl.close();
+      return Promise.resolve();
     },
   };
+};
+
+const makeEditorLineReader = async (ctx: REPLContext): Promise<LineReader> => {
+  const env = process.env;
+  const histPath = defaultHistoryPath(env);
+  const histSize = resolveHistSize(env);
+  const histControl =
+    (ctx.settings.vars.get('HISTCONTROL') as HistControl | undefined) ??
+    ctx.settings.histControl;
+  let history: string[] = [];
+  try {
+    history = await loadHistory(histPath);
+  } catch {
+    // Missing or unreadable history file — start fresh.
+    history = [];
+  }
+  const editor = new LineEditor({
+    stdin: ctx.stdin as NodeJS.ReadStream,
+    stdout: ctx.stdout,
+    history,
+  });
+  return {
+    readLine: async (prompt: string): Promise<string | null> => {
+      const r = await editor.readLine(prompt);
+      if (r === editor.EOF) return null;
+      return r as string;
+    },
+    pushHistory: (line: string): void => {
+      const trimmed = line.replace(/\n+$/, '');
+      if (trimmed.length === 0) return;
+      editor.pushHistory(trimmed);
+      // Best-effort persist. We don't block the REPL on disk I/O.
+      void appendHistory(histPath, trimmed, histControl).catch(() => undefined);
+    },
+    close: async (): Promise<void> => {
+      try {
+        editor.close();
+      } catch {
+        // ignore
+      }
+      // Truncate to HISTSIZE on exit (libreadline behaviour).
+      try {
+        await truncateHistory(histPath, histSize);
+      } catch {
+        // ignore
+      }
+    },
+  };
+};
+
+const makeLineReader = async (ctx: REPLContext): Promise<LineReader> => {
+  if (ctx.settings.notty) {
+    return makeStreamLineReader(ctx.stdin);
+  }
+  try {
+    return await makeEditorLineReader(ctx);
+  } catch {
+    // Fall back to the dumb reader if raw-mode setup fails (e.g., tests).
+    return makeStreamLineReader(ctx.stdin);
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -265,12 +348,34 @@ const dispatchRegisteredCommand = async (
 // ---------------------------------------------------------------------------
 // SendQuery — delegate to the unified pipeline in `common.ts`. Returns the
 // success flag so the read loop can short-circuit under ON_ERROR_STOP.
+//
+// If `\bind` (WP-21) has stashed parameters on the settings, route through
+// the extended-query path on the Connection. Otherwise use the simple-query
+// pipeline.
 // ---------------------------------------------------------------------------
 
 const dispatchSendQuery = async (
   ctx: REPLContext,
   sql: string,
 ): Promise<boolean> => {
+  const bind = consumeBindState(ctx.settings);
+  if (bind && ctx.settings.db) {
+    try {
+      const rs = await ctx.settings.db.query(sql, bind.values);
+      // Result rendering goes through the same printer path common.ts uses.
+      // For a single-shot extended query we render via execQueryAndProcessResults
+      // by delegating to sendQuery on a wrapped SQL — simpler: print here.
+      // Defer fully-featured extended rendering to a follow-up; for now the
+      // command at least executes and reports row count.
+      ctx.stderr.write(`-- bound query: ${rs.rowCount ?? 0} row(s)\n`);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.settings.lastErrorResult = { message };
+      writeError(ctx, message);
+      return false;
+    }
+  }
   const stats = await sendQuery(ctx, sql);
   return !stats.hadError;
 };
@@ -304,7 +409,7 @@ const installSigint = (ctx: REPLContext, state: SigintState): (() => void) => {
 // ---------------------------------------------------------------------------
 
 export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
-  const lineSource = makeLineSource(ctx.stdin);
+  const reader = await makeLineReader(ctx);
 
   let queryBuf = '';
   let scanState: ScanState = initialScanState();
@@ -321,10 +426,11 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   const sigintState: SigintState = { inQuery: false, resetBuf };
   const removeSigint = installSigint(ctx, sigintState);
 
-  // Render and write a prompt to stdout. For non-interactive (notty) input
-  // we skip rendering so script-driven runs don't pollute stdout.
-  const writePrompt = (status: PromptContext['promptStatus']): void => {
-    if (ctx.settings.notty) return;
+  // Compute the prompt string for the current state. For notty input we emit
+  // the empty string so the stream reader doesn't see prompt bytes interleaved
+  // with stdout. For TTY input the LineEditor renders the prompt itself.
+  const computePrompt = (status: PromptContext['promptStatus']): string => {
+    if (ctx.settings.notty) return '';
     const name =
       queryBuf.length === 0 || status === 'ready'
         ? 'PROMPT1'
@@ -332,8 +438,7 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           ? 'PROMPT3'
           : 'PROMPT2';
     const promptCtx = buildPromptContext(ctx, status, stmtLineNumber);
-    const text = renderPromptByName(name, promptCtx);
-    ctx.stdout.write(text);
+    return renderPromptByName(name, promptCtx);
   };
 
   /**
@@ -437,21 +542,48 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   };
 
   // -----------------------------------------------------------------------
-  // Read loop. readline emits one line per `for await`; we re-add the
-  // trailing newline so scanSql sees the same character stream a byte-level
-  // reader would.
+  // Read loop. Each iteration:
+  //   1. Drain any pending input enqueued by `\i FILE` (WP-15) — those lines
+  //      take precedence over fresh stdin so the include behaves as a
+  //      prepend on the input source.
+  //   2. Otherwise, ask the reader for the next line. For notty input this
+  //      is a `readline` stream; for TTY input it's the LineEditor with
+  //      emacs keybindings + persistent history (WP-24 + WP-25).
+  //   3. Each submitted line is recorded in history.
   // -----------------------------------------------------------------------
   try {
-    writePrompt('ready');
-    for await (const rawLine of lineSource) {
-      const line = rawLine + '\n';
-      await processChunk(line);
-      if (exitRequested) break;
-      if (queryBuf.length === 0) {
-        writePrompt('ready');
-      } else {
-        writePrompt(scanState.promptStatus);
+    while (!exitRequested) {
+      const status: PromptContext['promptStatus'] =
+        queryBuf.length === 0 ? 'ready' : scanState.promptStatus;
+      const prompt = computePrompt(status);
+
+      // 1. Pending input from \i: process as a single chunk and loop again.
+      const queued = consumeQueuedInput();
+      if (queued !== null) {
+        await processChunk(queued.endsWith('\n') ? queued : queued + '\n');
+        continue;
       }
+
+      // 2. Read the next line from stdin / line editor.
+      let line: string | null;
+      try {
+        line = await reader.readLine(prompt);
+      } catch (err) {
+        // SignalError (Ctrl-C on an interactive line) — drop the partial
+        // buffer and re-prompt, matching upstream psql.
+        if ((err as Error).name === 'SignalError') {
+          resetBuf();
+          continue;
+        }
+        throw err;
+      }
+      if (line === null) break; // EOF
+
+      // 3. Push to history once we have a complete submitted line (only
+      //    when there's something non-blank to record).
+      reader.pushHistory(line);
+
+      await processChunk(line + '\n');
     }
 
     // EOF: if there's a residual non-empty buffer in non-interactive mode,
@@ -483,7 +615,7 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       }
     }
   } finally {
-    lineSource.close();
+    await reader.close();
     removeSigint();
   }
 
