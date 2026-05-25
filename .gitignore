@@ -10,3 +10,4 @@ bundle/
 coverage
 tmp/
 .history
+.npmrc
