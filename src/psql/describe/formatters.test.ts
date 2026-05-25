@@ -796,6 +796,332 @@ describe('describeOneTableDetails', () => {
     expect(text).toContain('Number of partitions: 0');
     expect(text).not.toContain('(Use \\d+ to list them.)');
   });
+
+  // -------------------------------------------------------------------
+  // Round-2 sections: Statistics objects, Publications, Subscriptions,
+  // Per-column FDW options, TOAST Owning table.
+  // -------------------------------------------------------------------
+
+  it('renders Statistics objects section with mixed kinds (verbose)', async () => {
+    const cols = boringCols();
+    const stats = mkResultSet(
+      [
+        'stxnsp',
+        'stxname',
+        'ndist_enabled',
+        'deps_enabled',
+        'mcv_enabled',
+        'columns',
+        'stxrelname',
+        'stxstattarget',
+      ],
+      [
+        ['public', 'foo_stats', 't', 't', 'f', 'a, b', 'public.foo', '-1'],
+        ['public', 'foo_mcv', 'f', 'f', 't', 'c', 'public.foo', '-1'],
+      ],
+    );
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(['f', 'f', 'd', 'f', 0, 0, null, null]),
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_statistic_ext'),
+        rs: stats,
+      },
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      true,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).toContain('Statistics objects:');
+    expect(text).toContain(
+      '"public"."foo_stats" (ndistinct, dependencies) ON a, b FROM public.foo',
+    );
+    expect(text).toContain('"public"."foo_mcv" (mcv) ON c FROM public.foo');
+  });
+
+  it('does NOT render Statistics objects in non-verbose mode', async () => {
+    const cols = boringCols();
+    const stats = mkResultSet(
+      [
+        'stxnsp',
+        'stxname',
+        'ndist_enabled',
+        'deps_enabled',
+        'mcv_enabled',
+        'columns',
+        'stxrelname',
+        'stxstattarget',
+      ],
+      [['public', 'foo_stats', 't', 'f', 'f', 'a', 'public.foo', '-1']],
+    );
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(['f', 'f', 'd', 'f', 0, 0, null, null]),
+      // Even if returned, non-verbose mode must not query / render this.
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_statistic_ext'),
+        rs: stats,
+      },
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    expect(cap.text()).not.toContain('Statistics objects:');
+  });
+
+  it('renders Publications with explicit + FOR ALL TABLES entries', async () => {
+    const cols = boringCols();
+    const pubs = mkResultSet(
+      ['pubname'],
+      [['pub_all_tables'], ['pub_explicit_a'], ['pub_explicit_b']],
+    );
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(),
+      {
+        match: (s) =>
+          s.includes('FROM pg_catalog.pg_publication') &&
+          s.includes('puballtables'),
+        rs: pubs,
+      },
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).toContain('Publications:');
+    expect(text).toContain('"pub_all_tables"');
+    expect(text).toContain('"pub_explicit_a"');
+    expect(text).toContain('"pub_explicit_b"');
+  });
+
+  it('omits Publications section when no rows', async () => {
+    const cols = boringCols();
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(),
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    expect(cap.text()).not.toContain('Publications:');
+  });
+
+  it('renders Subscriptions section listing matched subs', async () => {
+    const cols = boringCols();
+    const subs = mkResultSet(['subname'], [['sub_a']]);
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(),
+      {
+        match: (s) =>
+          s.includes('FROM pg_catalog.pg_subscription') &&
+          s.includes('pg_subscription_rel'),
+        rs: subs,
+      },
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).toContain('Subscriptions:');
+    expect(text).toContain('"sub_a"');
+  });
+
+  it('silently omits Subscriptions on permission denied', async () => {
+    const cols = boringCols();
+    const empty = mkResultSet([], []);
+    const denied = Object.assign(
+      new Error('permission denied for table pg_subscription'),
+      { code: '42501' },
+    );
+    // The subscription query must reject; everything after it must still
+    // run normally. We use a stateful counter on the matcher to ensure
+    // only the subscription query fails.
+    const conn: Connection = {
+      ...mkConnection([
+        { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+        tableInfoMatch(),
+        { match: () => true, rs: empty },
+      ]),
+      query: vi.fn((sql: string) => {
+        if (
+          sql.includes('FROM pg_catalog.pg_subscription') &&
+          sql.includes('pg_subscription_rel')
+        ) {
+          return Promise.reject(denied);
+        }
+        if (sql.includes('FROM pg_catalog.pg_attribute')) {
+          return Promise.resolve(cols);
+        }
+        if (sql.includes('c.relreplident')) {
+          return Promise.resolve(
+            mkResultSet(
+              [
+                'relrowsecurity',
+                'relforcerowsecurity',
+                'relreplident',
+                'relispartition',
+                'reltablespace',
+                'relam',
+                'spcname',
+                'amname',
+              ],
+              [['f', 'f', 'd', 'f', 0, 0, null, null]],
+            ),
+          );
+        }
+        return Promise.resolve(empty);
+      }) as Connection['query'],
+    };
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    expect(cap.text()).not.toContain('Subscriptions:');
+  });
+
+  it('renders Per-column FDW options for foreign table', async () => {
+    const cols = boringCols();
+    const ftInfo = mkResultSet(
+      ['srvname', 'ftoptions'],
+      [['srv1', "table_name 'remote_t'"]],
+    );
+    const colOpts = mkResultSet(
+      ['attname', 'opts'],
+      [
+        ['c1', "column_name 'remote_c1'"],
+        ['c3', "column_name 'remote_c3', max_length '32'"],
+      ],
+    );
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_attribute a'),
+        rs: colOpts,
+      },
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(['f', 'f', 'd', 'f', 0, 0, null, null]),
+      {
+        match: (s) => s.includes('pg_catalog.pg_foreign_table'),
+        rs: ftInfo,
+      },
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'remote_t',
+      'f',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).toContain('Per-column FDW options:');
+    expect(text).toContain("c1: (column_name 'remote_c1')");
+    expect(text).toContain("c3: (column_name 'remote_c3', max_length '32')");
+  });
+
+  it('renders Owning table footer for TOAST relation', async () => {
+    const cols = mkResultSet(
+      [
+        'attname',
+        'type',
+        'default',
+        'attnotnull',
+        'collation',
+        'identity',
+        'generated',
+      ],
+      [['chunk_id', 'oid', null, 't', null, '', '']],
+    );
+    const owner = mkResultSet(['relname'], [['public.foo']]);
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(),
+      {
+        match: (s) =>
+          s.includes('FROM pg_catalog.pg_class') && s.includes('reltoastrelid'),
+        rs: owner,
+      },
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'pg_toast',
+      'pg_toast_12345',
+      't',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).toContain('TOAST table "pg_toast.pg_toast_12345"');
+    expect(text).toContain('Owning table: public.foo');
+  });
 });
 
 // ---------------------------------------------------------------------------

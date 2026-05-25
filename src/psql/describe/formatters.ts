@@ -49,9 +49,14 @@ import {
   fetchInherits,
   fetchPartitionKey,
   fetchPartitionOf,
+  fetchPerColumnFdwOptions,
   fetchPolicies,
   fetchReplicaIdentityIndex,
+  fetchStatisticsObjects,
   fetchTableInfo,
+  fetchTablePublications,
+  fetchTableSubscriptions,
+  fetchToastOwningTable,
 } from './queries.js';
 import { applyPattern, type NamePatternResult } from './processNamePattern.js';
 
@@ -322,6 +327,11 @@ export const describeOneTableDetails = async (
     await renderForeignTableFooter(conn, oid, out);
   }
 
+  // ----- Per-column FDW options (foreign tables only) -----
+  if (relkind === 'f') {
+    await renderPerColumnFdwOptionsSection(conn, oid, out);
+  }
+
   // ----- Inherits: (parents) — for tables, partitioned tables, foreign -----
   if (relkind === 'r' || relkind === 'p' || relkind === 'f') {
     await renderInheritsSection(conn, oid, out);
@@ -330,6 +340,34 @@ export const describeOneTableDetails = async (
   // ----- Inherited by / Partitions / Number of [child tables|partitions] -----
   if (relkind === 'r' || relkind === 'p' || relkind === 'f') {
     await renderInheritedBySection(conn, oid, relkind, verbose, out);
+  }
+
+  // ----- Publications (any publishable relkind) -----
+  if (
+    relkind === 'r' ||
+    relkind === 'p' ||
+    relkind === 'm' ||
+    relkind === 'f'
+  ) {
+    await renderPublicationsSection(conn, oid, out);
+  }
+
+  // ----- Subscriptions (any publishable relkind; permission-denied silent) -----
+  if (
+    relkind === 'r' ||
+    relkind === 'p' ||
+    relkind === 'm' ||
+    relkind === 'f'
+  ) {
+    await renderSubscriptionsSection(conn, oid, out);
+  }
+
+  // ----- Statistics objects (verbose; r/m/p/f) -----
+  if (
+    verbose &&
+    (relkind === 'r' || relkind === 'm' || relkind === 'p' || relkind === 'f')
+  ) {
+    await renderStatisticsObjectsSection(conn, oid, out);
   }
 
   // ----- Replica Identity (verbose, non-default, regular & matview) -----
@@ -345,6 +383,11 @@ export const describeOneTableDetails = async (
   // ----- Access method footer (verbose: relkind r/m/p with relam set) -----
   if (verbose && (relkind === 'r' || relkind === 'm' || relkind === 'p')) {
     renderAccessMethodFooter(relInfo, out);
+  }
+
+  // ----- Owning table (TOAST tables only) -----
+  if (relkind === 't') {
+    await renderToastOwningTableFooter(conn, oid, out);
   }
 };
 
@@ -827,6 +870,141 @@ const renderTriggersSection = async (
   for (const r of rs.rows) {
     out.write(`    ${cellToString(r[1])}\n`);
   }
+};
+
+/**
+ * Render `Statistics objects:\n    "schema"."name" (kinds) ON cols FROM tbl`
+ * for each `pg_statistic_ext` row on the relation. Verbose-only.
+ *
+ * Upstream concatenates the active "kinds" (ndistinct / dependencies / mcv)
+ * inside parentheses; we preserve insertion order matching upstream.
+ */
+const renderStatisticsObjectsSection = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchStatisticsObjects({ oid, serverVersion: conn.serverVersion });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  out.write('Statistics objects:\n');
+  for (const r of rs.rows) {
+    const nsp = cellToString(r[0] ?? '');
+    const name = cellToString(r[1] ?? '');
+    const ndist = parseBool(r[2]);
+    const deps = parseBool(r[3]);
+    const mcv = parseBool(r[4]);
+    const columns = cellToString(r[5] ?? '');
+    const relname = cellToString(r[6] ?? '');
+    const kinds: string[] = [];
+    if (ndist) kinds.push('ndistinct');
+    if (deps) kinds.push('dependencies');
+    if (mcv) kinds.push('mcv');
+    const kindStr = kinds.length > 0 ? ` (${kinds.join(', ')})` : '';
+    out.write(
+      `    "${nsp}"."${name}"${kindStr} ON ${columns} FROM ${relname}\n`,
+    );
+  }
+};
+
+/**
+ * Render `Publications:\n    "name"` (one per row) for any publication
+ * the relation belongs to (explicit, FOR ALL TABLES, or FOR ALL TABLES
+ * IN SCHEMA). No-op when the result set is empty.
+ */
+const renderPublicationsSection = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchTablePublications({ oid, serverVersion: conn.serverVersion });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  out.write('Publications:\n');
+  for (const r of rs.rows) {
+    out.write(`    "${cellToString(r[0] ?? '')}"\n`);
+  }
+};
+
+/**
+ * Render `Subscriptions:\n    "name"` (one per row). Requires superuser
+ * access to `pg_subscription` — when the query fails with a permission
+ * error, the section is silently omitted (mirroring upstream behaviour).
+ */
+const renderSubscriptionsSection = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchTableSubscriptions({ oid, serverVersion: conn.serverVersion });
+  let rs;
+  try {
+    rs = await conn.query(q.sql, q.params);
+  } catch (err) {
+    if (isPermissionDeniedError(err)) return;
+    throw err;
+  }
+  if (rs.rows.length === 0) return;
+  out.write('Subscriptions:\n');
+  for (const r of rs.rows) {
+    out.write(`    "${cellToString(r[0] ?? '')}"\n`);
+  }
+};
+
+/**
+ * Render `Per-column FDW options:\n    col: (k 'v', k 'v')` for each
+ * column on a foreign table that has at least one FDW option set. No-op
+ * when the result set is empty.
+ */
+const renderPerColumnFdwOptionsSection = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchPerColumnFdwOptions({ oid });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  out.write('Per-column FDW options:\n');
+  for (const r of rs.rows) {
+    const attname = cellToString(r[0] ?? '');
+    const opts = cellToString(r[1] ?? '');
+    out.write(`    ${attname}: (${opts})\n`);
+  }
+};
+
+/**
+ * Render `Owning table: "schema"."name"` for a TOAST relation. Matches
+ * upstream's `\d <toast>` footer.
+ */
+const renderToastOwningTableFooter = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchToastOwningTable({ oid });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  const owner = cellToString(rs.rows[0][0] ?? '');
+  if (owner === '') return;
+  out.write(`Owning table: ${owner}\n`);
+};
+
+/**
+ * Detect a "permission denied" PostgresError (SQLSTATE 42501) on a
+ * thrown value. We look at both `code` (SQLSTATE) and the message text
+ * because not every transport layer surfaces the code. The check is
+ * intentionally conservative — we only swallow genuine privilege
+ * errors, not arbitrary failures.
+ */
+const isPermissionDeniedError = (err: unknown): boolean => {
+  if (err === null || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === 'string' && code === '42501') return true;
+  const message = (err as { message?: unknown }).message;
+  if (typeof message === 'string' && /permission denied/i.test(message)) {
+    return true;
+  }
+  return false;
 };
 
 /**

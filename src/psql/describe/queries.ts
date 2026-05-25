@@ -2239,3 +2239,159 @@ export const fetchReplicaIdentityIndex = (opts: {
     'LIMIT 1;';
   return { sql, params: [], description: 'Replica-identity index' };
 };
+
+/**
+ * Extended-statistics objects defined on a relation. Mirrors the upstream
+ * verbose-only `\d+` section. Output columns:
+ *   stxnsp, stxname, ndist_enabled, deps_enabled, mcv_enabled, columns,
+ *   stxrelname, stxstattarget.
+ *
+ * Only meaningful on PG 10+ (the catalog table `pg_statistic_ext` doesn't
+ * exist before then). Caller gates by `relkind in ('r','m','p','f')` and
+ * verbose mode.
+ */
+export const fetchStatisticsObjects = (opts: {
+  oid: number;
+  serverVersion: ServerVersion;
+}): DescribeQuery => {
+  const { oid, serverVersion } = opts;
+  if (serverLess(serverVersion, PG_10)) {
+    return {
+      sql: '/* server < 10 does not support extended statistics */ SELECT 1 WHERE false;',
+      params: [],
+      description: 'Statistics objects',
+    };
+  }
+  // `pg_get_statisticsobjdef_columns` was added in PG 14. Older servers
+  // reconstruct the column list from `pg_statistic_ext.stxkeys`.
+  const columnsExpr = serverAtLeast(serverVersion, PG_14)
+    ? 'pg_catalog.pg_get_statisticsobjdef_columns(es.oid)'
+    : "(SELECT pg_catalog.string_agg(pg_catalog.quote_ident(a.attname), ', ')\n" +
+      '   FROM pg_catalog.unnest(es.stxkeys) k(attnum)\n' +
+      '   JOIN pg_catalog.pg_attribute a ON a.attrelid = es.stxrelid AND a.attnum = k.attnum AND NOT a.attisdropped)';
+  // `pg_statistic_ext.stxstattarget` exists on every supported PG; PG 17
+  // changed its type from int4 to int2 but we just CAST to text.
+  const sql =
+    'SELECT es.stxnamespace::pg_catalog.regnamespace::pg_catalog.text AS stxnsp,\n' +
+    '  es.stxname,\n' +
+    "  'd' = any(es.stxkind) AS ndist_enabled,\n" +
+    "  'f' = any(es.stxkind) AS deps_enabled,\n" +
+    "  'm' = any(es.stxkind) AS mcv_enabled,\n" +
+    '  ' +
+    columnsExpr +
+    ' AS columns,\n' +
+    '  es.stxrelid::pg_catalog.regclass::pg_catalog.text AS stxrelname,\n' +
+    '  es.stxstattarget\n' +
+    'FROM pg_catalog.pg_statistic_ext es\n' +
+    `WHERE es.stxrelid = '${oid}'\n` +
+    'ORDER BY stxnsp, es.stxname;';
+  return { sql, params: [], description: 'Statistics objects' };
+};
+
+/**
+ * Publications a relation belongs to. Returns one column `pubname` per
+ * publication. Covers the three sources upstream considers:
+ *   - explicit `pg_publication_rel` membership
+ *   - `puballtables` (FOR ALL TABLES)
+ *   - `pg_publication_namespace` (FOR ALL TABLES IN SCHEMA, PG 15+)
+ *
+ * Pre-PG 10 servers return an empty set (publications don't exist).
+ */
+export const fetchTablePublications = (opts: {
+  oid: number;
+  serverVersion: ServerVersion;
+}): DescribeQuery => {
+  const { oid, serverVersion } = opts;
+  if (serverLess(serverVersion, PG_10)) {
+    return {
+      sql: '/* server < 10 does not support publications */ SELECT 1 WHERE false;',
+      params: [],
+      description: 'Table publications',
+    };
+  }
+  const hasPubNs = serverAtLeast(serverVersion, PG_15);
+  let sql =
+    'SELECT pub.pubname\n' +
+    'FROM pg_catalog.pg_publication pub\n' +
+    'WHERE pub.puballtables\n' +
+    '   OR EXISTS (\n' +
+    '     SELECT 1 FROM pg_catalog.pg_publication_rel pr\n' +
+    `     WHERE pr.prpubid = pub.oid AND pr.prrelid = '${oid}'\n` +
+    '   )';
+  if (hasPubNs) {
+    sql +=
+      '\n   OR EXISTS (\n' +
+      '     SELECT 1 FROM pg_catalog.pg_publication_namespace pn\n' +
+      `     JOIN pg_catalog.pg_class c ON c.oid = '${oid}'\n` +
+      '     WHERE pn.pnpubid = pub.oid AND pn.pnnspid = c.relnamespace\n' +
+      '   )';
+  }
+  sql += '\nORDER BY 1;';
+  return { sql, params: [], description: 'Table publications' };
+};
+
+/**
+ * Subscriptions that include this relation. Mirrors the upstream
+ * `\d+` section. Requires read access to `pg_subscription`, which is
+ * only granted to superusers — the formatter must swallow
+ * permission-denied errors silently.
+ *
+ * Pre-PG 10 servers return an empty set.
+ */
+export const fetchTableSubscriptions = (opts: {
+  oid: number;
+  serverVersion: ServerVersion;
+}): DescribeQuery => {
+  const { oid, serverVersion } = opts;
+  if (serverLess(serverVersion, PG_10)) {
+    return {
+      sql: '/* server < 10 does not support subscriptions */ SELECT 1 WHERE false;',
+      params: [],
+      description: 'Table subscriptions',
+    };
+  }
+  const sql =
+    'SELECT sub.subname\n' +
+    'FROM pg_catalog.pg_subscription sub\n' +
+    'JOIN pg_catalog.pg_subscription_rel sr ON sr.srsubid = sub.oid\n' +
+    `WHERE sr.srrelid = '${oid}'\n` +
+    'ORDER BY 1;';
+  return { sql, params: [], description: 'Table subscriptions' };
+};
+
+/**
+ * Per-column FDW options for a foreign table. Returns one row per column
+ * that has at least one `attfdwoptions` entry. Output columns:
+ *   attname, opts (pre-formatted "k 'v', k 'v'").
+ *
+ * Only meaningful for `relkind = 'f'`.
+ */
+export const fetchPerColumnFdwOptions = (opts: {
+  oid: number;
+}): DescribeQuery => {
+  const { oid } = opts;
+  const sql =
+    'SELECT a.attname,\n' +
+    '  pg_catalog.array_to_string(ARRAY(\n' +
+    "    SELECT pg_catalog.quote_ident(option_name) || ' ' || pg_catalog.quote_literal(option_value)\n" +
+    "    FROM pg_catalog.pg_options_to_table(a.attfdwoptions)), ', ') AS opts\n" +
+    'FROM pg_catalog.pg_attribute a\n' +
+    `WHERE a.attrelid = '${oid}' AND a.attnum > 0 AND NOT a.attisdropped\n` +
+    '  AND a.attfdwoptions IS NOT NULL\n' +
+    'ORDER BY a.attnum;';
+  return { sql, params: [], description: 'Per-column FDW options' };
+};
+
+/**
+ * For a TOAST table (`relkind = 't'`), look up the owning user table.
+ * Returns at most one row with the parent's regclass-formatted name.
+ */
+export const fetchToastOwningTable = (opts: { oid: number }): DescribeQuery => {
+  const { oid } = opts;
+  const sql =
+    'SELECT oid::pg_catalog.regclass::pg_catalog.text AS relname\n' +
+    'FROM pg_catalog.pg_class\n' +
+    `WHERE reltoastrelid = '${oid}'\n` +
+    'LIMIT 1;';
+  return { sql, params: [], description: 'TOAST owning table' };
+};
