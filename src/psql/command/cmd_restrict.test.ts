@@ -14,6 +14,7 @@ import {
   RESTRICTED_COMMANDS,
   RESTRICTED_VAR,
   restrictedName,
+  wrapRestrictedCommands,
 } from './cmd_restrict.js';
 import {
   createBackslashRegistry,
@@ -355,5 +356,125 @@ describe('defaultRegistry includes restrict commands', () => {
   test('lookup finds \\unrestrict', () => {
     const r = defaultRegistry();
     expect(r.lookup('unrestrict')?.name).toBe('unrestrict');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wrapRestrictedCommands — gates `spec.run` so callers that bypass
+// `dispatchBackslash` (e.g. the REPL mainloop) still see the refusal.
+// ---------------------------------------------------------------------------
+
+describe('wrapRestrictedCommands (spec-level gate)', () => {
+  test('wrapped `\\!` refuses to run while restricted', async () => {
+    const r = createBackslashRegistry();
+    registerRestrictCommands(r);
+    let invocations = 0;
+    r.register({
+      name: '!',
+      argMode: 'whole-line',
+      run: () => {
+        invocations += 1;
+        return Promise.resolve({ status: 'ok' });
+      },
+    });
+    wrapRestrictedCommands(r);
+
+    const settings = defaultSettings(createVarStore());
+    settings.vars.set(RESTRICTED_VAR, 'k');
+
+    // Call spec.run directly — this is what the REPL mainloop does.
+    const spec = r.lookup('!');
+    expect(spec).toBeDefined();
+    const ctx = makeMockCtx('!', 'echo hi', settings);
+    const result = await (spec as BackslashCmdSpec).run(ctx);
+    expect(result.status).toBe('error');
+    expect(invocations).toBe(0);
+    expect(stderr()).toMatch(/not allowed in restricted mode/);
+  });
+
+  test('wrapped `\\!` runs while unrestricted', async () => {
+    const r = createBackslashRegistry();
+    registerRestrictCommands(r);
+    let invocations = 0;
+    r.register({
+      name: '!',
+      argMode: 'whole-line',
+      run: () => {
+        invocations += 1;
+        return Promise.resolve({ status: 'ok' });
+      },
+    });
+    wrapRestrictedCommands(r);
+
+    const settings = defaultSettings(createVarStore());
+    const spec = r.lookup('!');
+    const ctx = makeMockCtx('!', 'echo hi', settings);
+    const result = await (spec as BackslashCmdSpec).run(ctx);
+    expect(result.status).toBe('ok');
+    expect(invocations).toBe(1);
+  });
+
+  test('wrap is idempotent — calling twice keeps the same gate', async () => {
+    const r = createBackslashRegistry();
+    registerRestrictCommands(r);
+    let invocations = 0;
+    r.register({
+      name: '!',
+      run: () => {
+        invocations += 1;
+        return Promise.resolve({ status: 'ok' });
+      },
+    });
+    wrapRestrictedCommands(r);
+    wrapRestrictedCommands(r);
+
+    const settings = defaultSettings(createVarStore());
+    settings.vars.set(RESTRICTED_VAR, 'k');
+    const spec = r.lookup('!');
+    const result = await (spec as BackslashCmdSpec).run(
+      makeMockCtx('!', '', settings),
+    );
+    expect(result.status).toBe('error');
+    expect(invocations).toBe(0);
+    // And a single refusal message — no double-emission from double-wrap.
+    const matches = stderr().match(/not allowed in restricted mode/g) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  test('defaultRegistry wires up the wrap by default', async () => {
+    const r = defaultRegistry();
+    const settings = defaultSettings(createVarStore());
+    settings.vars.set(RESTRICTED_VAR, 'k');
+    const spec = r.lookup('!');
+    expect(spec).toBeDefined();
+    const ctx = makeMockCtx('!', '', settings);
+    const result = await (spec as BackslashCmdSpec).run(ctx);
+    expect(result.status).toBe('error');
+    expect(stderr()).toMatch(/not allowed in restricted mode/);
+  });
+
+  test('round-trip via spec.run (the REPL mainloop path)', async () => {
+    const r = defaultRegistry();
+    const settings = defaultSettings(createVarStore());
+
+    // Restricted blocks \!.
+    settings.vars.set(RESTRICTED_VAR, 'k');
+    let result = await (r.lookup('!') as BackslashCmdSpec).run(
+      makeMockCtx('!', 'echo hi', settings),
+    );
+    expect(result.status).toBe('error');
+
+    // \unrestrict with matching key still works (not in the restricted set).
+    result = await (r.lookup('unrestrict') as BackslashCmdSpec).run(
+      makeMockCtx('unrestrict', 'k', settings),
+    );
+    expect(result.status).toBe('ok');
+    expect(isRestricted(settings)).toBe(false);
+
+    // \! works again.
+    result = await (r.lookup('!') as BackslashCmdSpec).run(
+      makeMockCtx('!', 'true', settings),
+    );
+    expect(result.status).toBe('ok');
   });
 });

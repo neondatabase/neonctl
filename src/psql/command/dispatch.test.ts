@@ -187,9 +187,13 @@ describe('defaultRegistry()', () => {
       'setenv',
       'errverbose',
       'timing',
+      'copyright',
+      'h',
     ]) {
       expect(r.lookup(name), `missing meta command \\${name}`).toBeDefined();
     }
+    // `\help` resolves through the `h` alias.
+    expect(r.lookup('help')?.name).toBe('h');
   });
 
   test('includes format commands', () => {

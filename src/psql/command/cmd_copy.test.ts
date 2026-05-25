@@ -726,4 +726,47 @@ describe('cmdCopy.run', () => {
       process.stdout.write = stdoutOrig;
     }
   });
+
+  test('rejects with "COPY in a pipeline" diagnostic when pipeline is active', async () => {
+    // \copy must short-circuit before sending Query when a pipeline session
+    // is active — libpq otherwise aborts the connection with the same
+    // diagnostic and tests in tests/psql-conformance/tap/001_basic.spec.ts
+    // (lines 920-974) grep stderr for this exact phrase.
+    const { conn } = makeMockConn({ copyTag: 'COPY 1' });
+    let closed = false;
+    (conn as unknown as { close: () => Promise<void> }).close =
+      (): Promise<void> => {
+        closed = true;
+        return Promise.resolve();
+      };
+    let isClosedReturn = false;
+    (conn as unknown as { isClosed: () => boolean }).isClosed = () =>
+      isClosedReturn;
+    const settings = settingsWithConn(conn);
+    // Install a fake pipeline session stash so `getPipelineState` is non-null.
+    const PIPELINE_KEY = Symbol.for('neonctl.psql.pipeline');
+    (settings as unknown as Record<symbol, unknown>)[PIPELINE_KEY] = {
+      session: {} as unknown,
+      pending: [],
+    };
+    const ctx = makeMockCtx('psql_pipeline from stdin;', settings);
+    const stderrChunks: string[] = [];
+    const stderrOrig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((c: unknown) => {
+      stderrChunks.push(String(c));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const r = await cmdCopy.run(ctx);
+      isClosedReturn = closed;
+      expect(r.status).toBe('error');
+      expect(stderrChunks.join('')).toMatch(
+        /COPY in a pipeline is not supported, aborting connection/,
+      );
+      expect(closed).toBe(true);
+      expect(settings.lastErrorResult?.message).toMatch(/COPY in a pipeline/);
+    } finally {
+      process.stderr.write = stderrOrig;
+    }
+  });
 });

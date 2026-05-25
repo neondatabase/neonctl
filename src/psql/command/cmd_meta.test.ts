@@ -7,9 +7,11 @@ import { defaultSettings } from '../core/settings.js';
 
 import {
   cmdCd,
+  cmdCopyright,
   cmdEcho,
   cmdErrverbose,
   cmdGetenv,
+  cmdHelpSQL,
   cmdQecho,
   cmdQuit,
   cmdSet,
@@ -380,5 +382,58 @@ describe('\\!', () => {
   // which is doable but fragile. Documenting that gap here.
   test.skip('captures stdout (skipped: requires child_process mock)', () => {
     void vi;
+  });
+});
+
+describe('\\copyright', () => {
+  test('prints PostgreSQL copyright notice to stdout', async () => {
+    const ctx = makeMockCtx('copyright', '');
+    const r = await run(cmdCopyright, ctx);
+    expect(r.status).toBe('ok');
+    const out = stdout();
+    // Upstream `psql_like($node, '\copyright', qr/Copyright/, ...)`.
+    expect(out).toMatch(/Copyright/);
+    expect(out).toContain('PostgreSQL Database Management System');
+    expect(out).toContain('PostgreSQL Global Development Group');
+  });
+
+  test('ignores extra arguments', async () => {
+    const ctx = makeMockCtx('copyright', 'these are ignored');
+    const r = await run(cmdCopyright, ctx);
+    expect(r.status).toBe('ok');
+    expect(stdout()).toMatch(/Copyright/);
+  });
+});
+
+describe('\\h / \\help (SQL command help)', () => {
+  test('no topic lists every command (matches /ALTER/)', async () => {
+    const ctx = makeMockCtx('h', '');
+    const r = await run(cmdHelpSQL, ctx);
+    expect(r.status).toBe('ok');
+    const out = stdout();
+    expect(out).toMatch(/Available help/);
+    // Upstream `\help` matcher in 001_basic.pl line 76: `qr/ALTER/`.
+    expect(out).toMatch(/ALTER/);
+  });
+
+  test('SELECT topic prints the SELECT synopsis', async () => {
+    const ctx = makeMockCtx('h', 'SELECT');
+    const r = await run(cmdHelpSQL, ctx);
+    expect(r.status).toBe('ok');
+    const out = stdout();
+    expect(out).toMatch(/SELECT/);
+  });
+
+  test('unknown topic emits "No help available" hint', async () => {
+    const ctx = makeMockCtx('h', 'definitely-not-a-real-command');
+    const r = await run(cmdHelpSQL, ctx);
+    expect(r.status).toBe('ok');
+    expect(stdout()).toMatch(/No help available/);
+  });
+
+  test('aliases include `help` so `\\help` resolves to the same spec', () => {
+    // The alias is a config-level fact; just assert it's on the spec so a
+    // future refactor that drops it would break this test.
+    expect(cmdHelpSQL.aliases).toContain('help');
   });
 });

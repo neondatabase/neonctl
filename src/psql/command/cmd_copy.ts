@@ -59,7 +59,19 @@ import type { Connection, CopyInStream } from '../types/connection.js';
 
 import { pumpReadable } from '../wire/copy.js';
 
+import { getPipelineState } from './cmd_pipeline.js';
 import { writeErr, writeOut } from './shared.js';
+
+/**
+ * Diagnostic emitted when the user tries to run `\copy` (or a raw COPY
+ * statement) inside an active `\startpipeline` ... `\endpipeline` block.
+ * Matches upstream libpq's wording so conformance tests grepping stderr
+ * (e.g. tap/001_basic.pl lines 490-531) pick it up unchanged. Exported so
+ * the wire-layer abort path can reuse the same string and tests can match
+ * via a single source of truth.
+ */
+export const COPY_IN_PIPELINE_MSG =
+  'COPY in a pipeline is not supported, aborting connection';
 
 // ---------------------------------------------------------------------------
 // parse_slash_copy
@@ -843,6 +855,28 @@ export const cmdCopy: BackslashCmdSpec = {
     if (!ctx.settings.db) {
       ctx.settings.lastErrorResult = { message: 'no connection to the server' };
       writeErr('\\copy: no connection to the server\n');
+      return { status: 'error' };
+    }
+
+    // COPY is not supported inside a \startpipeline ... \endpipeline block:
+    // upstream libpq aborts the connection with this exact diagnostic and
+    // psql exits non-zero. Detect at the command layer so we don't even
+    // send the Query — that lets us short-circuit before the protocol
+    // switches into the COPY data phase (which would otherwise hang).
+    //
+    // We close (but do NOT null) the connection on `ctx.settings.db` so the
+    // mainloop's `checkConnectionLost` polls `db.isClosed()` and surfaces
+    // the standard "connection to server was lost" diagnostic + EXIT_BADCONN.
+    // That matches libpq's "aborting connection" promise — the script halts
+    // after this command rather than appearing to recover.
+    if (getPipelineState(ctx.settings) !== null) {
+      ctx.settings.lastErrorResult = { message: COPY_IN_PIPELINE_MSG };
+      writeErr(`\\copy: ${COPY_IN_PIPELINE_MSG}\n`);
+      try {
+        await ctx.settings.db.close();
+      } catch {
+        // best-effort; the connection may already be dead
+      }
       return { status: 'error' };
     }
 

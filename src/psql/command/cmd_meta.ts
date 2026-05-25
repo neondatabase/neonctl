@@ -13,6 +13,8 @@
  *   - `\getenv`, `\setenv`        → exec_command_getenv / exec_command_setenv
  *   - `\errverbose`               → exec_command_errverbose
  *   - `\timing`                   → exec_command_timing
+ *   - `\copyright`                → exec_command_copyright
+ *   - `\h` / `\help`              → exec_command_help (helpSQL)
  *
  * Each command is exported as a `BackslashCmdSpec` so {@link defaultRegistry}
  * in `dispatch.ts` can register them. Error messages follow upstream's
@@ -40,6 +42,7 @@ import type {
   BackslashContext,
   BackslashResult,
 } from '../types/backslash.js';
+import { helpSQL } from '../core/help.js';
 
 import { writeOut, writeErr, parseBool } from './shared.js';
 
@@ -334,23 +337,99 @@ export const cmdSetenv: BackslashCmdSpec = {
 };
 
 /**
+ * Render the `LINE N: …` re-print plus the `^` pointer underneath the
+ * failing character, mirroring upstream psql's `report_error_query`
+ * helper. Returns `null` when we don't have enough context (no SQL text
+ * or no position) so the caller can skip the lines entirely.
+ *
+ * `position` is a 1-based character offset into `sqlText` (as delivered
+ * in the server's `P` field). We pick the LINE containing that offset
+ * and emit:
+ *
+ *     LINE N: <that line>
+ *             ^
+ *
+ * The caret column is aligned to the offset within the picked line so
+ * it points at the failing token. Trailing newlines on the picked line
+ * are stripped so the `$` end-anchor in upstream's regex still matches.
+ */
+const renderLineAndCaret = (
+  sqlText: string | undefined,
+  position: string | undefined,
+): { line: string; caret: string } | null => {
+  if (!sqlText || !position) return null;
+  const pos = parseInt(position, 10);
+  if (!Number.isFinite(pos) || pos <= 0) return null;
+  // The server's offset is 1-based and points at the failing character.
+  const idx = Math.min(pos - 1, sqlText.length);
+  // Find the line containing `idx`.
+  let lineStart = sqlText.lastIndexOf('\n', idx - 1);
+  lineStart = lineStart === -1 ? 0 : lineStart + 1;
+  let lineEnd = sqlText.indexOf('\n', lineStart);
+  if (lineEnd === -1) lineEnd = sqlText.length;
+  const lineText = sqlText.slice(lineStart, lineEnd);
+  // Line number for the `LINE N:` prefix — 1-based.
+  const before = sqlText.slice(0, lineStart);
+  const lineNumber = (before.match(/\n/gu)?.length ?? 0) + 1;
+  // Column inside the picked line (0-based) where the `^` goes. Tabs
+  // upstream are expanded to a fixed width; we approximate with a
+  // single space so the pointer at least lands in the right ballpark.
+  const col = idx - lineStart;
+  const caretIndent = ' '.repeat(Math.max(0, col));
+  const prefix = `LINE ${String(lineNumber)}: `;
+  return {
+    line: `${prefix}${lineText}`,
+    caret: `${' '.repeat(prefix.length)}${caretIndent}^`,
+  };
+};
+
+/**
  * `\errverbose` — print the last error in verbose form. We rely on the
  * mainloop to have stored `settings.lastErrorResult`; this command only
  * formats and prints. Without a saved error, upstream emits "There is no
  * previous error."
+ *
+ * Verbose output (PG 18 form):
+ *
+ *     ERROR:  <sqlstate>: <message>
+ *     LINE N: <originating line of SQL>
+ *             ^
+ *     DETAIL:  <detail>
+ *     HINT:  <hint>
+ *     CONTEXT:  <where>
+ *     LOCATION:  <routine>, <file>:<line>
+ *
+ * Empty fields are omitted. The `LINE` / `^` pair is only emitted when
+ * we have both the originating SQL text and a server-provided position.
  */
 export const cmdErrverbose: BackslashCmdSpec = {
   name: 'errverbose',
   helpKey: 'errverbose',
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
     const e = ctx.settings.lastErrorResult;
-    if (!e || (!e.message && !e.sqlstate)) {
+    if (!e || (!e.message && !e.sqlstate && !e.code)) {
       writeOut('There is no previous error.\n');
       return Promise.resolve({ status: 'ok' });
     }
-    const sqlstate = e.sqlstate ?? '00000';
+    const severity = e.severity ?? 'ERROR';
+    const sqlstate = e.code ?? e.sqlstate ?? 'XX000';
     const message = e.message ?? '';
-    writeOut(`ERROR:  ${message}\nSQLSTATE: ${sqlstate}\n`);
+    const out: string[] = [];
+    out.push(`${severity}:  ${sqlstate}: ${message}`);
+    const lineCaret = renderLineAndCaret(e.sqlText, e.position);
+    if (lineCaret) {
+      out.push(lineCaret.line);
+      out.push(lineCaret.caret);
+    }
+    if (e.detail) out.push(`DETAIL:  ${e.detail}`);
+    if (e.hint) out.push(`HINT:  ${e.hint}`);
+    if (e.where) out.push(`CONTEXT:  ${e.where}`);
+    if (e.routine || e.file || e.line) {
+      const location =
+        (e.routine ?? '') + (e.file ? `, ${e.file}:${e.line ?? ''}` : '');
+      out.push(`LOCATION:  ${location}`);
+    }
+    writeOut(out.join('\n') + '\n');
     return Promise.resolve({ status: 'ok' });
   },
 };
@@ -379,6 +458,81 @@ export const cmdTiming: BackslashCmdSpec = {
     }
     ctx.settings.timing = next;
     writeOut(`Timing is ${next ? 'on' : 'off'}.\n`);
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * Static text emitted by `\copyright`. Mirrors upstream psql's
+ * `exec_command_copyright()` literal in `src/bin/psql/command.c`.
+ */
+const COPYRIGHT_TEXT = `PostgreSQL Database Management System
+(formerly known as Postgres, then as Postgres95)
+
+Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+
+Portions Copyright (c) 1994, The Regents of the University of California
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose, without fee, and without a written agreement
+is hereby granted, provided that the above copyright notice and this
+paragraph and the following two paragraphs appear in all copies.
+
+IN NO EVENT SHALL THE UNIVERSITY OF CALIFORNIA BE LIABLE TO ANY PARTY FOR
+DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING
+LOST PROFITS, ARISING OUT OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION,
+EVEN IF THE UNIVERSITY OF CALIFORNIA HAS BEEN ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+THE UNIVERSITY OF CALIFORNIA SPECIFICALLY DISCLAIMS ANY WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS
+ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATIONS TO
+PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+`;
+
+/**
+ * `\copyright` — print the PostgreSQL copyright / license notice. Takes
+ * no arguments; matches upstream's static text verbatim so the conformance
+ * regex `/Copyright/` (from upstream `001_basic.pl` line 75) is satisfied.
+ */
+export const cmdCopyright: BackslashCmdSpec = {
+  name: 'copyright',
+  helpKey: 'copyright',
+  run: (): Promise<BackslashResult> => {
+    writeOut(COPYRIGHT_TEXT);
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * Terminal width used to lay out `\h` / `\help` topic lists. Upstream
+ * uses `pset.popt.topt.envColumns` falling back to `ioctl(TIOCGWINSZ)`;
+ * we read `process.stdout.columns` (Node populates this for TTYs) and
+ * default to 80 if absent (non-TTY, piped output, etc.).
+ */
+const screenWidth = (): number => {
+  const cols = process.stdout.columns;
+  return typeof cols === 'number' && cols > 0 ? cols : 80;
+};
+
+/**
+ * `\h [TOPIC]` (alias `\help`) — show SQL command help.
+ *
+ * Delegates to {@link helpSQL} in `core/help.ts`, passing the remainder
+ * of the line as the topic. With no topic, prints the "Available help:"
+ * overview; with a topic, prints the matching synopsis or a list of
+ * matches. Mirrors upstream `exec_command_help` in `command.c`.
+ */
+export const cmdHelpSQL: BackslashCmdSpec = {
+  name: 'h',
+  aliases: ['help'],
+  helpKey: 'h',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    // Upstream consumes the rest of the line in `OT_WHOLE_LINE` mode so
+    // multi-word topics like "CREATE TABLE" come through intact.
+    const topic = ctx.restOfLine();
+    helpSQL(process.stdout, topic.length === 0 ? null : topic, screenWidth());
     return Promise.resolve({ status: 'ok' });
   },
 };

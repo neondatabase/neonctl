@@ -44,9 +44,11 @@ import { scanSlashArgs } from '../scanner/slash.js';
 
 import {
   cmdCd,
+  cmdCopyright,
   cmdEcho,
   cmdErrverbose,
   cmdGetenv,
+  cmdHelpSQL,
   cmdPrompt,
   cmdQecho,
   cmdQuit,
@@ -78,6 +80,7 @@ import { registerLargeObjectCommands } from './cmd_lo.js';
 import {
   isCommandRestricted,
   registerRestrictCommands,
+  wrapRestrictedCommands,
 } from './cmd_restrict.js';
 import { writeErr } from './shared.js';
 
@@ -338,6 +341,8 @@ export const defaultRegistry = (): BackslashRegistry => {
   r.register(cmdSetenv);
   r.register(cmdErrverbose);
   r.register(cmdTiming);
+  r.register(cmdCopyright);
+  r.register(cmdHelpSQL);
   // Format.
   r.register(cmdA);
   r.register(cmdC);
@@ -357,5 +362,11 @@ export const defaultRegistry = (): BackslashRegistry => {
   registerMiscCommands(r);
   registerLargeObjectCommands(r);
   registerRestrictCommands(r);
+  // Must run after every other `register*` call so the wrappers see the
+  // final specs for the restricted command names (e.g. `\!`, `\cd`, `\copy`,
+  // `\setenv`, `\w`). Without this, the REPL mainloop's direct
+  // `spec.run(ctx)` invocation bypasses the gate that lives in
+  // `dispatchBackslash`.
+  wrapRestrictedCommands(r);
   return r;
 };

@@ -330,6 +330,31 @@ describe('\\g', () => {
     const r = await run(cmdG, ctx);
     expect(r.status).toBe('error');
   });
+
+  test('pipe form `\\g | cmd` runs the program with rendered output', async () => {
+    const conn = makeMockConn();
+    conn.reply = () => [rs(['name'], [['neon']])];
+    const s = makeSettings(conn);
+    const sink = tmpFile();
+    // Quote-escape so the mock scanner reads the entire `|cat > sink` as
+    // one filepipe token.
+    const ctx = makeMockCtx('g', `'|cat > ${sink}'`, s, 'select 1');
+    const r = await run(cmdG, ctx);
+    expect(r.status).toBe('reset-buf');
+    const written = await fs.readFile(sink, 'utf8');
+    expect(written).toMatch(/neon/);
+  });
+
+  test('pipe form propagates a non-zero program exit code', async () => {
+    const conn = makeMockConn();
+    conn.reply = () => [rs(['a'], [[1]])];
+    const s = makeSettings(conn);
+    // `false` always exits 1 — \g must surface this as an error.
+    const ctx = makeMockCtx('g', `'|false'`, s, 'select 1');
+    const r = await run(cmdG, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/program exited with status 1/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -467,7 +492,149 @@ describe('\\watch', () => {
     const ctx = makeMockCtx('watch', 'banana', s, 'select 1');
     const r = await run(cmdWatch, ctx);
     expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/invalid watch interval/);
+    // Upstream message: "incorrect interval value "<token>""
+    expect(stderr()).toMatch(/incorrect interval value "banana"/);
+  });
+
+  test('rejects a negative positional interval', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', '-10', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/incorrect interval value "-10"/);
+  });
+
+  test('rejects garbage trailing characters in interval', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', '10ab', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/incorrect interval value "10ab"/);
+  });
+
+  test('rejects an out-of-range interval (Infinity)', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', '10e400', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/incorrect interval value "10e400"/);
+  });
+
+  test('parses `i=` named interval', async () => {
+    const conn = makeMockConn();
+    let count = 0;
+    const controller = new AbortController();
+    WATCH_TEST_CONTROLLER.ref = controller;
+    conn.reply = () => {
+      count += 1;
+      if (count >= 2) controller.abort();
+      return [rs(['n'], [[count]])];
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'i=0.01', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(stdout()).toMatch(/every 0\.01s/);
+  });
+
+  test('`c=` iteration count caps the loop', async () => {
+    const conn = makeMockConn();
+    let count = 0;
+    conn.reply = () => {
+      count += 1;
+      return [rs(['n'], [[count]])];
+    };
+    const s = makeSettings(conn);
+    // c=3 with very-short interval — loop should self-stop after 3.
+    const ctx = makeMockCtx('watch', 'c=3 i=0.001', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(count).toBe(3);
+  });
+
+  test('parses `min_rows=` as a synonym for `m=`', async () => {
+    const conn = makeMockConn();
+    // Always return enough rows so the watch loop stops on iteration 1.
+    conn.reply = () => [rs(['n'], [[1], [2], [3]])];
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'min_rows=2 i=0.001', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(conn.history.length).toBe(1);
+  });
+
+  test('rejects non-numeric `m=` value', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'm=x', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/incorrect minimum row count "x"/);
+  });
+
+  test('rejects duplicate positional interval (`\\watch 1 1`)', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', '1 1', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/interval value is specified more than once/);
+  });
+
+  test('rejects duplicate `c=` (`\\watch c=1 c=1`)', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'c=1 c=1', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/iteration count is specified more than once/);
+  });
+
+  test('rejects `m=1 min_rows=2` as a duplicate', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'm=1 min_rows=2', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/minimum row count specified more than once/);
+  });
+
+  test('`min_rows` keeps polling until threshold reached', async () => {
+    const conn = makeMockConn();
+    let count = 0;
+    // First call returns 1 row; subsequent calls return 5 rows. With
+    // min_rows=3 the loop must poll twice.
+    conn.reply = () => {
+      count += 1;
+      if (count === 1) return [rs(['n'], [[1]])];
+      return [rs(['n'], [[1], [2], [3], [4], [5]])];
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'min_rows=3 i=0.001', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(count).toBe(2);
+  });
+
+  test('falls back to WATCH_INTERVAL when no explicit interval is given', async () => {
+    const conn = makeMockConn();
+    const controller = new AbortController();
+    WATCH_TEST_CONTROLLER.ref = controller;
+    let count = 0;
+    conn.reply = () => {
+      count += 1;
+      if (count >= 2) controller.abort();
+      return [rs(['n'], [[count]])];
+    };
+    const s = makeSettings(conn);
+    s.vars.set('WATCH_INTERVAL', '0.01');
+    const ctx = makeMockCtx('watch', '', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(stdout()).toMatch(/every 0\.01s/);
   });
 
   test('empty buffer errors out', async () => {
@@ -477,6 +644,45 @@ describe('\\watch', () => {
     const r = await run(cmdWatch, ctx);
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/no query buffer/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WATCH_INTERVAL psql variable hook
+// ---------------------------------------------------------------------------
+
+describe('WATCH_INTERVAL variable hook', () => {
+  test('accepts a valid numeric value', () => {
+    const s = makeSettings();
+    expect(s.vars.set('WATCH_INTERVAL', '10')).toBe(true);
+    expect(s.vars.get('WATCH_INTERVAL')).toBe('10');
+  });
+
+  test('rejects 1e500 (overflows to Infinity)', () => {
+    const s = makeSettings();
+    expect(s.vars.set('WATCH_INTERVAL', '1e500')).toBe(false);
+    expect(s.vars.get('WATCH_INTERVAL')).toBeUndefined();
+    expect(stderr()).toMatch(/WATCH_INTERVAL "1e500" is out of range/);
+  });
+
+  test('rejects a non-numeric value', () => {
+    const s = makeSettings();
+    expect(s.vars.set('WATCH_INTERVAL', 'banana')).toBe(false);
+    expect(stderr()).toMatch(/WATCH_INTERVAL "banana" is out of range/);
+  });
+
+  test('rejects a negative value', () => {
+    const s = makeSettings();
+    expect(s.vars.set('WATCH_INTERVAL', '-5')).toBe(false);
+    expect(stderr()).toMatch(/WATCH_INTERVAL "-5" is out of range/);
+  });
+
+  test('allows unsetting (null) without producing an error', () => {
+    const s = makeSettings();
+    s.vars.set('WATCH_INTERVAL', '5');
+    stderrChunks.length = 0;
+    s.vars.unset('WATCH_INTERVAL');
+    expect(stderr()).toBe('');
   });
 });
 

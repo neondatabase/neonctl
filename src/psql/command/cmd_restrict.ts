@@ -43,6 +43,13 @@ import type { PsqlSettings } from '../types/settings.js';
 
 import { writeErr } from './shared.js';
 
+/** Standard refusal message emitted when a gated command is invoked while
+ * the session is in restricted mode. Public so callers and tests can match
+ * against the exact string. */
+export const RESTRICTED_REFUSAL_MESSAGE = (cmdName: string): string =>
+  `\\${cmdName}: command is not allowed in restricted mode; ` +
+  `use \\unrestrict to leave restricted mode\n`;
+
 /**
  * psql variable holding the active restriction name. When set to a
  * non-empty string the session is in restricted mode. Unset / empty
@@ -162,4 +169,39 @@ export const cmdUnrestrict: BackslashCmdSpec = {
 export const registerRestrictCommands = (registry: BackslashRegistry): void => {
   registry.register(cmdRestrict);
   registry.register(cmdUnrestrict);
+};
+
+/**
+ * Wrap every already-registered spec whose primary name is in
+ * {@link RESTRICTED_COMMANDS} so its `run` gates on the live restriction
+ * state. Without this the gate in `dispatch.ts::dispatchBackslash` only
+ * fires for the `psqlrc` path; the REPL mainloop currently invokes
+ * `spec.run` directly and would bypass the check.
+ *
+ * Idempotent: a wrapped spec carries a `[WRAPPED_FLAG]` marker so a second
+ * call is a no-op. Must be called *after* all restricted commands have
+ * been registered (so we see them via `registry.lookup`).
+ */
+const WRAPPED_FLAG = Symbol.for('neonctl.psql.restrictWrapped');
+
+type WrappedSpec = BackslashCmdSpec & { [WRAPPED_FLAG]?: true };
+
+export const wrapRestrictedCommands = (registry: BackslashRegistry): void => {
+  for (const name of RESTRICTED_COMMANDS) {
+    const spec = registry.lookup(name) as WrappedSpec | undefined;
+    if (!spec || spec[WRAPPED_FLAG]) continue;
+    const originalRun = spec.run.bind(spec);
+    const gated: WrappedSpec = {
+      ...spec,
+      run: (ctx: BackslashContext): Promise<BackslashResult> => {
+        if (isRestricted(ctx.settings)) {
+          writeErr(RESTRICTED_REFUSAL_MESSAGE(ctx.cmdName));
+          return Promise.resolve({ status: 'error' });
+        }
+        return originalRun(ctx);
+      },
+    };
+    gated[WRAPPED_FLAG] = true;
+    registry.register(gated);
+  }
 };

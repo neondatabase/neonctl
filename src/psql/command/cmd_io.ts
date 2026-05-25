@@ -105,8 +105,16 @@ const QUERY_FOUT_KEY = Symbol.for('neonctl.psql.queryFout');
 
 type QueryFoutEntry = {
   stream: NodeJS.WritableStream;
-  /** Closer used by `\o` rebinds to drain the previous target. */
-  close: () => Promise<void>;
+  /**
+   * Closer used by `\o` rebinds to drain the previous target.
+   *
+   * For pipe targets the resolved object carries the spawned program's
+   * exit status (`exitCode`, `null` if the child died from a signal).
+   * `\g | program` uses this so a non-zero exit propagates an error back
+   * to the REPL, matching upstream `do_g` semantics. File targets resolve
+   * with an object whose `exitCode` is omitted.
+   */
+  close: () => Promise<{ exitCode?: number | null }>;
 };
 
 type FoutStash = Record<symbol, unknown> & {
@@ -172,6 +180,9 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
  * Open a writable destination for `\o` / `\w` / `\g FILE` / `\g |cmd`.
  *
  * `target` of the form `|cmd` spawns `sh -c cmd` and pipes to its stdin.
+ * The returned closer waits for the child to exit and resolves to its
+ * status so callers (`\g | program`) can propagate a non-zero exit.
+ *
  * Any other string is treated as a file path; the file is truncated.
  */
 const openWriter = (target: string): QueryFoutEntry => {
@@ -180,29 +191,49 @@ const openWriter = (target: string): QueryFoutEntry => {
     const child = spawn('sh', ['-c', cmd], {
       stdio: ['pipe', 'inherit', 'inherit'],
     });
+    // Swallow EPIPE on the stdin pipe — the child may exit before we
+    // finish writing, and Node would otherwise raise an unhandled error.
+    child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code !== 'EPIPE') {
+        // Re-raise non-EPIPE errors as a crash so they show up; tests
+        // run with the default unhandledRejection handler and will see
+        // these via the failing assertion.
+        throw err;
+      }
+    });
     return {
       stream: child.stdin,
-      close: async () => {
-        child.stdin.end();
-        await new Promise<void>((resolve) => {
-          child.once('close', () => {
-            resolve();
+      close: () =>
+        new Promise<{ exitCode: number | null }>((resolve) => {
+          let settled = false;
+          const finish = (code: number | null): void => {
+            if (settled) return;
+            settled = true;
+            resolve({ exitCode: code });
+          };
+          child.once('close', (code) => {
+            finish(code);
           });
           child.once('error', () => {
-            resolve();
+            // spawn failure or stdio glitch — treat as a non-zero exit so
+            // \g sees a failure.
+            finish(127);
           });
-        });
-      },
+          // Half-close stdin so the child sees EOF and exits.
+          if (!child.stdin.destroyed) {
+            child.stdin.end();
+          }
+        }),
     };
   }
   const stream = createWriteStream(target, { encoding: 'utf8' });
   return {
     stream,
     close: () =>
-      new Promise<void>((resolve, reject) => {
+      new Promise<Record<string, never>>((resolve, reject) => {
         stream.end((err?: Error | null) => {
           if (err) reject(err);
-          else resolve();
+          else resolve({});
         });
       }),
   };
@@ -414,20 +445,42 @@ const runGCore = async (
   const priorExpanded = topt.expanded;
   if (forceExpanded) topt.expanded = 'on';
 
+  let execError: string | null = null;
   try {
     const results = await ctx.settings.db.execSimple(sql);
     const out = pickOut(ctx.settings, oneShot?.stream ?? null);
     for (const rs of results) {
       await renderResult(ctx.settings, rs, out);
     }
-    return { status: 'reset-buf', newBuf: '' };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return errResult(ctx, msg);
+    execError = err instanceof Error ? err.message : String(err);
   } finally {
     if (forceExpanded) topt.expanded = priorExpanded;
-    if (oneShot) await oneShot.close();
   }
+
+  // Close the one-shot writer regardless of execution success so any
+  // partial output is flushed; capture the child's exit status (for the
+  // pipe form) so a non-zero exit becomes our error.
+  let pipeError: string | null = null;
+  if (oneShot) {
+    try {
+      const result = await oneShot.close();
+      const code = result.exitCode;
+      if (code !== null && code !== undefined && code !== 0) {
+        pipeError = `program exited with status ${String(code)}`;
+      }
+    } catch (err) {
+      pipeError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  if (execError !== null) {
+    return errResult(ctx, execError);
+  }
+  if (pipeError !== null) {
+    return errResult(ctx, pipeError);
+  }
+  return { status: 'reset-buf', newBuf: '' };
 };
 
 export const cmdG: BackslashCmdSpec = {
@@ -588,7 +641,25 @@ export const cmdGexec: BackslashCmdSpec = {
 };
 
 // ---------------------------------------------------------------------------
-// \watch [INTERVAL]
+// \watch [args...]
+//
+// Upstream `\watch` accepts:
+//
+//   \watch [SEC]              — legacy positional interval (seconds)
+//   \watch i=SEC              — interval as named flag
+//   \watch c=N                — iteration count limit
+//   \watch m=N                — minimum row count: keep polling until the
+//                               result has >= N rows; uses `interval` as the
+//                               sleep between polls
+//   \watch min_rows=N         — long-form alias of `m=`
+//
+// Flags may be combined in any order. Duplicates (including the positional
+// interval colliding with `i=`) are rejected upstream with the message
+// "<thing> is specified more than once".
+//
+// The `WATCH_INTERVAL` psql variable supplies the default `interval` value
+// when `i=` is not given (and when there is no positional). The variable is
+// validated at `\set` time via a hook installed by `defaultSettings`.
 // ---------------------------------------------------------------------------
 
 const sleepCancellable = (ms: number, signal: AbortSignal): Promise<void> =>
@@ -610,6 +681,78 @@ const sleepCancellable = (ms: number, signal: AbortSignal): Promise<void> =>
     signal.addEventListener('abort', onAbort);
   });
 
+/**
+ * Strictly parse a non-negative finite float.
+ *
+ * Returns the parsed number, or `null` for any of:
+ *   - empty string
+ *   - non-numeric trailing characters (e.g. `10ab`)
+ *   - negative values (e.g. `-10`)
+ *   - out-of-range / non-finite results (e.g. `10e400` → Infinity)
+ *
+ * Used to validate `\watch` intervals and the `WATCH_INTERVAL` variable.
+ */
+const parseStrictNonNegativeFloat = (raw: string): number | null => {
+  if (raw.length === 0) return null;
+  // Reject anything that doesn't look like a plain float literal. We
+  // accept optional sign + digits + optional fractional + optional
+  // exponent. Trailing garbage (`10ab`), negative values, and exponents
+  // that overflow to Infinity all funnel into the null result.
+  const re = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+  if (!re.test(raw)) return null;
+  const value = parseFloat(raw);
+  if (!Number.isFinite(value)) return null;
+  if (value < 0) return null;
+  return value;
+};
+
+/**
+ * Parse a strict non-negative integer (no exponent, no fractional).
+ * Used for `c=` and `m=` / `min_rows=` argument values.
+ */
+const parseStrictNonNegativeInt = (raw: string): number | null => {
+  if (raw.length === 0) return null;
+  if (!/^\d+$/.test(raw)) return null;
+  const value = parseInt(raw, 10);
+  if (!Number.isFinite(value)) return null;
+  return value;
+};
+
+/**
+ * Default `\watch` interval (seconds). Mirrors upstream
+ * `DEFAULT_WATCH_INTERVAL`.
+ */
+const DEFAULT_WATCH_INTERVAL = 2;
+
+/**
+ * Upper bound on the `WATCH_INTERVAL` variable and the positional interval
+ * — matches upstream which rejects "out of range" values. Upstream uses
+ * `strtod` and rejects ±Infinity; we tighten further so a single watch loop
+ * cannot sleep for longer than ~100 hours, which catches obvious typos
+ * without breaking legitimate slow polls.
+ */
+const WATCH_INTERVAL_MAX_SECONDS = 100 * 3600;
+
+/**
+ * Resolve the effective default `\watch` interval from the `WATCH_INTERVAL`
+ * psql variable. Returns the parsed value, the documented default
+ * (`DEFAULT_WATCH_INTERVAL`), or an `error` envelope if the variable is set
+ * but parses out of range.
+ */
+const resolveWatchIntervalDefault = (
+  settings: PsqlSettings,
+): { value: number } | { error: string } => {
+  const raw = settings.vars.get('WATCH_INTERVAL');
+  if (raw === undefined) return { value: DEFAULT_WATCH_INTERVAL };
+  const parsed = parseStrictNonNegativeFloat(raw);
+  if (parsed === null || parsed > WATCH_INTERVAL_MAX_SECONDS) {
+    return {
+      error: `WATCH_INTERVAL "${raw}" is out of range`,
+    };
+  }
+  return { value: parsed };
+};
+
 export const cmdWatch: BackslashCmdSpec = {
   name: 'watch',
   helpKey: 'watch',
@@ -622,14 +765,100 @@ export const cmdWatch: BackslashCmdSpec = {
       return errResult(ctx, 'no connection to the server');
     }
 
-    const arg = ctx.nextArg('normal');
-    let interval = 2;
-    if (arg !== null && arg.length > 0) {
-      const parsed = parseFloat(arg);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        return errResult(ctx, `invalid watch interval "${arg}"`);
+    // Track which options have been seen so we can reject duplicates with
+    // the upstream-formatted "<thing> is specified more than once" message.
+    let intervalSet = false;
+    let interval: number | null = null;
+    let iterSet = false;
+    let iterMax = 0; // 0 = unlimited (matches upstream's "no -c").
+    let minRowsSet = false;
+    let minRows = 0;
+    let positionalSeen = false;
+
+    // Drain all args. Each is either a `key=value` token or a bare
+    // positional (only allowed as the very first arg, and only once).
+    while (true) {
+      const arg = ctx.nextArg('normal');
+      if (arg === null) break;
+      if (arg.length === 0) continue;
+
+      // Identify named flags by looking for `=`. Upstream tolerates an
+      // empty value (treats it as the option not being provided), but we
+      // mirror its stricter behaviour for the values we care about.
+      const eqIdx = arg.indexOf('=');
+      if (eqIdx > 0) {
+        const key = arg.slice(0, eqIdx);
+        const value = arg.slice(eqIdx + 1);
+
+        if (key === 'i') {
+          if (intervalSet) {
+            return errResult(ctx, 'interval value is specified more than once');
+          }
+          const parsed = parseStrictNonNegativeFloat(value);
+          if (parsed === null || parsed > WATCH_INTERVAL_MAX_SECONDS) {
+            return errResult(ctx, `incorrect interval value "${value}"`);
+          }
+          interval = parsed;
+          intervalSet = true;
+          continue;
+        }
+
+        if (key === 'c') {
+          if (iterSet) {
+            return errResult(
+              ctx,
+              'iteration count is specified more than once',
+            );
+          }
+          const parsed = parseStrictNonNegativeInt(value);
+          if (parsed === null) {
+            return errResult(ctx, `incorrect iteration count "${value}"`);
+          }
+          iterMax = parsed;
+          iterSet = true;
+          continue;
+        }
+
+        if (key === 'm' || key === 'min_rows') {
+          if (minRowsSet) {
+            return errResult(ctx, 'minimum row count specified more than once');
+          }
+          const parsed = parseStrictNonNegativeInt(value);
+          if (parsed === null) {
+            return errResult(ctx, `incorrect minimum row count "${value}"`);
+          }
+          minRows = parsed;
+          minRowsSet = true;
+          continue;
+        }
+
+        // Unknown key=value: surface a generic error mirroring upstream
+        // ("unrecognized value …").
+        return errResult(ctx, `unrecognized option "${key}"`);
+      }
+
+      // Positional argument — legacy interval. Allowed only once, and
+      // only collides with `i=` under the same upstream "specified more
+      // than once" rubric.
+      if (positionalSeen || intervalSet) {
+        return errResult(ctx, 'interval value is specified more than once');
+      }
+      const parsed = parseStrictNonNegativeFloat(arg);
+      if (parsed === null || parsed > WATCH_INTERVAL_MAX_SECONDS) {
+        return errResult(ctx, `incorrect interval value "${arg}"`);
       }
       interval = parsed;
+      intervalSet = true;
+      positionalSeen = true;
+    }
+
+    // If no explicit interval was supplied, fall back to WATCH_INTERVAL.
+    if (interval === null) {
+      const resolved = resolveWatchIntervalDefault(ctx.settings);
+      if ('error' in resolved) {
+        return errResult(ctx, resolved.error);
+      }
+      interval = resolved.value;
     }
     const intervalMs = Math.round(interval * 1000);
 
@@ -647,14 +876,18 @@ export const cmdWatch: BackslashCmdSpec = {
     const out = pickOut(ctx.settings, null);
 
     try {
+      let iter = 0;
       while (!controller.signal.aborted) {
+        iter++;
         const stamp = new Date().toString().replace(/\sGMT.*$/, '');
         out.write(`${stamp} (every ${String(interval)}s)\n\n`);
+        let lastRowCount = 0;
         try {
           const results = await ctx.settings.db.execSimple(sql);
           for (const rs of results) {
             if (rs.fields.length > 0) {
               await renderResult(ctx.settings, rs, out);
+              lastRowCount = rs.rows.length;
             }
           }
         } catch (err) {
@@ -663,6 +896,10 @@ export const cmdWatch: BackslashCmdSpec = {
           writeErr(`\\${ctx.cmdName}: ${msg}\n`);
           return { status: 'error' };
         }
+        // Stop if `c=` reached the configured iteration cap, OR if `m=`
+        // was set and the most-recent result satisfied the threshold.
+        if (iterSet && iter >= iterMax) break;
+        if (minRowsSet && lastRowCount >= minRows) break;
         if (controller.signal.aborted) break;
         await sleepCancellable(intervalMs, controller.signal);
       }
