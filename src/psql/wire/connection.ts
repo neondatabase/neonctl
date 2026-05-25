@@ -354,11 +354,11 @@ export class PgConnection implements Connection {
         // this so a future-proof TLS proxy can route on ALPN instead of
         // probing the wire. Always offer it — older servers ignore.
         ALPNProtocols: ['postgresql'],
-        // Mirror libpq/OpenSSL's TLS-1.3 ciphersuite preference order so
-        // we negotiate AES_256_GCM (matches vanilla psql) rather than
-        // Node's default which preferred AES_128_GCM with our setup.
-        ciphers:
-          'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256',
+        // Cipher preference is left to Node/OpenSSL defaults. Vanilla psql
+        // may negotiate AES_256_GCM where we land on AES_128_GCM under TLS
+        // 1.3; both are secure (TLS 1.3 only ships these three suites) and
+        // Node's `ciphers` option only accepts TLS-1.2 spec syntax, not the
+        // TLS_AES_* TLS-1.3 names.
       });
       if (tlsResult.kind === 'tls') {
         socket = tlsResult.socket;
@@ -727,8 +727,6 @@ export class PgConnection implements Connection {
         checkServerIdentity:
           this.opts.ssl === 'verify-full' ? undefined : () => undefined,
         ALPNProtocols: ['postgresql'],
-        ciphers:
-          'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256',
       });
       writeSocket = t.kind === 'tls' ? t.socket : t.socket;
       await new Promise<void>((resolve, reject) => {
