@@ -211,6 +211,40 @@ export class LineEditor {
     if (this.active !== null) this.render(true);
   }
 
+  /**
+   * Inject an out-of-band line into the terminal while a prompt is being
+   * edited. Used by callers that produce async output (NOTIFY messages,
+   * notices, etc.) that would otherwise clobber the prompt rendering.
+   *
+   * Behaviour:
+   *   - No active readLine: pass-through to stdout.
+   *   - Active readLine: move cursor to end-of-block, write a fresh newline
+   *     so the injected text starts on its own row, write the text, then
+   *     redraw the prompt + buffer below it (re-attaching the cursor).
+   *
+   * The injected text should NOT have a trailing newline — we add one as
+   * part of the move-to-end + LF dance. If the caller's payload already
+   * ends with `\n`, we strip it once.
+   */
+  interject(text: string): void {
+    if (this.active === null) {
+      this.stdout.write(text);
+      return;
+    }
+    const a = this.active;
+    this.moveCursorToEnd();
+    this.stdout.write(LF);
+    const body = text.endsWith('\n') ? text.slice(0, -1) : text;
+    this.stdout.write(body);
+    this.stdout.write(LF);
+    // Reset drawn-state so render() lays out a fresh block under the
+    // injected text instead of trying to overwrite the area we just used.
+    a.rowsDrawn = 0;
+    a.cursorRow = 0;
+    a.cursorCol = 0;
+    this.render(true);
+  }
+
   /** Cleanup raw mode and restore TTY. Idempotent. */
   close(): void {
     this.exitRaw();

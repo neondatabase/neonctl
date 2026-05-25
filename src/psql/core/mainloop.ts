@@ -108,10 +108,19 @@ type LineReader = {
   readLine(prompt: string): Promise<string | null>;
   /** Record a submitted line in the live history (in-memory + on-disk). */
   pushHistory(line: string): void;
+  /**
+   * Inject out-of-band output while the user is editing a prompt — used by
+   * async producers (NotificationResponse, NoticeResponse) so they don't
+   * garble the in-progress prompt rendering.
+   */
+  interject(text: string): void;
   close(): Promise<void>;
 };
 
-const makeStreamLineReader = (input: NodeJS.ReadableStream): LineReader => {
+const makeStreamLineReader = (
+  input: NodeJS.ReadableStream,
+  out: NodeJS.WritableStream,
+): LineReader => {
   const rl = readline.createInterface({
     input,
     crlfDelay: Infinity,
@@ -124,6 +133,10 @@ const makeStreamLineReader = (input: NodeJS.ReadableStream): LineReader => {
       return r.done ? null : r.value;
     },
     pushHistory: (): void => undefined,
+    // No prompt to garble; just write straight to stdout.
+    interject: (text: string): void => {
+      out.write(text);
+    },
     close: (): Promise<void> => {
       rl.close();
       return Promise.resolve();
@@ -163,6 +176,9 @@ const makeEditorLineReader = async (ctx: REPLContext): Promise<LineReader> => {
       editor.pushHistory(trimmed);
       // Best-effort persist. We don't block the REPL on disk I/O.
       void appendHistory(histPath, trimmed, histControl).catch(() => undefined);
+    },
+    interject: (text: string): void => {
+      editor.interject(text);
     },
     close: async (): Promise<void> => {
       try {
@@ -220,7 +236,7 @@ const makeLineReader = async (ctx: REPLContext): Promise<LineReader> => {
         '[psql-debug] notty=true; using stream reader (no line editor / no Tab completion)\n',
       );
     }
-    return makeStreamLineReader(ctx.stdin);
+    return makeStreamLineReader(ctx.stdin, ctx.stdout);
   }
   try {
     const r = await makeEditorLineReader(ctx);
@@ -236,7 +252,7 @@ const makeLineReader = async (ctx: REPLContext): Promise<LineReader> => {
         `[psql-debug] LineEditor setup failed, falling back to stream reader: ${(err as Error).message}\n`,
       );
     }
-    return makeStreamLineReader(ctx.stdin);
+    return makeStreamLineReader(ctx.stdin, ctx.stdout);
   }
 };
 
@@ -482,11 +498,17 @@ const formatNotification = (
  * `pset.queryFout`). Returns the disposer the connection handed us, or
  * `null` when no connection is bound.
  */
-const installNotificationHandler = (ctx: REPLContext): (() => void) | null => {
+const installNotificationHandler = (
+  ctx: REPLContext,
+  reader: LineReader,
+): (() => void) | null => {
   const db = ctx.settings.db;
   if (!db) return null;
   return db.onNotification((channel, payload, pid) => {
-    ctx.stdout.write(formatNotification(channel, payload, pid));
+    // Route through the reader so the LineEditor (when raw-mode active)
+    // can clear / re-render its prompt block around the injected line.
+    // The stream-reader path treats interject as a plain stdout write.
+    reader.interject(formatNotification(channel, payload, pid));
   });
 };
 
@@ -564,7 +586,7 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   // Subscribe to async NotificationResponse (LISTEN/NOTIFY) so a `NOTIFY foo`
   // surfaces upstream's `Asynchronous notification "foo" ...` line. The
   // disposer is run in the finally block at exit so we don't leak listeners.
-  const removeNotificationHandler = installNotificationHandler(ctx);
+  const removeNotificationHandler = installNotificationHandler(ctx, reader);
 
   // Compute the prompt string for the current state. For notty input we emit
   // the empty string so the stream reader doesn't see prompt bytes interleaved

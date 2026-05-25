@@ -1510,6 +1510,7 @@ export class PgConnection implements Connection {
           this.notify.emit(fieldsToNotice(msg.fields));
           return;
         }
+        // (NotificationResponse is handled by the early-out above.)
         // Anything else in idle is unexpected.
         this.socketError = new Error(`Unexpected ${msg.type} in idle state`);
         try {
