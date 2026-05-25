@@ -43,5 +43,49 @@ export type PsqlSettings = {
 
   logfile: NodeJS.WritableStream | null;
   timing: boolean;
-  lastErrorResult: { sqlstate?: string; message?: string } | null;
+  lastErrorResult: LastErrorResult | null;
+};
+
+/**
+ * Mirrors the named fields of an ErrorResponse message (pg-protocol's
+ * `DatabaseError` shape) plus the originating SQL text. Captured when a
+ * query fails so `\errverbose` can re-render the error in VERBOSE form,
+ * including LINE / `^` pointer / LOCATION metadata. `sqlstate` is kept
+ * as a legacy alias for `code` — older callers (and one unit test) read
+ * `lastErrorResult.sqlstate` directly.
+ */
+export type LastErrorResult = {
+  /** Server severity (`S` field — e.g. ERROR, FATAL). */
+  severity?: string;
+  /** SQLSTATE code (`C` field, 5 chars). */
+  code?: string;
+  /** Legacy alias for `code` retained for backward compatibility. */
+  sqlstate?: string;
+  /** Primary message (`M` field). */
+  message?: string;
+  /** Optional detail line (`D` field). */
+  detail?: string;
+  /** Optional hint line (`H` field). */
+  hint?: string;
+  /** 1-based character position in the user's query (`P` field). */
+  position?: string;
+  /** Position inside an internally generated query (`p` field). */
+  internalPosition?: string;
+  /** Server-generated query text (`q` field). */
+  internalQuery?: string;
+  /** Where-context string (`W` field). */
+  where?: string;
+  schema?: string;
+  table?: string;
+  column?: string;
+  dataType?: string;
+  constraint?: string;
+  /** Source file in the server (`F` field). */
+  file?: string;
+  /** Source line in the server (`L` field). */
+  line?: string;
+  /** Server routine name (`R` field). */
+  routine?: string;
+  /** The originating SQL text — used to render the `LINE N: ...` re-print. */
+  sqlText?: string;
 };

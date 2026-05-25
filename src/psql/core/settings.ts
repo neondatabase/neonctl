@@ -178,7 +178,84 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
   varStore.set('LAST_ERROR_MESSAGE', '');
   varStore.set('LAST_ERROR_SQLSTATE', '00000');
 
+  // SHOW_ALL_RESULTS defaults to 'on' — when off ('0' / 'off') the REPL only
+  // prints the final result set of a multi-statement `\;`-separated batch
+  // (upstream `pset.show_all_results`, set in startup.c).
+  varStore.set('SHOW_ALL_RESULTS', 'on');
+
+  // ENCODING tracks the server's client_encoding ParameterStatus. We seed
+  // with the connection-default UTF8 here; mainloop refreshes it after the
+  // connection is bound (and again whenever `SET client_encoding` flips the
+  // server value). Mirrors `pset.encoding` / `SetVariable("ENCODING", ...)`
+  // in upstream startup.c / common.c.
+  varStore.set('ENCODING', 'UTF8');
+
+  // WATCH_INTERVAL validation hook. Upstream `assign_watch_interval_hook`
+  // (in `startup.c`) rejects non-numeric, negative, or out-of-range values
+  // with a "WATCH_INTERVAL ... is out of range" diagnostic. The hook
+  // returns `false` to veto the set; the surrounding `\set` plumbing
+  // reports the failure.
+  varStore.addHook('WATCH_INTERVAL', (newValue) => {
+    if (newValue === null) return true; // unset is always allowed
+    const ok = isValidWatchInterval(newValue);
+    if (!ok) {
+      process.stderr.write(
+        `\\set: WATCH_INTERVAL "${newValue}" is out of range\n`,
+      );
+      return false;
+    }
+    return true;
+  });
+
+  // ON_ERROR_STOP assign hook. Upstream `assign_var_on_error_stop_hook` in
+  // startup.c keeps `pset.on_error_stop` in lockstep with the variable so
+  // both `--on-error-stop` (which flips the flag directly) and
+  // `--set ON_ERROR_STOP=1` (which only writes the variable) take effect.
+  // Accepts the same value set as `ParseVariableBool`: on/off, true/false,
+  // yes/no, 1/0, or empty (treated as on, matching upstream).
+  varStore.addHook('ON_ERROR_STOP', (newValue) => {
+    if (newValue === null) {
+      settings.onErrorStop = false;
+      return true;
+    }
+    const parsed = parseOnOffBool(newValue);
+    settings.onErrorStop = parsed ?? false;
+    return true;
+  });
+
   return settings;
+};
+
+/**
+ * Parse the `on`/`off`/`true`/`false`/`yes`/`no`/`1`/`0` boolean spelling
+ * upstream uses for psql variables. Mirrors `ParseVariableBool` (without the
+ * error reporting — callers handle that). Returns null on unrecognised input.
+ */
+const parseOnOffBool = (raw: string): boolean | null => {
+  const v = raw.toLowerCase().trim();
+  if (v === '' || v === 'on' || v === 'true' || v === 'yes' || v === '1') {
+    return true;
+  }
+  if (v === 'off' || v === 'false' || v === 'no' || v === '0') {
+    return false;
+  }
+  return null;
+};
+
+/**
+ * Strict validation for `WATCH_INTERVAL`. Mirrors the `\watch` parser:
+ * non-negative finite float, capped at a sensible upper bound to catch
+ * `1e500` (Infinity) and similar overflows.
+ */
+const WATCH_INTERVAL_MAX_SECONDS = 100 * 3600;
+const isValidWatchInterval = (raw: string): boolean => {
+  if (raw.length === 0) return false;
+  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(raw)) return false;
+  const value = parseFloat(raw);
+  if (!Number.isFinite(value)) return false;
+  if (value < 0) return false;
+  if (value > WATCH_INTERVAL_MAX_SECONDS) return false;
+  return true;
 };
 
 /**

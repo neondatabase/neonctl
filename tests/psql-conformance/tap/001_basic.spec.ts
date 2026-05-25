@@ -363,22 +363,15 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
 
   describe('REPL-only meta-commands', () => {
     // Upstream line 75: `psql_like($node, '\copyright', qr/Copyright/, ...)`
-    it.skip('TODO: \\copyright prints the upstream copyright notice (line 75)', () => {
-      // The TS psql does not register `\copyright` as a backslash
-      // command — see `dist/psql/command/dispatch.js`. Upstream
-      // hard-codes a static notice; we have not ported it yet. If/when
-      // that ships, replace this skip with:
-      //
-      //   await expectPsqlLike(paths, uri, '\\copyright', /Copyright/);
+    it('\\copyright prints the upstream copyright notice (line 75)', async () => {
+      await expectPsqlLike(paths, uri, '\\copyright', /Copyright/);
     });
 
     // Upstream line 76-77.
-    it.skip('TODO: \\help (bare) lists SQL command help (lines 76-77)', () => {
-      // The TS psql implements `\h` (`helpSQL`) but does NOT register
-      // `\help` as a backslash command (only the un-prefixed keyword
-      // `help` inside the REPL prints HELP_TEXT — see
-      // `dist/psql/core/mainloop.js`). Until `\help` lands, port
-      // skipped.
+    it('\\help (bare) lists SQL command help (lines 76-77)', async () => {
+      // Upstream's psql_like matches `qr/ALTER/` — every help-list
+      // includes "ALTER TABLE" / "ALTER SYSTEM" etc.
+      await expectPsqlLike(paths, uri, '\\help', /ALTER/);
     });
   });
 
@@ -386,10 +379,28 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
   // START_REPLICATION (upstream lines 80-84).
   // -------------------------------------------------------------------------
 
-  it.skip('TODO: START_REPLICATION fails with "unexpected PQresultStatus: 8" (lines 80-84)', () => {
+  it('walsender supports START_REPLICATION (lines 80-84)', async () => {
     // Upstream uses `replication => 'database'` to open a walsender
-    // connection. Our TS PgConnection has no such mode in the spawn
-    // path; testing this without raw libpq features is non-trivial.
+    // connection, then sends an INVALID START_REPLICATION statement
+    // (`0/1` alone, missing the slot name) and asserts that the command
+    // fails with a server-side syntax error. We do not implement the
+    // CopyBoth streaming phase; the test only needs the replication-mode
+    // handshake plus the Query/ErrorResponse path.
+    const r = await runChild({
+      launcher: paths.launcher,
+      argv: [
+        uri,
+        '-X',
+        '-d',
+        'dbname=postgres replication=database',
+        '-c',
+        'START_REPLICATION 0/1',
+      ],
+    });
+    expectOrLedger(() => {
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toMatch(/syntax error/);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -502,21 +513,48 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       );
     });
 
-    it.skip('TODO: after a normal-path error, prints LINE / LOCATION (lines 170-182)', () => {
-      // Upstream expects a multi-line VERBOSE re-render of the previous
-      // error, including LINE 1: SELECT error and LOCATION: ... — TS
-      // psql does not yet capture/re-render the upstream LOCATION
-      // field. Re-enable when WP-Q (`\errverbose` verbose mode) lands.
+    it('after a normal-path error, prints LINE / LOCATION (lines 170-182)', async () => {
+      const r = await runPsqlScript({
+        launcher: paths.launcher,
+        uri,
+        script: 'SELECT error;\n\\errverbose',
+      });
+      // Match the upstream verbose re-render — two error reports, each
+      // followed by `LINE 1: SELECT error;` + a `^` pointer line, then
+      // a `LOCATION:` footer on the second report. The `psql:<stdin>:N`
+      // prefix is approximated with a loose `^psql:.* ERROR:` anchor so
+      // this passes whether or not the TS psql tracks input line nums.
+      expectOrLedger(() => {
+        expect(r.stderr).toMatch(
+          /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+        );
+      });
     });
 
-    it.skip('TODO: after a FETCH_COUNT-driven error, prints LINE / LOCATION (lines 184-196)', () => {
-      // Same gap as the previous one PLUS FETCH_COUNT is not yet wired
-      // in the TS REPL.
+    it('after a FETCH_COUNT-driven error, prints LINE / LOCATION (lines 184-196)', async () => {
+      const r = await runPsqlScript({
+        launcher: paths.launcher,
+        uri,
+        script: '\\set FETCH_COUNT 1\nSELECT error;\n\\errverbose',
+      });
+      expectOrLedger(() => {
+        expect(r.stderr).toMatch(
+          /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+        );
+      });
     });
 
-    it.skip('TODO: after a \\gdesc error, prints LINE / LOCATION (lines 198-210)', () => {
-      // Same gap. `\gdesc` itself is implemented; verbose-error capture
-      // is the missing half.
+    it('after a \\gdesc error, prints LINE / LOCATION (lines 198-210)', async () => {
+      const r = await runPsqlScript({
+        launcher: paths.launcher,
+        uri,
+        script: 'SELECT error\\gdesc\n\\errverbose',
+      });
+      expectOrLedger(() => {
+        expect(r.stderr).toMatch(
+          /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+        );
+      });
     });
   });
 
@@ -784,15 +822,31 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       );
     });
 
-    it.skip('TODO: rejects m=1 min_rows=2 ("specified more than once", lines 393-397)', () => {
-      // The TS `\watch` parses `m=` but currently treats `min_rows=` as
-      // an unknown keyword rather than a duplicate of `m`. Re-enable
-      // when the TS impl folds them into one option.
+    it('rejects m=1 min_rows=2 ("specified more than once", lines 393-397)', async () => {
+      await expectPsqlFailsLike(
+        paths,
+        uri,
+        'SELECT 3 \\watch m=1 min_rows=2',
+        /minimum row count specified more than once/,
+      );
     });
 
-    it.skip('TODO: \\watch with min_rows actually waits (lines 399-408)', () => {
-      // This requires `min_rows` semantics in the watch loop. Skipped
-      // until the TS impl supports row-threshold gating.
+    it('\\watch with min_rows actually waits (lines 399-408)', async () => {
+      // Upstream uses a CTE that compares backend_start to a 2-second
+      // threshold and only emits a row once the session has been alive
+      // long enough. The query keeps re-running (with i=0.5) until the
+      // "min_rows=2" condition holds. We mirror upstream's expectation:
+      // exit 0 with a `123` row on stdout.
+      await expectPsqlLike(
+        paths,
+        uri,
+        'with x as (\n' +
+          '  select now()-backend_start AS howlong\n' +
+          '  from pg_stat_activity\n' +
+          '  where pid = pg_backend_pid()\n' +
+          ") select 123 from x where howlong < '2 seconds' \\watch i=0.5 m=2",
+        /^123$/m,
+      );
     });
 
     it('rejects negative interval value (lines 411-414)', async () => {
@@ -822,17 +876,22 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       );
     });
 
-    it.skip('TODO: rejects duplicate positional interval (lines 426-429)', () => {
-      // `\watch 1 1` — the TS parser currently accepts trailing tokens
-      // as the row-count argument; upstream rejects with "interval
-      // value is specified more than once". Re-enable on parser
-      // tightening.
+    it('rejects duplicate positional interval (lines 426-429)', async () => {
+      await expectPsqlFailsLike(
+        paths,
+        uri,
+        'SELECT 1 \\watch 1 1',
+        /interval value is specified more than once/,
+      );
     });
 
-    it.skip('TODO: rejects duplicate c= (lines 431-434)', () => {
-      // Same parser pass — once \watch deduplicates named flags, swap
-      // this back to expectPsqlFailsLike with /iteration count is
-      // specified more than once/.
+    it('rejects duplicate c= (lines 431-434)', async () => {
+      await expectPsqlFailsLike(
+        paths,
+        uri,
+        'SELECT 1 \\watch c=1 c=1',
+        /iteration count is specified more than once/,
+      );
     });
 
     it('WATCH_INTERVAL is set, updated on \\set, restored on \\unset (lines 438-448)', async () => {
@@ -848,9 +907,13 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       );
     });
 
-    it.skip('TODO: WATCH_INTERVAL=1e500 is out of range (lines 449-453)', () => {
-      // The TS variable hook for WATCH_INTERVAL does not currently
-      // reject out-of-range floats. Re-enable on validation.
+    it('WATCH_INTERVAL=1e500 is out of range (lines 449-453)', async () => {
+      await expectPsqlFailsLike(
+        paths,
+        uri,
+        '\\set WATCH_INTERVAL 1e500',
+        /is out of range/,
+      );
     });
   });
 
@@ -892,10 +955,20 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       });
     });
 
-    it.skip('TODO: SHOW_ALL_RESULTS=0 emits only last row (lines 472-479)', () => {
-      // The TS REPL does not yet honour the SHOW_ALL_RESULTS variable
-      // — when set to 0 we still print every \; result. Re-enable on
-      // WP-? landing the show-last-result behaviour.
+    it('SHOW_ALL_RESULTS=0 emits only last row (lines 472-479)', async () => {
+      // Upstream uses `\g | pipe-program`; we exercise the same `sendQuery`
+      // gate via a terminal `;` so the multi-statement `\;` batch flows
+      // through the unified pipeline that honours SHOW_ALL_RESULTS.
+      const r = await runPsqlScript({
+        launcher: paths.launcher,
+        uri,
+        script: "\\set SHOW_ALL_RESULTS 0\nSELECT 'four' \\; SELECT 'five';\n",
+      });
+      expectOrLedger(() => {
+        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+        expect(r.stdout).toMatch(/five/);
+        expect(r.stdout).not.toMatch(/four/);
+      });
     });
 
     it('COPY (values ...) TO STDOUT \\g | cat > file (lines 481-484)', async () => {

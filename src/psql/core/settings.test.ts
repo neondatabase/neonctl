@@ -77,6 +77,19 @@ describe('defaultSettings', () => {
     expect(v.get('LAST_ERROR_MESSAGE')).toBe('');
     expect(v.get('LAST_ERROR_SQLSTATE')).toBe('00000');
   });
+
+  test('seeds SHOW_ALL_RESULTS to "on" by default', () => {
+    const v = createVarStore();
+    defaultSettings(v);
+    expect(v.get('SHOW_ALL_RESULTS')).toBe('on');
+    expect(v.asBool('SHOW_ALL_RESULTS', false)).toBe(true);
+  });
+
+  test('seeds ENCODING to "UTF8" by default', () => {
+    const v = createVarStore();
+    defaultSettings(v);
+    expect(v.get('ENCODING')).toBe('UTF8');
+  });
 });
 
 describe('applyEnvOverrides', () => {

@@ -42,6 +42,7 @@ import { scanSql } from '../scanner/sql.js';
 import { scanSlashArgs } from '../scanner/slash.js';
 import { dispatchBackslash } from '../command/dispatch.js';
 import { attachCondStack, COND_COMMAND_NAMES } from '../command/cmd_cond.js';
+import { sendQuery } from '../core/common.js';
 
 // ---------------------------------------------------------------------------
 // Path discovery.
@@ -223,6 +224,38 @@ const makeBackslashContext = (
 };
 
 /**
+ * Outcome of running an input string. Lets the caller distinguish:
+ *   - clean success → keep going, status unchanged
+ *   - per-statement error (no ON_ERROR_STOP) → caller decides whether to
+ *     surface as a non-zero exit (for `-c`) or swallow (for `-f`)
+ *   - ON_ERROR_STOP fired → caller MUST stop further actions, exit non-zero
+ *   - fatal connection loss → caller MUST stop, exit EXIT_BADCONN, and the
+ *     diagnostic has already been written to stderr
+ *
+ * Mirrors the bits the upstream `process_file()` / `MainLoop()` pair tracks
+ * via the `success` / `die_on_error` / `cur_cmd_interactive` interplay.
+ */
+export type ExecuteOutcome = {
+  /** The most recently dispatched statement (SQL or backslash) errored. */
+  hadError: boolean;
+  /** ON_ERROR_STOP was set AND an error was encountered; caller must stop. */
+  stoppedOnError: boolean;
+  /** Connection was lost mid-script; caller must stop with EXIT_BADCONN. */
+  connectionLost: boolean;
+};
+
+export type ExecuteInputOpts = {
+  /**
+   * When true, route SQL through the same `sendQuery` pipeline the REPL uses
+   * so SELECT output, NOTICE messages, and timing all land on stdout/stderr.
+   * Used by the `-c`/`-f` driver. When false (default), SQL is dispatched
+   * silently via `db.execSimple` — the `.psqlrc` path uses this so a stray
+   * SELECT in the rc file doesn't spam the session.
+   */
+  print?: boolean;
+};
+
+/**
  * Execute the supplied input string against the running REPL context. Used
  * by `loadPsqlrc` (and exported for tests). This is a minimal cousin of
  * `runMainLoop`'s processChunk — see the module header for the duplication
@@ -230,14 +263,31 @@ const makeBackslashContext = (
  *
  * Returns when EOF is reached; `\q` and other exit commands inside an rc
  * file are treated as "stop reading this file" (the REPL itself continues).
+ *
+ * The returned outcome lets `runPsql`'s `-c`/`-f` loop apply upstream's
+ * per-switch exit-code semantics (see comment above).
  */
 export const executeInputString = async (
   input: string,
   ctx: REPLContext,
-): Promise<void> => {
+  opts: ExecuteInputOpts = {},
+): Promise<ExecuteOutcome> => {
   let working = input;
   let queryBuf = '';
   let scanState: ScanState = initialScanState();
+  let hadError = false;
+  let stoppedOnError = false;
+  let connectionLost = false;
+  const print = opts.print ?? false;
+
+  const noteConnectionLost = (): boolean => {
+    if (ctx.settings.db?.isClosed()) {
+      ctx.stderr.write('psql: error: connection to server was lost\n');
+      connectionLost = true;
+      return true;
+    }
+    return false;
+  };
 
   while (working.length > 0) {
     const r = scanSql(working, scanState);
@@ -252,12 +302,34 @@ export const executeInputString = async (
       const trimmed = sqlText.trim();
       if (trimmed.length === 0) continue;
       if (!ctx.settings.db) continue;
-      try {
-        await ctx.settings.db.execSimple(sqlText);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        ctx.stderr.write(`psql: ERROR:  ${msg}\n`);
-        if (ctx.settings.onErrorStop) return;
+      if (print) {
+        // `-c` / `-f`: route through the full SendQuery pipeline so SELECT
+        // tuples, NOTICE messages and `\timing` land on the output streams.
+        const stats = await sendQuery(ctx, sqlText);
+        hadError = stats.hadError;
+        if (noteConnectionLost()) {
+          return { hadError, stoppedOnError, connectionLost };
+        }
+        if (hadError && ctx.settings.onErrorStop) {
+          stoppedOnError = true;
+          return { hadError, stoppedOnError, connectionLost };
+        }
+      } else {
+        try {
+          await ctx.settings.db.execSimple(sqlText);
+          hadError = false;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.stderr.write(`psql: ERROR:  ${msg}\n`);
+          hadError = true;
+          if (noteConnectionLost()) {
+            return { hadError, stoppedOnError, connectionLost };
+          }
+          if (ctx.settings.onErrorStop) {
+            stoppedOnError = true;
+            return { hadError, stoppedOnError, connectionLost };
+          }
+        }
       }
       continue;
     }
@@ -281,15 +353,27 @@ export const executeInputString = async (
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.stderr.write(`psql: ERROR:  ${msg}\n`);
-        if (ctx.settings.onErrorStop) return;
+        hadError = true;
+        if (ctx.settings.onErrorStop) {
+          stoppedOnError = true;
+          return { hadError, stoppedOnError, connectionLost };
+        }
         continue;
       }
-      if (res.status === 'exit') return;
+      if (res.status === 'exit')
+        return { hadError, stoppedOnError, connectionLost };
       if (res.status === 'reset-buf') {
         queryBuf = res.newBuf ?? '';
         scanState = initialScanState();
       }
-      if (res.status === 'error' && ctx.settings.onErrorStop) return;
+      hadError = res.status === 'error';
+      if (noteConnectionLost()) {
+        return { hadError, stoppedOnError, connectionLost };
+      }
+      if (res.status === 'error' && ctx.settings.onErrorStop) {
+        stoppedOnError = true;
+        return { hadError, stoppedOnError, connectionLost };
+      }
       continue;
     }
 
@@ -302,13 +386,24 @@ export const executeInputString = async (
   // the residue. This matches `process_file` behaviour in upstream.
   const tail = queryBuf.trim();
   if (tail.length > 0 && ctx.settings.db && ctx.cond.isActive()) {
-    try {
-      await ctx.settings.db.execSimple(queryBuf);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.stderr.write(`psql: ERROR:  ${msg}\n`);
+    if (print) {
+      const stats = await sendQuery(ctx, queryBuf);
+      hadError = stats.hadError;
+      noteConnectionLost();
+    } else {
+      try {
+        await ctx.settings.db.execSimple(queryBuf);
+        hadError = false;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.stderr.write(`psql: ERROR:  ${msg}\n`);
+        hadError = true;
+        noteConnectionLost();
+      }
     }
   }
+
+  return { hadError, stoppedOnError, connectionLost };
 };
 
 // ---------------------------------------------------------------------------

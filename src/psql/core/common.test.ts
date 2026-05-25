@@ -510,6 +510,66 @@ describe('executeAndPrint', () => {
 // psqlExec
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// SHOW_ALL_RESULTS
+// ---------------------------------------------------------------------------
+
+describe('sendQuery — SHOW_ALL_RESULTS', () => {
+  const twoResults = new Map<string, Canned>([
+    [
+      "SELECT 'four' ; SELECT 'five';",
+      [
+        buildResultSet('SELECT', [{ name: '?column?' }], [['four']]),
+        buildResultSet('SELECT', [{ name: '?column?' }], [['five']]),
+      ],
+    ],
+  ]);
+
+  test('default (on): every \\;-separated result is printed', async () => {
+    const { ctx, stdout } = buildCtxWithBuffers({ canned: twoResults });
+    const stats = await sendQuery(ctx, "SELECT 'four' ; SELECT 'five';");
+    expect(stats.hadError).toBe(false);
+    expect(stdout.text()).toMatch(/four/);
+    expect(stdout.text()).toMatch(/five/);
+  });
+
+  test('off (0): only the LAST result is printed', async () => {
+    const { ctx, stdout } = buildCtxWithBuffers({
+      canned: twoResults,
+      settingsOverride: (s) => {
+        s.vars.set('SHOW_ALL_RESULTS', '0');
+      },
+    });
+    const stats = await sendQuery(ctx, "SELECT 'four' ; SELECT 'five';");
+    expect(stats.hadError).toBe(false);
+    expect(stdout.text()).toMatch(/five/);
+    expect(stdout.text()).not.toMatch(/four/);
+  });
+
+  test('off (off literal): only the LAST result is printed', async () => {
+    const { ctx, stdout } = buildCtxWithBuffers({
+      canned: twoResults,
+      settingsOverride: (s) => {
+        s.vars.set('SHOW_ALL_RESULTS', 'off');
+      },
+    });
+    await sendQuery(ctx, "SELECT 'four' ; SELECT 'five';");
+    expect(stdout.text()).toMatch(/five/);
+    expect(stdout.text()).not.toMatch(/four/);
+  });
+
+  test('off with a single result still prints that result', async () => {
+    const { ctx, stdout } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('SHOW_ALL_RESULTS', '0');
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    // Stdout should contain the mock SELECT output (default ?column? = 1).
+    expect(stdout.text()).toMatch(/1/);
+  });
+});
+
 describe('psqlExec', () => {
   test('returns the last ResultSet on success', async () => {
     const db = makeMockConn();

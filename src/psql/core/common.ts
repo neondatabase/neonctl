@@ -56,7 +56,7 @@
 import type { Connection, ResultSet } from '../types/connection.js';
 import type { Printer } from '../types/printer.js';
 import type { REPLContext } from '../types/repl.js';
-import type { PsqlSettings } from '../types/settings.js';
+import type { LastErrorResult, PsqlSettings } from '../types/settings.js';
 
 import { alignedPrinter } from '../print/aligned.js';
 import { asciidocPrinter } from '../print/asciidoc.js';
@@ -293,6 +293,15 @@ const readFetchCount = (settings: PsqlSettings): number => {
 const readSinglestep = (settings: PsqlSettings): boolean =>
   settings.singlestep || settings.vars.asBool('SINGLESTEP', false);
 
+/**
+ * SHOW_ALL_RESULTS controls multi-statement `\;` printing. Default 'on' —
+ * every result set is rendered. When 'off' / '0', only the LAST result set
+ * is printed (upstream's `pset.show_all_results` flag, consulted by
+ * `PrintQueryResults` in common.c).
+ */
+const readShowAllResults = (settings: PsqlSettings): boolean =>
+  settings.vars.asBool('SHOW_ALL_RESULTS', true);
+
 // ---------------------------------------------------------------------------
 // Error printing — mirrors mainloop's `writeError` format. We keep it local
 // so callers other than the mainloop can still emit consistent errors.
@@ -302,11 +311,54 @@ const writeError = (ctx: REPLContext, message: string): void => {
   ctx.stderr.write(`psql: ERROR:  ${message}\n`);
 };
 
-const recordError = (ctx: REPLContext, err: unknown): string => {
-  const message = err instanceof Error ? err.message : String(err);
-  ctx.settings.lastErrorResult = { message };
-  return message;
+/**
+ * Capture the full ErrorResponse-shaped payload from a thrown error.
+ *
+ * Our wire layer copies every named field of the server's ErrorResponse
+ * (severity / code / detail / hint / position / file / line / routine /
+ * …) onto the thrown Error as own properties (see `asThrowable` in
+ * `wire/connection.ts`). We mirror those onto `settings.lastErrorResult`
+ * so `\errverbose` can re-render the error in VERBOSE form — including
+ * the `LINE N: …` re-print + `^` pointer and the `LOCATION:` footer.
+ *
+ * `sqlText` is the originating SQL text from the caller; required so the
+ * `^` pointer can be positioned under the failing character.
+ */
+export const captureLastError = (
+  settings: PsqlSettings,
+  err: unknown,
+  sqlText: string,
+): string => {
+  const fallbackMessage = err instanceof Error ? err.message : String(err);
+  const e = (err ?? {}) as Partial<LastErrorResult> & { message?: string };
+  const code = e.code;
+  settings.lastErrorResult = {
+    severity: e.severity,
+    code,
+    // Keep `sqlstate` as an alias for legacy callers / tests.
+    sqlstate: code,
+    message: e.message ?? fallbackMessage,
+    detail: e.detail,
+    hint: e.hint,
+    position: e.position,
+    internalPosition: e.internalPosition,
+    internalQuery: e.internalQuery,
+    where: e.where,
+    schema: e.schema,
+    table: e.table,
+    column: e.column,
+    dataType: e.dataType,
+    constraint: e.constraint,
+    file: e.file,
+    line: e.line,
+    routine: e.routine,
+    sqlText,
+  };
+  return settings.lastErrorResult.message ?? fallbackMessage;
 };
+
+const recordError = (ctx: REPLContext, err: unknown, sqlText = ''): string =>
+  captureLastError(ctx.settings, err, sqlText);
 
 // ---------------------------------------------------------------------------
 // SINGLESTEP confirmation.
@@ -376,8 +428,16 @@ const renderResultSets = async (
   const printer = pickPrinter(ctx.settings);
   let rowsAffected = 0;
   let rowsPrinted = 0;
-  for (const rs of results) {
-    await printer.printQuery(rs, ctx.settings.popt, out);
+  // When SHOW_ALL_RESULTS is off and we have a `\;`-separated batch, upstream
+  // only prints the LAST result set. The tally counters still walk every
+  // result so QueryStats stays consistent — only the printer call is gated.
+  const showAll = readShowAllResults(ctx.settings);
+  const lastIdx = results.length - 1;
+  for (let i = 0; i < results.length; i++) {
+    const rs = results[i];
+    if (showAll || i === lastIdx) {
+      await printer.printQuery(rs, ctx.settings.popt, out);
+    }
     if (rs.fields.length === 0) {
       // Non-tuples-producing commands (INSERT/UPDATE/DELETE/DDL) — rowCount
       // is the affected-row total when libpq sets it.
@@ -540,7 +600,7 @@ export const executeAndPrint = async (
       stats.rowsPrinted = rowsPrinted;
     }
   } catch (err) {
-    const message = recordError(ctx, err);
+    const message = recordError(ctx, err, sql);
     writeError(ctx, message);
     stats.hadError = true;
   } finally {
@@ -661,7 +721,7 @@ export const sendQuery = async (
       stats.rowsPrinted = r.rowsPrinted;
     }
   } catch (err) {
-    const message = recordError(ctx, err);
+    const message = recordError(ctx, err, sql);
     writeError(ctx, message);
     stats.hadError = true;
   }

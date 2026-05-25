@@ -50,20 +50,40 @@ const buildResultSet = (
 
 type QueryCall = { sql: string; params: unknown[] };
 
-const makeMockConnection = (
-  canned: Map<string, Canned> = new Map(),
-): Connection & {
+type NotificationListener = (
+  channel: string,
+  payload: string,
+  pid: number,
+) => void;
+
+type MockConn = Connection & {
   calls: string[];
   queryCalls: QueryCall[];
   cancelCalls: number;
-} => {
+  /** Set/override a ParameterStatus value (e.g. `client_encoding`). */
+  setParam(name: string, value: string): void;
+  /** Emit a NotificationResponse to every subscriber installed via onNotification. */
+  emitNotification(channel: string, payload: string, pid: number): void;
+};
+
+const makeMockConnection = (
+  canned: Map<string, Canned> = new Map(),
+): MockConn => {
   const calls: string[] = [];
   const queryCalls: QueryCall[] = [];
   let cancelCalls = 0;
   const noop = (): (() => void) => () => undefined;
+  const params = new Map<string, string>();
+  const notificationListeners = new Set<NotificationListener>();
   const conn = {
     serverVersion: 170000,
-    parameterStatus: (): string | undefined => undefined,
+    parameterStatus: (name: string): string | undefined => params.get(name),
+    setParam(name: string, value: string): void {
+      params.set(name, value);
+    },
+    emitNotification(channel: string, payload: string, pid: number): void {
+      for (const l of notificationListeners) l(channel, payload, pid);
+    },
     query(sql: string, params?: unknown[]): Promise<ResultSet> {
       const trimmed = sql.trim();
       queryCalls.push({ sql: trimmed, params: params ?? [] });
@@ -103,7 +123,10 @@ const makeMockConnection = (
     escapeIdentifier: (v: string) => `"${v}"`,
     escapeLiteral: (v: string) => `'${v}'`,
     onNotice: noop,
-    onNotification: noop,
+    onNotification(listener: NotificationListener): () => void {
+      notificationListeners.add(listener);
+      return () => notificationListeners.delete(listener);
+    },
     close: () => Promise.resolve(),
     isClosed: () => false,
     get calls() {
@@ -118,11 +141,7 @@ const makeMockConnection = (
   };
   // The accessor properties above won't survive a structural cast cleanly;
   // expose plain properties for tests to inspect.
-  return conn as unknown as Connection & {
-    calls: string[];
-    queryCalls: QueryCall[];
-    cancelCalls: number;
-  };
+  return conn as unknown as MockConn;
 };
 
 // ---------------------------------------------------------------------------
@@ -273,10 +292,13 @@ describe('runMainLoop — backslash commands', () => {
     expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('hello');
   });
 
-  test('unknown backslash command writes an error', async () => {
+  test('unknown backslash command writes an error and exits non-zero', async () => {
     const { ctx, stderr } = buildCtx({ lines: ['\\nosuch'] });
     const code = await runMainLoop(ctx);
-    expect(code).toBe(EXIT_SUCCESS);
+    // Mirrors upstream MainLoop's `success` propagation: when the last
+    // submitted statement fails in scripted (notty) mode, the process exits
+    // EXIT_USER even without ON_ERROR_STOP.
+    expect(code).toBe(EXIT_USER);
     expect(stderr.text()).toMatch(/invalid command \\nosuch/);
   });
 });
@@ -492,5 +514,82 @@ describe('runMainLoop — \\bind', () => {
       params: ['once'],
     });
     expect(db?.calls).toEqual(['SELECT 2;']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ENCODING — seeded from server's client_encoding at startup; refreshed
+// after each successful query (mirrors upstream's tail-of-SendQuery refresh
+// in common.c).
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — ENCODING', () => {
+  test('seeded from server client_encoding on startup', async () => {
+    const { ctx, db } = buildCtx({ lines: [] });
+    db?.setParam('client_encoding', 'LATIN1');
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('ENCODING')).toBe('LATIN1');
+  });
+
+  test('falls back to default UTF8 when no parameterStatus is set', async () => {
+    const { ctx } = buildCtx({ lines: [] });
+    await runMainLoop(ctx);
+    // defaultSettings seeds ENCODING=UTF8 and no client_encoding was set
+    // on the mock, so refresh keeps the default.
+    expect(ctx.settings.vars.get('ENCODING')).toBe('UTF8');
+  });
+
+  test('refreshes after a SET client_encoding statement', async () => {
+    const { ctx, db } = buildCtx({ lines: ['SELECT 1;'] });
+    db?.setParam('client_encoding', 'UTF8');
+    // Drive the connection's perceived encoding to flip after the query.
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        // Mock the server returning a ParameterStatus mid-flight by
+        // mutating the mock's params map before resolving.
+        db.setParam('client_encoding', 'LATIN1');
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('ENCODING')).toBe('LATIN1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Asynchronous NotificationResponse (LISTEN/NOTIFY)
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — NotificationResponse', () => {
+  test('renders the upstream "Asynchronous notification" line (no payload)', async () => {
+    const { ctx, stdout, db } = buildCtx({ lines: ['SELECT 1;'] });
+    // Drive the mock to emit a NotificationResponse during the query.
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotification('foo', '', 4242);
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stdout.text()).toMatch(
+      /Asynchronous notification "foo" received from server process with PID 4242\./,
+    );
+  });
+
+  test('includes payload clause when payload is non-empty', async () => {
+    const { ctx, stdout, db } = buildCtx({ lines: ['SELECT 1;'] });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotification('foo', 'bar', 7);
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stdout.text()).toMatch(
+      /Asynchronous notification "foo" with payload "bar" received from server process with PID 7\./,
+    );
   });
 });

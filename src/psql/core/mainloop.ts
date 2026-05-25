@@ -405,6 +405,22 @@ const dispatchRegisteredCommand = async (
 // pipeline.
 // ---------------------------------------------------------------------------
 
+/**
+ * Refresh psql vars that mirror connection-driven server state. Today this
+ * is just `ENCODING` (tracks `client_encoding` ParameterStatus). Upstream
+ * does the same check at the tail of `SendQuery` in common.c so a
+ * `SET client_encoding = ...` lands on the psql var before the next
+ * statement looks it up. Safe to call when no connection is bound.
+ */
+const refreshConnectionVars = (ctx: REPLContext): void => {
+  const db = ctx.settings.db;
+  if (!db) return;
+  const enc = db.parameterStatus('client_encoding');
+  if (enc !== undefined && ctx.settings.vars.get('ENCODING') !== enc) {
+    ctx.settings.vars.set('ENCODING', enc);
+  }
+};
+
 const dispatchSendQuery = async (
   ctx: REPLContext,
   sql: string,
@@ -427,13 +443,51 @@ const dispatchSendQuery = async (
       writeError(ctx, message);
       return false;
     } finally {
+      refreshConnectionVars(ctx);
       if (ctx.settings.timing) {
         ctx.stdout.write('\n' + formatDurationMs(Date.now() - started) + '\n');
       }
     }
   }
   const stats = await sendQuery(ctx, sql);
+  refreshConnectionVars(ctx);
   return !stats.hadError;
+};
+
+/**
+ * Format an async NotificationResponse (LISTEN/NOTIFY payload) the way
+ * upstream's `PrintNotifications` in common.c does. Empty payloads omit the
+ * payload clause for backward-compat with pre-9.0 servers.
+ */
+const formatNotification = (
+  channel: string,
+  payload: string,
+  pid: number,
+): string => {
+  if (payload.length > 0) {
+    return (
+      `Asynchronous notification "${channel}" with payload "${payload}" ` +
+      `received from server process with PID ${String(pid)}.\n`
+    );
+  }
+  return (
+    `Asynchronous notification "${channel}" ` +
+    `received from server process with PID ${String(pid)}.\n`
+  );
+};
+
+/**
+ * Subscribe to NotificationResponse on the active connection, rendering each
+ * to the REPL output (mirrors upstream `PrintNotifications` writing to
+ * `pset.queryFout`). Returns the disposer the connection handed us, or
+ * `null` when no connection is bound.
+ */
+const installNotificationHandler = (ctx: REPLContext): (() => void) | null => {
+  const db = ctx.settings.db;
+  if (!db) return null;
+  return db.onNotification((channel, payload, pid) => {
+    ctx.stdout.write(formatNotification(channel, payload, pid));
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -472,6 +526,12 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   let stmtLineNumber = 1;
   let successResult = EXIT_SUCCESS;
   let exitRequested = false;
+  // Tracks whether the most recently dispatched SQL statement (NOT a
+  // backslash command) errored. Upstream psql's MainLoop maintains the
+  // equivalent `success` flag; at end-of-input, if the last statement
+  // failed we surface that as a non-zero exit even when ON_ERROR_STOP
+  // is off (mirrors `\timing on; SELECT error` exiting non-zero).
+  let lastWasError = false;
 
   const resetBuf = (): void => {
     queryBuf = '';
@@ -479,8 +539,32 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
     stmtLineNumber = 1;
   };
 
+  // Detect mid-script connection loss and, on first detection, emit the
+  // upstream "connection to server was lost" diagnostic + flag EXIT_BADCONN.
+  // Subsequent statements would all rethrow against the closed connection;
+  // we halt the loop instead so we don't spam ERROR lines for every one.
+  const checkConnectionLost = (): boolean => {
+    if (ctx.settings.db?.isClosed()) {
+      ctx.stderr.write('psql: error: connection to server was lost\n');
+      successResult = EXIT_BADCONN;
+      exitRequested = true;
+      return true;
+    }
+    return false;
+  };
+
   const sigintState: SigintState = { inQuery: false, resetBuf };
   const removeSigint = installSigint(ctx, sigintState);
+
+  // Seed the ENCODING psql var from the server's client_encoding the first
+  // time we enter the REPL — subsequent `SET client_encoding = ...` lands
+  // back through `refreshConnectionVars` after each query.
+  refreshConnectionVars(ctx);
+
+  // Subscribe to async NotificationResponse (LISTEN/NOTIFY) so a `NOTIFY foo`
+  // surfaces upstream's `Asynchronous notification "foo" ...` line. The
+  // disposer is run in the finally block at exit so we don't leak listeners.
+  const removeNotificationHandler = installNotificationHandler(ctx);
 
   // Compute the prompt string for the current state. For notty input we emit
   // the empty string so the stream reader doesn't see prompt bytes interleaved
@@ -521,6 +605,11 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         sigintState.inQuery = true;
         const ok = await dispatchSendQuery(ctx, sqlText);
         sigintState.inQuery = false;
+        lastWasError = !ok;
+        // After any SQL statement, the server may have closed the connection
+        // (e.g. pg_terminate_backend on our own pid). Surface that once and
+        // halt — psql cannot recover from a lost connection mid-script.
+        if (checkConnectionLost()) return;
         if (!ok && ctx.settings.onErrorStop) {
           successResult = EXIT_USER;
           exitRequested = true;
@@ -552,6 +641,9 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
             exitRequested = true;
             return;
           }
+          if (r.handled) {
+            lastWasError = r.result?.status === 'error';
+          }
           if (
             r.handled &&
             r.result?.status === 'error' &&
@@ -582,6 +674,9 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           scanState = initialScanState();
           stmtLineNumber = 1;
         }
+        lastWasError = bres?.status === 'error';
+        // Backslash commands like \connect can also tear down the connection.
+        if (checkConnectionLost()) return;
         if (bres?.status === 'error' && ctx.settings.onErrorStop) {
           successResult = EXIT_USER;
           exitRequested = true;
@@ -700,7 +795,13 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         sigintState.inQuery = true;
         const ok = await dispatchSendQuery(ctx, queryBuf);
         sigintState.inQuery = false;
-        if (!ok && ctx.settings.onErrorStop) successResult = EXIT_USER;
+        lastWasError = !ok;
+        if (ctx.settings.db?.isClosed()) {
+          ctx.stderr.write('psql: error: connection to server was lost\n');
+          successResult = EXIT_BADCONN;
+        } else if (!ok && ctx.settings.onErrorStop) {
+          successResult = EXIT_USER;
+        }
       }
       queryBuf = '';
     }
@@ -712,9 +813,18 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         successResult = EXIT_USER;
       }
     }
+
+    // Upstream MainLoop's terminal check: when the very last statement
+    // errored and we haven't already escalated to a worse exit code, surface
+    // EXIT_USER. Only kicks in for scripted input (`notty`); the interactive
+    // REPL never propagates per-statement failures into the process exit.
+    if (lastWasError && ctx.settings.notty && successResult === EXIT_SUCCESS) {
+      successResult = EXIT_USER;
+    }
   } finally {
     await reader.close();
     removeSigint();
+    if (removeNotificationHandler) removeNotificationHandler();
   }
 
   return successResult;
