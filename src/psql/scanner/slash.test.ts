@@ -1,11 +1,34 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { scanSlashArgs } from './slash.js';
+import { BACKTICK_EXECUTOR, scanSlashArgs } from './slash.js';
 
 const lookup =
   (vars: Record<string, string>) =>
   (name: string): string | undefined =>
     Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : undefined;
+
+// stderr capture for the backtick error path.
+let stderrChunks: string[];
+let stderrOrig: typeof process.stderr.write;
+
+beforeEach(() => {
+  stderrChunks = [];
+  stderrOrig = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: unknown) => {
+    stderrChunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+});
+
+afterEach(() => {
+  process.stderr.write = stderrOrig;
+  // Reset the executor to its original implementation so test ordering
+  // can't leave a stale mock in place.
+  BACKTICK_EXECUTOR.current = ORIG_EXECUTOR;
+});
+
+const ORIG_EXECUTOR = BACKTICK_EXECUTOR.current;
+const stderr = (): string => stderrChunks.join('');
 
 describe('scanSlashArgs — bare args', () => {
   test('splits whitespace-separated bare args', () => {
@@ -155,14 +178,53 @@ describe('scanSlashArgs — whole-line mode', () => {
   });
 });
 
-describe('scanSlashArgs — backticks (stubbed)', () => {
-  test('backticked text is passed through verbatim', () => {
-    // WP-12 will wire shell exec; for now we keep the backticks visible.
-    expect(scanSlashArgs('`echo hi`', 'normal')).toEqual(['`echo hi`']);
+describe('scanSlashArgs — backticks', () => {
+  test('backticked command substitutes its stdout (newline trimmed)', () => {
+    const exec = vi.fn(() => 'hi\n');
+    BACKTICK_EXECUTOR.current = exec;
+    expect(scanSlashArgs('`echo hi`', 'normal')).toEqual(['hi']);
+    expect(exec).toHaveBeenCalledWith('echo hi');
   });
 
-  test(':var inside backticks still expands', () => {
+  test(':var inside backticks expands before exec', () => {
+    const calls: string[] = [];
+    BACKTICK_EXECUTOR.current = (cmd: string) => {
+      calls.push(cmd);
+      return 'mock\n';
+    };
     const vars = lookup({ CMD: 'date' });
-    expect(scanSlashArgs('`:CMD -u`', 'normal', vars)).toEqual(['`date -u`']);
+    expect(scanSlashArgs('`:CMD -u`', 'normal', vars)).toEqual(['mock']);
+    expect(calls).toEqual(['date -u']);
+  });
+
+  test('backtick output concatenates with surrounding literal text', () => {
+    BACKTICK_EXECUTOR.current = () => '42';
+    expect(scanSlashArgs('pre`x`post', 'normal')).toEqual(['pre42post']);
+  });
+
+  test('multi-line output preserves interior newlines, trims one trailing', () => {
+    BACKTICK_EXECUTOR.current = () => 'a\nb\nc\n';
+    expect(scanSlashArgs('`x`', 'normal')).toEqual(['a\nb\nc']);
+  });
+
+  test('failed command logs to stderr and substitutes empty string', () => {
+    BACKTICK_EXECUTOR.current = () => {
+      throw new Error('command failed');
+    };
+    expect(scanSlashArgs('`bogus`', 'normal')).toEqual(['']);
+    expect(stderr()).toMatch(/psql: error: \\!: bogus: command failed/);
+  });
+
+  test('empty backticks (``) are a no-op empty string', () => {
+    const exec = vi.fn(() => 'should-not-run');
+    BACKTICK_EXECUTOR.current = exec;
+    expect(scanSlashArgs('``', 'normal')).toEqual(['']);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  test('real execSync round-trip via /bin/echo', () => {
+    // Smoke test the un-mocked path; uses the original executor.
+    BACKTICK_EXECUTOR.current = ORIG_EXECUTOR;
+    expect(scanSlashArgs('`echo hello`', 'normal')).toEqual(['hello']);
   });
 });

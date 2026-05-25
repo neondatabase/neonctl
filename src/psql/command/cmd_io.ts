@@ -52,10 +52,13 @@
  *     to have exactly one row, and stores `${prefix}${colname}` → value
  *     for each column on `settings.vars`.
  *
- *   - `\gdesc` would need the extended-query protocol (Parse + Describe
- *     without Execute). Our `Connection` interface stubs `prepare()` but
- *     mainloop hasn't adopted it yet; we error with a clear
- *     "extended protocol not available — TODO(WP-21)" message.
+ *   - `\gdesc` parses the buffered query with the extended protocol
+ *     (Parse + Describe by statement, no Execute), then assembles a
+ *     synthetic `Column / Type` ResultSet and renders it through the
+ *     active printer (`alignedPrinter` by default; the format picker
+ *     honours `\pset format`). Tuples-only mode (`\t on`) and `\o FILE`
+ *     redirects ride along automatically because the same ResultSet
+ *     goes through the same printer the REPL would use for a query.
  *
  *   - `\gexec` iterates the cells of the last result row-major and feeds
  *     each non-null cell back as SQL through `execSimple`. Each statement's
@@ -85,9 +88,17 @@ import type {
   BackslashResult,
 } from '../types/backslash.js';
 import type { PsqlSettings } from '../types/settings.js';
-import type { ResultSet } from '../types/connection.js';
+import type { FieldDescription, ResultSet } from '../types/connection.js';
+import type { Printer } from '../types/printer.js';
 
 import { alignedPrinter } from '../print/aligned.js';
+import { asciidocPrinter } from '../print/asciidoc.js';
+import { csvPrinter } from '../print/csv.js';
+import { htmlPrinter } from '../print/html.js';
+import { jsonPrinter } from '../print/json.js';
+import { latexLongtablePrinter, latexPrinter } from '../print/latex.js';
+import { troffMsPrinter } from '../print/troff.js';
+import { unalignedPrinter } from '../print/unaligned.js';
 
 import { writeErr } from './shared.js';
 import { enqueue as enqueueInput } from './inputQueue.js';
@@ -249,6 +260,40 @@ const renderResult = async (
   out: NodeJS.WritableStream,
 ): Promise<void> => {
   await alignedPrinter.printQuery(rs, settings.popt, out);
+};
+
+/**
+ * Pick the printer for the active output format. Mirrors `pickPrinter`
+ * in `core/common.ts` — duplicated here to avoid the cmd_io → common
+ * import cycle (common.ts depends on this file for `getQueryFout`).
+ *
+ * `wrapped` falls back to the aligned printer (which renders `wrapped`
+ * mode itself via `topt.format`).
+ */
+const pickActivePrinter = (settings: PsqlSettings): Printer => {
+  switch (settings.popt.topt.format) {
+    case 'aligned':
+    case 'wrapped':
+      return alignedPrinter;
+    case 'unaligned':
+      return unalignedPrinter;
+    case 'csv':
+      return csvPrinter;
+    case 'json':
+      return jsonPrinter;
+    case 'html':
+      return htmlPrinter;
+    case 'asciidoc':
+      return asciidocPrinter;
+    case 'latex':
+      return latexPrinter;
+    case 'latex-longtable':
+      return latexLongtablePrinter;
+    case 'troff-ms':
+      return troffMsPrinter;
+    default:
+      return alignedPrinter;
+  }
 };
 
 /**
@@ -550,8 +595,14 @@ export const cmdGset: BackslashCmdSpec = {
       return errResult(ctx, 'query did not return any rows');
     }
     const rs = tupled[tupled.length - 1];
-    if (rs.rows.length !== 1) {
-      return errResult(ctx, `expected one row, got ${String(rs.rows.length)}`);
+    if (rs.rows.length > 1) {
+      // Match upstream psql's exact wording from `exec_command_gset` —
+      // `\gset: more than one row returned for \gset`. The wrapping
+      // `errResult` prepends the `\gset:` prefix so we keep only the tail.
+      return errResult(ctx, 'more than one row returned for \\gset');
+    }
+    if (rs.rows.length === 0) {
+      return errResult(ctx, 'expected one row, got 0');
     }
     const row = rs.rows[0];
     for (let i = 0; i < rs.fields.length; i++) {
@@ -568,20 +619,147 @@ export const cmdGset: BackslashCmdSpec = {
 // ---------------------------------------------------------------------------
 // \gdesc — describe the current query without executing it.
 //
-// Requires extended-query protocol (Parse + Describe-by-statement). The
-// `Connection` interface exposes `prepare()` and `describe()`, but the
-// surrounding plumbing for emitting a `ResultSet` shaped like psql's
-// "Column / Type" listing belongs to WP-20/WP-21. We stub with a clear
-// error message so callers know to wait.
+// Mirrors upstream `exec_command_gdesc` in `src/bin/psql/command.c`: parse
+// the buffered query through the extended protocol (Parse + Describe by
+// statement, no Execute), then build a synthetic two-column ResultSet of
+// `Column` and `Type` rows and route it through the printer the user's
+// `\pset format` selected. Tuples-only mode (`\t on`) suppresses the
+// header / `(N columns)` footer the same way it would for a real query
+// result, because we hand the synthetic ResultSet to the same printer.
+//
+// Type names come from a follow-up `SELECT ... format_type(tp, tpm)`
+// over a VALUES literal — exactly the round-trip upstream uses so
+// non-builtin types and typmod modifiers (`numeric(10,2)`, `varchar(64)`)
+// render with their canonical form.
 // ---------------------------------------------------------------------------
+
+/**
+ * Build the SQL that resolves each describe-result column's `Type` via
+ * `pg_catalog.format_type(typoid, typmod)`. We feed the names + OIDs
+ * + typmods through a `VALUES` literal so the server does the formatting
+ * for us — the same query upstream issues from `describeFieldsByType`.
+ *
+ * Returns null when there are zero fields (caller emits `(0 rows)` form
+ * by hand because PostgreSQL rejects an empty VALUES list).
+ */
+const buildGdescFormatQuery = (fields: FieldDescription[]): string | null => {
+  if (fields.length === 0) return null;
+  // Each row literal escapes the column name with the standard E'' string
+  // form so embedded quotes survive the round trip. The pg_type catalogue
+  // expects oid + int4 typmod, so we cast accordingly. `_idx` keeps the
+  // VALUES list in insertion order; `format_type` handles -1 typmod
+  // (== "no modifier") natively.
+  const rows = fields
+    .map((f, i) => {
+      const safeName = f.name.replace(/'/gu, "''");
+      const oid = String(f.dataTypeID >>> 0);
+      const typmod = String(f.dataTypeModifier | 0);
+      return `(${String(i)}, '${safeName}', ${oid}::oid, ${typmod}::int4)`;
+    })
+    .join(', ');
+  // ORDER BY _idx preserves the describe order regardless of how the server
+  // happens to evaluate the VALUES list. Aliases match upstream column
+  // titles exactly so the printer header is identical.
+  return (
+    'SELECT name AS "Column", pg_catalog.format_type(tp, tpm) AS "Type"' +
+    ` FROM (VALUES ${rows}) AS x(_idx, name, tp, tpm) ORDER BY _idx`
+  );
+};
+
+/**
+ * Field descriptors for the synthetic `Column / Type` ResultSet that
+ * `\gdesc` emits when format_type resolution fails or yields nothing.
+ *
+ * We fall back to the field's raw OID so the user still sees a value.
+ */
+const GDESC_SYNTHETIC_FIELDS: FieldDescription[] = [
+  {
+    name: 'Column',
+    tableID: 0,
+    columnID: 0,
+    dataTypeID: 25, // text
+    dataTypeSize: -1,
+    dataTypeModifier: -1,
+    format: 0,
+  },
+  {
+    name: 'Type',
+    tableID: 0,
+    columnID: 0,
+    dataTypeID: 25, // text
+    dataTypeSize: -1,
+    dataTypeModifier: -1,
+    format: 0,
+  },
+];
+
+const buildSyntheticGdescResultSet = (rows: unknown[][]): ResultSet => ({
+  command: 'SELECT',
+  rowCount: rows.length,
+  oid: null,
+  fields: GDESC_SYNTHETIC_FIELDS,
+  rows,
+  notices: [],
+});
 
 export const cmdGdesc: BackslashCmdSpec = {
   name: 'gdesc',
   helpKey: 'gdesc',
-  run: (ctx: BackslashContext): Promise<BackslashResult> =>
-    Promise.resolve(
-      errResult(ctx, 'extended protocol not available — TODO(WP-21)'),
-    ),
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const sql = ctx.queryBuf.trim();
+    if (sql.length === 0) {
+      return errResult(ctx, 'no query buffer');
+    }
+    if (!ctx.settings.db) {
+      return errResult(ctx, 'no connection to the server');
+    }
+    let fields: FieldDescription[];
+    try {
+      const stmt = await ctx.settings.db.prepare('', sql);
+      fields = await stmt.describe();
+      // Close the unnamed prepared statement so we don't leak it. Failure
+      // to close (e.g. server already in error state) is non-fatal.
+      try {
+        await stmt.close();
+      } catch {
+        // ignore
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+
+    // Resolve canonical type names via a follow-up round trip when we have
+    // at least one field. On failure (or when the server returns nothing —
+    // a mock or an unusual connection state) fall back to the raw OID so
+    // the user still sees a row per described column.
+    let rows: unknown[][];
+    const formatQuery = buildGdescFormatQuery(fields);
+    if (formatQuery === null) {
+      rows = [];
+    } else {
+      const fallbackRows = (): unknown[][] =>
+        fields.map((f) => [f.name, String(f.dataTypeID)]);
+      try {
+        const sets = await ctx.settings.db.execSimple(formatQuery);
+        const last = sets[sets.length - 1];
+        rows = last && last.rows.length > 0 ? last.rows : fallbackRows();
+      } catch {
+        rows = fallbackRows();
+      }
+    }
+
+    const rs = buildSyntheticGdescResultSet(rows);
+    const printer = pickActivePrinter(ctx.settings);
+    const out = pickOut(ctx.settings, null);
+    try {
+      await printer.printQuery(rs, ctx.settings.popt, out);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+    return { status: 'reset-buf', newBuf: '' };
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -725,6 +903,44 @@ const parseStrictNonNegativeInt = (raw: string): number | null => {
 const DEFAULT_WATCH_INTERVAL = 2;
 
 /**
+ * Render `\watch`'s per-iteration timestamp in upstream psql's
+ * `ctime`-style layout: `Day Mon DD HH:MM:SS YYYY` (e.g. `Mon May 25
+ * 19:41:55 2026`). Upstream calls `strftime("%c", &tm)` with the C locale;
+ * we reproduce the field order in vanilla English so the output matches
+ * regardless of the host locale.
+ *
+ * Exported only for unit-testing the format ladder.
+ */
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+] as const;
+
+const pad2 = (n: number): string => (n < 10 ? `0${String(n)}` : String(n));
+
+export const formatWatchTimestamp = (now: Date): string => {
+  const weekday = WEEKDAYS[now.getDay()];
+  const month = MONTHS[now.getMonth()];
+  const day = pad2(now.getDate());
+  const hh = pad2(now.getHours());
+  const mm = pad2(now.getMinutes());
+  const ss = pad2(now.getSeconds());
+  const year = String(now.getFullYear());
+  return `${weekday} ${month} ${day} ${hh}:${mm}:${ss} ${year}`;
+};
+
+/**
  * Upper bound on the `WATCH_INTERVAL` variable and the positional interval
  * — matches upstream which rejects "out of range" values. Upstream uses
  * `strtod` and rejects ±Infinity; we tighten further so a single watch loop
@@ -751,6 +967,67 @@ const resolveWatchIntervalDefault = (
     };
   }
   return { value: parsed };
+};
+
+/**
+ * Pager handle returned by {@link openWatchPager}.
+ */
+type WatchPagerHandle = {
+  stream: NodeJS.WritableStream;
+  close: () => Promise<void>;
+};
+
+/**
+ * Spawn the `\watch` pager for the full duration of the polling loop.
+ *
+ * Upstream `do_watch` wraps the loop in a single `popen` of
+ * `PSQL_WATCH_PAGER` (falling back to `$PAGER`); every iteration writes
+ * into the pager's stdin and the pager only exits when the loop ends.
+ * We mirror that here with a single `sh -c <pager>` spawn — using the
+ * shell lets the user set the variable to a full command string
+ * (`less -R`, `tee /tmp/log`, …) without the caller having to tokenise
+ * it. EPIPE on the stdin pipe is swallowed for the same reason as in
+ * `openWriter`: the user may quit `less` while we still have writes
+ * pending in the next iteration.
+ *
+ * Returns `null` when neither `PSQL_WATCH_PAGER` nor `PAGER` is set
+ * (or both are whitespace-only — matching upstream's "no pager" rule),
+ * so the caller can fall back to its normal output target.
+ */
+const openWatchPager = (): WatchPagerHandle | null => {
+  const cmd = process.env.PSQL_WATCH_PAGER ?? process.env.PAGER ?? '';
+  if (cmd.trim().length === 0) return null;
+
+  const child = spawn('sh', ['-c', cmd], {
+    stdio: ['pipe', 'inherit', 'inherit'],
+  });
+  child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code !== 'EPIPE') {
+      throw err;
+    }
+  });
+  return {
+    stream: child.stdin,
+    close: () =>
+      new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        child.once('close', finish);
+        child.once('error', finish);
+        if (!child.stdin.destroyed) {
+          try {
+            child.stdin.end();
+          } catch (err) {
+            const e = err as NodeJS.ErrnoException;
+            if (e.code !== 'EPIPE') finish();
+          }
+        }
+      }),
+  };
 };
 
 export const cmdWatch: BackslashCmdSpec = {
@@ -873,13 +1150,18 @@ export const cmdWatch: BackslashCmdSpec = {
       process.once('SIGINT', sigintHandler);
     }
 
-    const out = pickOut(ctx.settings, null);
+    // Open the pager once for the whole loop (upstream `do_watch` wraps the
+    // entire session, not each iteration, so the user can scroll the
+    // accumulated output in one go). When PSQL_WATCH_PAGER / PAGER aren't
+    // set we fall through to the normal `pickOut` target.
+    const pager = openWatchPager();
+    const out = pager?.stream ?? pickOut(ctx.settings, null);
 
     try {
       let iter = 0;
       while (!controller.signal.aborted) {
         iter++;
-        const stamp = new Date().toString().replace(/\sGMT.*$/, '');
+        const stamp = formatWatchTimestamp(new Date());
         out.write(`${stamp} (every ${String(interval)}s)\n\n`);
         let lastRowCount = 0;
         try {
@@ -907,6 +1189,12 @@ export const cmdWatch: BackslashCmdSpec = {
     } finally {
       if (installedSigint) {
         process.removeListener('SIGINT', sigintHandler);
+      }
+      // Drain the pager so its child has a chance to exit before \watch
+      // returns. Failures are swallowed: a broken pager shouldn't mask the
+      // (already-flushed) query results.
+      if (pager) {
+        await pager.close();
       }
     }
   },

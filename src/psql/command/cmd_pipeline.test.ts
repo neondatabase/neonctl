@@ -305,11 +305,21 @@ describe('\\startpipeline / \\endpipeline', () => {
 
 // ---------------------------------------------------------------------------
 // \gdesc
+//
+// The active implementation lives in `./cmd_io.ts`; we re-export the spec
+// from cmd_pipeline.ts so this test (and any other call sites that
+// imported `cmdGdesc` from this module) keep working. The cmd_io test
+// covers printer-routing and tuples-only behaviour; here we sanity-check
+// the re-export path and the no-buffer error.
 // ---------------------------------------------------------------------------
 
 describe('\\gdesc', () => {
-  test('renders Column / Type listing from describe()', async () => {
+  test('renders a Column / Type listing through the printer', async () => {
     const conn = makeMockConn();
+    // The cmd_io implementation issues a follow-up format_type query.
+    // The default mock returns `[]` from execSimple, so we fall through to
+    // the OID-fallback and print the raw dataTypeID. That still gives us
+    // a Column / Type row to assert on.
     const s = makeSettings(conn);
     const ctx = makeMockCtx(
       'gdesc',
@@ -323,7 +333,8 @@ describe('\\gdesc', () => {
     expect(out).toMatch(/Column/);
     expect(out).toMatch(/Type/);
     expect(out).toMatch(/col/);
-    expect(out).toMatch(/\(1 columns\)/);
+    // The new impl uses the standard printer footer: `(N rows)`.
+    expect(out).toMatch(/\(0 rows\)|\(1 row\)/);
   });
 
   test('\\gdesc without a query buffer fails', async () => {

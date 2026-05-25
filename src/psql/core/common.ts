@@ -68,6 +68,7 @@ import { troffMsPrinter } from '../print/troff.js';
 import { unalignedPrinter } from '../print/unaligned.js';
 import { formatDurationMs } from '../print/units.js';
 import { getQueryFout } from '../command/cmd_io.js';
+import { formatErrorReport } from '../command/cmd_meta.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -305,10 +306,52 @@ const readShowAllResults = (settings: PsqlSettings): boolean =>
 // ---------------------------------------------------------------------------
 // Error printing — mirrors mainloop's `writeError` format. We keep it local
 // so callers other than the mainloop can still emit consistent errors.
+//
+// `writeError` handles client-side diagnostics (e.g., "no connection to the
+// server") that have no server-side ErrorResponse payload — we emit a single
+// `psql: ERROR:  <msg>` line.
+//
+// `writeQueryError` is used after a thrown query error has been captured
+// into `settings.lastErrorResult` by `recordError` / `captureLastError`. It
+// dispatches through {@link formatErrorReport} so the verbosity and
+// SHOW_CONTEXT settings decide whether to surface the SQLSTATE / LINE /
+// caret / DETAIL / HINT / CONTEXT / LOCATION layers. Matches upstream
+// psql's `pg_log_error` shape in `src/bin/psql/common.c`.
 // ---------------------------------------------------------------------------
 
 const writeError = (ctx: REPLContext, message: string): void => {
   ctx.stderr.write(`psql: ERROR:  ${message}\n`);
+};
+
+/**
+ * Render the verbosity-aware error report for the most recently captured
+ * query error and write it to `ctx.stderr`. Mirrors the bare libpq-style
+ * shape upstream `ProcessResult` writes: the leading severity line has no
+ * `psql: ` prefix because server-side error messages already include the
+ * severity tag (`ERROR:  ...`). Subsequent layers (`LINE N: ...`, caret,
+ * `DETAIL: ...`, ...) follow on their own lines per
+ * {@link formatErrorReport}. When the captured error is missing (defensive
+ * — callers should always pair this with a preceding `recordError`) we
+ * fall back to the plain client-side {@link writeError} form so we never
+ * swallow the message entirely.
+ *
+ * Exported so the bind-path in mainloop can share the renderer.
+ */
+export const writeQueryError = (
+  ctx: REPLContext,
+  fallbackMessage: string,
+): void => {
+  const e = ctx.settings.lastErrorResult;
+  if (!e || (!e.message && !e.code && !e.sqlstate)) {
+    writeError(ctx, fallbackMessage);
+    return;
+  }
+  const lines = formatErrorReport(
+    e,
+    ctx.settings.verbosity,
+    ctx.settings.showContext,
+  );
+  ctx.stderr.write(lines.join('\n') + '\n');
 };
 
 /**
@@ -632,7 +675,7 @@ export const executeAndPrint = async (
     }
   } catch (err) {
     const message = recordError(ctx, err, sql);
-    writeError(ctx, message);
+    writeQueryError(ctx, message);
     stats.hadError = true;
   } finally {
     if (ctx.settings.timing) {
@@ -700,7 +743,7 @@ export const sendQuery = async (
       implicitBeginIssued = true;
     } catch (err) {
       const message = recordError(ctx, err);
-      writeError(ctx, message);
+      writeQueryError(ctx, message);
       stats.hadError = true;
       if (ctx.settings.timing) {
         stats.durationMs = Date.now() - started;
@@ -725,7 +768,7 @@ export const sendQuery = async (
     } catch (err) {
       // Mirror upstream: failure to install the savepoint is a hard error.
       const message = recordError(ctx, err);
-      writeError(ctx, message);
+      writeQueryError(ctx, message);
       stats.hadError = true;
       if (ctx.settings.timing) {
         stats.durationMs = Date.now() - started;
@@ -753,7 +796,7 @@ export const sendQuery = async (
     }
   } catch (err) {
     const message = recordError(ctx, err, sql);
-    writeError(ctx, message);
+    writeQueryError(ctx, message);
     stats.hadError = true;
   }
 
@@ -772,7 +815,7 @@ export const sendQuery = async (
       // already have one to report.
       if (!stats.hadError) {
         const message = recordError(ctx, err);
-        writeError(ctx, message);
+        writeQueryError(ctx, message);
         stats.hadError = true;
       }
     }

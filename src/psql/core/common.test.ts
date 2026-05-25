@@ -475,6 +475,68 @@ describe('sendQuery — errors', () => {
     expect(stats.hadError).toBe(true);
     expect(stderr.text()).toMatch(/no connection to the server/);
   });
+
+  test('server error renders the layered form (no psql: prefix, LINE / caret on default verbosity)', async () => {
+    // Build a throwable that carries the full ErrorResponse shape — this
+    // mirrors what `asThrowable` in wire/connection.ts produces.
+    const err = Object.assign(new Error('syntax error at or near "FOO"'), {
+      severity: 'ERROR',
+      code: '42601',
+      detail: 'parse failed',
+      hint: 'check spelling',
+      position: '8',
+    });
+    const canned = new Map<string, Canned>([['SELECT FOO FROM bar;', err]]);
+    const { ctx, stderr } = buildCtxWithBuffers({ canned });
+    await sendQuery(ctx, 'SELECT FOO FROM bar;');
+    const text = stderr.text();
+    expect(text).toContain('ERROR:  syntax error at or near "FOO"');
+    // Default verbosity hides the SQLSTATE on the severity line.
+    expect(text).not.toMatch(/^ERROR: {2}42601:/m);
+    expect(text).toContain('LINE 1: SELECT FOO FROM bar;');
+    expect(text).toMatch(/^\s+\^$/m);
+    expect(text).toContain('DETAIL:  parse failed');
+    expect(text).toContain('HINT:  check spelling');
+    // The bare-libpq shape: no `psql:` prefix on the severity line.
+    expect(text).not.toMatch(/^psql:/m);
+  });
+
+  test('verbose verbosity exposes the SQLSTATE on the severity line', async () => {
+    const err = Object.assign(new Error('boom'), {
+      severity: 'ERROR',
+      code: '42P01',
+    });
+    const canned = new Map<string, Canned>([['SELECT bad;', err]]);
+    const { ctx, stderr } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.verbosity = 'verbose';
+      },
+    });
+    await sendQuery(ctx, 'SELECT bad;');
+    expect(stderr.text()).toContain('ERROR:  42P01: boom');
+  });
+
+  test('terse verbosity prints only the severity line', async () => {
+    const err = Object.assign(new Error('boom'), {
+      severity: 'ERROR',
+      code: '42P01',
+      detail: 'gone',
+      hint: 'use IF NOT EXISTS',
+    });
+    const canned = new Map<string, Canned>([['SELECT bad;', err]]);
+    const { ctx, stderr } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.verbosity = 'terse';
+      },
+    });
+    await sendQuery(ctx, 'SELECT bad;');
+    const text = stderr.text();
+    expect(text).toContain('ERROR:  boom');
+    expect(text).not.toContain('DETAIL');
+    expect(text).not.toContain('HINT');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -42,6 +42,11 @@ import type {
   BackslashContext,
   BackslashResult,
 } from '../types/backslash.js';
+import type {
+  LastErrorResult,
+  ShowContext,
+  VerbosityLevel,
+} from '../types/settings.js';
 import { helpSQL } from '../core/help.js';
 
 import { writeOut, writeErr, parseBool } from './shared.js';
@@ -56,8 +61,16 @@ export const cmdQuit: BackslashCmdSpec = {
 
 /**
  * `\!` — shell escape. Whole-line mode: the entire rest of the line is the
- * command string. No args → run `$SHELL` interactively (we approximate with
- * `sh -i`). Failures still continue the REPL (upstream behaviour).
+ * command string.
+ *
+ *   - `\!` (no args)             → spawn `$SHELL -i` (fallback `sh -i`)
+ *   - `\!command args`           → spawn `sh -c 'command args'`
+ *
+ * In both cases the child inherits stdio and we return `{ status: 'ok' }`
+ * regardless of the child's exit status — matching upstream `do_shell`,
+ * which keeps the REPL alive after a failing shell command rather than
+ * propagating the exit code. Catching a spawn-time exception keeps us
+ * resilient against environments where `sh` is unavailable.
  */
 export const cmdShell: BackslashCmdSpec = {
   name: '!',
@@ -65,11 +78,17 @@ export const cmdShell: BackslashCmdSpec = {
   helpKey: '!',
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
     const line = ctx.restOfLine().trim();
-    if (line.length === 0) {
-      const shell = process.env.SHELL ?? '/bin/sh';
-      spawnSync(shell, ['-i'], { stdio: 'inherit' });
-    } else {
-      spawnSync('sh', ['-c', line], { stdio: 'inherit' });
+    try {
+      if (line.length === 0) {
+        const shell = process.env.SHELL ?? '/bin/sh';
+        spawnSync(shell, ['-i'], { stdio: 'inherit' });
+      } else {
+        spawnSync('sh', ['-c', line], { stdio: 'inherit' });
+      }
+    } catch {
+      // Upstream `do_shell` swallows shell-spawn failures: the REPL has to
+      // keep running even when the child won't start. Status stays `ok` so
+      // a failing `\!` is purely informational.
     }
     return Promise.resolve({ status: 'ok' });
   },
@@ -352,8 +371,11 @@ export const cmdSetenv: BackslashCmdSpec = {
  * The caret column is aligned to the offset within the picked line so
  * it points at the failing token. Trailing newlines on the picked line
  * are stripped so the `$` end-anchor in upstream's regex still matches.
+ *
+ * Exported so the per-statement error renderer in `core/common.ts` can
+ * share the helper with `\errverbose`.
  */
-const renderLineAndCaret = (
+export const renderLineAndCaret = (
   sqlText: string | undefined,
   position: string | undefined,
 ): { line: string; caret: string } | null => {
@@ -384,6 +406,80 @@ const renderLineAndCaret = (
 };
 
 /**
+ * Render an ErrorResponse-shaped payload as the layered, verbosity-aware
+ * report that upstream psql emits to stderr after a failed statement
+ * (`PSQLExec` / `ProcessResult` in `src/bin/psql/common.c`).
+ *
+ * Returned array contains one element per logical line, without trailing
+ * newlines — callers join with `\n` and write to their stream.
+ *
+ * Verbosity / SHOW_CONTEXT semantics, mirrored from upstream:
+ *
+ *   - `terse`: only the severity line (`<sev>:  <msg>`) is emitted.
+ *
+ *   - `default`: severity + message, plus `LINE N` / caret, DETAIL, HINT,
+ *     STATEMENT (we omit STATEMENT — we never echo the query verbatim).
+ *     CONTEXT and LOCATION are suppressed unless `SHOW_CONTEXT='always'`.
+ *
+ *   - `verbose`: adds the SQLSTATE prefix on the severity line, and
+ *     CONTEXT plus LOCATION are unconditionally included when present.
+ *
+ *   - `sqlstate`: prepend the SQLSTATE on the severity line (same as
+ *     `verbose`'s first line), but suppress LINE/DETAIL/HINT/CONTEXT/
+ *     LOCATION. Matches the upstream "just give me the code" flavour.
+ *
+ * Empty server fields are skipped silently. The `LINE` / `^` pair only
+ * appears when we have both originating SQL text and a 1-based position
+ * pointing inside it.
+ */
+export const formatErrorReport = (
+  e: LastErrorResult,
+  verbosity: VerbosityLevel = 'default',
+  showContext: ShowContext = 'errors',
+): string[] => {
+  const severity = e.severity ?? 'ERROR';
+  const sqlstate = e.code ?? e.sqlstate ?? 'XX000';
+  const message = e.message ?? '';
+  const out: string[] = [];
+
+  const showSqlstate = verbosity === 'verbose' || verbosity === 'sqlstate';
+  if (showSqlstate) {
+    out.push(`${severity}:  ${sqlstate}: ${message}`);
+  } else {
+    out.push(`${severity}:  ${message}`);
+  }
+
+  // `terse` stops after the severity line. `sqlstate` likewise stops
+  // after the prefixed severity line.
+  if (verbosity === 'terse' || verbosity === 'sqlstate') {
+    return out;
+  }
+
+  const lineCaret = renderLineAndCaret(e.sqlText, e.position);
+  if (lineCaret) {
+    out.push(lineCaret.line);
+    out.push(lineCaret.caret);
+  }
+  if (e.detail) out.push(`DETAIL:  ${e.detail}`);
+  if (e.hint) out.push(`HINT:  ${e.hint}`);
+  // CONTEXT under default verbosity follows SHOW_CONTEXT: 'never' / 'errors'
+  // (the default — show on errors) / 'always'. We treat every call into the
+  // formatter as an error report, so 'errors' and 'always' both include
+  // CONTEXT, while 'never' suppresses it. Verbose verbosity unconditionally
+  // includes CONTEXT.
+  const includeContext = verbosity === 'verbose' || showContext !== 'never';
+  if (includeContext && e.where) {
+    out.push(`CONTEXT:  ${e.where}`);
+  }
+  if (verbosity === 'verbose' && (e.routine || e.file || e.line)) {
+    const location =
+      (e.routine ?? '') + (e.file ? `, ${e.file}:${e.line ?? ''}` : '');
+    out.push(`LOCATION:  ${location}`);
+  }
+  return out;
+};
+
+/**
  * `\errverbose` — print the last error in verbose form. We rely on the
  * mainloop to have stored `settings.lastErrorResult`; this command only
  * formats and prints. Without a saved error, upstream emits "There is no
@@ -411,25 +507,10 @@ export const cmdErrverbose: BackslashCmdSpec = {
       writeOut('There is no previous error.\n');
       return Promise.resolve({ status: 'ok' });
     }
-    const severity = e.severity ?? 'ERROR';
-    const sqlstate = e.code ?? e.sqlstate ?? 'XX000';
-    const message = e.message ?? '';
-    const out: string[] = [];
-    out.push(`${severity}:  ${sqlstate}: ${message}`);
-    const lineCaret = renderLineAndCaret(e.sqlText, e.position);
-    if (lineCaret) {
-      out.push(lineCaret.line);
-      out.push(lineCaret.caret);
-    }
-    if (e.detail) out.push(`DETAIL:  ${e.detail}`);
-    if (e.hint) out.push(`HINT:  ${e.hint}`);
-    if (e.where) out.push(`CONTEXT:  ${e.where}`);
-    if (e.routine || e.file || e.line) {
-      const location =
-        (e.routine ?? '') + (e.file ? `, ${e.file}:${e.line ?? ''}` : '');
-      out.push(`LOCATION:  ${location}`);
-    }
-    writeOut(out.join('\n') + '\n');
+    // `\errverbose` always emits the full verbose form regardless of the
+    // currently active VERBOSITY setting.
+    const lines = formatErrorReport(e, 'verbose', 'always');
+    writeOut(lines.join('\n') + '\n');
     return Promise.resolve({ status: 'ok' });
   },
 };

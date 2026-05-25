@@ -46,14 +46,20 @@
  *    `dequoteDowncaseIdentifier`, which mirrors upstream's
  *    `dequote_downcase_identifier()`: collapse `"…"` quoting, double `""`
  *    into a single `"`, and (for `sql-id`) lowercase unquoted letters.
- *  - **Backticks** are NOT executed here. We pass through the backticked
- *    text verbatim (including the backticks) and leave the `// TODO(WP-12)`
- *    marker below. Shell execution requires `settings` and process plumbing
- *    that belong in the REPL mainloop, not the scanner.
+ *  - **Backticks** ARE executed here, synchronously via `child_process.execSync`
+ *    on `sh -c <body>`. Variable references inside the backticked body are
+ *    expanded first (matching upstream's `xslashbackquote` rules), then the
+ *    resulting command is run with the inherited environment but NO shell
+ *    state; the child's stdout (trimmed of one trailing newline) is the
+ *    arg's value. Non-zero exits / spawn failures are reported on stderr
+ *    in the upstream `psql:...: error: \!:` shape and substitute the empty
+ *    string. This is the scanner-level analogue of upstream's `evaluate_backtick`.
  *  - **Inside-quote escapes** match upstream `xslashquote`: `\n \t \b \r \f`,
  *    octal `\ooo`, hex `\xhh`, and `\<other>` as a literal character. We
  *    apply them in-line so the returned arg contains the decoded value.
  */
+
+import { execSync } from 'node:child_process';
 
 import type { SlashArgMode } from '../types/scanner.js';
 
@@ -320,30 +326,80 @@ const consumeDoubleQuoted = (
 };
 
 /**
- * Process the contents of a `` `…` `` slash-backquoted token. We expand
- * `:var` references inside the backticks (matching upstream's
- * `xslashbackquote` rules) but do NOT execute the resulting command — that
- * happens in the REPL mainloop where shell/settings plumbing lives.
+ * Test seam for swapping the shell executor. Vitest sets `current` to its
+ * own mock; production uses `execSync(cmd, { shell: '/bin/sh' })`. Kept as
+ * an exported object so tests can flip it in `beforeEach` without monkey-
+ * patching `child_process`.
+ */
+export const BACKTICK_EXECUTOR: {
+  current: (cmd: string) => string;
+} = {
+  current: (cmd: string) =>
+    execSync(cmd, {
+      shell: '/bin/sh',
+      encoding: 'utf8',
+      // Children inherit the parent env but get no stdin pipe — matches
+      // upstream's `popen(cmd, "r")` semantics. stderr passes through so
+      // shell error output is visible to the user.
+      stdio: ['ignore', 'pipe', 'inherit'],
+      // Defensive cap: backtick output goes into a slash arg, so a runaway
+      // command shouldn't be able to fill arbitrary memory.
+      maxBuffer: 1 << 20,
+    }),
+};
+
+/**
+ * Execute the lexed body of a `` `…` `` token via `sh -c` and return its
+ * stdout with one trailing newline stripped (matching shell command-
+ * substitution convention). Errors are reported on stderr in the upstream
+ * `psql: error: \!: <command>: <message>` shape and substitute the empty
+ * string — so a failed backtick never aborts the surrounding slash command.
  *
- * Returns the backticked body including the surrounding backticks so the
- * caller can see what was lexed. The `// TODO(WP-12)` marker below tracks
- * the pending shell-exec integration.
+ * Called only by {@link consumeBackQuoted}; lives at module scope so the
+ * scanner stays free of inline I/O and tests can spy on the executor via
+ * {@link BACKTICK_EXECUTOR}.
+ */
+const runBacktickCommand = (cmd: string): string => {
+  if (cmd.length === 0) return '';
+  try {
+    const out = BACKTICK_EXECUTOR.current(cmd);
+    // Trim a single trailing newline; preserve interior newlines so multi-line
+    // output (e.g. `\set FOO `cat file``) lands as-is.
+    return out.endsWith('\n') ? out.slice(0, -1) : out;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Upstream prints `psql:file:line: error: \!: <cmd>: <msg>`. We don't
+    // have file/line context in the scanner; emit the prefix verbatim and
+    // include the command for diagnosis.
+    process.stderr.write(`psql: error: \\!: ${cmd}: ${msg}\n`);
+    return '';
+  }
+};
+
+/**
+ * Process the contents of a `` `…` `` slash-backquoted token.
+ *
+ * Phase 1 (this function): consume the body, expanding `:var` references
+ * along the way (matching upstream's `xslashbackquote` rules).
+ *
+ * Phase 2 (delegated to {@link runBacktickCommand}): run the assembled
+ * command via `sh -c` and return its stdout.
+ *
+ * Returns the command's stdout (one trailing `\n` stripped). Unterminated
+ * backticks still execute the body so partial input doesn't silently
+ * succeed; tests cover both well-formed and unterminated cases.
  */
 const consumeBackQuoted = (
   s: string,
   start: number,
   varLookup: ((name: string) => string | undefined) | undefined,
 ): { end: number; text: string } => {
-  // TODO(WP-12): wire backticks to shell exec. For now we lex the body,
-  // expand `:var` references, and return the verbatim backticked string so
-  // tests can observe the boundary. Actual subprocess execution belongs in
-  // the REPL mainloop where settings and signal handlers live.
   let inner = '';
   let i = start;
   while (i < s.length) {
     const c = s[i];
     if (c === '`') {
-      return { end: i + 1, text: '`' + inner + '`' };
+      return { end: i + 1, text: runBacktickCommand(inner) };
     }
     const sub = tryConsumeVarSubstitution(s, i, varLookup);
     if (sub !== null) {
@@ -354,8 +410,9 @@ const consumeBackQuoted = (
     inner += c;
     i++;
   }
-  // Unterminated — return what we have, including the opening backtick.
-  return { end: i, text: '`' + inner };
+  // Unterminated — still run what we accumulated so the user can see the
+  // error from `sh` itself rather than silently dropping the command.
+  return { end: i, text: runBacktickCommand(inner) };
 };
 
 /**

@@ -85,6 +85,16 @@ let stderrChunks: string[];
 let stdoutOrig: typeof process.stdout.write;
 let stderrOrig: typeof process.stderr.write;
 
+// Capture the host PAGER / PSQL_WATCH_PAGER values once so we can restore
+// them after each test. The `\watch` pager hook reads those env vars
+// directly; if the user runs the suite with `PAGER=less` (the typical
+// shell default) the watch loop would otherwise hijack stdout into a
+// subprocess and the captured-stdout assertions would see an empty
+// string. We unset both per-test so tests that want pager behaviour
+// must opt in explicitly.
+let priorPager: string | undefined;
+let priorWatchPager: string | undefined;
+
 beforeEach(() => {
   stdoutChunks = [];
   stderrChunks = [];
@@ -98,6 +108,10 @@ beforeEach(() => {
     stderrChunks.push(String(chunk));
     return true;
   }) as typeof process.stderr.write;
+  priorPager = process.env.PAGER;
+  priorWatchPager = process.env.PSQL_WATCH_PAGER;
+  delete process.env.PAGER;
+  delete process.env.PSQL_WATCH_PAGER;
 });
 
 afterEach(() => {
@@ -105,6 +119,13 @@ afterEach(() => {
   process.stderr.write = stderrOrig;
   resetInputQueue();
   WATCH_TEST_CONTROLLER.ref = null;
+  if (priorPager !== undefined) process.env.PAGER = priorPager;
+  else delete process.env.PAGER;
+  if (priorWatchPager !== undefined) {
+    process.env.PSQL_WATCH_PAGER = priorWatchPager;
+  } else {
+    delete process.env.PSQL_WATCH_PAGER;
+  }
 });
 
 const stderr = (): string => stderrChunks.join('');
@@ -413,7 +434,8 @@ describe('\\gset', () => {
     const ctx = makeMockCtx('gset', '', s, 'select x');
     const r = await run(cmdGset, ctx);
     expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/expected one row, got 2/);
+    // Match upstream wording — `more than one row returned for \gset`.
+    expect(stderr()).toMatch(/more than one row returned for \\gset/);
   });
 });
 
@@ -645,6 +667,81 @@ describe('\\watch', () => {
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/no query buffer/);
   });
+
+  test('emits the upstream ctime-style header before each iteration', async () => {
+    const conn = makeMockConn();
+    const controller = new AbortController();
+    WATCH_TEST_CONTROLLER.ref = controller;
+    let count = 0;
+    conn.reply = () => {
+      count += 1;
+      controller.abort();
+      return [rs(['n'], [[count]])];
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', '0.01', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('reset-buf');
+    // Upstream layout: `Day Mon DD HH:MM:SS YYYY (every Ns)`.
+    expect(stdout()).toMatch(
+      /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{2} \d{2}:\d{2}:\d{2} \d{4} \(every 0\.01s\)/,
+    );
+  });
+
+  test('PSQL_WATCH_PAGER pipes the whole watch session through the pager', async () => {
+    const conn = makeMockConn();
+    const controller = new AbortController();
+    WATCH_TEST_CONTROLLER.ref = controller;
+    let count = 0;
+    conn.reply = () => {
+      count += 1;
+      if (count >= 2) controller.abort();
+      return [rs(['n'], [[count]])];
+    };
+    const sink = tmpFile('watch-pager.out');
+    const prev = process.env.PSQL_WATCH_PAGER;
+    // `cat > sink` captures the entire watch session — both header and
+    // tabular output — into a file so we can assert on it.
+    process.env.PSQL_WATCH_PAGER = `cat > ${sink}`;
+    try {
+      const s = makeSettings(conn);
+      const ctx = makeMockCtx('watch', '0.01', s, 'select 1');
+      const r = await run(cmdWatch, ctx);
+      expect(r.status).toBe('reset-buf');
+    } finally {
+      if (prev === undefined) delete process.env.PSQL_WATCH_PAGER;
+      else process.env.PSQL_WATCH_PAGER = prev;
+    }
+    const written = await fs.readFile(sink, 'utf8');
+    // The pager received the header + table output, not stdout.
+    expect(written).toMatch(/every 0\.01s/);
+    // Nothing leaked to the captured stdout buffer.
+    expect(stdout()).not.toMatch(/every 0\.01s/);
+  });
+
+  test('PSQL_WATCH_PAGER is ignored when set to whitespace-only', async () => {
+    const conn = makeMockConn();
+    const controller = new AbortController();
+    WATCH_TEST_CONTROLLER.ref = controller;
+    conn.reply = () => {
+      controller.abort();
+      return [rs(['n'], [[1]])];
+    };
+    const prev = process.env.PSQL_WATCH_PAGER;
+    process.env.PSQL_WATCH_PAGER = '   ';
+    try {
+      const s = makeSettings(conn);
+      const ctx = makeMockCtx('watch', '0.01', s, 'select 1');
+      const r = await run(cmdWatch, ctx);
+      expect(r.status).toBe('reset-buf');
+    } finally {
+      if (prev === undefined) delete process.env.PSQL_WATCH_PAGER;
+      else process.env.PSQL_WATCH_PAGER = prev;
+    }
+    // Whitespace-only disables the pager — output goes to the
+    // captured stdout exactly as it does without the env var.
+    expect(stdout()).toMatch(/every 0\.01s/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -755,18 +852,163 @@ describe('\\i / \\include', () => {
 });
 
 // ---------------------------------------------------------------------------
-// \gdesc — stubbed
+// \gdesc — describes the buffered query via Parse + Describe-by-statement
+// and renders the result through the active printer.
 // ---------------------------------------------------------------------------
 
+/**
+ * Wire a mock Connection so that `prepare(name, sql).describe()` returns
+ * the given fields and `execSimple(formatQuery)` returns a canned
+ * Column / Type ResultSet so we can observe the printer-driven output.
+ */
+const mockGdescConn = (
+  fields: FieldDescription[],
+  typeNames: string[],
+): MockConn => {
+  const conn = makeMockConn();
+  const preparedClose: string[] = [];
+  conn.prepare = (name: string) => {
+    return Promise.resolve({
+      name,
+      paramTypes: [],
+      bind: () => Promise.resolve(),
+      describe: () => Promise.resolve(fields),
+      execute: (): Promise<ResultSet> =>
+        Promise.resolve({
+          command: 'SELECT',
+          rowCount: 0,
+          oid: null,
+          fields,
+          rows: [],
+          notices: [],
+        }),
+      close: () => {
+        preparedClose.push(name);
+        return Promise.resolve();
+      },
+    });
+  };
+  // Whenever the gdesc round-trip issues the `SELECT ... format_type(...)
+  // FROM (VALUES ...)` query we return the supplied type names paired with
+  // the field names — same order.
+  conn.reply = (sql: string) => {
+    if (sql.includes('format_type')) {
+      return [
+        rs(
+          ['Column', 'Type'],
+          fields.map((f, i) => [f.name, typeNames[i] ?? '???']),
+        ),
+      ];
+    }
+    return [];
+  };
+  return conn;
+};
+
 describe('\\gdesc', () => {
-  test('returns the extended-protocol stub error', async () => {
+  test('renders a Column / Type listing via the active printer', async () => {
+    const conn = mockGdescConn(
+      [
+        {
+          name: 'id',
+          tableID: 0,
+          columnID: 0,
+          dataTypeID: 23,
+          dataTypeSize: 4,
+          dataTypeModifier: -1,
+          format: 0,
+        },
+        {
+          name: 'note',
+          tableID: 0,
+          columnID: 0,
+          dataTypeID: 25,
+          dataTypeSize: -1,
+          dataTypeModifier: -1,
+          format: 0,
+        },
+      ],
+      ['integer', 'text'],
+    );
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('gdesc', '', s, "SELECT 1 AS id, 'x' AS note");
+    const r = await run(cmdGdesc, ctx);
+    expect(r.status).toBe('reset-buf');
+    const out = stdout();
+    // Header line + box separator + (2 rows) footer — same shape as a
+    // real two-column SELECT in the default aligned printer.
+    expect(out).toMatch(/Column\s*\|\s*Type/);
+    expect(out).toMatch(/id\s*\|\s*integer/);
+    expect(out).toMatch(/note\s*\|\s*text/);
+    expect(out).toMatch(/\(2 rows\)/);
+  });
+
+  test('routes through the unaligned printer when format=unaligned', async () => {
+    const conn = mockGdescConn(
+      [
+        {
+          name: 'col',
+          tableID: 0,
+          columnID: 0,
+          dataTypeID: 23,
+          dataTypeSize: 4,
+          dataTypeModifier: -1,
+          format: 0,
+        },
+      ],
+      ['integer'],
+    );
+    const s = makeSettings(conn);
+    s.popt.topt.format = 'unaligned';
+    const ctx = makeMockCtx('gdesc', '', s, 'select 1');
+    const r = await run(cmdGdesc, ctx);
+    expect(r.status).toBe('reset-buf');
+    // Unaligned printer separates with `|` and writes `col|integer` on
+    // its own line.
+    expect(stdout()).toMatch(/^col\|integer$/m);
+  });
+
+  test('tuples-only mode suppresses the header and footer', async () => {
+    const conn = mockGdescConn(
+      [
+        {
+          name: 'col',
+          tableID: 0,
+          columnID: 0,
+          dataTypeID: 23,
+          dataTypeSize: 4,
+          dataTypeModifier: -1,
+          format: 0,
+        },
+      ],
+      ['integer'],
+    );
+    const s = makeSettings(conn);
+    s.popt.topt.tuplesOnly = true;
+    const ctx = makeMockCtx('gdesc', '', s, 'select 1');
+    const r = await run(cmdGdesc, ctx);
+    expect(r.status).toBe('reset-buf');
+    const out = stdout();
+    expect(out).not.toMatch(/Column/);
+    expect(out).not.toMatch(/\(1 row\)/);
+    expect(out).toMatch(/integer/);
+  });
+
+  test('errors when the query buffer is empty', async () => {
     const s = makeSettings(makeMockConn());
+    const ctx = makeMockCtx('gdesc', '', s, '');
+    const r = await run(cmdGdesc, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/no query buffer/);
+  });
+
+  test('surfaces Parse failures', async () => {
+    const conn = makeMockConn();
+    // Default mock's prepare rejects with `not implemented`.
+    const s = makeSettings(conn);
     const ctx = makeMockCtx('gdesc', '', s, 'select 1');
     const r = await run(cmdGdesc, ctx);
     expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/extended protocol not available/);
-    expect(s.lastErrorResult?.message).toMatch(
-      /extended protocol not available/,
-    );
+    expect(stderr()).toMatch(/not implemented/);
   });
 });

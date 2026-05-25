@@ -114,10 +114,46 @@ export const formatByteSize = (
 };
 
 /**
- * Render a duration in the `\timing` style: `Time: 12.345 ms`.
+ * Render a duration in the upstream `\timing` style. psql scales the
+ * granularity to keep the line compact:
  *
- * psql produces three decimal digits regardless of magnitude.
+ *   - `< 1 ms`     → `Time: 0.123 ms` (three decimal digits)
+ *   - `< 1 s`      → `Time: 123.456 ms`
+ *   - `< 1 min`    → `Time: 12.345 s`
+ *   - `< 1 hour`   → `Time: 12 m 34.567 s`
+ *   - `>= 1 hour`  → `Time: 1 h 23 m 45.678 s`
+ *
+ * Mirrors the `PrintTiming()` ladder in `src/bin/psql/common.c`. Negative
+ * or non-finite inputs fall through the ladder as `0`.
  */
 export const formatDurationMs = (ms: number): string => {
-  return `Time: ${ms.toFixed(3)} ms`;
+  return `Time: ${formatDurationBody(ms)}`;
+};
+
+/**
+ * Format just the scaled-duration body (without the `Time: ` prefix) so
+ * callers like the `\watch` header can reuse the same ladder without
+ * dragging the prefix along.
+ */
+export const formatDurationBody = (ms: number): string => {
+  const safe = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  // Under one second: render in milliseconds with three decimal places.
+  if (safe < 1000) {
+    return `${safe.toFixed(3)} ms`;
+  }
+  const totalSeconds = safe / 1000;
+  // Under one minute: render in seconds with three decimal places.
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(3)} s`;
+  }
+  // Under one hour: `M m SS.sss s`.
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds - totalMinutes * 60;
+  if (totalMinutes < 60) {
+    return `${String(totalMinutes)} m ${remainingSeconds.toFixed(3)} s`;
+  }
+  // One hour or more: `H h MM m SS.sss s`.
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes - hours * 60;
+  return `${String(hours)} h ${String(minutes)} m ${remainingSeconds.toFixed(3)} s`;
 };

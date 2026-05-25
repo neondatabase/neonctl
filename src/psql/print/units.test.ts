@@ -3,6 +3,7 @@ import { describe, test, expect } from 'vitest';
 import {
   formatNumericLocale,
   formatByteSize,
+  formatDurationBody,
   formatDurationMs,
 } from './units.js';
 
@@ -71,9 +72,44 @@ describe('formatByteSize', () => {
 });
 
 describe('formatDurationMs', () => {
-  test('renders the standard psql \\timing line', () => {
+  test('renders milliseconds when below one second', () => {
+    expect(formatDurationMs(0.123)).toBe('Time: 0.123 ms');
     expect(formatDurationMs(12.345)).toBe('Time: 12.345 ms');
+    expect(formatDurationMs(123.456)).toBe('Time: 123.456 ms');
     expect(formatDurationMs(0)).toBe('Time: 0.000 ms');
-    expect(formatDurationMs(1500)).toBe('Time: 1500.000 ms');
+    expect(formatDurationMs(999.999)).toBe('Time: 999.999 ms');
+  });
+
+  test('renders seconds when below one minute', () => {
+    expect(formatDurationMs(1000)).toBe('Time: 1.000 s');
+    expect(formatDurationMs(12345)).toBe('Time: 12.345 s');
+    expect(formatDurationMs(59999)).toBe('Time: 59.999 s');
+  });
+
+  test('renders minutes when below one hour', () => {
+    expect(formatDurationMs(60_000)).toBe('Time: 1 m 0.000 s');
+    expect(formatDurationMs(754_567)).toBe('Time: 12 m 34.567 s');
+    expect(formatDurationMs(3_599_999)).toBe('Time: 59 m 59.999 s');
+  });
+
+  test('renders hours when at or above one hour', () => {
+    expect(formatDurationMs(3_600_000)).toBe('Time: 1 h 0 m 0.000 s');
+    expect(formatDurationMs(5_025_678)).toBe('Time: 1 h 23 m 45.678 s');
+    // 25h 1m 0s
+    expect(formatDurationMs(90_060_000)).toBe('Time: 25 h 1 m 0.000 s');
+  });
+
+  test('non-finite and negative inputs collapse to 0', () => {
+    expect(formatDurationMs(NaN)).toBe('Time: 0.000 ms');
+    expect(formatDurationMs(-5)).toBe('Time: 0.000 ms');
+    expect(formatDurationMs(Number.POSITIVE_INFINITY)).toBe('Time: 0.000 ms');
+  });
+});
+
+describe('formatDurationBody', () => {
+  test('omits the `Time:` prefix', () => {
+    expect(formatDurationBody(123)).toBe('123.000 ms');
+    expect(formatDurationBody(5000)).toBe('5.000 s');
+    expect(formatDurationBody(120_500)).toBe('2 m 0.500 s');
   });
 });

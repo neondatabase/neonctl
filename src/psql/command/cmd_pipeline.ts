@@ -40,13 +40,9 @@ import type {
   BackslashResult,
 } from '../types/backslash.js';
 import type { PsqlSettings } from '../types/settings.js';
-import type {
-  FieldDescription,
-  Pipeline,
-  ResultSet,
-} from '../types/connection.js';
+import type { Pipeline, ResultSet } from '../types/connection.js';
 
-import { writeOut, writeErr } from './shared.js';
+import { writeErr } from './shared.js';
 
 // ---------------------------------------------------------------------------
 // Settings stash. We can't add new fields to PsqlSettings (frozen WP-00) so
@@ -373,39 +369,15 @@ export const cmdGetResults: BackslashCmdSpec = {
 
 // ---------------------------------------------------------------------------
 // \gdesc — describe the buffered query without executing it.
+//
+// The implementation lives in `./cmd_io.ts` (it shares the printer-routing
+// machinery used by `\g` / `\gx` / `\watch`); we re-export the spec here
+// so the existing pipeline test (which imports `cmdGdesc` from this
+// module) continues to compile. Registration is left to `cmd_io.ts`'s
+// `registerIoCommands` so we don't double-register.
 // ---------------------------------------------------------------------------
 
-export const cmdGdesc: BackslashCmdSpec = {
-  name: 'gdesc',
-  helpKey: 'gdesc',
-  async run(ctx: BackslashContext): Promise<BackslashResult> {
-    const sql = ctx.queryBuf.trim();
-    if (sql.length === 0) {
-      return errResult(ctx, 'no query buffer');
-    }
-    if (!ctx.settings.db) {
-      return errResult(ctx, 'no connection to the server');
-    }
-    try {
-      const stmt = await ctx.settings.db.prepare('', sql);
-      const fields: FieldDescription[] = await stmt.describe();
-      // Render psql's "Column / Type" listing. We bypass the aligned printer
-      // and emit a compact two-column table — the mainloop will reroute
-      // through the proper printer in WP-22 once Describe-shaped results
-      // become first class. For now this is enough for tests + interactive.
-      writeOut('     Column     |    Type\n');
-      writeOut('----------------+-----------------\n');
-      for (const f of fields) {
-        writeOut(` ${f.name.padEnd(14)} | ${String(f.dataTypeID)}\n`);
-      }
-      writeOut(`(${String(fields.length)} columns)\n`);
-      return { status: 'reset-buf', newBuf: '' };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
-    }
-  },
-};
+export { cmdGdesc } from './cmd_io.js';
 
 // ---------------------------------------------------------------------------
 // Registration entry point.
@@ -423,5 +395,4 @@ export const registerPipelineCommands = (registry: BackslashRegistry): void => {
   registry.register(cmdFlush);
   registry.register(cmdSendPipeline);
   registry.register(cmdGetResults);
-  registry.register(cmdGdesc); // overrides the WP-15 TODO stub
 };

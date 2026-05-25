@@ -29,19 +29,61 @@
  *  - `%[`/`%]` are upstream's readline non-printing markers. We strip them
  *    (emit nothing) for now; a future WP wiring readline integration can
  *    re-introduce them.
- *  - Backtick command interpolation (\`cmd\`) is stubbed — we emit nothing.
- *    TODO(WP-12): wire backticks once the shell-exec primitive lands.
+ *  - Backtick command interpolation (`%`\``cmd`\``) is executed synchronously
+ *    via `child_process.execSync` on `sh -c <cmd>`. Output is substituted
+ *    verbatim minus one trailing newline. Errors print to stderr and yield
+ *    an empty substitution — matching upstream's `get_prompt`, which re-runs
+ *    the command on every render rather than caching.
  *  - Unknown `%X` escapes pass through as literal `X` (the upstream
  *    `default:` branch). `%w` width is computed from PROMPT1 when present
  *    and consumed by a subsequent PROMPT2 render via the optional
  *    `lastPrompt1Width` field on the context.
  */
 
+import { execSync } from 'node:child_process';
+
 import type { PsqlSettings } from '../types/settings.js';
 import type { CondStack, IfState } from '../types/repl.js';
 import type { PromptStatus } from '../types/scanner.js';
 
 export type PromptName = 'PROMPT1' | 'PROMPT2' | 'PROMPT3';
+
+/**
+ * Test seam for the prompt-level backtick executor. The default
+ * implementation calls `execSync(cmd, { shell: '/bin/sh' })`; tests can
+ * replace `.current` with a synchronous mock to avoid actually spawning
+ * a child. Same pattern as `BACKTICK_EXECUTOR` in `scanner/slash.ts`.
+ */
+export const PROMPT_BACKTICK_EXECUTOR: {
+  current: (cmd: string) => string;
+} = {
+  current: (cmd: string) =>
+    execSync(cmd, {
+      shell: '/bin/sh',
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'inherit'],
+      // Keep prompt rendering responsive — a heavy backtick command should
+      // not be able to fill arbitrary memory or hang the prompt forever.
+      maxBuffer: 1 << 16,
+    }),
+};
+
+/**
+ * Run a single backtick command and return its stdout, with one trailing
+ * newline trimmed. On failure (non-zero exit / spawn error) print the
+ * error to stderr and return the empty string so the prompt still renders.
+ */
+const runPromptBacktick = (cmd: string): string => {
+  if (cmd.length === 0) return '';
+  try {
+    const out = PROMPT_BACKTICK_EXECUTOR.current(cmd);
+    return out.endsWith('\n') ? out.slice(0, -1) : out;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`psql: error: \\!: ${cmd}: ${msg}\n`);
+    return '';
+  }
+};
 
 export type TransactionState = 'idle' | 'in-block' | 'failed' | 'unknown';
 export type PipelineState = 'off' | 'on' | 'aborted';
@@ -244,15 +286,18 @@ const expandEscape = (
       return { text: '', consumed: 1 };
 
     case '`': {
-      // Backtick command: read until the matching `\`` after the opening
-      // backtick. We stub the execution but still consume the template.
-      // TODO(WP-12): wire backticks via a shell-exec primitive.
+      // Backtick command: read until the matching `` ` `` after the opening
+      // backtick, then run the body through `sh -c` and substitute its
+      // stdout. Upstream `get_prompt` re-runs the command on every render
+      // rather than caching, so we do the same — callers who want caching
+      // should stash the rendered prompt themselves.
       const close = template.indexOf('`', start + 1);
       if (close === -1) {
-        // Unterminated — consume the rest defensively.
+        // Unterminated — consume the rest defensively without spawning.
         return { text: '', consumed: template.length - start };
       }
-      return { text: '', consumed: close - start + 1 };
+      const body = template.slice(start + 1, close);
+      return { text: runPromptBacktick(body), consumed: close - start + 1 };
     }
 
     case ':': {

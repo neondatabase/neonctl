@@ -44,7 +44,13 @@ import { initialScanState } from '../types/scanner.js';
 import { scanSql } from '../scanner/sql.js';
 import { scanSlashArgs } from '../scanner/slash.js';
 import { renderPromptByName, type PromptContext } from './prompt.js';
-import { pickOut, renderResultSet, sendQuery } from './common.js';
+import {
+  captureLastError,
+  pickOut,
+  renderResultSet,
+  sendQuery,
+  writeQueryError,
+} from './common.js';
 import { formatDurationMs } from '../print/units.js';
 import {
   COND_COMMAND_NAMES,
@@ -454,9 +460,11 @@ const dispatchSendQuery = async (
       await renderResultSet(ctx, rs, pickOut(ctx));
       return true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      ctx.settings.lastErrorResult = { message };
-      writeError(ctx, message);
+      // Capture the full ErrorResponse payload (severity / code / position /
+      // detail / hint / location) so the layered renderer can honour
+      // VERBOSITY and SHOW_CONTEXT exactly like the simple-query path.
+      const message = captureLastError(ctx.settings, err, sql);
+      writeQueryError(ctx, message);
       return false;
     } finally {
       refreshConnectionVars(ctx);

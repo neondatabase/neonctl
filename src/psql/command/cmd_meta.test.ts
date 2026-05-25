@@ -20,6 +20,7 @@ import {
   cmdTiming,
   cmdUnset,
   cmdWarn,
+  formatErrorReport,
 } from './cmd_meta.js';
 
 // Mock context factory — each call yields a one-shot scanner over the
@@ -369,11 +370,123 @@ describe('\\errverbose', () => {
   });
 });
 
+describe('formatErrorReport', () => {
+  test('default verbosity omits the SQLSTATE but keeps LINE / DETAIL / HINT', () => {
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        code: '42601',
+        message: 'syntax error at or near "FOO"',
+        detail: 'parse failed',
+        hint: 'check spelling',
+        position: '8',
+        sqlText: 'SELECT FOO FROM bar;',
+      },
+      'default',
+      'errors',
+    );
+    expect(lines[0]).toBe('ERROR:  syntax error at or near "FOO"');
+    // No SQLSTATE prefix on the leading line under default.
+    expect(lines[0]).not.toMatch(/42601/);
+    expect(lines).toContain('LINE 1: SELECT FOO FROM bar;');
+    expect(lines.some((l) => /^\s+\^$/.test(l))).toBe(true);
+    expect(lines).toContain('DETAIL:  parse failed');
+    expect(lines).toContain('HINT:  check spelling');
+  });
+
+  test('verbose verbosity prepends SQLSTATE and adds CONTEXT / LOCATION', () => {
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        code: '42601',
+        message: 'boom',
+        where: 'PL/pgSQL function foo()',
+        routine: 'exec_stmt',
+        file: 'pl_exec.c',
+        line: '123',
+      },
+      'verbose',
+      'errors',
+    );
+    expect(lines[0]).toBe('ERROR:  42601: boom');
+    expect(lines).toContain('CONTEXT:  PL/pgSQL function foo()');
+    expect(lines).toContain('LOCATION:  exec_stmt, pl_exec.c:123');
+  });
+
+  test('terse verbosity stops after the severity line', () => {
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        code: '42601',
+        message: 'boom',
+        detail: 'should NOT appear',
+        hint: 'should NOT appear',
+      },
+      'terse',
+      'errors',
+    );
+    expect(lines).toEqual(['ERROR:  boom']);
+  });
+
+  test('SHOW_CONTEXT=never suppresses CONTEXT under default verbosity', () => {
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'boom',
+        where: 'somewhere',
+      },
+      'default',
+      'never',
+    );
+    expect(lines).toEqual(['ERROR:  boom']);
+  });
+
+  test('uses two spaces after every label (vanilla parity)', () => {
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        code: '42P01',
+        message: 'no such table',
+        detail: 'd',
+        hint: 'h',
+        where: 'w',
+        routine: 'r',
+        file: 'f.c',
+        line: '1',
+      },
+      'verbose',
+      'errors',
+    );
+    for (const l of lines) {
+      // Skip the LINE/caret pair which doesn't follow the "LABEL:  body"
+      // shape.
+      if (l.startsWith('LINE ') || /^\s+\^$/.test(l)) continue;
+      expect(l).toMatch(/^[A-Z]+: {2}/);
+    }
+  });
+});
+
 describe('\\!', () => {
   test('runs echo via shell (smoke)', async () => {
     // We can't easily capture child-stdio because spawnSync inherits.
     // Best we can do without a heavy mock: confirm the call returns ok.
     const ctx = makeMockCtx('!', 'true');
+    const r = await run(cmdShell, ctx);
+    expect(r.status).toBe('ok');
+  });
+
+  test('non-zero-exit command still returns ok (REPL keeps running)', async () => {
+    // `false` always exits 1. Upstream `do_shell` swallows the failure so the
+    // REPL stays alive — make sure we do the same.
+    const ctx = makeMockCtx('!', 'false');
+    const r = await run(cmdShell, ctx);
+    expect(r.status).toBe('ok');
+  });
+
+  test('command that does not exist still returns ok', async () => {
+    // Run a command that's guaranteed to fail to spawn through `sh -c`. The
+    // shell returns 127, which we ignore — the REPL must not crash.
+    const ctx = makeMockCtx('!', '/definitely/does/not/exist/binary-xyz');
     const r = await run(cmdShell, ctx);
     expect(r.status).toBe('ok');
   });

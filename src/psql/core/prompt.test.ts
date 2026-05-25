@@ -1,14 +1,18 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { createVarStore } from './variables.js';
 import { defaultSettings } from './settings.js';
 import {
+  PROMPT_BACKTICK_EXECUTOR,
   renderPrompt,
   renderPromptByName,
   type PromptContext,
 } from './prompt.js';
 import type { CondStack, CondStackFrame, IfState } from '../types/repl.js';
 import type { PromptStatus } from '../types/scanner.js';
+
+// Capture the original executor so per-test mocks can be undone in `afterEach`.
+const ORIG_PROMPT_EXECUTOR = PROMPT_BACKTICK_EXECUTOR.current;
 
 /** Minimal in-memory CondStack stub for tests. */
 const makeCond = (initial?: IfState): CondStack => {
@@ -278,10 +282,72 @@ describe('renderPrompt — special markers and substitutions', () => {
     expect(renderPrompt('line %l', ctx)).toBe('line 42');
   });
 
-  test('%`cmd` is stubbed and emits nothing (TODO WP-12)', () => {
+  test('%`cmd` substitutes the command stdout (newline trimmed)', () => {
     const ctx = makeCtx();
-    expect(renderPrompt('out:%`echo hi`!', ctx)).toBe('out:!');
+    PROMPT_BACKTICK_EXECUTOR.current = (cmd: string) => {
+      expect(cmd).toBe('echo foo');
+      return 'foo\n';
+    };
+    try {
+      expect(renderPrompt('out:%`echo foo`!', ctx)).toBe('out:foo!');
+    } finally {
+      PROMPT_BACKTICK_EXECUTOR.current = ORIG_PROMPT_EXECUTOR;
+    }
   });
+
+  test('%`cmd` re-runs on every render (no cache)', () => {
+    const ctx = makeCtx();
+    const exec = vi.fn().mockReturnValueOnce('1\n').mockReturnValueOnce('2\n');
+    PROMPT_BACKTICK_EXECUTOR.current = exec;
+    try {
+      expect(renderPrompt('%`pwd`', ctx)).toBe('1');
+      expect(renderPrompt('%`pwd`', ctx)).toBe('2');
+      expect(exec).toHaveBeenCalledTimes(2);
+    } finally {
+      PROMPT_BACKTICK_EXECUTOR.current = ORIG_PROMPT_EXECUTOR;
+    }
+  });
+
+  test('%`cmd` failure → empty substitution and stderr diagnostic', () => {
+    const ctx = makeCtx();
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: unknown) => {
+      stderrChunks.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    PROMPT_BACKTICK_EXECUTOR.current = () => {
+      throw new Error('exit 1');
+    };
+    try {
+      expect(renderPrompt('a%`bogus`b', ctx)).toBe('ab');
+      expect(stderrChunks.join('')).toMatch(/psql: error: \\!: bogus: exit 1/);
+    } finally {
+      PROMPT_BACKTICK_EXECUTOR.current = ORIG_PROMPT_EXECUTOR;
+      process.stderr.write = origWrite;
+    }
+  });
+
+  test('unterminated %`...` consumes the rest without spawning', () => {
+    const ctx = makeCtx();
+    const exec = vi.fn();
+    PROMPT_BACKTICK_EXECUTOR.current = exec;
+    try {
+      expect(renderPrompt('start%`no closer here', ctx)).toBe('start');
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      PROMPT_BACKTICK_EXECUTOR.current = ORIG_PROMPT_EXECUTOR;
+    }
+  });
+});
+
+// Belt-and-braces: ensure other tests in this file are insulated from any
+// stray mock left behind by the backtick tests.
+beforeEach(() => {
+  PROMPT_BACKTICK_EXECUTOR.current = ORIG_PROMPT_EXECUTOR;
+});
+afterEach(() => {
+  PROMPT_BACKTICK_EXECUTOR.current = ORIG_PROMPT_EXECUTOR;
 });
 
 describe('renderPrompt — search_path and hot-standby', () => {
