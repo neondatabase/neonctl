@@ -102,6 +102,7 @@
     "test": "vitest run",
     "test:conformance": "vitest run --config tests/psql-conformance/vitest.config.ts",
     "test:conformance:seed": "bun tests/psql-conformance/scripts/seed-known-failures.ts",
+    "test:conformance:matrix": "bun tests/psql-conformance/scripts/run-local-matrix.ts",
     "prepare": "test -d .git && husky install || true"
   },
   "lint-staged": {

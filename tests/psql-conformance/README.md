@@ -122,6 +122,39 @@ The script honours the same `PGCONFORMANCE_PG_*` env vars as the
 runtime harness, so a maintainer can point it at a managed postgres
 instead of relying on Docker.
 
+## Running the matrix locally
+
+The CI workflow runs the harness against PG 14/15/16/17/18 (Neon's full
+support range) in parallel matrix slots. To mirror that locally:
+
+```sh
+bun run test:conformance:matrix
+```
+
+This script:
+
+- Builds `dist/` (unless `--skip-build`).
+- For each PG major: boots a dedicated `@testcontainers/postgresql`
+  container at the appropriate image tag, runs the conformance suite
+  with `PGCONFORMANCE_PG_MAJOR=<n>` (so the truth-table loader filters
+  per-version `KNOWN_FAILURES.yml` entries), captures the JSON report,
+  and tears the container down.
+- Persists per-version reports under `tmp/psql-conformance/pg-<n>.json`
+  for triage.
+- Prints a summary table with total / passed / failed / status per
+  version. Exits non-zero if any version had unexpected failures.
+
+Useful flags:
+
+| Flag                | Effect                                                              |
+| ------------------- | ------------------------------------------------------------------- |
+| `--pg 17` (repeats) | Limit the matrix to specific majors. Default: all five.             |
+| `--skip-build`      | Reuse the existing `dist/cli.js` instead of rebuilding.             |
+
+Each slot is independent — one version failing doesn't abort the rest,
+and Docker memory usage stays bounded because containers are torn down
+between slots rather than running in parallel.
+
 ## Environment variables
 
 | Var                         | Purpose                                                                                          |
