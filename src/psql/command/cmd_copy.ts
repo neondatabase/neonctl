@@ -28,9 +28,14 @@
  * destination table, so the subquery form only makes sense with `TO`.
  *
  * Limitations vs upstream:
- *   - Binary COPY (server-side `WITH (FORMAT BINARY)` option) works for the
- *     I/O path but the BINARY *keyword* legacy syntax is parsed and re-emitted
- *     verbatim; we don't attempt to validate options.
+ *   - Binary COPY (server-side `WITH (FORMAT BINARY)` option) is byte-for-byte
+ *     transparent: bytes captured by `COPY ... TO STDOUT WITH BINARY` are
+ *     piped straight to the destination, and on `COPY ... FROM STDIN WITH
+ *     BINARY` we relay the source bytes verbatim. We do NOT parse tuples;
+ *     `validateCopyBinarySignature` is offered for callers that want to
+ *     sniff the 11-byte file header, but the wire path itself is format-
+ *     agnostic. The legacy `BINARY <table> FROM …` keyword syntax is parsed
+ *     and re-emitted verbatim; we don't try to interpret the options blob.
  *   - The literal `\.` end-of-data marker is honoured when (and only when):
  *     the source is STDIN, AND the COPY format is text (not csv, not binary).
  *     A line matching exactly `\.` terminates the stream client-side via
@@ -428,6 +433,80 @@ export const isCopyTextFormat = (afterToFrom: string | null): boolean => {
     return m[1].toLowerCase() === 'text';
   }
   return true;
+};
+
+/**
+ * Mirror of `isCopyTextFormat`'s scan, but returns `true` only when the COPY
+ * was explicitly opted into binary format. Used by the `\copy` driver to gate
+ * the BINARY-signature byte-for-byte transparency check (we don't want to
+ * touch text/csv streams).
+ *
+ * Matches `WITH BINARY`, `WITH (FORMAT binary)`, the legacy psql `BINARY t
+ * FROM …` keyword (which the parser folds into `beforeToFrom`), and
+ * mixed-case variants.
+ */
+export const isCopyBinaryFormat = (
+  beforeToFrom: string,
+  afterToFrom: string | null,
+): boolean => {
+  // Legacy syntax: the BINARY keyword sits between `\copy` and the table name,
+  // which our parser preserves as the leading token of `beforeToFrom`.
+  if (/^\s*binary\b/i.test(beforeToFrom)) return true;
+  if (afterToFrom === null) return false;
+  // Strip single-quoted strings so a column-named `binary` doesn't trigger.
+  const stripped = afterToFrom.replace(/'(?:''|[^'])*'/g, "''");
+  // Plain `WITH BINARY` (or the bare options token).
+  if (/(^|\W)binary(\W|$)/i.test(stripped)) {
+    // But only when it isn't part of a `format binary` form (already covered
+    // by the regex below — keep both paths so `WITH BINARY` alone still wins).
+    return true;
+  }
+  const m = /\bformat\s+([A-Za-z_]+)/i.exec(stripped);
+  if (m) {
+    return m[1].toLowerCase() === 'binary';
+  }
+  return false;
+};
+
+/**
+ * PostgreSQL COPY binary-format file header signature.
+ *
+ * Per the docs[1]: every binary COPY stream begins with an 11-byte signature
+ * (`PGCOPY\n\xff\r\n\0`), followed by a 4-byte flags field and a 4-byte
+ * header-extension-area length. After that come zero-or-more tuples, then a
+ * 2-byte file trailer of `0xFFFF` (Int16 `-1`).
+ *
+ * We expose the signature bytes (not the full 19-byte fixed prefix) so callers
+ * can sniff incoming streams or assert outgoing streams without depending on
+ * server-version-specific flags / extension data.
+ *
+ * [1] https://www.postgresql.org/docs/current/sql-copy.html#id-1.9.3.55.9.4
+ */
+export const COPY_BINARY_SIGNATURE: Buffer = Buffer.from([
+  0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff, 0x0d, 0x0a, 0x00,
+]);
+
+/**
+ * Validate that a buffer starts with the COPY binary signature.
+ *
+ * Used to assert round-trip transparency: bytes captured by `COPY ... TO
+ * STDOUT WITH BINARY` should be byte-for-byte acceptable to `COPY ... FROM
+ * STDIN WITH BINARY` on another instance. We don't try to parse tuples —
+ * that requires per-type binary decoders the printer doesn't otherwise need.
+ *
+ * Returns `null` on success or a short diagnostic string on failure (matching
+ * the upstream wording style: "missing signature" / "wrong signature").
+ */
+export const validateCopyBinarySignature = (buf: Buffer): string | null => {
+  if (buf.length < COPY_BINARY_SIGNATURE.length) {
+    return 'missing COPY binary signature (input too short)';
+  }
+  for (let i = 0; i < COPY_BINARY_SIGNATURE.length; i++) {
+    if (buf[i] !== COPY_BINARY_SIGNATURE[i]) {
+      return 'COPY binary signature mismatch';
+    }
+  }
+  return null;
 };
 
 /**

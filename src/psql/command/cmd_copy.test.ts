@@ -31,12 +31,15 @@ import { createVarStore } from '../core/variables.js';
 import { defaultSettings } from '../core/settings.js';
 
 import {
+  COPY_BINARY_SIGNATURE,
   buildCopySql,
   cmdCopy,
   doCopy,
+  isCopyBinaryFormat,
   isCopyTextFormat,
   parseSlashCopy,
   pumpStdinWithEofMarker,
+  validateCopyBinarySignature,
 } from './cmd_copy.js';
 
 // ---------------------------------------------------------------------------
@@ -390,6 +393,236 @@ describe('doCopy', () => {
 // ---------------------------------------------------------------------------
 // isCopyTextFormat — gate for `\.` EOF-marker handling.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// COPY BINARY signature + round-trip transparency.
+// ---------------------------------------------------------------------------
+
+describe('COPY_BINARY_SIGNATURE', () => {
+  test('is the canonical 11-byte header (PGCOPY\\n\\xff\\r\\n\\0)', () => {
+    expect(COPY_BINARY_SIGNATURE.length).toBe(11);
+    expect(COPY_BINARY_SIGNATURE.toString('latin1', 0, 6)).toBe('PGCOPY');
+    expect(COPY_BINARY_SIGNATURE[6]).toBe(0x0a); // \n
+    expect(COPY_BINARY_SIGNATURE[7]).toBe(0xff);
+    expect(COPY_BINARY_SIGNATURE[8]).toBe(0x0d); // \r
+    expect(COPY_BINARY_SIGNATURE[9]).toBe(0x0a); // \n
+    expect(COPY_BINARY_SIGNATURE[10]).toBe(0x00);
+  });
+});
+
+describe('validateCopyBinarySignature', () => {
+  test('accepts a buffer that starts with the canonical signature', () => {
+    expect(validateCopyBinarySignature(COPY_BINARY_SIGNATURE)).toBeNull();
+  });
+
+  test('accepts a signature followed by flags + extension area', () => {
+    // 11-byte signature + 4-byte flags (0) + 4-byte ext-len (0) = 19 bytes
+    // typical minimum prefix.
+    const buf = Buffer.concat([
+      COPY_BINARY_SIGNATURE,
+      Buffer.alloc(4), // flags
+      Buffer.alloc(4), // ext-area length
+    ]);
+    expect(validateCopyBinarySignature(buf)).toBeNull();
+  });
+
+  test('rejects buffers that are too short', () => {
+    expect(validateCopyBinarySignature(Buffer.from('PGCOPY'))).toMatch(
+      /too short/,
+    );
+    expect(validateCopyBinarySignature(Buffer.alloc(0))).toMatch(/too short/);
+  });
+
+  test('rejects buffers with wrong signature bytes', () => {
+    const broken = Buffer.from(COPY_BINARY_SIGNATURE);
+    broken[0] = 0x00; // corrupt first byte
+    expect(validateCopyBinarySignature(broken)).toMatch(/mismatch/);
+  });
+
+  test('rejects similar-looking but distinct prefix', () => {
+    // psql text-format COPY data could start with bytes like "1\t" or so —
+    // anything that doesn't match the magic should be rejected, otherwise
+    // a callers' sniff would silently accept a text stream.
+    const text = Buffer.from('1\talice\n2\tbob\n', 'utf8');
+    expect(validateCopyBinarySignature(text)).toMatch(/mismatch/);
+  });
+});
+
+describe('isCopyBinaryFormat', () => {
+  test('legacy "BINARY t FROM …" syntax is detected', () => {
+    expect(isCopyBinaryFormat('binary t', null)).toBe(true);
+    expect(isCopyBinaryFormat('BINARY t', null)).toBe(true);
+  });
+
+  test('"WITH BINARY" tail detected', () => {
+    expect(isCopyBinaryFormat('t', 'WITH BINARY')).toBe(true);
+    expect(isCopyBinaryFormat('t', 'with binary')).toBe(true);
+  });
+
+  test('"WITH (FORMAT binary)" detected', () => {
+    expect(isCopyBinaryFormat('t', 'WITH (FORMAT binary)')).toBe(true);
+  });
+
+  test('CSV is not binary', () => {
+    expect(isCopyBinaryFormat('t', 'WITH csv')).toBe(false);
+    expect(isCopyBinaryFormat('t', 'WITH (FORMAT csv)')).toBe(false);
+  });
+
+  test('text is not binary', () => {
+    expect(isCopyBinaryFormat('t', null)).toBe(false);
+    expect(isCopyBinaryFormat('t', 'WITH (FORMAT text)')).toBe(false);
+  });
+
+  test('a quoted "binary" literal does not false-trigger', () => {
+    expect(isCopyBinaryFormat('t', "DELIMITER 'binary'")).toBe(false);
+  });
+});
+
+describe('doCopy BINARY round-trip', () => {
+  // The wire path is format-agnostic: bytes captured by COPY ... TO STDOUT
+  // WITH BINARY must survive a byte-for-byte trip through COPY ... FROM
+  // STDIN WITH BINARY on the way back to the server. This test wires the
+  // two halves end-to-end through the mock connection and asserts no
+  // bytes were mangled.
+  test('TO → bytes captured equal the server-emitted stream', async () => {
+    // Build a minimal but valid binary header + a single trailer.
+    const header = Buffer.concat([
+      COPY_BINARY_SIGNATURE,
+      Buffer.alloc(4), // flags = 0
+      Buffer.alloc(4), // ext-len = 0
+    ]);
+    const trailer = Buffer.from([0xff, 0xff]); // -1 == file trailer
+    const tuple = Buffer.from([
+      0x00,
+      0x01, // 1 field
+      0x00,
+      0x00,
+      0x00,
+      0x04, // int4: length=4
+      0x00,
+      0x00,
+      0x00,
+      0x2a, // int4 value 42
+    ]);
+    const stream = Buffer.concat([header, tuple, trailer]);
+    const file = tmpFile('.bin');
+    const { conn, recorded } = makeMockConn({
+      copyOutChunks: [stream],
+      copyTag: 'COPY 1',
+    });
+    const result = await doCopy(conn, {
+      beforeToFrom: 't',
+      afterToFrom: 'WITH BINARY',
+      file,
+      program: false,
+      psqlInOut: false,
+      direction: 'to',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(recorded.sql).toBe('COPY t TO STDOUT WITH BINARY');
+    const captured = await fs.readFile(file);
+    expect(captured.equals(stream)).toBe(true);
+    // And the captured stream still validates as binary.
+    expect(validateCopyBinarySignature(captured)).toBeNull();
+  });
+
+  test('FROM → bytes pushed to server equal the file contents', async () => {
+    // Same shape as above, but now we go the other direction.
+    const header = Buffer.concat([
+      COPY_BINARY_SIGNATURE,
+      Buffer.alloc(4),
+      Buffer.alloc(4),
+    ]);
+    const trailer = Buffer.from([0xff, 0xff]);
+    const tuple = Buffer.from([
+      0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x2a,
+    ]);
+    const stream = Buffer.concat([header, tuple, trailer]);
+    const file = tmpFile('.bin');
+    await fs.writeFile(file, stream);
+    const { conn, recorded } = makeMockConn({ copyTag: 'COPY 1' });
+    const result = await doCopy(conn, {
+      beforeToFrom: 't',
+      afterToFrom: 'WITH BINARY',
+      file,
+      program: false,
+      psqlInOut: false,
+      direction: 'from',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(recorded.sql).toBe('COPY t FROM STDIN WITH BINARY');
+    expect(recorded.copyInBytes.equals(stream)).toBe(true);
+    expect(validateCopyBinarySignature(recorded.copyInBytes)).toBeNull();
+  });
+
+  test('round-trip: TO captures, then FROM replays — bytes identical', async () => {
+    // End-to-end: imagine an operator running `\copy t TO 'snap.bin' WITH
+    // BINARY` and later `\copy u FROM 'snap.bin' WITH BINARY`. The two
+    // hops should preserve every byte.
+    const stream = Buffer.concat([
+      COPY_BINARY_SIGNATURE,
+      Buffer.from([
+        0x00,
+        0x00,
+        0x00,
+        0x00, // flags
+        0x00,
+        0x00,
+        0x00,
+        0x00, // ext-area length
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x08,
+        0x12,
+        0x34,
+        0x56,
+        0x78,
+        0xab,
+        0xcd,
+        0xef,
+        0x01, // int8 tuple
+        0xff,
+        0xff, // trailer
+      ]),
+    ]);
+    const snap = tmpFile('.bin');
+
+    // Hop 1: TO captures.
+    const out = makeMockConn({
+      copyOutChunks: [stream],
+      copyTag: 'COPY 1',
+    });
+    const toResult = await doCopy(out.conn, {
+      beforeToFrom: 't',
+      afterToFrom: 'WITH BINARY',
+      file: snap,
+      program: false,
+      psqlInOut: false,
+      direction: 'to',
+    });
+    expect(toResult.ok).toBe(true);
+    const captured = await fs.readFile(snap);
+    expect(captured.equals(stream)).toBe(true);
+
+    // Hop 2: FROM replays.
+    const replay = makeMockConn({ copyTag: 'COPY 1' });
+    const fromResult = await doCopy(replay.conn, {
+      beforeToFrom: 'u',
+      afterToFrom: 'WITH BINARY',
+      file: snap,
+      program: false,
+      psqlInOut: false,
+      direction: 'from',
+    });
+    expect(fromResult.ok).toBe(true);
+    expect(replay.recorded.copyInBytes.equals(stream)).toBe(true);
+  });
+});
 
 describe('isCopyTextFormat', () => {
   test('null options is treated as text (the default)', () => {

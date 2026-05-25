@@ -341,16 +341,29 @@ export const padToWidth = (
 
 // PG type OIDs that should render right-aligned. From upstream
 // `column_type_alignment` / `print_aligned_text`'s `align[]` build.
+//
+// Upstream libpq looks the OID up against the server-side `pg_type.typcategory`
+// (or the legacy hard-coded numeric category) and right-aligns anything with
+// category 'N' (numeric). That catches custom domains over numeric types and
+// extension-provided numeric/identifier types (`pg_lsn`, `xid8`, …) without a
+// hard-coded OID list.
+//
+// We don't have access to a live catalog at print time, so we maintain a
+// curated set of well-known numeric/identifier OIDs that ship with stock PG.
+// Custom domains over numeric types and contrib types not listed here will
+// fall back to left-alignment — documented limitation.
 const RIGHT_ALIGNED_OIDS = new Set<number>([
   20, // int8
   21, // int2
   23, // int4
+  26, // oid
   700, // float4
   701, // float8
+  790, // money
   1700, // numeric
   1186, // interval
-  790, // money
-  26, // oid
+  3220, // pg_lsn  (PG 9.4+ — log sequence numbers, render right-aligned)
+  5069, // xid8    (PG 13+ — 64-bit transaction IDs)
 ]);
 
 const isRightAlignedField = (oid: number): boolean =>
@@ -420,6 +433,27 @@ const ASCII_GLYPHS: Glyphs = {
   nlRight: ' ',
 };
 
+// Light box-drawing glyphs (the only Unicode variant we expose today —
+// `unicode_border_linestyle=double` / `unicode_column_linestyle=double` /
+// `unicode_header_linestyle=double` are parsed by `cmd_format.ts` but the
+// shared `Unicode2LineStyle` slot in `PrintTableOpts` only carries
+// `ascii | unicode`, so all three settings collapse onto these "single"
+// glyphs. Adding the double variant requires extending the type to keep
+// `single`/`double` distinct (or carrying a separate side-channel field) —
+// out of scope for this pass.
+//
+// Codepoints (verified against upstream `unicode_style` in print.c):
+//   U+2500 ─ Box Drawings Light Horizontal           (hrule)
+//   U+2502 │ Box Drawings Light Vertical             (vrule)
+//   U+250C ┌ Box Drawings Light Down and Right       (topLeft)
+//   U+252C ┬ Box Drawings Light Down and Horizontal  (topMid)
+//   U+2510 ┐ Box Drawings Light Down and Left        (topRight)
+//   U+251C ├ Box Drawings Light Vertical and Right   (midLeft)
+//   U+253C ┼ Box Drawings Light Vertical and Horiz.  (midMid)
+//   U+2524 ┤ Box Drawings Light Vertical and Left    (midRight)
+//   U+2514 └ Box Drawings Light Up and Right         (botLeft)
+//   U+2534 ┴ Box Drawings Light Up and Horizontal    (botMid)
+//   U+2518 ┘ Box Drawings Light Up and Left          (botRight)
 const UNICODE_GLYPHS: Glyphs = {
   hrule: '─',
   vrule: '│',
@@ -586,30 +620,79 @@ const renderHorizontal = (
     }
   }
 
-  // Wrapped mode shrinks the widest column(s) until total width fits
-  // `topt.columns`. Each shrunk column gets multi-line cell rendering
-  // via greedy character break.
+  // Wrapped mode shrinks the worst column until total width fits
+  // `topt.columns`. Mirrors upstream `print_aligned_text` in
+  // `fe_utils/print.c`: we score each column by
+  //
+  //   ratio = current_width / average_width + max_width * 0.01
+  //
+  // and shrink the column with the highest ratio. That picks the column
+  // whose individual rows are mostly narrower than the worst-case row
+  // (so wrapping costs fewer extra lines than shrinking a uniformly-wide
+  // column would). The +max*0.01 bias breaks ties in favour of the
+  // overall-widest column, matching the upstream comment "Slightly bias
+  // against wider columns. (Increases chance a narrow column will fit
+  // in its cell.)".
+  //
+  // `width_wrap` (== `widths` here) starts as `max_width`. Each loop
+  // iteration decrements it by one until the total fits or no column
+  // can shrink further (every column is already at its header width).
   if (wrapped) {
     const maxColumns = topt.columns > 0 ? topt.columns : topt.envColumns;
     if (maxColumns > 0) {
-      const sepCost = border === 0 ? 1 : 3;
-      const sideCost = border === 2 || border === 3 ? 4 : 0;
-      let total = sideCost + widths.reduce((a, b) => a + b, 0);
-      total += sepCost * Math.max(0, colCount - 1);
-      while (total > maxColumns) {
-        // Find worst column: largest width that is still > header width.
-        let worstCol = -1;
-        let worstWidth = -1;
-        for (let i = 0; i < colCount; i++) {
-          const headerW = headerCells[i].width;
-          if (widths[i] > headerW && widths[i] > worstWidth) {
-            worstWidth = widths[i];
-            worstCol = i;
+      // Average width per column over the data rows (header excluded,
+      // matching upstream `width_average` which divides cell_count by
+      // col_count). Each cell's width is its max line width (mirrors
+      // upstream `pg_wcssize`, which returns the widest line of the
+      // possibly-multiline cell).
+      const widthAverage: number[] = new Array(colCount).fill(0) as number[];
+      const maxWidth: number[] = headerCells.map((c) => c.width);
+      if (cellGrid.length > 0) {
+        for (const row of cellGrid) {
+          for (let i = 0; i < colCount; i++) {
+            widthAverage[i] += row[i].width;
+            if (row[i].width > maxWidth[i]) maxWidth[i] = row[i].width;
           }
         }
-        if (worstCol === -1) break;
-        widths[worstCol]--;
-        total--;
+        for (let i = 0; i < colCount; i++) {
+          widthAverage[i] /= cellGrid.length;
+        }
+      }
+
+      const sepCost = border === 0 ? 1 : 3;
+      const sideCost = border === 2 || border === 3 ? 4 : 0;
+      const totalHeaderWidth =
+        sideCost +
+        headerCells.reduce((a, c) => a + c.width, 0) +
+        sepCost * Math.max(0, colCount - 1);
+      let total = sideCost + widths.reduce((a, b) => a + b, 0);
+      total += sepCost * Math.max(0, colCount - 1);
+
+      // Upstream guards against shrinking when even the headers don't
+      // fit — there's no point picking columns to wrap if the rule row
+      // is already too wide.
+      if (maxColumns >= totalHeaderWidth) {
+        while (total > maxColumns) {
+          let worstCol = -1;
+          let maxRatio = 0;
+          for (let i = 0; i < colCount; i++) {
+            const headerW = headerCells[i].width;
+            // Two preconditions from upstream:
+            //   - width_average[i] != 0  (column has some data; avoids /0)
+            //   - width_wrap[i] > width_header[i]  (header is the floor;
+            //     can't shrink below it without overlapping the header).
+            if (widthAverage[i] > 0 && widths[i] > headerW) {
+              const ratio = widths[i] / widthAverage[i] + maxWidth[i] * 0.01;
+              if (ratio > maxRatio) {
+                maxRatio = ratio;
+                worstCol = i;
+              }
+            }
+          }
+          if (worstCol === -1) break;
+          widths[worstCol]--;
+          total--;
+        }
       }
     }
   }

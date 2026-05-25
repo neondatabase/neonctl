@@ -401,6 +401,143 @@ describe('alignedPrinter wrapped mode', () => {
     // Original characters should all be present.
     expect(out).toContain('abc');
   });
+
+  test('ratio-scoring picks the high-variance column to shrink', async () => {
+    // Two columns at equal max width (13 chars) but with very different
+    // value variance:
+    //   - col `a` is uniformly wide (every row is 'xxxxxxxxxxxxx')
+    //   - col `b` has one wide outlier and three narrow rows
+    //
+    // Greedy `shrink-widest-first` is ambiguous when widths tie; with the
+    // ratio formula `width/avg + max*0.01`, column `b` wins because
+    // shrinking it costs at most 1 wrapped row, while shrinking `a` would
+    // wrap every row.
+    //
+    // Target width 20 cols forces ~11 chars of total shrink (full layout
+    // would be 31 cols including the border=1 gutters).
+    const wideA = 'x'.repeat(13);
+    const wideB = 'y'.repeat(13);
+    const narrowB = 'y';
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [
+        [wideA, wideB],
+        [wideA, narrowB],
+        [wideA, narrowB],
+        [wideA, narrowB],
+      ],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          format: 'wrapped',
+          border: 1,
+          columns: 20,
+          envColumns: 20,
+        }),
+        s,
+      ),
+    );
+    // Column `a` was NOT shrunk — every one of the 4 data rows shows the
+    // full 13-char `xxxxxxxxxxxxx` value once on its own physical line.
+    const aLines = out.split('\n').filter((l) => l.includes(wideA));
+    expect(aLines.length).toBe(4);
+    // Column `b`'s wide outlier wrapped across multiple display lines:
+    // there must be more total output lines than data rows.
+    const dataLines = out
+      .split('\n')
+      .filter((l) => l.includes('y') || l.includes('x'));
+    expect(dataLines.length).toBeGreaterThan(4);
+  });
+
+  test('right-aligns xid8 and pg_lsn by OID', async () => {
+    // xid8 = OID 5069, pg_lsn = OID 3220. Both should be right-aligned
+    // even though they're contrib/extension-y "numeric-ish" types.
+    const rs = makeResultSet({
+      columns: [
+        { name: 'xmin', oid: 5069 },
+        { name: 'lsn', oid: 3220 },
+        { name: 'label' },
+      ],
+      rows: [
+        ['12345', '0/1A2B3C4D', 'a'],
+        ['7', '0/0', 'longer-label'],
+      ],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(), s),
+    );
+    // xid8 value '7' should be right-aligned within its column.
+    // The shorter value '7' should have padding on the LEFT (right-align).
+    const lines = out.split('\n');
+    const row7 = lines.find((l) => l.includes(' 7 ') && l.includes('0/0'));
+    expect(row7).toBeDefined();
+    // Verify "7" follows whitespace (right-aligned), not "7 " (left-aligned).
+    expect(row7).toMatch(/ {2,}7 \|/);
+    // Verify pg_lsn '0/0' is right-aligned vs '0/1A2B3C4D'.
+    expect(row7).toMatch(/\| {2,}0\/0 \|/);
+  });
+});
+
+describe('alignedPrinter unicode linestyle variants', () => {
+  test('unicode mode emits the full box-drawing glyph set', async () => {
+    // Snapshot-style assertion for a small 2x2 grid with border=2 (full box)
+    // so we exercise every glyph in the Glyphs struct.
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [
+        ['x', 'y'],
+        ['z', 'w'],
+      ],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          border: 2,
+          unicodeBorderLineStyle: 'unicode',
+          unicodeColumnLineStyle: 'unicode',
+          unicodeHeaderLineStyle: 'unicode',
+        }),
+        s,
+      ),
+    );
+    expect(out).toBe(
+      '┌───┬───┐\n' +
+        '│ a │ b │\n' +
+        '├───┼───┤\n' +
+        '│ x │ y │\n' +
+        '│ z │ w │\n' +
+        '└───┴───┘\n' +
+        '(2 rows)\n',
+    );
+  });
+
+  test('unicode border=1 uses middle-junction glyphs (no outer box)', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'k' }, { name: 'v' }],
+      rows: [['a', '1']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          border: 1,
+          unicodeBorderLineStyle: 'unicode',
+        }),
+        s,
+      ),
+    );
+    // border=1 still uses the middle T-junction for the header rule even
+    // though we don't draw the outer box. Vertical column rule is │.
+    expect(out).toContain('│'); // column rule
+    expect(out).toContain('─'); // header underline
+    expect(out).toContain('┼'); // cross at header-rule × column-rule
+    // No outer-box glyphs.
+    expect(out).not.toContain('┌');
+    expect(out).not.toContain('┘');
+  });
 });
 
 describe('alignedPrinter unicode mode', () => {

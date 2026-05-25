@@ -51,7 +51,6 @@ import {
   fetchPartitionOf,
   fetchPerColumnFdwOptions,
   fetchPolicies,
-  fetchReplicaIdentityIndex,
   fetchStatisticsObjects,
   fetchTableInfo,
   fetchTablePublications,
@@ -215,7 +214,29 @@ export const describeOneTableDetails = async (
   out: NodeJS.WritableStream,
   popt: PrintQueryOpts,
 ): Promise<void> => {
-  const title = headerForRelkind(relkind, schema, name);
+  // ----- One-shot relation info (RLS flags, replica identity,
+  //       partition flag, tablespace, access method). Fetched before
+  //       columns so the matview header can carry an "Access method:"
+  //       line and the per-column FDW options can be merged inline.
+  const relInfo = await fetchRelationInfo(conn, oid);
+
+  // Compose the title. Matviews with a non-default access method get
+  // a second line ("Access method: <amname>") between the header and
+  // the column table — see upstream `describeOneTableDetails`.
+  const baseTitle = headerForRelkind(relkind, schema, name);
+  const title =
+    relkind === 'm' && relInfo.relam !== 0 && relInfo.amname
+      ? `${baseTitle}\nAccess method: ${relInfo.amname}`
+      : baseTitle;
+
+  // ----- Pre-fetch per-column FDW options (foreign tables only) so we
+  //       can fold them into each column row. Upstream renders these
+  //       inline as a trailing "FDW options: (k 'v', ...)" annotation
+  //       rather than a separate footer section.
+  const fdwOptionsByColumn =
+    relkind === 'f'
+      ? await fetchPerColumnFdwOptionsMap(conn, oid)
+      : new Map<string, string>();
 
   // ----- Columns -----
   const colSql =
@@ -234,7 +255,12 @@ export const describeOneTableDetails = async (
     'ORDER BY a.attnum;';
   const colsRs = await conn.query(colSql, []);
 
-  // Synthesize a printable result set: Column, Type, Collation, Nullable, Default
+  // Foreign tables get an extra "FDW options" column when at least one
+  // attribute actually has options set (matches upstream — the column
+  // slot is conditional on the row data, not just the relkind).
+  const hasAnyFdwOptions = fdwOptionsByColumn.size > 0;
+
+  // Synthesize a printable result set: Column, Type, Collation, Nullable, Default[, FDW options]
   const fields = [
     fakeField('Column'),
     fakeField('Type'),
@@ -242,6 +268,7 @@ export const describeOneTableDetails = async (
     fakeField('Nullable'),
     fakeField('Default'),
   ];
+  if (hasAnyFdwOptions) fields.push(fakeField('FDW options'));
   const rows: unknown[][] = colsRs.rows.map((r) => {
     const colName = cellToString(r[0]);
     const colType = cellToString(r[1]);
@@ -264,7 +291,12 @@ export const describeOneTableDetails = async (
       // STORED but without the trailing keyword.
       dflt = dflt ? `generated always as (${dflt})` : '';
     }
-    return [colName, colType, collation ?? '', nullable, dflt];
+    const row: unknown[] = [colName, colType, collation ?? '', nullable, dflt];
+    if (hasAnyFdwOptions) {
+      const opts = fdwOptionsByColumn.get(colName);
+      row.push(opts ? `(${opts})` : '');
+    }
+    return row;
   });
   const colsResult: ResultSet = {
     command: 'SELECT',
@@ -279,12 +311,6 @@ export const describeOneTableDetails = async (
     { ...popt, title, footers: null },
     out,
   );
-
-  // ----- One-shot relation footer info (RLS flags, replica identity,
-  //       partition flag, tablespace, access method). Fetched after
-  //       columns so existing rendering ordering is unchanged for the
-  //       header table. -----
-  const relInfo = await fetchRelationInfo(conn, oid);
 
   // ----- Partition-key (partitioned-table parent only) -----
   if (relkind === 'p') {
@@ -323,13 +349,10 @@ export const describeOneTableDetails = async (
   }
 
   // ----- Foreign-table footer: Server + FDW options -----
+  // Per-column FDW options are rendered inline within the columns
+  // table (see fdwOptionsByColumn above); no separate footer here.
   if (relkind === 'f') {
     await renderForeignTableFooter(conn, oid, out);
-  }
-
-  // ----- Per-column FDW options (foreign tables only) -----
-  if (relkind === 'f') {
-    await renderPerColumnFdwOptionsSection(conn, oid, out);
   }
 
   // ----- Inherits: (parents) — for tables, partitioned tables, foreign -----
@@ -370,9 +393,11 @@ export const describeOneTableDetails = async (
     await renderStatisticsObjectsSection(conn, oid, out);
   }
 
-  // ----- Replica Identity (verbose, non-default, regular & matview) -----
+  // ----- Replica Identity (verbose, non-default, regular & matview).
+  //       INDEX mode is rendered inline within Indexes:, so the footer
+  //       is only emitted for FULL / NOTHING.
   if (verbose && (relkind === 'r' || relkind === 'm')) {
-    await renderReplicaIdentitySection(conn, oid, schema, relInfo, out);
+    renderReplicaIdentitySection(schema, relInfo, out);
   }
 
   // ----- Tablespace footer (verbose: explicit tablespace only) -----
@@ -380,8 +405,10 @@ export const describeOneTableDetails = async (
     renderTablespaceFooter(relkind, relInfo, out);
   }
 
-  // ----- Access method footer (verbose: relkind r/m/p with relam set) -----
-  if (verbose && (relkind === 'r' || relkind === 'm' || relkind === 'p')) {
+  // ----- Access method footer (verbose: relkind r/p with relam set).
+  //       Matviews ('m') show their access method inline in the header,
+  //       so we don't double up here.
+  if (verbose && (relkind === 'r' || relkind === 'p')) {
     renderAccessMethodFooter(relInfo, out);
   }
 
@@ -656,33 +683,20 @@ const renderInheritedBySection = async (
 
 /**
  * Render `Replica Identity: <value>` when the relation's `relreplident`
- * is non-default. Upstream skips this footer entirely for the default
- * value ('d' in user schemas, 'n' for pg_catalog relations) and for
- * 'i' (INDEX) since the index footer already carries the marker.
+ * is non-default and non-INDEX. Upstream skips this footer entirely for
+ * the default value ('d' in user schemas, 'n' for pg_catalog relations);
+ * INDEX-mode (relreplident = 'i') is surfaced inline on the matching
+ * index line in the Indexes: section, so no footer is emitted there
+ * either.
  */
-const renderReplicaIdentitySection = async (
-  conn: Connection,
-  oid: number,
+const renderReplicaIdentitySection = (
   schema: string,
   relInfo: RelationInfo,
   out: NodeJS.WritableStream,
-): Promise<void> => {
+): void => {
   const ri = relInfo.relreplident;
-  if (ri === 'i') {
-    // INDEX replica identity — fetch the index name and render that
-    // explicitly; upstream surfaces this on the corresponding index
-    // line but for our extracted detail it's helpful to also emit a
-    // header line.
-    const q = fetchReplicaIdentityIndex({ oid });
-    const rs = await conn.query(q.sql, q.params);
-    if (rs.rows.length > 0) {
-      const idxName = cellToString(rs.rows[0][0] ?? '');
-      if (idxName !== '') {
-        out.write(`Replica Identity: INDEX "${idxName}"\n`);
-      }
-    }
-    return;
-  }
+  // INDEX mode is rendered inline on the matching index — no footer.
+  if (ri === 'i') return;
   // pg_catalog relations default to 'n', user relations to 'd' — both
   // suppress the footer when the value matches the schema default.
   const isCatalog = schema === 'pg_catalog';
@@ -738,6 +752,12 @@ const renderAccessMethodFooter = (
 /**
  * Render `Indexes:\n    "name" PRIMARY KEY, btree (col)` for each index
  * on `oid`. Free-form section — not a table.
+ *
+ * When the relation has INDEX-mode replica identity (relreplident = 'i'),
+ * the corresponding index gets a trailing " REPLICA IDENTITY" marker on
+ * its line, matching upstream `\d` output. The marker comes from each
+ * index's own `pg_index.indisreplident` flag — only one index can carry
+ * it, so no follow-up footer is needed for INDEX-mode RI.
  */
 const renderIndexesSection = async (
   conn: Connection,
@@ -766,6 +786,7 @@ const renderIndexesSection = async (
     const isValid = String(r[4]) === 't' || r[4] === true;
     const indexdef = cellToString(r[5]);
     const constrDef = r[6] !== null ? cellToString(r[6]) : '';
+    const isReplIdent = String(r[10]) === 't' || r[10] === true;
     const tag = isPrimary ? 'PRIMARY KEY' : isUnique ? 'UNIQUE CONSTRAINT' : '';
     let line = `    "${idxName}"`;
     if (constrDef) {
@@ -780,6 +801,7 @@ const renderIndexesSection = async (
       line += `, ${tail}`;
     }
     if (!isValid) line += ' INVALID';
+    if (isReplIdent) line += ' REPLICA IDENTITY';
     out.write(`${line}\n`);
   }
 };
@@ -952,24 +974,24 @@ const renderSubscriptionsSection = async (
 };
 
 /**
- * Render `Per-column FDW options:\n    col: (k 'v', k 'v')` for each
- * column on a foreign table that has at least one FDW option set. No-op
- * when the result set is empty.
+ * Pre-fetch per-column FDW options for a foreign table and index them by
+ * column name so the column-table renderer can fold them in inline.
+ * Upstream renders these as a trailing "FDW options: (k 'v', ...)" cell
+ * on each affected column row, not as a separate footer.
  */
-const renderPerColumnFdwOptionsSection = async (
+const fetchPerColumnFdwOptionsMap = async (
   conn: Connection,
   oid: number,
-  out: NodeJS.WritableStream,
-): Promise<void> => {
+): Promise<Map<string, string>> => {
   const q = fetchPerColumnFdwOptions({ oid });
   const rs = await conn.query(q.sql, q.params);
-  if (rs.rows.length === 0) return;
-  out.write('Per-column FDW options:\n');
+  const m = new Map<string, string>();
   for (const r of rs.rows) {
     const attname = cellToString(r[0] ?? '');
     const opts = cellToString(r[1] ?? '');
-    out.write(`    ${attname}: (${opts})\n`);
+    if (attname !== '' && opts !== '') m.set(attname, opts);
   }
+  return m;
 };
 
 /**

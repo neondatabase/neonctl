@@ -459,6 +459,123 @@ describe('describeOneTableDetails', () => {
     expect(cap.text()).not.toContain('Replica Identity');
   });
 
+  it('annotates the replica-identity index inline within Indexes:', async () => {
+    // Round 3 polish: INDEX-mode replica identity is rendered as a
+    // " REPLICA IDENTITY" suffix on the matching index line instead of
+    // a `Replica Identity: INDEX "name"` footer.
+    const cols = boringCols();
+    // Two indexes on the relation: a primary key (no RI) + a unique
+    // index marked as INDEX replica identity (indisreplident = 't').
+    const indexes = mkResultSet(
+      [
+        'relname',
+        'indisprimary',
+        'indisunique',
+        'indisclustered',
+        'indisvalid',
+        'indexdef',
+        'condef',
+        'contype',
+        'condeferrable',
+        'condeferred',
+        'indisreplident',
+        'reltablespace',
+      ],
+      [
+        [
+          'foo_pkey',
+          't',
+          't',
+          'f',
+          't',
+          'CREATE UNIQUE INDEX foo_pkey ON public.foo USING btree (id)',
+          'PRIMARY KEY (id)',
+          'p',
+          'f',
+          'f',
+          'f',
+          0,
+        ],
+        [
+          'foo_x_key',
+          'f',
+          't',
+          'f',
+          't',
+          'CREATE UNIQUE INDEX foo_x_key ON public.foo USING btree (x)',
+          'UNIQUE (x)',
+          'u',
+          'f',
+          'f',
+          't',
+          0,
+        ],
+      ],
+    );
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(['f', 'f', 'i', 'f', 0, 0, null, null]),
+      {
+        match: (s) =>
+          s.includes(
+            'FROM pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_index',
+          ),
+        rs: indexes,
+      },
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      true,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).toContain('Indexes:');
+    // Primary key line: no REPLICA IDENTITY suffix.
+    const lines = text.split('\n');
+    const pkLine = lines.find((l) => l.includes('foo_pkey'));
+    expect(pkLine).toBeDefined();
+    expect(pkLine).not.toMatch(/REPLICA IDENTITY/);
+    // Unique-index line: trailing REPLICA IDENTITY marker.
+    const riLine = lines.find((l) => l.includes('foo_x_key'));
+    expect(riLine).toBeDefined();
+    expect(riLine).toMatch(/REPLICA IDENTITY/);
+    // INDEX-mode RI footer is suppressed — only the inline marker.
+    expect(text).not.toContain('Replica Identity: INDEX');
+    expect(text).not.toContain('Replica Identity:');
+  });
+
+  it('renders Replica Identity: NOTHING footer for relreplident = n (verbose)', async () => {
+    // NOTHING (and FULL) modes still have a footer — only INDEX moved
+    // inline.
+    const cols = boringCols();
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(['f', 'f', 'n', 'f', 0, 0, null, null]),
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      true,
+      cap.out,
+      defaultPopt(),
+    );
+    expect(cap.text()).toContain('Replica Identity: NOTHING');
+  });
+
   it('renders Partition key + summary count for partitioned table (3 children)', async () => {
     const cols = boringCols();
     const partkey = mkResultSet(['partkeydef'], [['RANGE (created_at)']]);
@@ -720,7 +837,10 @@ describe('describeOneTableDetails', () => {
     expect(cap.text()).toContain('Tablespace: "fast_ssd"');
   });
 
-  it('renders Access method footer for matview with custom AM (verbose)', async () => {
+  it('renders Access method for matview with custom AM (verbose, in header)', async () => {
+    // Round 3 polish: matview AM is rendered inline in the header,
+    // independent of verbose. The verbose footer for matview is
+    // suppressed so we don't double up.
     const cols = boringCols();
     const empty = mkResultSet([], []);
     const conn = mkConnection([
@@ -739,15 +859,87 @@ describe('describeOneTableDetails', () => {
       cap.out,
       defaultPopt(),
     );
-    expect(cap.text()).toContain('Access method: columnar');
+    const text = cap.text();
+    expect(text).toContain('Access method: columnar');
+    // Matview AM appears once — in the header, not duplicated in the
+    // footer.
+    expect(text.match(/Access method:/g)?.length).toBe(1);
   });
 
-  it('does NOT render Access method footer in non-verbose mode', async () => {
+  it('renders Access method footer for regular table with custom AM (verbose, in footer)', async () => {
+    // Plain tables still have the verbose footer rendering — only
+    // matviews switched to inline-in-header.
+    const cols = boringCols();
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(['f', 'f', 'd', 'f', 0, 7777, null, 'heap']),
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'foo',
+      'r',
+      true,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).toContain('Access method: heap');
+    // Confirm it really is in the footer (after the columns table),
+    // not woven into the title line.
+    const lines = text.split('\n');
+    const titleIdx = lines.findIndex((l) => l.includes('Table "public.foo"'));
+    const amIdx = lines.findIndex((l) => l.includes('Access method: heap'));
+    expect(amIdx).toBeGreaterThan(titleIdx + 2);
+  });
+
+  it('renders matview Access method in the header even in non-verbose mode', async () => {
+    // Round 3 polish moved matview access-method rendering from a
+    // verbose-only footer to a header line so it matches upstream
+    // (`Materialized view "x"\nAccess method: <am>\n  Column | …`).
     const cols = boringCols();
     const empty = mkResultSet([], []);
     const conn = mkConnection([
       { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
       tableInfoMatch(['f', 'f', 'd', 'f', 0, 7777, null, 'columnar']),
+      { match: () => true, rs: empty },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'mv',
+      'm',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    // The matview title is now multi-line: title + access-method line
+    // immediately above the columns table.
+    expect(text).toContain('Materialized view "public.mv"');
+    expect(text).toContain('Access method: columnar');
+    const lines = text.split('\n');
+    const titleIdx = lines.findIndex((l) =>
+      l.includes('Materialized view "public.mv"'),
+    );
+    const amIdx = lines.findIndex((l) => l.includes('Access method: columnar'));
+    expect(amIdx).toBe(titleIdx + 1);
+  });
+
+  it('omits matview Access method header when relam = 0 (default AM)', async () => {
+    // No access method means no extra header line — the title falls
+    // back to the single-line "Materialized view "x"".
+    const cols = boringCols();
+    const empty = mkResultSet([], []);
+    const conn = mkConnection([
+      { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
+      tableInfoMatch(['f', 'f', 'd', 'f', 0, 0, null, null]),
       { match: () => true, rs: empty },
     ]);
     const cap = captureStream();
@@ -1038,8 +1230,27 @@ describe('describeOneTableDetails', () => {
     expect(cap.text()).not.toContain('Subscriptions:');
   });
 
-  it('renders Per-column FDW options for foreign table', async () => {
-    const cols = boringCols();
+  it('renders per-column FDW options inline on the columns table', async () => {
+    // Foreign table with three columns; c1 and c3 carry per-column FDW
+    // options, c2 does not. Round 3 polish moved this from a `Per-column
+    // FDW options:` footer to a trailing `FDW options` cell in the
+    // columns table.
+    const cols = mkResultSet(
+      [
+        'attname',
+        'type',
+        'default',
+        'attnotnull',
+        'collation',
+        'identity',
+        'generated',
+      ],
+      [
+        ['c1', 'text', null, 'f', null, '', ''],
+        ['c2', 'integer', null, 'f', null, '', ''],
+        ['c3', 'text', null, 'f', null, '', ''],
+      ],
+    );
     const ftInfo = mkResultSet(
       ['srvname', 'ftoptions'],
       [['srv1', "table_name 'remote_t'"]],
@@ -1052,9 +1263,12 @@ describe('describeOneTableDetails', () => {
       ],
     );
     const empty = mkResultSet([], []);
+    // The per-column FDW options query reaches `FROM pg_catalog.pg_attribute a`
+    // (with a trailing 'a') AND filters on `a.attfdwoptions IS NOT NULL`.
+    // We route to `colOpts` based on the IS NOT NULL clause.
     const conn = mkConnection([
       {
-        match: (s) => s.includes('FROM pg_catalog.pg_attribute a'),
+        match: (s) => s.includes('a.attfdwoptions IS NOT NULL'),
         rs: colOpts,
       },
       { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
@@ -1077,9 +1291,21 @@ describe('describeOneTableDetails', () => {
       defaultPopt(),
     );
     const text = cap.text();
-    expect(text).toContain('Per-column FDW options:');
-    expect(text).toContain("c1: (column_name 'remote_c1')");
-    expect(text).toContain("c3: (column_name 'remote_c3', max_length '32')");
+    // The "FDW options" column header is added to the columns table…
+    expect(text).toContain('FDW options');
+    // …and each annotated column carries its options on the same row
+    // with parens.
+    expect(text).toContain("(column_name 'remote_c1')");
+    expect(text).toContain("(column_name 'remote_c3', max_length '32')");
+    // c2 has no per-column options — it should still appear in the
+    // table but with an empty FDW-options cell.
+    expect(text).toContain('c2');
+    // Footer rendering removed: no separate "Per-column FDW options:"
+    // section any more.
+    expect(text).not.toContain('Per-column FDW options:');
+    // Server-level FDW options footer is still rendered.
+    expect(text).toContain('Server: srv1');
+    expect(text).toContain("FDW options: (table_name 'remote_t')");
   });
 
   it('renders Owning table footer for TOAST relation', async () => {

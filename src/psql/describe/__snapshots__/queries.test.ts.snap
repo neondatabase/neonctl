@@ -915,7 +915,7 @@ exports[`describe/queries — pg17 snapshots > listTables > pg12 / verbose=true 
   pg_catalog.pg_get_userbyid(c.relowner) as "Owner",
   CASE c.relpersistence WHEN 'p' THEN 'permanent' WHEN 't' THEN 'temporary' WHEN 'u' THEN 'unlogged' END as "Persistence",
   am.amname as "Access method",
-  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as "Size",
+  pg_catalog.pg_size_pretty(pg_catalog.pg_total_relation_size(c.oid)) as "Size",
   pg_catalog.obj_description(c.oid, 'pg_class') as "Description"
 FROM pg_catalog.pg_class c
      LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -959,7 +959,7 @@ exports[`describe/queries — pg17 snapshots > listTables > pg17 / verbose=true 
   c2.relname as "Table",
   CASE c.relpersistence WHEN 'p' THEN 'permanent' WHEN 't' THEN 'temporary' WHEN 'u' THEN 'unlogged' END as "Persistence",
   am.amname as "Access method",
-  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as "Size",
+  pg_catalog.pg_size_pretty(pg_catalog.pg_total_relation_size(c.oid)) as "Size",
   pg_catalog.obj_description(c.oid, 'pg_class') as "Description"
 FROM pg_catalog.pg_class c
      LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

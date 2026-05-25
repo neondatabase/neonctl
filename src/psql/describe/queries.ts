@@ -806,8 +806,12 @@ export const listTables = (opts: ListTablesOpts): DescribeQuery => {
       serverAtLeast(serverVersion, PG_12) &&
       (showTables || showMatViews || showIndexes);
     if (wantsAm) sql += ',\n  am.amname as "Access method"';
+    // Upstream uses `pg_total_relation_size` (table + indexes + toast)
+    // in verbose mode so the formatting matches `pg_size_pretty` exactly
+    // — including the "8192 bytes" vs "8 kB" threshold the upstream
+    // tests pin to.
     sql +=
-      ',\n  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as "Size"' +
+      ',\n  pg_catalog.pg_size_pretty(pg_catalog.pg_total_relation_size(c.oid)) as "Size"' +
       ',\n  pg_catalog.obj_description(c.oid, \'pg_class\') as "Description"';
   }
   sql +=
