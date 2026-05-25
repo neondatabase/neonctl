@@ -100,6 +100,8 @@
     "start": "bun dist/index.js",
     "pretest": "bun run build",
     "test": "vitest run",
+    "test:conformance": "vitest run --config tests/psql-conformance/vitest.config.ts",
+    "test:conformance:seed": "bun tests/psql-conformance/scripts/seed-known-failures.ts",
     "prepare": "test -d .git && husky install || true"
   },
   "lint-staged": {

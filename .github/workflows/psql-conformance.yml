@@ -1,0 +1,113 @@
+# psql conformance harness (WP-T).
+#
+# Drives `tests/psql-conformance/regress.spec.ts` against the TypeScript
+# psql implementation, using upstream PostgreSQL 18.0 regression scripts
+# as ground truth. The harness consults `KNOWN_FAILURES.yml` so a known
+# parity gap is recorded once and stops generating noise.
+#
+# NON-BLOCKING: the conformance step has `continue-on-error: true` so
+# unexpected failures appear in the PR check list as warnings but do NOT
+# gate merge. This matches the bootstrap phase of the WP-T plan — TS-psql
+# is still being burned in and the KNOWN_FAILURES ledger is wide open.
+#
+# WHEN TO FLIP TO BLOCKING:
+#   * `KNOWN_FAILURES.yml` reflects the real coverage gap (no stale
+#     entries; conformance reporter's `coverage` is >= 95%);
+#   * a maintainer has re-seeded the ledger via
+#     `bun run test:conformance:seed` after the last major TS-psql change;
+#   * a green run on `main` has been observed for at least one week.
+# At that point, drop `continue-on-error: true` from the
+# `Run conformance suite` step and (optionally) hoist this job into the
+# required-checks set in branch protection.
+
+name: psql conformance
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/psql/**'
+      - 'src/utils/psql.ts'
+      - 'src/commands/branches.ts'
+      - 'src/commands/connection_string.ts'
+      - 'src/commands/projects.ts'
+      - 'tests/psql-conformance/**'
+      - '.github/workflows/psql-conformance.yml'
+  push:
+    branches:
+      - main
+      - feat/ts-psql
+
+permissions: {}
+
+jobs:
+  psql-conformance:
+    name: psql-conformance
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:18.0
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: regression
+        ports:
+          - 5432:5432
+        # `pg_isready` lives in the image; GitHub re-runs this until the
+        # service reports healthy or `--health-retries` is exceeded.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d regression"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Run conformance suite
+        # Non-blocking until coverage stabilises — see top-of-file note.
+        continue-on-error: true
+        env:
+          # `dist/cli.js` is the neonctl entrypoint; the harness invokes
+          # it with libpq-style flags. The conformance gate is the
+          # KNOWN_FAILURES ledger; raw stderr surfaces in the run log.
+          PSQL_BINARY: ${{ github.workspace }}/dist/cli.js
+          # Point the harness's pg-fixture at the GHA service container
+          # instead of booting a testcontainer in CI.
+          PGCONFORMANCE_PG_HOST: 127.0.0.1
+          PGCONFORMANCE_PG_PORT: '5432'
+          PGCONFORMANCE_PG_USER: postgres
+          PGCONFORMANCE_PG_PASSWORD: postgres
+          PGCONFORMANCE_PG_DB: regression
+        run: |
+          set -o pipefail
+          bun run test:conformance 2>&1 | tee psql-conformance.log
+
+      - name: Upload conformance log
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: psql-conformance-log
+          path: psql-conformance.log
+          if-no-files-found: warn
+          retention-days: 14

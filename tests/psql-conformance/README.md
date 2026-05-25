@@ -73,21 +73,54 @@ npx vitest run \
 # The full conformance run against the system psql.
 # Requires Docker (or PGCONFORMANCE_PG_HOST set) AND
 # `@testcontainers/postgresql` installed.
-PSQL_BINARY="$(which psql)" \
-  npx vitest run --config tests/psql-conformance/vitest.config.ts
+PSQL_BINARY="$(which psql)" bun run test:conformance
 
-# Once the TS implementation is buildable, point PSQL_BINARY at it:
-PSQL_BINARY="./dist/bin/ts-psql" \
-  npx vitest run --config tests/psql-conformance/vitest.config.ts
+# Once the TS implementation is built, point PSQL_BINARY at dist/cli.js:
+bun run build
+PSQL_BINARY="$(pwd)/dist/cli.js" bun run test:conformance
 ```
 
-A `test:conformance` npm script is intentionally **not** added to
-`package.json` in this PR — that is a follow-up once the dev-dep is
-in place. Recommended addition:
+The `test:conformance` npm script wraps the vitest invocation:
 
 ```json
 "test:conformance": "vitest run --config tests/psql-conformance/vitest.config.ts"
 ```
+
+## Re-seeding the KNOWN_FAILURES ledger
+
+After a major TS-psql behaviour change, the ledger may diverge from
+what the suite actually exercises. Run:
+
+```sh
+bun run test:conformance:seed
+```
+
+This boots postgres, builds the TS psql, runs the conformance suite,
+and rewrites `KNOWN_FAILURES.yml` with one `full-file` entry per
+failing regression test. The previous ledger is copied to
+`KNOWN_FAILURES.yml.bak` so a maintainer can diff or roll back.
+
+Each seeded entry has a placeholder `reason: "TS-impl gap — TODO
+triage"` and `ticket: ''`. Triage by hand:
+
+1. Inspect the failure (the seed run leaves the full JSON report under
+   `$TMPDIR/psql-conformance-seed-*/report.json` — see the script's
+   stderr output for the path).
+2. Replace `reason` with a one-liner referencing the WP that owns the
+   gap.
+3. Drop in a ticket id if one exists.
+4. Commit the ledger.
+
+Useful flags:
+
+| Flag            | Effect                                                  |
+| --------------- | ------------------------------------------------------- |
+| `--skip-build`  | Assume `dist/cli.js` is already current (no rebuild).   |
+| `--reuse-build` | Skip the rebuild iff `dist/cli.js` already exists.      |
+
+The script honours the same `PGCONFORMANCE_PG_*` env vars as the
+runtime harness, so a maintainer can point it at a managed postgres
+instead of relying on Docker.
 
 ## Environment variables
 
@@ -161,29 +194,42 @@ The script re-resolves commit shas via the GitHub API (set
 `$GITHUB_TOKEN` to avoid rate limits), redownloads each vendored
 file, and rewrites `POSTGRES_REF` and `VENDORED_FROM`.
 
-## CI integration (not in this PR)
+## CI integration
 
-A future PR will add a `conformance` job to
-`.github/workflows/pr.yml` along the lines of:
+The conformance suite runs on every PR that touches the TS psql or the
+harness — see `.github/workflows/psql-conformance.yml`. The workflow:
 
-```yaml
-conformance:
-  runs-on: ubuntu-24.04
-  services:
-    postgres:
-      image: postgres:17.4
-      env:
-        POSTGRES_PASSWORD: postgres
-      ports: ['5432:5432']
-  steps:
-    - uses: actions/checkout@v4
-    - uses: oven-sh/setup-bun@v1
-    - run: bun install
-    - run: |
-        export PGCONFORMANCE_PG_HOST=127.0.0.1
-        export PGCONFORMANCE_PG_PASSWORD=postgres
-        PSQL_BINARY=$(which psql) \
-          npx vitest run --config tests/psql-conformance/vitest.config.ts
-```
+* triggers on PRs that change `src/psql/**`, `src/utils/psql.ts`,
+  `src/commands/{branches,connection_string,projects}.ts`, or
+  `tests/psql-conformance/**` (plus pushes to `main` / `feat/ts-psql`);
+* boots a `postgres:18.0` GHA service container and exposes it via
+  `PGCONFORMANCE_PG_HOST=127.0.0.1` / `PGCONFORMANCE_PG_PORT=5432`;
+* runs `bun run build` then `bun run test:conformance` with
+  `PSQL_BINARY` pointed at `dist/cli.js`;
+* uploads the captured `psql-conformance.log` as a workflow artifact
+  for triage.
 
-Until then, conformance is a local-dev workflow.
+### Non-blocking phase
+
+The conformance step is **non-blocking** (`continue-on-error: true`)
+during the bootstrap phase, so an unexpected failure surfaces as a
+warning on the PR check list but does **not** gate merge. The flag
+lives on the `Run conformance suite` step itself; the rest of the job
+(build, install, artifact upload) still fails fast.
+
+Flip to blocking when **all** of the following hold:
+
+1. `KNOWN_FAILURES.yml` reflects the real coverage gap — no stale
+   entries (the harness will already complain about those, but the
+   maintainer has eyeballed the ledger).
+2. The conformance reporter's `coverage` headline is **>= 95%**.
+3. A maintainer has re-seeded the ledger via
+   `bun run test:conformance:seed` after the last major TS-psql change.
+4. `main` has stayed green on conformance for at least one week.
+
+When that bar is met:
+
+* drop `continue-on-error: true` from the `Run conformance suite` step
+  in `psql-conformance.yml`;
+* (optionally) add the `psql-conformance` job to the required-checks
+  set in the repo's branch protection rules.
