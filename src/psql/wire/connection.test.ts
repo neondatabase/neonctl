@@ -844,6 +844,94 @@ describe('PgConnection', () => {
     await conn.close();
   });
 
+  test('cancel() mid-COPY-IN sends CopyFail on the live socket', async () => {
+    // SIGINT during a COPY FROM STDIN should NOT open a side CancelRequest
+    // socket — instead we abort by writing CopyFail on the data socket. The
+    // server replies with ErrorResponse + ReadyForQuery and the connection
+    // returns to idle.
+    let copyFailSeen: string | null = null;
+    let cancelRequestSeen = false;
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'CancelRequest') {
+        cancelRequestSeen = true;
+        client.end();
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(copyInResponse([0]));
+        return;
+      }
+      if (msg.type === 'CopyFail') {
+        copyFailSeen = (msg.reason as string) ?? '';
+        client.send(
+          errorResponse({
+            S: 'ERROR',
+            V: 'ERROR',
+            C: '57014',
+            M: 'COPY from stdin failed: canceled by user',
+          }),
+        );
+        client.send(readyForQuery('E'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    // Open the COPY-IN; we DON'T call end()/fail() — instead simulate the
+    // SIGINT path by invoking cancel() while the stream is open.
+    await conn.startCopyIn('COPY t FROM STDIN');
+    await conn.cancel();
+    // Give the fake server a tick to process the CopyFail.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(copyFailSeen).toBe('canceled by user');
+    expect(cancelRequestSeen).toBe(false);
+    await conn.close();
+  });
+
+  test('cancel() outside COPY mode falls back to side CancelRequest', async () => {
+    // Sanity check: the new state-aware cancel() still uses the side socket
+    // for the normal in-query path. This guards against accidentally
+    // routing all cancels through CopyFail.
+    let cancelRequestSeen = false;
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(0x42, 0x99));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'CancelRequest') {
+        cancelRequestSeen = true;
+        client.end();
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    await conn.cancel();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cancelRequestSeen).toBe(true);
+    await conn.close();
+  });
+
   // -------------------------------------------------------------------------
   // Extended protocol (WP-21).
   // -------------------------------------------------------------------------

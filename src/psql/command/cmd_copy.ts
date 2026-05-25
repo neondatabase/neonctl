@@ -31,11 +31,11 @@
  *   - Binary COPY (server-side `WITH (FORMAT BINARY)` option) works for the
  *     I/O path but the BINARY *keyword* legacy syntax is parsed and re-emitted
  *     verbatim; we don't attempt to validate options.
- *   - The "EOF marker" (`\.` on its own line) handling that psql does when
- *     stdin is the same as the current input file is NOT implemented: we
- *     stream the whole file as-is. Standalone scripts that embed COPY data
- *     inline keep working because the server's text-format parser handles
- *     the `\.` terminator itself.
+ *   - The literal `\.` end-of-data marker is honoured when (and only when):
+ *     the source is STDIN, AND the COPY format is text (not csv, not binary).
+ *     A line matching exactly `\.` terminates the stream client-side via
+ *     CopyDone; subsequent input bytes go back to the SQL stream. Matches
+ *     upstream's stricter behaviour: csv/binary COPY treats `\.` as data.
  *   - PSTDIN/PSTDOUT are treated as STDIN/STDOUT (no separate "psql stdin
  *     vs current input source" distinction — REPL plumbing isn't wired yet).
  */
@@ -55,7 +55,7 @@ import type {
   BackslashRegistry,
   BackslashResult,
 } from '../types/backslash.js';
-import type { Connection } from '../types/connection.js';
+import type { Connection, CopyInStream } from '../types/connection.js';
 
 import { pumpReadable } from '../wire/copy.js';
 
@@ -391,6 +391,34 @@ const buildCopySql = (opts: ParsedCopy): string => {
 };
 
 /**
+ * Detect whether the COPY uses the (default) text format. Upstream psql only
+ * honours the `\.` end-of-data marker for text-format COPY; csv/binary treat
+ * the bytes as data.
+ *
+ * The check is a coarse keyword scan of the options string: if any of `csv`,
+ * `binary`, or `format <something>` appears (case-insensitive), we assume the
+ * user has explicitly selected a non-text format and disable EOF-marker
+ * handling. Quoted literals are stripped first so a column-named "binary"
+ * doesn't false-trigger.
+ */
+export const isCopyTextFormat = (afterToFrom: string | null): boolean => {
+  if (afterToFrom === null) return true;
+  // Strip single-quoted strings so `DELIMITER 'binary'` doesn't false-trigger.
+  const stripped = afterToFrom.replace(/'(?:''|[^'])*'/g, "''");
+  if (/\bcsv\b/i.test(stripped)) return false;
+  if (/\bbinary\b/i.test(stripped)) return false;
+  // The newer WITH (FORMAT <fmt>) form — if `format` appears followed by a
+  // non-text token, assume non-text. We don't try to parse the value because
+  // anything other than `text` is non-default; treat any FORMAT mention as
+  // "user said something explicit" and only allow the marker for `format text`.
+  const m = /\bformat\s+([A-Za-z_]+)/i.exec(stripped);
+  if (m) {
+    return m[1].toLowerCase() === 'text';
+  }
+  return true;
+};
+
+/**
  * Parse a CommandComplete tag like `"COPY 17"` into its numeric row count.
  * Returns `null` when the tag is unparseable; callers print it verbatim then.
  */
@@ -462,6 +490,155 @@ const drainCopyTo = async (
   }
 };
 
+/**
+ * Pump a Readable into a CopyInStream, honouring the upstream `\.` text-mode
+ * EOF marker. A line consisting EXACTLY of `\.` (LF- or CRLF-terminated) ends
+ * the COPY via `copyIn.end()`; everything after the marker is left on the
+ * Readable for the caller (the REPL goes back to SQL mode and reads it as
+ * the next statement).
+ *
+ * The marker is detected by accumulating a tail buffer until we see a newline,
+ * then comparing the line to `\.`. We DO NOT mutate or strip data already
+ * flushed — once a chunk has been forwarded as CopyData, it's gone. The
+ * implementation reads chunks, splits on newlines, and forwards complete
+ * lines individually so the marker can short-circuit the stream cleanly.
+ *
+ * We DO NOT use `for await (const chunk of readable)` because Node destroys
+ * the underlying stream when the async-iterator wrapper exits (even cleanly
+ * via `break`), which would prevent the caller from resuming reads after the
+ * marker. Instead we drive the readable with explicit data/end event
+ * listeners, paused/resumed via `pause()`/`resume()`, and remove them once
+ * the marker fires — leaving the source intact for subsequent consumption.
+ *
+ * Returns true if the marker was hit (caller closed the stream), false on
+ * normal EOF.
+ */
+const pumpStdinWithEofMarker = async (
+  readable: Readable,
+  copyIn: CopyInStream,
+): Promise<boolean> => {
+  return new Promise<boolean>((resolve, reject) => {
+    let tail = '';
+    let markerHit = false;
+    let settled = false;
+    /** In-flight `copyIn.write` chain; we serialize writes for backpressure. */
+    let writeChain: Promise<void> = Promise.resolve();
+
+    const settle = (run: () => Promise<void>): void => {
+      if (settled) return;
+      settled = true;
+      readable.removeListener('data', onData);
+      readable.removeListener('end', onEnd);
+      readable.removeListener('error', onError);
+      run().then(
+        () => {
+          resolve(markerHit);
+        },
+        (err: unknown) => {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        },
+      );
+    };
+
+    const writeLine = (line: string): void => {
+      if (line.length === 0) return;
+      writeChain = writeChain.then(() =>
+        copyIn.write(Buffer.from(line, 'utf8')),
+      );
+    };
+
+    const handleChunk = (chunk: Buffer | string): void => {
+      if (settled) return;
+      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      tail += text;
+      let nl = tail.indexOf('\n');
+      while (nl !== -1) {
+        const line = tail.slice(0, nl + 1);
+        // Match exactly `\.\n` or `\.\r\n` — strip the trailing newline /
+        // CRLF to compare. Upstream rejects trailing whitespace.
+        const stripped = line.endsWith('\r\n')
+          ? line.slice(0, -2)
+          : line.slice(0, -1);
+        if (stripped === '\\.') {
+          markerHit = true;
+          const leftover = tail.slice(nl + 1);
+          tail = '';
+          // Pause + remove listeners BEFORE unshifting so the post-marker
+          // bytes aren't re-emitted into our own data handler.
+          readable.pause();
+          readable.removeListener('data', onData);
+          readable.removeListener('end', onEnd);
+          readable.removeListener('error', onError);
+          if (leftover.length > 0) {
+            readable.unshift(Buffer.from(leftover, 'utf8'));
+          }
+          settled = true;
+          writeChain
+            .then(() => copyIn.end())
+            .then(
+              () => {
+                resolve(true);
+              },
+              (err: unknown) => {
+                reject(err instanceof Error ? err : new Error(String(err)));
+              },
+            );
+          return;
+        }
+        writeLine(line);
+        tail = tail.slice(nl + 1);
+        nl = tail.indexOf('\n');
+      }
+    };
+
+    const onData = (chunk: Buffer | string): void => {
+      try {
+        handleChunk(chunk);
+      } catch (err) {
+        settle(async () => {
+          try {
+            await copyIn.fail(err instanceof Error ? err.message : String(err));
+          } catch {
+            // best-effort
+          }
+          throw err instanceof Error ? err : new Error(String(err));
+        });
+      }
+    };
+
+    const onEnd = (): void => {
+      if (settled) return;
+      const trailing = tail;
+      tail = '';
+      settle(async () => {
+        if (trailing.length > 0) {
+          writeLine(trailing);
+        }
+        await writeChain;
+        await copyIn.end();
+      });
+    };
+
+    const onError = (err: Error): void => {
+      if (settled) return;
+      settle(async () => {
+        try {
+          await copyIn.fail(err.message);
+        } catch {
+          // best-effort
+        }
+        throw err;
+      });
+    };
+
+    readable.on('data', onData);
+    readable.once('end', onEnd);
+    readable.once('error', onError);
+    // Trigger flowing mode in case the readable is paused.
+    readable.resume();
+  });
+};
+
 export type DoCopyResult =
   | { ok: true; tag: string | null }
   | { ok: false; error: string };
@@ -486,6 +663,12 @@ export const doCopy = async (
   let readable: Readable | null = null;
   let writable: Writable | null = null;
   let program: ProgramHandles | null = null;
+  /**
+   * True iff the data path is "psql stdin" — i.e. the user typed
+   * `\copy t FROM STDIN`. Only this path honours the `\.` text-mode EOF
+   * marker; file and PROGRAM sources stream verbatim to match upstream.
+   */
+  let fromStdin = false;
   /** Cleanup callbacks run in `finally`. */
   const cleanups: (() => Promise<void> | void)[] = [];
 
@@ -541,6 +724,7 @@ export const doCopy = async (
       // STDIN form — read from process.stdin. We don't differentiate
       // PSTDIN/STDIN here (see file header limitations).
       readable = process.stdin;
+      fromStdin = true;
     }
   } else {
     // direction === 'to'
@@ -600,7 +784,13 @@ export const doCopy = async (
         return failWith('no input stream for COPY FROM');
       }
       const copyIn = await conn.startCopyIn(sql);
-      await pumpReadable(conn, readable, copyIn);
+      // STDIN + text format honours the `\.` EOF marker; everything else
+      // (file, PROGRAM, csv/binary STDIN) streams the bytes verbatim.
+      if (fromStdin && isCopyTextFormat(opts.afterToFrom)) {
+        await pumpStdinWithEofMarker(readable, copyIn);
+      } else {
+        await pumpReadable(conn, readable, copyIn);
+      }
     } else {
       if (writable === null) {
         return failWith('no output stream for COPY TO');
@@ -701,7 +891,7 @@ export const registerCopyCommands = (registry: BackslashRegistry): void => {
 };
 
 // Re-export for direct callers that want to bypass the dispatcher (tests).
-export { buildCopySql };
+export { buildCopySql, pumpStdinWithEofMarker };
 
 /**
  * Convenience: encode a JS string as UTF-8 bytes for COPY FROM. Exposed so

@@ -666,9 +666,44 @@ export class PgConnection implements Connection {
     return new PipelineSession(this);
   }
 
+  /**
+   * Cancel whatever the connection is currently doing.
+   *
+   * The routing is state-aware so the mainloop SIGINT handler can call this
+   * blindly without knowing the protocol phase:
+   *
+   * - `in-copy-in`: we hold the writing end of the data stream, so the
+   *   correct action is a client-initiated CopyFail on the *same* socket.
+   *   Sending a side CancelRequest would race with our own pending writes;
+   *   CopyFail is the spec-blessed abort path. The server replies with
+   *   ErrorResponse + ReadyForQuery and we transition back to idle.
+   * - `in-copy-out`: the server is pushing data at us. CopyFail is not a
+   *   valid client message here, so we fall back to the side CancelRequest
+   *   path that normal queries use. PG will surface an ErrorResponse and
+   *   tear the COPY down.
+   * - everything else: side CancelRequest, the historical behaviour.
+   *
+   * Best-effort. We don't reject if BackendKeyData hasn't arrived yet
+   * during the auth dance — there's nothing to cancel; we just return.
+   */
   public async cancel(): Promise<void> {
+    // In-copy-in: send CopyFail on the live socket so the server returns
+    // to ReadyForQuery cleanly. This is the same abort path the upstream
+    // SIGINT handler in `copy.c::handleCopyIn` triggers via longjmp.
+    if (this.state === 'in-copy-in' && this.copyIn && !this.copyIn.closed) {
+      this.copyIn.closed = true;
+      try {
+        this.socket.write(CopyFail('canceled by user'));
+      } catch {
+        // Socket may have died — failPending() will surface that.
+      }
+      return;
+    }
     if (this.processId === 0) {
-      throw new Error('PgConnection.cancel: no BackendKeyData received');
+      // Nothing to cancel — startup hasn't reached BackendKeyData. Be
+      // forgiving: the mainloop SIGINT handler shouldn't crash on cancel
+      // during a half-open connection.
+      return;
     }
     // Per the PG protocol, CancelRequest is sent on a *fresh* connection,
     // not the one running the query. We TLS-negotiate against the same
