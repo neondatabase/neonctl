@@ -420,6 +420,28 @@ const confirmSinglestep = async (
 // is null for DDL, rows.length is 0 for COPY etc.).
 // ---------------------------------------------------------------------------
 
+/**
+ * Reconstruct the libpq-style CommandComplete tag from the parsed parts our
+ * wire layer stores on a ResultSet. INSERT carries `oid` + `rowCount`; the
+ * other DML verbs (UPDATE/DELETE/MERGE/SELECT/MOVE/FETCH/COPY) carry just a
+ * `rowCount`; DDL has neither.
+ *
+ * Matches upstream psql's `PQcmdStatus(conn)` output (which is the raw tag
+ * the server sent — we round-trip it through our parser).
+ */
+const formatCommandTag = (rs: ResultSet): string => {
+  const command = (rs.command || '').trim();
+  if (command.length === 0) return '';
+  if (command === 'INSERT') {
+    // INSERT is the only tag with the legacy oid in front of rowCount.
+    return `INSERT ${rs.oid ?? 0} ${rs.rowCount ?? 0}`;
+  }
+  if (rs.rowCount !== null && rs.rowCount !== undefined) {
+    return `${command} ${rs.rowCount}`;
+  }
+  return command;
+};
+
 const renderResultSets = async (
   ctx: REPLContext,
   results: ResultSet[],
@@ -433,16 +455,25 @@ const renderResultSets = async (
   // result so QueryStats stays consistent — only the printer call is gated.
   const showAll = readShowAllResults(ctx.settings);
   const lastIdx = results.length - 1;
+  const tuplesOnly = ctx.settings.popt.topt.tuplesOnly;
   for (let i = 0; i < results.length; i++) {
     const rs = results[i];
-    if (showAll || i === lastIdx) {
-      await printer.printQuery(rs, ctx.settings.popt, out);
-    }
+    const shouldEmit = showAll || i === lastIdx;
     if (rs.fields.length === 0) {
-      // Non-tuples-producing commands (INSERT/UPDATE/DELETE/DDL) — rowCount
-      // is the affected-row total when libpq sets it.
+      // Non-tuples-producing commands (INSERT/UPDATE/DELETE/DDL) — emit the
+      // CommandComplete tag instead of running the table printer (which would
+      // render an empty `(0 rows)` block). Suppressed in tuples-only mode
+      // (`\t`) to match upstream.
+      if (shouldEmit && !tuplesOnly) {
+        const tag = formatCommandTag(rs);
+        if (tag.length > 0) out.write(`${tag}\n`);
+      }
+      // rowCount is the affected-row total when libpq sets it.
       rowsAffected += rs.rowCount ?? 0;
     } else {
+      if (shouldEmit) {
+        await printer.printQuery(rs, ctx.settings.popt, out);
+      }
       rowsPrinted += rs.rows.length;
     }
   }
