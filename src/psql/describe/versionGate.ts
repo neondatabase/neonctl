@@ -52,3 +52,4 @@ export const PG_14: ServerVersion = 140000;
 export const PG_15: ServerVersion = 150000;
 export const PG_16: ServerVersion = 160000;
 export const PG_17: ServerVersion = 170000;
+export const PG_18: ServerVersion = 180000;

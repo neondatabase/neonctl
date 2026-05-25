@@ -73,6 +73,13 @@ import { registerConnectCommands } from './cmd_connect.js';
 import { registerCopyCommands } from './cmd_copy.js';
 import { registerDescribeCommands } from './cmd_describe.js';
 import { registerPipelineCommands } from './cmd_pipeline.js';
+import { registerMiscCommands } from './cmd_misc.js';
+import { registerLargeObjectCommands } from './cmd_lo.js';
+import {
+  isCommandRestricted,
+  registerRestrictCommands,
+} from './cmd_restrict.js';
+import { writeErr } from './shared.js';
 
 /**
  * Concrete `BackslashRegistry`: a primary-name → spec map plus a parallel
@@ -292,6 +299,16 @@ export const dispatchBackslash = async (
 ): Promise<BackslashResult> => {
   const spec = registry.lookup(cmdName);
   if (!spec) return { status: 'error' };
+  // PG 18: refuse shell/filesystem-touching commands while restricted.
+  // We check against the resolved *primary* name so aliases like
+  // `\write` → `w` are caught.
+  if (isCommandRestricted(ctx.settings, spec.name)) {
+    writeErr(
+      `\\${cmdName}: command is not allowed in restricted mode; ` +
+        `use \\unrestrict to leave restricted mode\n`,
+    );
+    return { status: 'error' };
+  }
   return spec.run(ctx);
 };
 
@@ -337,5 +354,8 @@ export const defaultRegistry = (): BackslashRegistry => {
   registerCopyCommands(r);
   registerDescribeCommands(r);
   registerPipelineCommands(r);
+  registerMiscCommands(r);
+  registerLargeObjectCommands(r);
+  registerRestrictCommands(r);
   return r;
 };

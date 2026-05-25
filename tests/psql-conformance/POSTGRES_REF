@@ -9,19 +9,11 @@
 # (or `bun tests/psql-conformance/scripts/refresh-vendored.ts <new-tag>`
 #  to drive the bump from the command line.)
 
-PG_VERSION=17.4
-PG_TAG=REL_17_4
-PG_COMMIT=f8554dee417ffc4540c94cf357f7bf7d4b6e5d80
+PG_VERSION=18.0
+PG_TAG=REL_18_0
+PG_COMMIT=3d6a828938a5fa0444275d3d2f67b64ec3199eb7
 
-# Image digest for docker.io/library/postgres:17.4 (used by GHA service
+# Image digest for docker.io/library/postgres:18.0 (used by GHA service
 # container and by @testcontainers/postgresql when running locally).
-PG_IMAGE=postgres:17.4
-PG_IMAGE_DIGEST=sha256:304ab813518754228f9f792f79d6da36359b82d8ecf418096c636725f8c930ad
-
-# Files that are NOT present in REL_17_4 — vendored from a newer tag
-# instead. They are still validated against the pinned PG_IMAGE server
-# (the test scripts/expected output happen to be compatible with 17.x).
-#
-# When the harness moves to PG 18, these overrides go away.
-PG_PIPELINE_TAG=REL_18_0
-PG_PIPELINE_COMMIT=3d6a828938a5fa0444275d3d2f67b64ec3199eb7
+PG_IMAGE=postgres:18.0
+PG_IMAGE_DIGEST=sha256:41fc5342eefba6cc2ccda736aaf034bbbb7c3df0fdb81516eba1ba33f360162c

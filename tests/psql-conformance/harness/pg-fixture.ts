@@ -24,7 +24,7 @@ export type PgConn = {
   password: string;
 };
 
-const PG_IMAGE_DEFAULT = 'postgres:17.4';
+const PG_IMAGE_DEFAULT = 'postgres:18.0';
 
 type StoppableContainer = { stop(): Promise<unknown> };
 

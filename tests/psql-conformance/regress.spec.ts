@@ -20,7 +20,7 @@ import { getPgConn } from './harness/pg-fixture.js';
 import { log } from './harness/util-log.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const VENDOR_ROOT = join(HERE, 'vendor', 'postgres-17.4');
+const VENDOR_ROOT = join(HERE, 'vendor', 'postgres-18.0');
 const SQL_DIR = join(VENDOR_ROOT, 'src', 'test', 'regress', 'sql');
 const EXPECTED_DIR = join(VENDOR_ROOT, 'src', 'test', 'regress', 'expected');
 

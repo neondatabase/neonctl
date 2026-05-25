@@ -26,9 +26,9 @@ export const defaultRules: readonly NormalizeRule[] = [
     replacement: '\n',
   },
   // Server / client version banners. Matches strings like:
-  //   psql (17.4)
-  //   psql (17.4 (Debian 17.4-1.pgdg120+1))
-  //   psql (PostgreSQL) 17.4
+  //   psql (18.0)
+  //   psql (18.0 (Debian 18.0-1.pgdg120+1))
+  //   psql (PostgreSQL) 18.0
   // The inner alternation handles one level of nested parens, which is
   // what the Debian-style banner uses.
   {

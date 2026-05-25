@@ -32,6 +32,7 @@ import {
   PG_15,
   PG_16,
   PG_17,
+  PG_18,
 } from './versionGate.js';
 
 export type DescribeQuery = {
@@ -230,8 +231,14 @@ export const describeFunctions = (
     }
     sql +=
       ',\n pg_catalog.pg_get_userbyid(p.proowner) as "Owner"' +
-      ",\n CASE WHEN prosecdef THEN 'definer' ELSE 'invoker' END AS \"Security\"" +
-      ",\n CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END as \"Leakproof?\"";
+      ",\n CASE WHEN prosecdef THEN 'definer' ELSE 'invoker' END AS \"Security\"";
+    // PG 18 added a "Leakproof?" column to verbose `\df+`. The pg_proc
+    // catalog has carried `proleakproof` since 9.2, but upstream's psql
+    // only began surfacing it in 18.
+    if (serverAtLeast(serverVersion, PG_18)) {
+      sql +=
+        ",\n CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END as \"Leakproof?\"";
+    }
     sql += ',\n ' + aclColumn('p.proacl');
     sql +=
       ',\n l.lanname as "Language"' +
@@ -361,7 +368,7 @@ export const describeTypes = (opts: CommonOpts): DescribeQuery => {
 /* \do — describeOperators                                            */
 /* ------------------------------------------------------------------ */
 export const describeOperators = (opts: CommonOpts): DescribeQuery => {
-  const { verbose, showSystem, pattern } = opts;
+  const { verbose, showSystem, pattern, serverVersion } = opts;
   let sql =
     'SELECT n.nspname as "Schema",\n' +
     '  o.oprname AS "Name",\n' +
@@ -369,16 +376,21 @@ export const describeOperators = (opts: CommonOpts): DescribeQuery => {
     '  CASE WHEN o.oprkind=\'r\' THEN NULL ELSE pg_catalog.format_type(o.oprright, NULL) END AS "Right arg type",\n' +
     '  pg_catalog.format_type(o.oprresult, NULL) AS "Result type",\n';
   if (verbose) {
-    sql +=
-      '  o.oprcode AS "Function",\n' +
-      "  CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END AS \"Leakproof?\",\n";
+    sql += '  o.oprcode AS "Function",\n';
+    // PG 18 added "Leakproof?" to verbose `\do+`. Earlier servers only
+    // emitted Function and Description.
+    if (serverAtLeast(serverVersion, PG_18)) {
+      sql +=
+        "  CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END AS \"Leakproof?\",\n";
+    }
   }
   sql +=
     "  coalesce(pg_catalog.obj_description(o.oid, 'pg_operator'),\n" +
     '           pg_catalog.obj_description(o.oprcode, \'pg_proc\')) AS "Description"\n' +
     'FROM pg_catalog.pg_operator o\n' +
     '     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace\n';
-  if (verbose) {
+  if (verbose && serverAtLeast(serverVersion, PG_18)) {
+    // Only joined when we need proleakproof from pg_proc (PG 18+).
     sql += '     LEFT JOIN pg_catalog.pg_proc p ON p.oid = o.oprcode\n';
   }
   let hasWhere = false;
@@ -512,6 +524,10 @@ export const permissionsList = (opts: CommonOpts): DescribeQuery => {
 /* \ddp — listDefaultACLs                                             */
 /* ------------------------------------------------------------------ */
 export const listDefaultACLs = (opts: CommonOpts): DescribeQuery => {
+  const { serverVersion } = opts;
+  // PG 18 added DEFACLOBJ_LARGEOBJECT ('L'); pre-18 servers can never
+  // produce that defaclobjtype value, so emitting the WHEN is harmless
+  // there — but to mirror upstream `\ddp` output, we gate it.
   let sql =
     'SELECT pg_catalog.pg_get_userbyid(d.defaclrole) AS "Owner",\n' +
     '  n.nspname AS "Schema",\n' +
@@ -520,9 +536,11 @@ export const listDefaultACLs = (opts: CommonOpts): DescribeQuery => {
     " WHEN 'S' THEN 'sequence'" +
     " WHEN 'f' THEN 'function'" +
     " WHEN 'T' THEN 'type'" +
-    " WHEN 'n' THEN 'schema'" +
-    " WHEN 'L' THEN 'large object'" +
-    ' END AS "Type",\n  ';
+    " WHEN 'n' THEN 'schema'";
+  if (serverAtLeast(serverVersion, PG_18)) {
+    sql += " WHEN 'L' THEN 'large object'";
+  }
+  sql += ' END AS "Type",\n  ';
   sql += aclColumn('d.defaclacl');
   sql +=
     '\nFROM pg_catalog.pg_default_acl d\n' +
@@ -1153,7 +1171,7 @@ export const listExtendedStats = (opts: CommonOpts): DescribeQuery => {
 /* \dC — listCasts                                                    */
 /* ------------------------------------------------------------------ */
 export const listCasts = (opts: CommonOpts): DescribeQuery => {
-  const { verbose } = opts;
+  const { verbose, serverVersion } = opts;
   let sql =
     'SELECT pg_catalog.format_type(castsource, NULL) AS "Source type",\n' +
     '       pg_catalog.format_type(casttarget, NULL) AS "Target type",\n' +
@@ -1166,9 +1184,14 @@ export const listCasts = (opts: CommonOpts): DescribeQuery => {
     "            ELSE 'yes'\n" +
     '       END AS "Implicit?"';
   if (verbose) {
-    sql +=
-      ",\n       CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END AS \"Leakproof?\",\n" +
-      '       d.description AS "Description"';
+    // PG 18 added "Leakproof?" to verbose `\dC+`. The pg_proc join
+    // already exists for the Function column, so emitting the cast's
+    // function's `proleakproof` is incremental.
+    if (serverAtLeast(serverVersion, PG_18)) {
+      sql +=
+        ",\n       CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END AS \"Leakproof?\"";
+    }
+    sql += ',\n       d.description AS "Description"';
   }
   sql +=
     '\nFROM pg_catalog.pg_cast c LEFT JOIN pg_catalog.pg_proc p\n' +
@@ -1535,13 +1558,24 @@ export const listForeignTables = (opts: CommonOpts): DescribeQuery => {
 /* \dx — listExtensions  /  \dx+ — listExtensionContents              */
 /* ------------------------------------------------------------------ */
 export const listExtensions = (opts: CommonOpts): DescribeQuery => {
-  let sql =
-    'SELECT e.extname AS "Name", e.extversion AS "Version", ae.default_version AS "Default version",' +
+  const { serverVersion } = opts;
+  // PG 18 added the "Default version" column to `\dx` to make it
+  // easy to spot extensions that are behind the available default.
+  const hasDefaultVersion = serverAtLeast(serverVersion, PG_18);
+  let sql = 'SELECT e.extname AS "Name", e.extversion AS "Version", ';
+  if (hasDefaultVersion) {
+    sql += 'ae.default_version AS "Default version",';
+  }
+  sql +=
     'n.nspname AS "Schema", d.description AS "Description"\n' +
     'FROM pg_catalog.pg_extension e ' +
     'LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace ' +
-    "LEFT JOIN pg_catalog.pg_description d ON d.objoid = e.oid AND d.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass " +
-    'LEFT JOIN pg_catalog.pg_available_extensions() ae(name, default_version, comment) ON ae.name = e.extname\n';
+    "LEFT JOIN pg_catalog.pg_description d ON d.objoid = e.oid AND d.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass";
+  if (hasDefaultVersion) {
+    sql +=
+      ' LEFT JOIN pg_catalog.pg_available_extensions() ae(name, default_version, comment) ON ae.name = e.extname';
+  }
+  sql += '\n';
   sql += patternStub(false, undefined, 'e.extname');
   sql += orderBy('1');
   return {
@@ -1600,7 +1634,9 @@ export const listPublications = (opts: CommonOpts): DescribeQuery => {
   if (serverAtLeast(serverVersion, PG_11)) {
     sql += ',\n  pubtruncate AS "Truncates"';
   }
-  if (serverAtLeast(serverVersion, 18)) {
+  // PG 18 added `pg_publication.pubgencols`, surfaced as "Generated
+  // columns" in `\dRp`. Values: 'n' = none, 's' = stored.
+  if (serverAtLeast(serverVersion, PG_18)) {
     sql +=
       ',\n (CASE pubgencols ' +
       "WHEN 'n' THEN 'none' WHEN 's' THEN 'stored' END) AS \"Generated columns\"";
@@ -1630,7 +1666,7 @@ export const describePublications = (opts: CommonOpts): DescribeQuery => {
   }
   const hasSeq = serverAtLeast(serverVersion, 19);
   const hasTrunc = serverAtLeast(serverVersion, PG_11);
-  const hasGen = serverAtLeast(serverVersion, 18);
+  const hasGen = serverAtLeast(serverVersion, PG_18);
   const hasViaRoot = serverAtLeast(serverVersion, PG_13);
   let sql =
     'SELECT oid, pubname,\n  pg_catalog.pg_get_userbyid(pubowner) AS owner,\n  puballtables';
@@ -1828,7 +1864,7 @@ type OpFamilyMembersOpts = Omit<CommonOpts, 'pattern'> & {
 export const listOpFamilyOperators = (
   opts: OpFamilyMembersOpts,
 ): DescribeQuery => {
-  const { verbose } = opts;
+  const { verbose, serverVersion } = opts;
   let sql =
     'SELECT\n  am.amname AS "AM",\n' +
     '  CASE\n' +
@@ -1843,9 +1879,14 @@ export const listOpFamilyOperators = (
     "    WHEN 's' THEN 'search'\n" +
     '  END AS "Purpose"\n';
   if (verbose) {
-    sql +=
-      ', ofs.opfname AS "Sort opfamily",\n' +
-      "  CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END AS \"Leakproof?\"\n";
+    sql += ', ofs.opfname AS "Sort opfamily"';
+    // PG 18 added "Leakproof?" to verbose `\dAo+`. Same pattern as
+    // `\df+` — the operator's underlying function's proleakproof.
+    if (serverAtLeast(serverVersion, PG_18)) {
+      sql +=
+        ",\n  CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END AS \"Leakproof?\"";
+    }
+    sql += '\n';
   }
   sql +=
     'FROM pg_catalog.pg_amop o\n' +
@@ -1854,9 +1895,12 @@ export const listOpFamilyOperators = (
     '  LEFT JOIN pg_catalog.pg_namespace nsf ON of.opfnamespace = nsf.oid\n';
   if (verbose) {
     sql +=
-      '  LEFT JOIN pg_catalog.pg_opfamily ofs ON ofs.oid = o.amopsortfamily\n' +
-      '  LEFT JOIN pg_catalog.pg_operator op ON op.oid = o.amopopr\n' +
-      '  LEFT JOIN pg_catalog.pg_proc p ON p.oid = op.oprcode\n';
+      '  LEFT JOIN pg_catalog.pg_opfamily ofs ON ofs.oid = o.amopsortfamily\n';
+    if (serverAtLeast(serverVersion, PG_18)) {
+      sql +=
+        '  LEFT JOIN pg_catalog.pg_operator op ON op.oid = o.amopopr\n' +
+        '  LEFT JOIN pg_catalog.pg_proc p ON p.oid = op.oprcode\n';
+    }
   }
   let hasWhere = false;
   if (opts.amPattern !== undefined) {

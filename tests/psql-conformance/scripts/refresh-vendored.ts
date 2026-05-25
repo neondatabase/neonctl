@@ -3,7 +3,7 @@
 //
 // Usage:
 //   bun tests/psql-conformance/scripts/refresh-vendored.ts            # use POSTGRES_REF
-//   bun tests/psql-conformance/scripts/refresh-vendored.ts REL_17_5   # override tag
+//   bun tests/psql-conformance/scripts/refresh-vendored.ts REL_18_1   # override tag
 //
 // Steps:
 //   1. Read tests/psql-conformance/POSTGRES_REF
@@ -26,14 +26,11 @@ type Ref = {
   pgCommit: string;
   pgImage: string;
   pgImageDigest: string;
-  pipelineTag: string;
-  pipelineCommit: string;
 };
 
 type RefreshTarget = {
   destRelative: string; // relative to vendor/postgres-<version>/
   upstreamPath: string; // relative to repo root in postgres/postgres
-  fromOverride?: 'pipeline'; // pull from pipeline tag instead of main tag
 };
 
 const TARGETS: readonly RefreshTarget[] = [
@@ -48,7 +45,6 @@ const TARGETS: readonly RefreshTarget[] = [
   {
     destRelative: 'src/test/regress/sql/psql_pipeline.sql',
     upstreamPath: 'src/test/regress/sql/psql_pipeline.sql',
-    fromOverride: 'pipeline',
   },
   {
     destRelative: 'src/test/regress/expected/psql.out',
@@ -61,7 +57,6 @@ const TARGETS: readonly RefreshTarget[] = [
   {
     destRelative: 'src/test/regress/expected/psql_pipeline.out',
     upstreamPath: 'src/test/regress/expected/psql_pipeline.out',
-    fromOverride: 'pipeline',
   },
   {
     destRelative: 'src/bin/psql/t/001_basic.pl',
@@ -92,21 +87,6 @@ async function main(): Promise<void> {
   ref.pgCommit = await resolveCommit(ref.pgTag);
   out(`  ${ref.pgTag} -> ${ref.pgCommit}`);
 
-  // Resolve pipeline tag — only ever a *newer* version than the primary
-  // pin while pipeline tests are not yet backported. If the primary
-  // pin is now >= the pipeline tag, treat the primary tag as the
-  // single source.
-  if (compareTags(ref.pgTag, ref.pipelineTag) >= 0) {
-    out(
-      `primary tag ${ref.pgTag} is now >= pipeline tag ${ref.pipelineTag}; ` +
-        `pipeline files will be pulled from ${ref.pgTag}`,
-    );
-    ref.pipelineTag = ref.pgTag;
-    ref.pipelineCommit = ref.pgCommit;
-  } else {
-    ref.pipelineCommit = await resolveCommit(ref.pipelineTag);
-  }
-
   const vendorDir = resolve(
     CONFORMANCE_ROOT,
     'vendor',
@@ -115,19 +95,16 @@ async function main(): Promise<void> {
   out(`writing to ${vendorDir}`);
 
   for (const t of TARGETS) {
-    const tag = t.fromOverride === 'pipeline' ? ref.pipelineTag : ref.pgTag;
-    const url = `https://raw.githubusercontent.com/postgres/postgres/${tag}/${t.upstreamPath}`;
+    const url = `https://raw.githubusercontent.com/postgres/postgres/${ref.pgTag}/${t.upstreamPath}`;
     const destPath = join(vendorDir, t.destRelative);
     mkdirSync(dirname(destPath), { recursive: true });
     try {
       const body = await fetchText(url);
       writeFileSync(destPath, body, 'utf8');
-      out(`  ${tag}:${t.upstreamPath} (${body.length} bytes)`);
+      out(`  ${ref.pgTag}:${t.upstreamPath} (${body.length} bytes)`);
     } catch (e) {
-      // Pipeline file might not exist in older tags — that's a
-      // known scenario (see VENDORED_FROM). Warn and continue.
       const msg = e instanceof Error ? e.message : String(e);
-      out(`  WARN: ${tag}:${t.upstreamPath} skipped: ${msg}`);
+      out(`  WARN: ${ref.pgTag}:${t.upstreamPath} skipped: ${msg}`);
     }
   }
 
@@ -145,8 +122,6 @@ function readRef(): Ref {
     pgCommit: required(map, 'PG_COMMIT'),
     pgImage: required(map, 'PG_IMAGE'),
     pgImageDigest: required(map, 'PG_IMAGE_DIGEST'),
-    pipelineTag: required(map, 'PG_PIPELINE_TAG'),
-    pipelineCommit: required(map, 'PG_PIPELINE_COMMIT'),
   };
 }
 
@@ -155,12 +130,7 @@ function writeRef(ref: Ref): void {
   const updated = current
     .replace(/^PG_VERSION=.*$/m, `PG_VERSION=${ref.pgVersion}`)
     .replace(/^PG_TAG=.*$/m, `PG_TAG=${ref.pgTag}`)
-    .replace(/^PG_COMMIT=.*$/m, `PG_COMMIT=${ref.pgCommit}`)
-    .replace(/^PG_PIPELINE_TAG=.*$/m, `PG_PIPELINE_TAG=${ref.pipelineTag}`)
-    .replace(
-      /^PG_PIPELINE_COMMIT=.*$/m,
-      `PG_PIPELINE_COMMIT=${ref.pipelineCommit}`,
-    );
+    .replace(/^PG_COMMIT=.*$/m, `PG_COMMIT=${ref.pgCommit}`);
   writeFileSync(POSTGRES_REF_PATH, updated, 'utf8');
 }
 
@@ -174,10 +144,16 @@ Primary source:
   commit: ${ref.pgCommit}
   date vendored: ${today}
 
-Pipeline file source (only differs from primary while pipeline tests
-are not yet present in the primary tag — see scripts/refresh-vendored.ts):
-  tag: ${ref.pipelineTag}
-  commit: ${ref.pipelineCommit}
+Files vendored at ${ref.pgTag}:
+  src/test/regress/sql/psql.sql
+  src/test/regress/sql/psql_crosstab.sql
+  src/test/regress/sql/psql_pipeline.sql
+  src/test/regress/expected/psql.out
+  src/test/regress/expected/psql_crosstab.out
+  src/test/regress/expected/psql_pipeline.out
+  src/bin/psql/t/001_basic.pl
+  src/bin/psql/t/010_tab_completion.pl
+  src/bin/psql/t/020_cancel.pl
 
 License: PostgreSQL License (BSD-style). The PostgreSQL Global
 Development Group retains copyright. See:
@@ -217,17 +193,6 @@ function tagToVersion(tag: string): string {
     );
   }
   return `${m[1]}.${m[2]}`;
-}
-
-function compareTags(a: string, b: string): number {
-  const va = tagToVersion(a).split('.').map(Number);
-  const vb = tagToVersion(b).split('.').map(Number);
-  for (let i = 0; i < Math.max(va.length, vb.length); i++) {
-    const ai = va[i] ?? 0;
-    const bi = vb[i] ?? 0;
-    if (ai !== bi) return ai - bi;
-  }
-  return 0;
 }
 
 async function resolveCommit(tag: string): Promise<string> {
