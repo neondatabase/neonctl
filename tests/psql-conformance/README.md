@@ -124,16 +124,17 @@ instead of relying on Docker.
 
 ## Environment variables
 
-| Var                         | Purpose                                            |
-| --------------------------- | -------------------------------------------------- |
-| `PSQL_BINARY`               | path/name of the psql to test (default `psql`)     |
-| `PGCONFORMANCE_PG_HOST`     | use an externally-managed postgres (GHA service)   |
-| `PGCONFORMANCE_PG_PORT`     | port for the external server (default 5432)        |
-| `PGCONFORMANCE_PG_USER`     | user for the external server (default postgres)    |
-| `PGCONFORMANCE_PG_PASSWORD` | password for the external server                   |
-| `PGCONFORMANCE_PG_DB`       | database (default postgres)                        |
-| `PGCONFORMANCE_PG_IMAGE`    | override testcontainers image                      |
-| `PSQL_CONFORMANCE_SKIP_PG`  | set to `1` to skip postgres boot (unit tests only) |
+| Var                         | Purpose                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| `PSQL_BINARY`               | path/name of the psql to test (default `psql`)                                                   |
+| `PGCONFORMANCE_PG_HOST`     | use an externally-managed postgres (GHA service)                                                 |
+| `PGCONFORMANCE_PG_PORT`     | port for the external server (default 5432)                                                      |
+| `PGCONFORMANCE_PG_USER`     | user for the external server (default postgres)                                                  |
+| `PGCONFORMANCE_PG_PASSWORD` | password for the external server                                                                 |
+| `PGCONFORMANCE_PG_DB`       | database (default postgres)                                                                      |
+| `PGCONFORMANCE_PG_IMAGE`    | override testcontainers image                                                                    |
+| `PGCONFORMANCE_PG_MAJOR`    | PG major (`14` / `15` / `16` / `17` / `18`); filters per-version `KNOWN_FAILURES` entries. Unset = no filter. |
+| `PSQL_CONFORMANCE_SKIP_PG`  | set to `1` to skip postgres boot (unit tests only)                                               |
 
 ## Bootstrap sequence
 
@@ -177,8 +178,37 @@ that mismatch are expected to be enumerated in `KNOWN_FAILURES.yml`
 when the maintainer runs step 1.
 
 `030_pager.pl` is listed in the WP-T plan but **does not exist** in
-upstream and so is not vendored. The plan should be updated, or a
-custom pager harness should be authored, in a follow-up.
+upstream and so is not vendored. A custom port lives at
+`tap/030_pager.spec.ts` — see "Custom pager spec" below.
+
+### Custom pager spec (`tap/030_pager.spec.ts`)
+
+The pager spec is a gated **integration** test that:
+
+* skips by default (no `RUN_INTEGRATION=1` in the env);
+* skips when `dist/psql/index.js` is missing (no auto-build step);
+* boots the shared postgres fixture and spawns a Node subprocess that
+  imports `runPsql` from the built dist, so the code path matches
+  what `bin/cli.js` would execute;
+* exercises the four pager contracts from the upstream TAP file:
+  `PAGER` spawns / receives query output / is suppressed by
+  `\pset pager off` / `PSQL_PAGER` overrides `PAGER`.
+
+To run the integration tier:
+
+```sh
+bun run build
+RUN_INTEGRATION=1 \
+  npx vitest run --config tests/psql-conformance/vitest.config.ts \
+  tests/psql-conformance/tap/030_pager.spec.ts
+```
+
+Caveat: at time of writing the embedded TS psql does not yet wire the
+pager into the query-printing path (see `src/psql/print/pager.ts` —
+fully unit-tested but unintegrated). The spec is structured so that
+adding the wiring should make the assertions tighter without rewriting
+the harness; today the assertions are content-based and verify the
+plumbing.
 
 ### Refreshing
 
@@ -202,12 +232,76 @@ harness — see `.github/workflows/psql-conformance.yml`. The workflow:
 * triggers on PRs that change `src/psql/**`, `src/utils/psql.ts`,
   `src/commands/{branches,connection_string,projects}.ts`, or
   `tests/psql-conformance/**` (plus pushes to `main` / `feat/ts-psql`);
-* boots a `postgres:18.0` GHA service container and exposes it via
-  `PGCONFORMANCE_PG_HOST=127.0.0.1` / `PGCONFORMANCE_PG_PORT=5432`;
+* fans out across a **PG matrix** (one job per supported major — see
+  below) — each job boots its own `postgres:<major>` GHA service
+  container and exposes it via `PGCONFORMANCE_PG_HOST=127.0.0.1` /
+  `PGCONFORMANCE_PG_PORT=5432`;
 * runs `bun run build` then `bun run test:conformance` with
   `PSQL_BINARY` pointed at `dist/cli.js`;
-* uploads the captured `psql-conformance.log` as a workflow artifact
-  for triage.
+* uploads each job's `psql-conformance.log` under a per-version
+  artifact name (`psql-conformance-pg-<major>`) for triage.
+
+### PG version matrix
+
+Neon supports PG 14 through PG 18, so the conformance job runs as a
+matrix over `pg: ['14', '15', '16', '17', '18']`. Key points:
+
+* `fail-fast: false` — every PG version runs, even if one fails, so a
+  PG-18-only break does not hide a PG-15 break.
+* Each matrix job is gated by `continue-on-error: true` on the
+  conformance step (same as the single-version setup); flipping to
+  blocking is a follow-up — see the criteria above.
+* The job name encodes the matrix value (`psql-conformance (pg-18)`),
+  so the GitHub check list is self-describing.
+* `concurrency: psql-conformance-${{ github.ref }}` with
+  `cancel-in-progress: true` so re-pushing a branch cancels the
+  in-flight matrix.
+* The workflow exports `PGCONFORMANCE_PG_MAJOR=${{ matrix.pg }}` to the
+  conformance step. The harness uses it to filter `KNOWN_FAILURES.yml`
+  by the optional `pg:` field (see below) — so a PG-18-only waiver
+  does **not** mask a regression on PG 14.
+
+### Per-PG-version `KNOWN_FAILURES.yml` waivers
+
+Some upstream regression scripts legitimately produce different output
+across PG versions (e.g. PG 18 added columns to `\df+`). The optional
+`pg:` field on a `KNOWN_FAILURES.yml` entry constrains it to a single
+PG major. When `pg:` is **unset** the entry applies to every version
+(the legacy behaviour); when set, the entry only applies when the
+running server matches `$PGCONFORMANCE_PG_MAJOR`.
+
+Two example entries:
+
+```yaml
+# Cross-version waiver — applies on every PG major (legacy / unset pg).
+- test: regress/psql
+  scope: full-file
+  reason: "TS-psql \\df+ column ordering — WP-22"
+  owner: '@team-cli'
+  ticket: NEON-1234
+  added: 2026-05-25
+
+# PG-18-specific waiver — only applies when PGCONFORMANCE_PG_MAJOR='18'.
+- test: regress/psql
+  scope: subtest
+  subtest: '\\df+ output'
+  reason: "PG 18 added new columns to \\df+; rebaseline pending"
+  owner: '@team-cli'
+  ticket: NEON-5678
+  added: 2026-05-25
+  pg: '18'
+```
+
+Adding a per-version waiver:
+
+1. Reproduce the failure locally (or read the matrix job's artifact).
+2. Decide whether the divergence is real (upstream output drift) or
+   a TS-psql gap that only surfaces on one version. The former gets a
+   `pg:` field; the latter usually gets cross-version — fix everywhere.
+3. Add the entry to `KNOWN_FAILURES.yml`. Quote the version (`pg: '14'`)
+   to keep it a string in YAML.
+4. Re-run only that matrix slot:
+   `PGCONFORMANCE_PG_MAJOR=14 PSQL_BINARY=...$(pwd)/dist/cli.js bun run test:conformance`.
 
 ### Non-blocking phase
 

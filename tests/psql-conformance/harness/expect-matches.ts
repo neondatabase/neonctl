@@ -27,6 +27,13 @@ export type KnownFailureEntry = {
   owner?: string;
   ticket?: string;
   added?: string;
+  /**
+   * Optional PG major version (`'14'`..`'18'`). When set, the entry
+   * only applies to runs against that PG major. When unset, the entry
+   * applies to every PG major. The running version is read from
+   * `$PGCONFORMANCE_PG_MAJOR` (set by the workflow matrix).
+   */
+  pg?: string;
 };
 
 export type ExpectInput = {
@@ -127,6 +134,25 @@ function validateEntry(
       );
     }
   }
+  // Coerce `pg` to a string — YAML readers often parse `14` as a
+  // number, but we treat it canonically as a PG major string ('14').
+  let pg: string | undefined;
+  if (obj.pg !== undefined && obj.pg !== null) {
+    if (typeof obj.pg === 'string') {
+      pg = obj.pg;
+    } else if (typeof obj.pg === 'number') {
+      pg = String(obj.pg);
+    } else {
+      throw new Error(
+        `KNOWN_FAILURES.yml (${path}) entry #${index} (test=${test}) has invalid 'pg' (type ${typeof obj.pg})`,
+      );
+    }
+    if (pg.length === 0) {
+      throw new Error(
+        `KNOWN_FAILURES.yml (${path}) entry #${index} (test=${test}) has empty 'pg'`,
+      );
+    }
+  }
   return {
     test,
     scope,
@@ -135,7 +161,26 @@ function validateEntry(
     owner: typeof obj.owner === 'string' ? obj.owner : undefined,
     ticket: typeof obj.ticket === 'string' ? obj.ticket : undefined,
     added: typeof obj.added === 'string' ? obj.added : undefined,
+    pg,
   };
+}
+
+/**
+ * Filter KNOWN_FAILURES entries by the running PG major version.
+ *
+ * - Entries with no `pg` field always apply (legacy / cross-version).
+ * - Entries with `pg: '14'` only apply when `serverPgMajor === '14'`.
+ * - When `serverPgMajor` is undefined (no env var set), every entry
+ *   applies — same as the legacy behaviour.
+ */
+export function filterByPgMajor(
+  entries: readonly KnownFailureEntry[],
+  serverPgMajor: string | undefined,
+): KnownFailureEntry[] {
+  if (serverPgMajor === undefined) {
+    return [...entries];
+  }
+  return entries.filter((e) => e.pg === undefined || e.pg === serverPgMajor);
 }
 
 /**
@@ -159,14 +204,21 @@ export function findKnownFailure(
  * Apply the 4-quadrant truth table. On a regression or unexpected
  * failure, throws `Error`. Returns the resolved outcome on success.
  *
+ * Per-PG-version entries (`pg: '14'`) are filtered against
+ * `$PGCONFORMANCE_PG_MAJOR` before the table is evaluated, so a PG-18
+ * waiver does not mask a regression on PG 14.
+ *
  * @param knownFailuresPath override path; default is
  *                          tests/psql-conformance/KNOWN_FAILURES.yml
+ * @param serverPgMajor     override the env-derived PG major (for tests)
  */
 export function expectMatches(
   input: ExpectInput,
   knownFailuresPath?: string,
+  serverPgMajor: string | undefined = process.env.PGCONFORMANCE_PG_MAJOR,
 ): ExpectOutcome {
-  const entries = loadKnownFailures(knownFailuresPath);
+  const allEntries = loadKnownFailures(knownFailuresPath);
+  const entries = filterByPgMajor(allEntries, serverPgMajor);
   const entry = findKnownFailure(input, entries);
   const label = describeTarget(input);
 

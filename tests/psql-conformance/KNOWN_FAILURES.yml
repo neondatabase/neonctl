@@ -15,6 +15,12 @@
 #     owner:    GitHub handle / team
 #     ticket:   optional issue id
 #     added:    ISO date the entry was added
+#     pg:       OPTIONAL PG major ('14'..'18'). When set, the entry
+#               only applies on runs where the server matches (i.e.
+#               $PGCONFORMANCE_PG_MAJOR is the same string). Unset =
+#               applies to every PG major. Use this for upstream test
+#               output that legitimately differs across versions, e.g.
+#               PG 18 added columns to \df+.
 #
 # Day-1: the system psql passes every vendored regress test, so this
 # file is empty. Once the harness is pointed at the TS implementation

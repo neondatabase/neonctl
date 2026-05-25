@@ -5,10 +5,16 @@
 # as ground truth. The harness consults `KNOWN_FAILURES.yml` so a known
 # parity gap is recorded once and stops generating noise.
 #
-# NON-BLOCKING: the conformance step has `continue-on-error: true` so
-# unexpected failures appear in the PR check list as warnings but do NOT
-# gate merge. This matches the bootstrap phase of the WP-T plan — TS-psql
-# is still being burned in and the KNOWN_FAILURES ledger is wide open.
+# MATRIX: Neon supports PG 14-18, so we exercise the harness against
+# every supported major version. Per-version output deltas (e.g. PG 18's
+# new \df+ columns) are handled via the optional `pg:` field in
+# KNOWN_FAILURES.yml — see tests/psql-conformance/README.md.
+#
+# NON-BLOCKING: each matrix job's conformance step has
+# `continue-on-error: true` so unexpected failures appear in the PR
+# check list as warnings but do NOT gate merge. This matches the
+# bootstrap phase of the WP-T plan — TS-psql is still being burned in
+# and the KNOWN_FAILURES ledger is wide open.
 #
 # WHEN TO FLIP TO BLOCKING:
 #   * `KNOWN_FAILURES.yml` reflects the real coverage gap (no stale
@@ -41,16 +47,27 @@ on:
 
 permissions: {}
 
+# Cancel superseded runs on the same ref so re-pushed branches do not
+# pile up matrix jobs.
+concurrency:
+  group: psql-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   psql-conformance:
-    name: psql-conformance
+    name: psql-conformance (pg-${{ matrix.pg }})
     runs-on: ubuntu-24.04
     permissions:
       contents: read
 
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ['14', '15', '16', '17', '18']
+
     services:
       postgres:
-        image: postgres:18.0
+        image: postgres:${{ matrix.pg }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: regression
@@ -99,6 +116,9 @@ jobs:
           PGCONFORMANCE_PG_USER: postgres
           PGCONFORMANCE_PG_PASSWORD: postgres
           PGCONFORMANCE_PG_DB: regression
+          # Tell the harness which PG major is running so per-version
+          # KNOWN_FAILURES entries (`pg: '14'` etc.) filter correctly.
+          PGCONFORMANCE_PG_MAJOR: ${{ matrix.pg }}
         run: |
           set -o pipefail
           bun run test:conformance 2>&1 | tee psql-conformance.log
@@ -107,7 +127,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: psql-conformance-log
+          # Artifacts must have unique names within a workflow run, so
+          # we suffix with the PG major from the matrix.
+          name: psql-conformance-pg-${{ matrix.pg }}
           path: psql-conformance.log
           if-no-files-found: warn
           retention-days: 14

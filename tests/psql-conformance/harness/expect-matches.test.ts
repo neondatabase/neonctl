@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   _resetCache,
   expectMatches,
+  filterByPgMajor,
   findKnownFailure,
   loadKnownFailures,
   type KnownFailureEntry,
@@ -271,5 +272,261 @@ describe('expectMatches: 4-quadrant truth table', () => {
         p,
       ),
     ).toThrowError(/tap\/001_basic :: connect ok failed/);
+  });
+});
+
+describe('KNOWN_FAILURES.yml: pg-major filtering', () => {
+  it('parses an entry with a string pg field', () => {
+    const p = writeYaml(
+      'pg-string.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "PG 18 added df+ columns"
+  pg: '18'
+`,
+    );
+    const entries = loadKnownFailures(p);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].pg).toBe('18');
+  });
+
+  it('parses an entry with a numeric pg field (coerced to string)', () => {
+    // YAML unquoted `14` parses to a number; ensure we coerce.
+    const p = writeYaml(
+      'pg-num.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "PG 14 quirk"
+  pg: 14
+`,
+    );
+    const entries = loadKnownFailures(p);
+    expect(entries[0].pg).toBe('14');
+  });
+
+  it('rejects a non-string, non-number pg field', () => {
+    const p = writeYaml(
+      'pg-bad.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "oops"
+  pg: [14, 15]
+`,
+    );
+    expect(() => loadKnownFailures(p)).toThrowError(/invalid 'pg'/);
+  });
+
+  it('omits pg field on entries that do not set it', () => {
+    const p = writeYaml(
+      'pg-absent.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "applies to every PG"
+`,
+    );
+    const entries = loadKnownFailures(p);
+    expect(entries[0].pg).toBeUndefined();
+  });
+});
+
+describe('filterByPgMajor', () => {
+  const entries: KnownFailureEntry[] = [
+    {
+      test: 'regress/psql',
+      scope: 'full-file',
+      reason: 'applies to every PG',
+    },
+    {
+      test: 'regress/psql_crosstab',
+      scope: 'full-file',
+      reason: 'PG 14 quirk',
+      pg: '14',
+    },
+    {
+      test: 'regress/psql_pipeline',
+      scope: 'full-file',
+      reason: 'PG 18 quirk',
+      pg: '18',
+    },
+  ];
+
+  it('keeps every entry when serverPgMajor is undefined', () => {
+    expect(filterByPgMajor(entries, undefined)).toHaveLength(3);
+  });
+
+  it('keeps version-agnostic entries plus matching-version entries', () => {
+    const filtered = filterByPgMajor(entries, '14');
+    expect(filtered.map((e) => e.test)).toEqual([
+      'regress/psql',
+      'regress/psql_crosstab',
+    ]);
+  });
+
+  it('drops non-matching-version entries', () => {
+    const filtered = filterByPgMajor(entries, '15');
+    expect(filtered.map((e) => e.test)).toEqual(['regress/psql']);
+  });
+
+  it('returns version-agnostic entries when no per-version entry matches', () => {
+    const filtered = filterByPgMajor(entries, '17');
+    expect(filtered.map((e) => e.test)).toEqual(['regress/psql']);
+  });
+});
+
+describe('expectMatches: pg-major filter integration', () => {
+  it('entry without pg field applies regardless of server version', () => {
+    const p = writeYaml(
+      'pg-int-1.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "always applicable"
+`,
+    );
+    // Run as if on PG 18:
+    const out = expectMatches(
+      {
+        testName: 'regress/psql',
+        actualOutcome: 'fail',
+        failureMessage: 'diff',
+      },
+      p,
+      '18',
+    );
+    expect(out.kind).toBe('expected-failure');
+    // ... and as if on PG 14:
+    _resetCache();
+    const out2 = expectMatches(
+      {
+        testName: 'regress/psql',
+        actualOutcome: 'fail',
+        failureMessage: 'diff',
+      },
+      p,
+      '14',
+    );
+    expect(out2.kind).toBe('expected-failure');
+  });
+
+  it("entry with pg: '14' is skipped when server is 18 (unexpected failure)", () => {
+    const p = writeYaml(
+      'pg-int-2.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "PG 14 quirk"
+  pg: '14'
+`,
+    );
+    expect(() =>
+      expectMatches(
+        {
+          testName: 'regress/psql',
+          actualOutcome: 'fail',
+          failureMessage: 'diff',
+        },
+        p,
+        '18',
+      ),
+    ).toThrowError(/regress\/psql failed: diff/);
+  });
+
+  it("entry with pg: '14' applies when server is 14", () => {
+    const p = writeYaml(
+      'pg-int-3.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "PG 14 quirk"
+  pg: '14'
+`,
+    );
+    const out = expectMatches(
+      {
+        testName: 'regress/psql',
+        actualOutcome: 'fail',
+        failureMessage: 'diff',
+      },
+      p,
+      '14',
+    );
+    expect(out.kind).toBe('expected-failure');
+    if (out.kind === 'expected-failure') {
+      expect(out.entry.pg).toBe('14');
+      expect(out.entry.reason).toBe('PG 14 quirk');
+    }
+  });
+
+  it('multiple entries for the same test but different pg fields: each evaluated separately', () => {
+    const p = writeYaml(
+      'pg-int-4.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "PG 14 quirk"
+  pg: '14'
+- test: regress/psql
+  scope: full-file
+  reason: "PG 18 quirk"
+  pg: '18'
+`,
+    );
+    // PG 14 -> matches PG-14 entry
+    const out14 = expectMatches(
+      {
+        testName: 'regress/psql',
+        actualOutcome: 'fail',
+        failureMessage: 'diff',
+      },
+      p,
+      '14',
+    );
+    expect(out14.kind).toBe('expected-failure');
+    if (out14.kind === 'expected-failure') {
+      expect(out14.entry.reason).toBe('PG 14 quirk');
+    }
+    // PG 18 -> matches PG-18 entry
+    _resetCache();
+    const out18 = expectMatches(
+      {
+        testName: 'regress/psql',
+        actualOutcome: 'fail',
+        failureMessage: 'diff',
+      },
+      p,
+      '18',
+    );
+    expect(out18.kind).toBe('expected-failure');
+    if (out18.kind === 'expected-failure') {
+      expect(out18.entry.reason).toBe('PG 18 quirk');
+    }
+    // PG 15 -> no entry matches; unexpected failure.
+    _resetCache();
+    expect(() =>
+      expectMatches(
+        {
+          testName: 'regress/psql',
+          actualOutcome: 'fail',
+          failureMessage: 'diff',
+        },
+        p,
+        '15',
+      ),
+    ).toThrowError(/regress\/psql failed: diff/);
+  });
+
+  it('a PG-only entry on a passing test does NOT count as a regression off-version', () => {
+    // pg: '14' entry, but running on PG 18 with actual=pass. Filter
+    // strips the entry first, so quadrant 1 (pass + not-in-list) wins.
+    const p = writeYaml(
+      'pg-int-5.yml',
+      `- test: regress/psql
+  scope: full-file
+  reason: "PG 14 quirk"
+  pg: '14'
+`,
+    );
+    const out = expectMatches(
+      { testName: 'regress/psql', actualOutcome: 'pass' },
+      p,
+      '18',
+    );
+    expect(out.kind).toBe('pass');
   });
 });
