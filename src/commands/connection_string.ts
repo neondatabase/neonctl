@@ -69,10 +69,9 @@ export const builder = (argv: yargs.Argv) => {
         describe: 'Connect to a database via psql using connection string',
         default: false,
       },
-      'ts-psql': {
+      fallback: {
         type: 'boolean',
-        describe:
-          'Force the embedded TypeScript psql implementation (for testing)',
+        describe: 'Force the embedded TypeScript psql fallback (for testing)',
         default: false,
         hidden: true,
       },
@@ -96,7 +95,7 @@ export const handler = async (
     extended: boolean;
     endpointType?: EndpointType;
     psql: boolean;
-    tsPsql: boolean;
+    fallback: boolean;
     ssl: (typeof SSL_MODES)[number];
     '--'?: string[];
   },
@@ -212,7 +211,7 @@ export const handler = async (
   if (props.psql) {
     const psqlArgs = props['--'];
     await psql(connectionString.toString(), psqlArgs, {
-      mode: props.tsPsql ? 'ts' : 'auto',
+      mode: props.fallback ? 'ts' : 'auto',
     });
   } else if (props.extended) {
     writer(props).end(

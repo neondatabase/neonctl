@@ -10,7 +10,7 @@ export type PsqlOpts = {
 
 const resolveMode = (opts: PsqlOpts): PsqlMode => {
   if (opts.mode && opts.mode !== 'auto') return opts.mode;
-  if (process.env.NEONCTL_TS_PSQL === '1') return 'ts';
+  if (process.env.NEONCTL_PSQL_FALLBACK === '1') return 'ts';
   return opts.mode ?? 'auto';
 };
 
