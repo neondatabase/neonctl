@@ -1,0 +1,23 @@
+# Known failures — the conformance ledger.
+#
+# Each TS psql work-package that ships should REMOVE entries from this
+# file as features land. The harness fails the suite if an entry is
+# stale (i.e. the test now passes), which mechanically forces the
+# ledger to stay accurate.
+#
+# Entry schema:
+#   - test:     'regress/<name>' or 'tap/<name>' (matches `testName` in
+#               the assertion call)
+#     scope:    'full-file' (matches the whole test) or 'subtest'
+#               (matches a single named sub-assertion)
+#     subtest:  required when scope is 'subtest'; the exact subtest name
+#     reason:   short human description; reference the WP
+#     owner:    GitHub handle / team
+#     ticket:   optional issue id
+#     added:    ISO date the entry was added
+#
+# Day-1: the system psql passes every vendored regress test, so this
+# file is empty. Once the harness is pointed at the TS implementation
+# (PSQL_BINARY=./bin/ts-psql), populate from a failing run.
+
+[]
