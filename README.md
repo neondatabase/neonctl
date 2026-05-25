@@ -58,6 +58,53 @@ neonctl projects list --api-key <neon_api_key>
 
 For information about obtaining an Neon API key, see [Authentication](https://api-docs.neon.tech/reference/authentication), in the _Neon API Reference_.
 
+## Connect with psql
+
+Several commands accept a `--psql` flag that opens a psql session against the resolved endpoint:
+
+```bash
+neonctl connection-string --psql --project-id <id>
+neonctl projects create --psql
+neonctl branches create --psql
+```
+
+Any arguments after `--` are forwarded to psql, for example:
+
+```bash
+neonctl cs --psql --project-id <id> -- -c "SELECT version()"
+neonctl cs --psql --project-id <id> -- -f script.sql --csv
+```
+
+### Embedded psql fallback
+
+If the system has `psql` installed on `$PATH`, `--psql` continues to spawn the native binary — there is no behavior change for existing users.
+
+If `psql` is not found on `$PATH`, neonctl now falls back to an embedded TypeScript implementation. There is nothing to install or configure; it ships with `neonctl`. This removes the "no psql binary" trap on machines (and CI runners) that don't have PostgreSQL client tools installed.
+
+The embedded psql can also be forced explicitly:
+
+- `--fallback` — opt-in flag on `connection-string`, `projects create`, and `branches create`. Useful for testing or for environments where you want a guaranteed psql experience regardless of what's on `$PATH`. The flag is currently hidden from `--help` while conformance test coverage is built out; it is safe to use today.
+- `NEONCTL_PSQL_FALLBACK=1` — environment variable with the same effect as `--fallback`. Convenient for scripts and CI.
+
+The embedded implementation covers the common psql use cases, including:
+
+- All output formats: aligned, unaligned, wrapped, csv, json, html, asciidoc, latex, latex-longtable, troff-ms
+- All `\d*` describe commands with full upstream parity (columns, indexes, foreign keys, triggers, view definitions, sequences, RLS, replica identity, partitions, tablespaces, access methods, inheritance, FDW, stats objects, publications, subscriptions, per-column FDW options, TOAST owner)
+- `\copy` to/from file, `PROGRAM`, `STDIN`, and `STDOUT`, including the `\.` EOF marker
+- Extended query with `\bind` / `\bind_named` and pipeline mode (`\startpipeline`, `\parse`)
+- Tab completion (~50 rules)
+- Persistent command history (`~/.psql_history`, libreadline format)
+- vi and emacs line-edit modes
+- `~/.psqlrc` autoload (including `$PGSYSCONFDIR/psqlrc` and version-suffixed variants)
+- Scripted modes: `-c "SQL"` and `-f script.sql`
+- SCRAM-SHA-256 authentication with channel binding (required for Neon)
+
+### Known limitations
+
+- The `--fallback` flag is hidden in `--help` until we finish building out the conformance test suite. The behavior is safe to use today; the hide is a signal of "not yet flipped to default."
+- The conformance test suite is non-blocking in CI until the `KNOWN_FAILURES.yml` ledger has been seeded.
+- Multi-host load-balanced connection URIs are not yet supported by the embedded psql; it connects to the first host listed.
+
 ## Configure autocompletion
 
 The Neon CLI supports autocompletion, which you can configure in a few easy steps. See [Neon CLI commands — completion](https://neon.tech/docs/reference/cli-completion) for instructions.
@@ -159,4 +206,14 @@ To run commands from the local build, replace the `neonctl` command with `node d
 
 ```shell
 node dist branches --help
+```
+
+### Embedded psql tests
+
+The embedded TypeScript psql implementation has its own conformance test suite that runs the same scripts against the embedded psql and a reference `psql` binary, then diffs the output.
+
+```shell
+bun run test:conformance         # run against $PSQL_BINARY (defaults to the system psql)
+bun run test:conformance:matrix  # run across PG 14/15/16/17/18 locally (requires Docker)
+bun run test:conformance:seed    # re-baseline KNOWN_FAILURES.yml after a major change
 ```
