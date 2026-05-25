@@ -468,6 +468,31 @@ describe('PgConnection', () => {
     await conn.close();
   });
 
+  test('retains the connect-time password on the password getter', async () => {
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'alice',
+      password: 's3cret',
+      database: 'db',
+      ssl: 'disable',
+    });
+    // The password getter must return exactly what was passed at connect so
+    // `\c <newdb>` can reconnect without re-prompting (matches libpq's
+    // behaviour of retaining the credential on the live `PGconn`).
+    expect(conn.password).toBe('s3cret');
+    await conn.close();
+  });
+
   test('runs execSimple(SELECT 1) end-to-end', async () => {
     server = await startFakeServer((msg, client) => {
       if (msg.type === 'Startup') {

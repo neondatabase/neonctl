@@ -69,6 +69,8 @@ type FakeConnectionOpts = {
   queryResponses?: Record<string, ResultSet>;
   /** Captured argument for the last `execSimple()` call. */
   onExecSimple?: (sql: string) => void;
+  /** Password to expose via the structural `password` getter (PgConnection parity). */
+  password?: string | null;
 };
 
 const makeFakeConnection = (
@@ -76,59 +78,64 @@ const makeFakeConnection = (
 ): Connection & {
   closeCalls: number;
   lastExecSql: string | null;
+  password: string | null;
 } => {
   let isClosed = opts.closed ?? false;
   const responses = opts.queryResponses ?? {};
-  const fake: Connection & { closeCalls: number; lastExecSql: string | null } =
-    {
-      closeCalls: 0,
-      lastExecSql: null,
-      serverVersion: 160000,
-      parameterStatus: () => undefined,
-      query: (sql: string) => {
-        const rs = responses[sql.trim()];
-        if (rs) return Promise.resolve(rs);
-        return Promise.resolve<ResultSet>({
-          command: 'SELECT',
-          rowCount: 0,
+  const fake: Connection & {
+    closeCalls: number;
+    lastExecSql: string | null;
+    password: string | null;
+  } = {
+    closeCalls: 0,
+    lastExecSql: null,
+    password: opts.password ?? null,
+    serverVersion: 160000,
+    parameterStatus: () => undefined,
+    query: (sql: string) => {
+      const rs = responses[sql.trim()];
+      if (rs) return Promise.resolve(rs);
+      return Promise.resolve<ResultSet>({
+        command: 'SELECT',
+        rowCount: 0,
+        oid: null,
+        fields: [],
+        rows: [],
+        notices: [],
+      });
+    },
+    execSimple: (sql: string) => {
+      fake.lastExecSql = sql;
+      opts.onExecSimple?.(sql);
+      return Promise.resolve<ResultSet[]>([
+        {
+          command: 'SET',
+          rowCount: null,
           oid: null,
           fields: [],
           rows: [],
           notices: [],
-        });
-      },
-      execSimple: (sql: string) => {
-        fake.lastExecSql = sql;
-        opts.onExecSimple?.(sql);
-        return Promise.resolve<ResultSet[]>([
-          {
-            command: 'SET',
-            rowCount: null,
-            oid: null,
-            fields: [],
-            rows: [],
-            notices: [],
-          },
-        ]);
-      },
-      prepare: () => Promise.reject(new Error('not impl')),
-      startCopyIn: () => Promise.reject(new Error('not impl')),
-      startCopyOut: () => Promise.reject(new Error('not impl')),
-      pipeline: () => {
-        throw new Error('not impl');
-      },
-      cancel: () => Promise.resolve(),
-      escapeIdentifier: (v) => '"' + v.replace(/"/g, '""') + '"',
-      escapeLiteral: (v) => "'" + v.replace(/'/g, "''") + "'",
-      onNotice: () => () => undefined,
-      onNotification: () => () => undefined,
-      close: () => {
-        fake.closeCalls++;
-        isClosed = true;
-        return Promise.resolve();
-      },
-      isClosed: () => isClosed,
-    };
+        },
+      ]);
+    },
+    prepare: () => Promise.reject(new Error('not impl')),
+    startCopyIn: () => Promise.reject(new Error('not impl')),
+    startCopyOut: () => Promise.reject(new Error('not impl')),
+    pipeline: () => {
+      throw new Error('not impl');
+    },
+    cancel: () => Promise.resolve(),
+    escapeIdentifier: (v) => '"' + v.replace(/"/g, '""') + '"',
+    escapeLiteral: (v) => "'" + v.replace(/'/g, "''") + "'",
+    onNotice: () => () => undefined,
+    onNotification: () => () => undefined,
+    close: () => {
+      fake.closeCalls++;
+      isClosed = true;
+      return Promise.resolve();
+    },
+    isClosed: () => isClosed,
+  };
   return fake;
 };
 
@@ -310,7 +317,7 @@ describe('\\c (cmdConnect)', () => {
     s.vars.set('PORT', '5432');
     s.vars.set('USER', 'alice');
     s.vars.set('DBNAME', 'orig');
-    const oldConn = makeFakeConnection();
+    const oldConn = makeFakeConnection({ password: 's3cret' });
     s.db = oldConn;
 
     const newConn = makeFakeConnection();
@@ -329,6 +336,9 @@ describe('\\c (cmdConnect)', () => {
       port: 5432,
       user: 'alice',
       database: 'otherdb',
+      // Password is retained from the previous connection (libpq parity) so
+      // the user doesn't have to re-supply it on every `\c`.
+      password: 's3cret',
     });
     expect(oldConn.closeCalls).toBe(1);
     expect(s.db).toBe(newConn);
@@ -336,6 +346,35 @@ describe('\\c (cmdConnect)', () => {
     expect(stdout()).toMatch(
       /You are now connected to database "otherdb" as user "alice"/,
     );
+  });
+
+  test('explicit password in URI wins over the previous connection password', async () => {
+    const s = defaultSettings(createVarStore());
+    s.vars.set('USER', 'alice');
+    s.db = makeFakeConnection({ password: 'old-pw' });
+
+    const calls: ConnectOptions[] = [];
+    restore = setCmdConnectDeps({
+      connect: (opts) => {
+        calls.push(opts);
+        return Promise.resolve(makeFakeConnection());
+      },
+    });
+
+    await run(
+      cmdConnect,
+      makeMockCtx(
+        'c',
+        'postgresql://alice:new-pw@host.example.com:5433/mydb',
+        s,
+      ),
+    );
+    expect(calls[0]).toMatchObject({
+      host: 'host.example.com',
+      database: 'mydb',
+      user: 'alice',
+      password: 'new-pw',
+    });
   });
 
   test('"-" sentinels keep current values', async () => {

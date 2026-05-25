@@ -290,6 +290,14 @@ export class PgConnection implements Connection {
    */
   public lastCopyTag: string | null = null;
 
+  /**
+   * Password captured at connect time, retained in memory so that `\c` can
+   * reconnect without re-supplying credentials (matching libpq's behaviour,
+   * which keeps the password on the live `PGconn`). `null` when no password
+   * was provided. Read via the {@link password} getter.
+   */
+  private readonly _password: string | null;
+
   // -- Async messages
   private readonly notify: NoticeMultiplexer = new NoticeMultiplexer();
 
@@ -308,6 +316,7 @@ export class PgConnection implements Connection {
     this.socket = socket;
     this.opts = opts;
     this.channelBindingData = channelBindingData;
+    this._password = opts.password ?? null;
 
     socket.on('data', (chunk: Buffer) => {
       this.onData(chunk);
@@ -391,6 +400,15 @@ export class PgConnection implements Connection {
   }
   public get pid(): number {
     return this.processId;
+  }
+  /**
+   * The password supplied at connect time (or `null`). Mirrors libpq's
+   * retention of the password on the live `PGconn` so `\c <newdb>` can
+   * reconnect transparently. Read-only by design — the field is set once in
+   * the constructor and never mutated.
+   */
+  public get password(): string | null {
+    return this._password;
   }
 
   /**

@@ -59,6 +59,12 @@ import type { REPLContext } from '../types/repl.js';
 import type { PsqlSettings } from '../types/settings.js';
 
 import { alignedPrinter } from '../print/aligned.js';
+import { asciidocPrinter } from '../print/asciidoc.js';
+import { csvPrinter } from '../print/csv.js';
+import { htmlPrinter } from '../print/html.js';
+import { jsonPrinter } from '../print/json.js';
+import { latexLongtablePrinter, latexPrinter } from '../print/latex.js';
+import { troffMsPrinter } from '../print/troff.js';
 import { unalignedPrinter } from '../print/unaligned.js';
 import { formatDurationMs } from '../print/units.js';
 import { getQueryFout } from '../command/cmd_io.js';
@@ -210,16 +216,33 @@ const destroysSavepoint = (sql: string): boolean => {
 };
 
 // ---------------------------------------------------------------------------
-// Printer selection. Mirrors the (very small) slice we currently route
-// through. Other formats fall back to aligned until WP-09 lands fully.
+// Printer selection. Routes to the printer for the active output format —
+// every format in {@link OutputFormat} that we ship is wired here; `wrapped`
+// falls back to the aligned printer (which renders `wrapped` mode itself
+// via `topt`).
 // ---------------------------------------------------------------------------
 
 const pickPrinter = (settings: PsqlSettings): Printer => {
   switch (settings.popt.topt.format) {
     case 'aligned':
+    case 'wrapped':
       return alignedPrinter;
     case 'unaligned':
       return unalignedPrinter;
+    case 'csv':
+      return csvPrinter;
+    case 'json':
+      return jsonPrinter;
+    case 'html':
+      return htmlPrinter;
+    case 'asciidoc':
+      return asciidocPrinter;
+    case 'latex':
+      return latexPrinter;
+    case 'latex-longtable':
+      return latexLongtablePrinter;
+    case 'troff-ms':
+      return troffMsPrinter;
     default:
       return alignedPrinter;
   }
@@ -364,6 +387,21 @@ const renderResultSets = async (
     }
   }
   return { rowsAffected, rowsPrinted };
+};
+
+/**
+ * Render a single {@link ResultSet} through the active printer and the
+ * configured output target (respecting `\o FILE` redirects). Used by the
+ * `\bind` / extended-query path in {@link mainloop.dispatchSendQuery} which
+ * comes back with a single result instead of the array shape `execSimple`
+ * produces. Returns a tally consistent with {@link renderResultSets}.
+ */
+export const renderResultSet = (
+  ctx: REPLContext,
+  rs: ResultSet,
+  out?: NodeJS.WritableStream,
+): Promise<{ rowsAffected: number; rowsPrinted: number }> => {
+  return renderResultSets(ctx, [rs], out ?? pickOut(ctx));
 };
 
 // ---------------------------------------------------------------------------

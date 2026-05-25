@@ -33,19 +33,19 @@
  *
  * What this module does NOT own:
  *
- *   - Storing the password in memory after the initial connect. The
- *     `Connection` interface (WP-00) deliberately does not expose the
- *     credential, and we can't modify `PgConnection` from here (WP-02
- *     deliverable, frozen). On reconnect we read the password from the
- *     psql `PASSWORD` variable if set; otherwise we try the connect with
- *     no password and let it fail if the server demands one. A future WP
- *     can plumb secure password retention through the {@link Connection}
- *     contract.
  *   - Cataloguing the current host/port/user/database. These are populated
  *     by the startup WP into psql vars HOST/PORT/USER/DBNAME (and so are
  *     read out of `settings.vars` here). When those vars are missing we
  *     query SQL or fall back to opt defaults, accepting that `\conninfo`
  *     will then report whatever the server reports.
+ *
+ * Password retention: `PgConnection` exposes the password captured at
+ * connect time via a read-only `password` getter (mirroring libpq's
+ * retention on the `PGconn`). `\c` reads it via a structural cast so we
+ * don't have to widen the frozen {@link Connection} interface, and feeds
+ * it to {@link mergeConnectOpts} so a reconnect to a different database
+ * works without re-prompting. A new password supplied in the conninfo /
+ * URI override always wins.
  */
 
 import { Buffer } from 'node:buffer';
@@ -106,6 +106,24 @@ export const setCmdConnectDeps = (
   return () => {
     currentDeps = prev;
   };
+};
+
+// ---------------------------------------------------------------------------
+// Password retention helper.
+//
+// `PgConnection` exposes a public read-only `password` getter; consumers that
+// only see the frozen {@link Connection} interface reach for it via a
+// structural cast (same shape as the `txStatus` / `lastCopyTag` accessors
+// used elsewhere). Returns `null` when the connection is absent or the field
+// isn't populated (mock connections in tests, future drivers, etc.).
+// ---------------------------------------------------------------------------
+
+type ConnWithPassword = { password?: string | null };
+
+const readConnectionPassword = (conn: Connection | null): string | null => {
+  if (!conn) return null;
+  const raw = (conn as unknown as ConnWithPassword).password;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
 };
 
 // ---------------------------------------------------------------------------
@@ -332,12 +350,21 @@ const parseConninfo = (
  * startup WP populates; for fields not represented there (sslmode, etc.)
  * we use safe defaults.
  *
+ * For passwords specifically the precedence is:
+ *   1. `override.password` — anything the user typed in this `\c` invocation
+ *      (URI password or `password=` conninfo key) wins.
+ *   2. `previousPassword` — the password captured on the live
+ *      {@link PgConnection}, mirroring libpq's behaviour of retaining the
+ *      credential on the `PGconn` so reconnects work transparently.
+ *   3. `PASSWORD` psql var — set by `-W` / `PGPASSWORD` at startup.
+ *
  * Returns `null` if the merge can't produce a usable opts (e.g. no database
  * and no current connection).
  */
 export const mergeConnectOpts = (
   settings: PsqlSettings,
   override: Partial<ConnectOptions>,
+  previousPassword: string | null = null,
 ): ConnectOptions | { error: string } => {
   const vars = settings.vars;
   const host = override.host ?? vars.get('HOST') ?? 'localhost';
@@ -357,9 +384,12 @@ export const mergeConnectOpts = (
     return { error: 'no user name specified' };
   }
   const database = override.database ?? vars.get('DBNAME') ?? user;
-  // Password: explicit override wins; otherwise read from psql var
-  // PASSWORD (set by the startup WP via -W / PGPASSWORD), else undefined.
-  const password = override.password ?? vars.get('PASSWORD');
+  // Password precedence: explicit override (URI / conninfo) > the previous
+  // connection's retained credential > psql `PASSWORD` var > undefined. This
+  // matches libpq's behaviour of holding the password on the `PGconn` so
+  // `\c <newdb>` doesn't have to re-prompt the user.
+  const password =
+    override.password ?? previousPassword ?? vars.get('PASSWORD');
   const ssl =
     override.ssl ??
     (vars.get('SSLMODE') as ConnectOptions['ssl'] | undefined) ??
@@ -368,7 +398,7 @@ export const mergeConnectOpts = (
     host,
     port,
     user,
-    password,
+    password: password ?? undefined,
     database,
     ssl,
     applicationName: override.applicationName ?? vars.get('APPLICATION_NAME'),
@@ -410,7 +440,12 @@ export const cmdConnect: BackslashCmdSpec = {
       return { status: 'error' };
     }
 
-    const newOpts = mergeConnectOpts(ctx.settings, parsed);
+    // Pull the live connection's password through a structural cast — the
+    // {@link Connection} interface is frozen (WP-00) and deliberately doesn't
+    // expose credentials, but {@link PgConnection} keeps the password on a
+    // public read-only field for exactly this case.
+    const previousPassword = readConnectionPassword(ctx.settings.db);
+    const newOpts = mergeConnectOpts(ctx.settings, parsed, previousPassword);
     if ('error' in newOpts) {
       writeErr(`\\${ctx.cmdName}: ${newOpts.error}\n`);
       return { status: 'error' };

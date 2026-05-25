@@ -44,7 +44,8 @@ import { initialScanState } from '../types/scanner.js';
 import { scanSql } from '../scanner/sql.js';
 import { scanSlashArgs } from '../scanner/slash.js';
 import { renderPromptByName, type PromptContext } from './prompt.js';
-import { sendQuery } from './common.js';
+import { pickOut, renderResultSet, sendQuery } from './common.js';
+import { formatDurationMs } from '../print/units.js';
 import {
   COND_COMMAND_NAMES,
   attachCondStack,
@@ -408,22 +409,27 @@ const dispatchSendQuery = async (
   ctx: REPLContext,
   sql: string,
 ): Promise<boolean> => {
+  // Always consume the bind stash up-front so it's cleared regardless of which
+  // branch runs (and regardless of success / failure on the bind path).
   const bind = consumeBindState(ctx.settings);
   if (bind && ctx.settings.db) {
+    const started = ctx.settings.timing ? Date.now() : 0;
     try {
       const rs = await ctx.settings.db.query(sql, bind.values);
-      // Result rendering goes through the same printer path common.ts uses.
-      // For a single-shot extended query we render via execQueryAndProcessResults
-      // by delegating to sendQuery on a wrapped SQL — simpler: print here.
-      // Defer fully-featured extended rendering to a follow-up; for now the
-      // command at least executes and reports row count.
-      ctx.stderr.write(`-- bound query: ${rs.rowCount ?? 0} row(s)\n`);
+      // Route the single ResultSet through the unified printer pipeline so
+      // `\bind` output looks identical to a simple-query result (and honours
+      // `\o FILE`, format selection, expanded mode, etc.).
+      await renderResultSet(ctx, rs, pickOut(ctx));
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.settings.lastErrorResult = { message };
       writeError(ctx, message);
       return false;
+    } finally {
+      if (ctx.settings.timing) {
+        ctx.stdout.write(formatDurationMs(Date.now() - started) + '\n');
+      }
     }
   }
   const stats = await sendQuery(ctx, sql);

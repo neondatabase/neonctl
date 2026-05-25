@@ -48,16 +48,35 @@ const buildResultSet = (
   notices: [],
 });
 
+type QueryCall = { sql: string; params: unknown[] };
+
 const makeMockConnection = (
   canned: Map<string, Canned> = new Map(),
-): Connection & { calls: string[]; cancelCalls: number } => {
+): Connection & {
+  calls: string[];
+  queryCalls: QueryCall[];
+  cancelCalls: number;
+} => {
   const calls: string[] = [];
+  const queryCalls: QueryCall[] = [];
   let cancelCalls = 0;
   const noop = (): (() => void) => () => undefined;
   const conn = {
     serverVersion: 170000,
     parameterStatus: (): string | undefined => undefined,
-    query: () => Promise.reject(new Error('not implemented')),
+    query(sql: string, params?: unknown[]): Promise<ResultSet> {
+      const trimmed = sql.trim();
+      queryCalls.push({ sql: trimmed, params: params ?? [] });
+      const lookup = canned.get(trimmed);
+      if (lookup === undefined) {
+        return Promise.resolve(
+          buildResultSet('SELECT', [{ name: '?column?' }], [[1]]),
+        );
+      }
+      if (lookup instanceof Error) return Promise.reject(lookup);
+      const rs = typeof lookup === 'function' ? lookup() : lookup;
+      return Promise.resolve(rs);
+    },
     execSimple(sql: string): Promise<ResultSet[]> {
       const trimmed = sql.trim();
       calls.push(trimmed);
@@ -90,6 +109,9 @@ const makeMockConnection = (
     get calls() {
       return calls;
     },
+    get queryCalls() {
+      return queryCalls;
+    },
     get cancelCalls() {
       return cancelCalls;
     },
@@ -98,6 +120,7 @@ const makeMockConnection = (
   // expose plain properties for tests to inspect.
   return conn as unknown as Connection & {
     calls: string[];
+    queryCalls: QueryCall[];
     cancelCalls: number;
   };
 };
@@ -409,5 +432,65 @@ describe('runMainLoop — \\timing', () => {
     const { ctx, stdout } = buildCtx({ lines: ['SELECT 1;'] });
     await runMainLoop(ctx);
     expect(stdout.text()).not.toMatch(/^Time: /m);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `\bind` — extended-protocol path with parameter substitution.
+//
+// `cmd_pipeline.ts` stashes parameters on a Symbol-keyed slot of
+// `PsqlSettings`; the mainloop consumes them on the next `;` boundary and
+// routes the SQL through `Connection.query(sql, params)` instead of
+// `execSimple`. The result must render through the same printer pipeline as
+// the simple-query path (not a stderr placeholder).
+// ---------------------------------------------------------------------------
+
+const BIND_STATE_KEY = Symbol.for('neonctl.psql.bindState');
+
+describe('runMainLoop — \\bind', () => {
+  test('bound query is dispatched via query() and rendered on stdout', async () => {
+    const { ctx, stdout, stderr, db } = buildCtx({ lines: ['SELECT $1;'] });
+    // Pre-stash bind params via the same Symbol the `\bind` command writes
+    // to. The mainloop's `dispatchSendQuery` should pick this up, call
+    // `db.query(sql, values)`, and print the result through the printer.
+    (ctx.settings as unknown as Record<symbol, unknown>)[BIND_STATE_KEY] = {
+      name: '',
+      values: ['hello'],
+    };
+
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+
+    // query() — not execSimple() — was called with the stashed params.
+    expect(db?.queryCalls).toHaveLength(1);
+    expect(db?.queryCalls[0]).toMatchObject({
+      sql: 'SELECT $1;',
+      params: ['hello'],
+    });
+    expect(db?.calls).toEqual([]);
+
+    // The printer output landed on stdout, not on the old stderr placeholder.
+    const stdoutText = stdout.text();
+    expect(stdoutText).toContain('?column?');
+    expect(stdoutText).toContain('1');
+    expect(stderr.text()).not.toContain('-- bound query:');
+  });
+
+  test('bind stash is cleared after dispatch (next query takes simple path)', async () => {
+    const { ctx, db } = buildCtx({ lines: ['SELECT $1;', 'SELECT 2;'] });
+    (ctx.settings as unknown as Record<symbol, unknown>)[BIND_STATE_KEY] = {
+      name: '',
+      values: ['once'],
+    };
+
+    await runMainLoop(ctx);
+
+    // First query went through the extended path; second through execSimple.
+    expect(db?.queryCalls).toHaveLength(1);
+    expect(db?.queryCalls[0]).toMatchObject({
+      sql: 'SELECT $1;',
+      params: ['once'],
+    });
+    expect(db?.calls).toEqual(['SELECT 2;']);
   });
 });
