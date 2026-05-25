@@ -113,10 +113,10 @@ triage"` and `ticket: ''`. Triage by hand:
 
 Useful flags:
 
-| Flag            | Effect                                                  |
-| --------------- | ------------------------------------------------------- |
-| `--skip-build`  | Assume `dist/cli.js` is already current (no rebuild).   |
-| `--reuse-build` | Skip the rebuild iff `dist/cli.js` already exists.      |
+| Flag            | Effect                                                |
+| --------------- | ----------------------------------------------------- |
+| `--skip-build`  | Assume `dist/cli.js` is already current (no rebuild). |
+| `--reuse-build` | Skip the rebuild iff `dist/cli.js` already exists.    |
 
 The script honours the same `PGCONFORMANCE_PG_*` env vars as the
 runtime harness, so a maintainer can point it at a managed postgres
@@ -146,10 +146,10 @@ This script:
 
 Useful flags:
 
-| Flag                | Effect                                                              |
-| ------------------- | ------------------------------------------------------------------- |
-| `--pg 17` (repeats) | Limit the matrix to specific majors. Default: all five.             |
-| `--skip-build`      | Reuse the existing `dist/cli.js` instead of rebuilding.             |
+| Flag                | Effect                                                  |
+| ------------------- | ------------------------------------------------------- |
+| `--pg 17` (repeats) | Limit the matrix to specific majors. Default: all five. |
+| `--skip-build`      | Reuse the existing `dist/cli.js` instead of rebuilding. |
 
 Each slot is independent — one version failing doesn't abort the rest,
 and Docker memory usage stays bounded because containers are torn down
@@ -157,17 +157,17 @@ between slots rather than running in parallel.
 
 ## Environment variables
 
-| Var                         | Purpose                                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------------------ |
-| `PSQL_BINARY`               | path/name of the psql to test (default `psql`)                                                   |
-| `PGCONFORMANCE_PG_HOST`     | use an externally-managed postgres (GHA service)                                                 |
-| `PGCONFORMANCE_PG_PORT`     | port for the external server (default 5432)                                                      |
-| `PGCONFORMANCE_PG_USER`     | user for the external server (default postgres)                                                  |
-| `PGCONFORMANCE_PG_PASSWORD` | password for the external server                                                                 |
-| `PGCONFORMANCE_PG_DB`       | database (default postgres)                                                                      |
-| `PGCONFORMANCE_PG_IMAGE`    | override testcontainers image                                                                    |
+| Var                         | Purpose                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `PSQL_BINARY`               | path/name of the psql to test (default `psql`)                                                                |
+| `PGCONFORMANCE_PG_HOST`     | use an externally-managed postgres (GHA service)                                                              |
+| `PGCONFORMANCE_PG_PORT`     | port for the external server (default 5432)                                                                   |
+| `PGCONFORMANCE_PG_USER`     | user for the external server (default postgres)                                                               |
+| `PGCONFORMANCE_PG_PASSWORD` | password for the external server                                                                              |
+| `PGCONFORMANCE_PG_DB`       | database (default postgres)                                                                                   |
+| `PGCONFORMANCE_PG_IMAGE`    | override testcontainers image                                                                                 |
 | `PGCONFORMANCE_PG_MAJOR`    | PG major (`14` / `15` / `16` / `17` / `18`); filters per-version `KNOWN_FAILURES` entries. Unset = no filter. |
-| `PSQL_CONFORMANCE_SKIP_PG`  | set to `1` to skip postgres boot (unit tests only)                                               |
+| `PSQL_CONFORMANCE_SKIP_PG`  | set to `1` to skip postgres boot (unit tests only)                                                            |
 
 ## Bootstrap sequence
 
@@ -229,22 +229,22 @@ default conformance run does not pay the testcontainers boot cost.
 
 Current inventory:
 
-| spec                          | upstream source                             | scope                                                                                                                |
-| ----------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `tap/001_basic.spec.ts`       | `src/bin/psql/t/001_basic.pl` (vendored)    | program args, `\timing`, `:ENCODING`, LISTEN/NOTIFY, server crash, `\errverbose`, multi-`-c`/`-f` + `--single-transaction`, `\copy ... DEFAULT`, `\watch`, `\g | pipe`, COPY-in-pipeline, `\restrict` |
-| `tap/030_pager.spec.ts`       | custom (upstream's `030_pager.pl` deleted)  | `PAGER`, `PSQL_PAGER`, `\pset pager off` / `always`                                                                  |
+| spec                    | upstream source                            | scope                                                                                                                                                          |
+| ----------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `tap/001_basic.spec.ts` | `src/bin/psql/t/001_basic.pl` (vendored)   | program args, `\timing`, `:ENCODING`, LISTEN/NOTIFY, server crash, `\errverbose`, multi-`-c`/`-f` + `--single-transaction`, `\copy ... DEFAULT`, `\watch`, `\g | pipe`, COPY-in-pipeline, `\restrict` |
+| `tap/030_pager.spec.ts` | custom (upstream's `030_pager.pl` deleted) | `PAGER`, `PSQL_PAGER`, `\pset pager off` / `always`                                                                                                            |
 
 Common helpers for these specs live in `tap/_helpers.ts`:
 
-* `SHOULD_RUN_INTEGRATION` — combined gate (`RUN_INTEGRATION=1` AND
+- `SHOULD_RUN_INTEGRATION` — combined gate (`RUN_INTEGRATION=1` AND
   `dist/psql/index.js` exists).
-* `makeLauncher(prefix)` — writes a one-shot Node launcher that imports
+- `makeLauncher(prefix)` — writes a one-shot Node launcher that imports
   the built `runPsql` so spawned children execute the same code path
   as `bin/cli.js`.
-* `runChild()` / `runPsqlScript()` — capture stdout/stderr/exit with a
+- `runChild()` / `runPsqlScript()` — capture stdout/stderr/exit with a
   bounded timeout; the script variant feeds SQL on stdin with `-XAtq`
   (matches the PostgresNode `psql` helper).
-* `ensureFixture()` — re-hydrates the per-worker postgres connection
+- `ensureFixture()` — re-hydrates the per-worker postgres connection
   cache from the env vars that `globalSetup` populated.
 
 KNOWN_FAILURES integration: each `it(...)` in `001_basic.spec.ts` is
@@ -268,12 +268,12 @@ RUN_INTEGRATION=1 \
 
 The pager spec is a gated **integration** test that:
 
-* skips by default (no `RUN_INTEGRATION=1` in the env);
-* skips when `dist/psql/index.js` is missing (no auto-build step);
-* boots the shared postgres fixture and spawns a Node subprocess that
+- skips by default (no `RUN_INTEGRATION=1` in the env);
+- skips when `dist/psql/index.js` is missing (no auto-build step);
+- boots the shared postgres fixture and spawns a Node subprocess that
   imports `runPsql` from the built dist, so the code path matches
   what `bin/cli.js` would execute;
-* exercises the four pager contracts from the upstream TAP file:
+- exercises the four pager contracts from the upstream TAP file:
   `PAGER` spawns / receives query output / is suppressed by
   `\pset pager off` / `PSQL_PAGER` overrides `PAGER`.
 
@@ -312,16 +312,16 @@ file, and rewrites `POSTGRES_REF` and `VENDORED_FROM`.
 The conformance suite runs on every PR that touches the TS psql or the
 harness — see `.github/workflows/psql-conformance.yml`. The workflow:
 
-* triggers on PRs that change `src/psql/**`, `src/utils/psql.ts`,
+- triggers on PRs that change `src/psql/**`, `src/utils/psql.ts`,
   `src/commands/{branches,connection_string,projects}.ts`, or
   `tests/psql-conformance/**` (plus pushes to `main` / `feat/ts-psql`);
-* fans out across a **PG matrix** (one job per supported major — see
+- fans out across a **PG matrix** (one job per supported major — see
   below) — each job boots its own `postgres:<major>` GHA service
   container and exposes it via `PGCONFORMANCE_PG_HOST=127.0.0.1` /
   `PGCONFORMANCE_PG_PORT=5432`;
-* runs `bun run build` then `bun run test:conformance` with
+- runs `bun run build` then `bun run test:conformance` with
   `PSQL_BINARY` pointed at `dist/cli.js`;
-* uploads each job's `psql-conformance.log` under a per-version
+- uploads each job's `psql-conformance.log` under a per-version
   artifact name (`psql-conformance-pg-<major>`) for triage.
 
 ### PG version matrix
@@ -329,17 +329,17 @@ harness — see `.github/workflows/psql-conformance.yml`. The workflow:
 Neon supports PG 14 through PG 18, so the conformance job runs as a
 matrix over `pg: ['14', '15', '16', '17', '18']`. Key points:
 
-* `fail-fast: false` — every PG version runs, even if one fails, so a
+- `fail-fast: false` — every PG version runs, even if one fails, so a
   PG-18-only break does not hide a PG-15 break.
-* Each matrix job is gated by `continue-on-error: true` on the
+- Each matrix job is gated by `continue-on-error: true` on the
   conformance step (same as the single-version setup); flipping to
   blocking is a follow-up — see the criteria above.
-* The job name encodes the matrix value (`psql-conformance (pg-18)`),
+- The job name encodes the matrix value (`psql-conformance (pg-18)`),
   so the GitHub check list is self-describing.
-* `concurrency: psql-conformance-${{ github.ref }}` with
+- `concurrency: psql-conformance-${{ github.ref }}` with
   `cancel-in-progress: true` so re-pushing a branch cancels the
   in-flight matrix.
-* The workflow exports `PGCONFORMANCE_PG_MAJOR=${{ matrix.pg }}` to the
+- The workflow exports `PGCONFORMANCE_PG_MAJOR=${{ matrix.pg }}` to the
   conformance step. The harness uses it to filter `KNOWN_FAILURES.yml`
   by the optional `pg:` field (see below) — so a PG-18-only waiver
   does **not** mask a regression on PG 14.
@@ -406,7 +406,7 @@ Flip to blocking when **all** of the following hold:
 
 When that bar is met:
 
-* drop `continue-on-error: true` from the `Run conformance suite` step
+- drop `continue-on-error: true` from the `Run conformance suite` step
   in `psql-conformance.yml`;
-* (optionally) add the `psql-conformance` job to the required-checks
+- (optionally) add the `psql-conformance` job to the required-checks
   set in the repo's branch protection rules.
