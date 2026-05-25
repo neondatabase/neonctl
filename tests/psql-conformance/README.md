@@ -214,6 +214,56 @@ when the maintainer runs step 1.
 upstream and so is not vendored. A custom port lives at
 `tap/030_pager.spec.ts` — see "Custom pager spec" below.
 
+`001_basic.pl` IS vendored under
+`vendor/postgres-18.0/src/bin/psql/t/`; the Vitest port lives at
+`tap/001_basic.spec.ts`. See "TAP-port specs" below for the gating /
+KNOWN_FAILURES interaction.
+
+### TAP-port specs
+
+The `tap/` directory holds direct ports of upstream PostgreSQL TAP
+tests (perl) to Vitest. Each spec gates its body on
+`RUN_INTEGRATION=1` and the presence of `dist/psql/index.js`; when
+either condition is missing the whole describe is skipped, so the
+default conformance run does not pay the testcontainers boot cost.
+
+Current inventory:
+
+| spec                          | upstream source                             | scope                                                                                                                |
+| ----------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `tap/001_basic.spec.ts`       | `src/bin/psql/t/001_basic.pl` (vendored)    | program args, `\timing`, `:ENCODING`, LISTEN/NOTIFY, server crash, `\errverbose`, multi-`-c`/`-f` + `--single-transaction`, `\copy ... DEFAULT`, `\watch`, `\g | pipe`, COPY-in-pipeline, `\restrict` |
+| `tap/030_pager.spec.ts`       | custom (upstream's `030_pager.pl` deleted)  | `PAGER`, `PSQL_PAGER`, `\pset pager off` / `always`                                                                  |
+
+Common helpers for these specs live in `tap/_helpers.ts`:
+
+* `SHOULD_RUN_INTEGRATION` — combined gate (`RUN_INTEGRATION=1` AND
+  `dist/psql/index.js` exists).
+* `makeLauncher(prefix)` — writes a one-shot Node launcher that imports
+  the built `runPsql` so spawned children execute the same code path
+  as `bin/cli.js`.
+* `runChild()` / `runPsqlScript()` — capture stdout/stderr/exit with a
+  bounded timeout; the script variant feeds SQL on stdin with `-XAtq`
+  (matches the PostgresNode `psql` helper).
+* `ensureFixture()` — re-hydrates the per-worker postgres connection
+  cache from the env vars that `globalSetup` populated.
+
+KNOWN_FAILURES integration: each `it(...)` in `001_basic.spec.ts` is
+routed through `expectMatches` (the same 4-quadrant gate that
+`regress.spec.ts` uses). A failure that has a matching entry in
+`KNOWN_FAILURES.yml` is recorded as an "expected failure" and the
+suite stays green; an unacknowledged failure goes red. As TS psql
+gaps are closed, the corresponding entry MUST be removed — the
+harness fails the run if a passing test still has a ledger entry.
+
+To run the integration tier locally:
+
+```sh
+bun run build
+RUN_INTEGRATION=1 \
+  npx vitest run --config tests/psql-conformance/vitest.config.ts \
+  tests/psql-conformance/tap/001_basic.spec.ts
+```
+
 ### Custom pager spec (`tap/030_pager.spec.ts`)
 
 The pager spec is a gated **integration** test that:

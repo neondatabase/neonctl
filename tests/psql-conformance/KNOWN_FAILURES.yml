@@ -26,4 +26,209 @@
 # file is empty. Once the harness is pointed at the TS implementation
 # (PSQL_BINARY=./bin/ts-psql), populate from a failing run.
 
-[]
+# ---------------------------------------------------------------------------
+# tap/001_basic — port of upstream src/bin/psql/t/001_basic.pl.
+#
+# Entries below were seeded from the first integration run of the port
+# against the embedded TS psql. Each is a real divergence from upstream
+# psql's behaviour that has been acknowledged but not yet fixed. As the
+# corresponding TS implementation gap is filled, the entry MUST be
+# removed (the harness fails the suite on a passing test that still has
+# a ledger entry — that is the 4-quadrant truth table at work).
+# ---------------------------------------------------------------------------
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\timing > emits "Time:" even when the query errors (lines 96-108)'
+  reason: 'TS psql exits 0 on `-c`/stdin script with SQL syntax error; upstream exits non-zero. Root cause: error path in executeInputString does not propagate to exit status.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'ENCODING is set and updates on `set client_encoding` (lines 112-119)'
+  reason: 'TS psql does not initialise the `ENCODING` psql variable from the server `client_encoding` parameter, nor does it refresh it on `SET client_encoding = ...`. `\echo :ENCODING` prints the literal `:ENCODING` token.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'LISTEN / NOTIFY > plain NOTIFY surfaces an "Asynchronous notification" line (lines 122-127)'
+  reason: 'TS psql does not surface asynchronous NotificationResponse messages from the server. Upstream prints `Asynchronous notification "foo" received from server process with PID N.` on each delivery.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'LISTEN / NOTIFY > NOTIFY ... with payload includes the payload (lines 129-134)'
+  reason: 'Same NotificationResponse gap as above; payload variant.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'terminates the backend mid-script -> exit code 2 and connection-lost stderr (lines 137-151)'
+  reason: 'TS psql exits 0 after the backend terminates the connection mid-script. Upstream exits 2 and emits a `connection to server was lost` diagnostic.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'multi-c / multi-f with --single-transaction > two -c inserts commit under ON_ERROR_STOP + --single-transaction (lines 220-234)'
+  reason: 'Multi `--command`/`--file` execution semantics differ. Either `--single-transaction` does not wrap the actions, or the actions return a non-zero exit; followup `SELECT count(*)` returns nothing.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'multi-c / multi-f with --single-transaction > -c then bad \copy under ON_ERROR_STOP -> non-zero exit, rollback (lines 236-250)'
+  reason: 'Same multi-action / single-transaction gap as above.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'multi-c / multi-f with --single-transaction > two -f inserts commit under ON_ERROR_STOP + --single-transaction (lines 258-272)'
+  reason: 'Same multi-action / single-transaction gap as above.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'multi-c / multi-f with --single-transaction > -f insert then bad \copy under ON_ERROR_STOP -> rollback (lines 274-288)'
+  reason: 'Same multi-action / single-transaction gap as above.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'multi-c / multi-f with --single-transaction > two -f then bad \copy via -c WITHOUT ON_ERROR_STOP -> exit !=0, transaction still commits (lines 293-307)'
+  reason: 'Same multi-action / single-transaction gap as above.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'multi-c / multi-f with --single-transaction > two -f then bad \copy via -f WITHOUT ON_ERROR_STOP -> exit 0, commit (lines 311-325)'
+  reason: 'Same multi-action / single-transaction gap as above.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'multi-c / multi-f with --single-transaction > -c, bad \copy via -f, -c WITHOUT ON_ERROR_STOP -> exit 0, all -c commits (lines 329-343)'
+  reason: 'Same multi-action / single-transaction gap as above.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\watch > runs N=3 iterations at 10ms interval (lines 371-373)'
+  reason: '\watch does not parse `c=N` (iteration count) or `i=F` (interval-in-seconds) named flags — upstream syntax. The TS parser raises `syntax error at or near "\\"`.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\watch > runs N=3 iterations at 0.0001s interval (sub-ms, lines 376-378)'
+  reason: 'Same \watch named-flag parser gap as above.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\watch > runs N=3 iterations with WATCH_INTERVAL=0 (lines 381-384)'
+  reason: 'Same \watch named-flag parser gap (the `c=` arg).'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\watch > rejects m=x (invalid minimum row count, lines 387-391)'
+  reason: '\watch does not reject `m=<non-numeric>`; the option silently no-ops.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\watch > rejects negative interval value (lines 411-414)'
+  reason: '\watch accepts negative positional interval (`-10`); upstream rejects with "incorrect interval value".'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\watch > rejects garbage interval value (lines 416-419)'
+  reason: '\watch accepts garbage positional interval (`10ab`); upstream rejects with "incorrect interval value".'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\watch > rejects out-of-range interval value (lines 421-424)'
+  reason: '\watch accepts out-of-range positional interval (`10e400`); upstream rejects.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\watch > WATCH_INTERVAL is set, updated on \set, restored on \unset (lines 438-448)'
+  reason: '`WATCH_INTERVAL` psql variable is not initialised to 2 by default and `\echo :WATCH_INTERVAL` does not substitute. Once :NAME substitution lands, the literal `:WATCH_INTERVAL` token will go away.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\g piped into an external program > single SELECT \g | cat > file (lines 462-464)'
+  reason: '\g | <program> is not implemented — psql currently emits to stdout instead of piping the rendered output through a child process. Output file is never written.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\g piped into an external program > multi-statement SELECT ... \g | cat > file emits both rows (lines 466-469)'
+  reason: 'Same \g pipe gap as above.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\g piped into an external program > COPY (values ...) TO STDOUT \g | cat > file (lines 481-484)'
+  reason: 'Same \g pipe gap as above (COPY variant).'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'COPY inside \startpipeline ... \endpipeline > COPY FROM STDIN inside a pipeline fails with "COPY in a pipeline" (lines 490-501)'
+  reason: 'TS psql does not emit "COPY in a pipeline is not supported, aborting connection"; the COPY-in-pipeline path hangs waiting for stdin.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'COPY inside \startpipeline ... \endpipeline > COPY TO STDOUT inside a pipeline fails (lines 504-511)'
+  reason: 'COPY TO STDOUT in pipeline succeeds (exit 0) — upstream aborts with the "COPY in a pipeline" diagnostic.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'COPY inside \startpipeline ... \endpipeline > \copy FROM inside a pipeline fails (lines 513-521)'
+  reason: '\copy in a pipeline currently hangs waiting for stdin instead of failing fast with the "COPY in a pipeline" diagnostic.'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: 'COPY inside \startpipeline ... \endpipeline > \copy TO inside a pipeline fails (lines 523-531)'
+  reason: 'Same \copy-in-pipeline gap as above (TO variant — exits 0 instead of aborting).'
+  owner: '@team-cli'
+  added: 2026-05-25
+
+- test: tap/001_basic
+  scope: subtest
+  subtest: '\restrict refuses \! (shell) until \unrestrict (lines 533-538)'
+  reason: '\restrict mode does not block \\! (or other shell-touching meta-commands) by exiting non-zero; upstream emits "backslash commands are restricted; only \\unrestrict is allowed".'
+  owner: '@team-cli'
+  added: 2026-05-25
