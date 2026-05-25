@@ -546,7 +546,7 @@ export const executeAndPrint = async (
   } finally {
     if (ctx.settings.timing) {
       stats.durationMs = Date.now() - started;
-      ctx.stdout.write(formatDurationMs(stats.durationMs) + '\n');
+      ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
     }
   }
   return stats;
@@ -613,7 +613,7 @@ export const sendQuery = async (
       stats.hadError = true;
       if (ctx.settings.timing) {
         stats.durationMs = Date.now() - started;
-        ctx.stdout.write(formatDurationMs(stats.durationMs) + '\n');
+        ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
       }
       return stats;
     }
@@ -638,7 +638,7 @@ export const sendQuery = async (
       stats.hadError = true;
       if (ctx.settings.timing) {
         stats.durationMs = Date.now() - started;
-        ctx.stdout.write(formatDurationMs(stats.durationMs) + '\n');
+        ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
       }
       return stats;
     }
@@ -696,7 +696,7 @@ export const sendQuery = async (
 
   if (ctx.settings.timing) {
     stats.durationMs = Date.now() - started;
-    ctx.stdout.write(formatDurationMs(stats.durationMs) + '\n');
+    ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
   }
   return stats;
 };

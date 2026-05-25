@@ -428,7 +428,7 @@ const dispatchSendQuery = async (
       return false;
     } finally {
       if (ctx.settings.timing) {
-        ctx.stdout.write(formatDurationMs(Date.now() - started) + '\n');
+        ctx.stdout.write('\n' + formatDurationMs(Date.now() - started) + '\n');
       }
     }
   }
@@ -488,7 +488,7 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   const computePrompt = (status: PromptContext['promptStatus']): string => {
     if (ctx.settings.notty) return '';
     const name =
-      queryBuf.length === 0 || status === 'ready'
+      queryBuf.trim().length === 0 || status === 'ready'
         ? 'PROMPT1'
         : status === 'copy'
           ? 'PROMPT3'
@@ -612,9 +612,11 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       // Prompt status drives `%R`. When the query buffer holds an incomplete
       // statement but the scanner isn't inside any special context (paren,
       // comment, quoted-string), it still reports `'ready'`; map that to
-      // `'continue'` so PROMPT2 renders `-` instead of `=`.
+      // `'continue'` so PROMPT2 renders `-` instead of `=`. A whitespace-only
+      // residue (e.g. a trailing `\n` left over after a `;` boundary) counts
+      // as empty so the next prompt is PROMPT1 not PROMPT2.
       const status: PromptContext['promptStatus'] =
-        queryBuf.length === 0
+        queryBuf.trim().length === 0
           ? 'ready'
           : scanState.promptStatus === 'ready'
             ? 'continue'
