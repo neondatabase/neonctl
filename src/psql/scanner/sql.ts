@@ -509,7 +509,11 @@ export const scanSql = (input: string, state?: ScanState): ScanResult => {
         // `\d+`, `\dt+` etc.).
         const first = input[i];
         if (first !== undefined && /[A-Za-z]/.test(first)) {
-          while (cmdEnd < input.length && /[A-Za-z0-9+]/.test(input[cmdEnd])) {
+          // Backslash command names are ASCII alnum + `_` + `+` (the trailing
+          // modifier on `\d+`/`\dt+`). Underscore is required for psql's
+          // multi-word commands: `\lo_import`, `\lo_export`, `\lo_list`,
+          // `\lo_unlink`, `\bind_named`, `\close_prepared`.
+          while (cmdEnd < input.length && /[A-Za-z0-9_+]/.test(input[cmdEnd])) {
             cmdEnd++;
           }
         } else if (first !== undefined && /[?!|]/.test(first)) {

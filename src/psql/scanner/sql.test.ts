@@ -250,6 +250,21 @@ const corpus: CorpusCase[] = [
     expectedSplits: ['\\?'],
   },
   {
+    name: 'backslash command with underscore (\\lo_import)',
+    input: '\\lo_import /path/to/file',
+    expectedSplits: ['\\lo_import /path/to/file'],
+  },
+  {
+    name: 'backslash command with underscore (\\bind_named)',
+    input: '\\bind_named foo 1 2',
+    expectedSplits: ['\\bind_named foo 1 2'],
+  },
+  {
+    name: 'backslash command with + modifier (\\dt+)',
+    input: '\\dt+',
+    expectedSplits: ['\\dt+'],
+  },
+  {
     name: '\\d+ verbose form',
     input: '\\d+ public.users',
     expectedSplits: ['\\d+ public.users'],
@@ -392,6 +407,23 @@ describe('scanSql / splitStatements — corpus', () => {
 // ---------------------------------------------------------------------------
 
 describe('scanSql — incremental feeding', () => {
+  test('backslash command names include underscore (cmd field)', () => {
+    const r = scanSql('\\lo_import file.bin');
+    expect(r.kind).toBe('backslash');
+    if (r.kind === 'backslash') {
+      expect(r.cmd).toBe('lo_import');
+      expect(r.rest).toBe(' file.bin');
+    }
+  });
+
+  test('backslash command names include trailing + modifier', () => {
+    const r = scanSql('\\dt+');
+    expect(r.kind).toBe('backslash');
+    if (r.kind === 'backslash') {
+      expect(r.cmd).toBe('dt+');
+    }
+  });
+
   test('character-by-character feed reaches same boundaries', () => {
     const input = "SELECT 'a;b'; SELECT 2;";
     const splits: string[] = [];
