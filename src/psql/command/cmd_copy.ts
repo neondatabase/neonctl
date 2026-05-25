@@ -1,0 +1,711 @@
+/**
+ * psql `\copy` backslash command (WP-16).
+ *
+ * Port of `parse_slash_copy()` + `do_copy()` from upstream `src/bin/psql/copy.c`.
+ * The wire-level protocol (CopyData/CopyDone/CopyFail framing and the
+ * in-copy-in/in-copy-out state machine) lives in `../wire/connection.ts`; here
+ * we own:
+ *
+ *   1. Lexing the user-supplied tail of `\copy …`. Mirrors the upstream
+ *      `strtokx()`-driven tokeniser: we ratchet through the input with the
+ *      same whitespace/delim/quote rules so the grammar matches psql.
+ *   2. Building the COPY SQL the server sees. The client side does
+ *      file/program plumbing; the server always sees `... FROM STDIN ...` /
+ *      `... TO STDOUT ...` so the COPY data flows over the protocol stream.
+ *   3. Driving the protocol: open the file (or spawn `PROGRAM 'cmd'`), then
+ *      `startCopyIn(sql)` / `startCopyOut(sql)`, push/pull bytes, and print
+ *      the upstream-style `COPY <N>` summary on success.
+ *
+ * Grammar accepted (matching upstream documentation):
+ *
+ *   \copy [BINARY] tablename [(columnlist)] FROM
+ *           ( 'file' | PROGRAM 'cmd' | STDIN | PSTDIN ) [options]
+ *   \copy [BINARY] tablename [(columnlist)] TO
+ *           ( 'file' | PROGRAM 'cmd' | STDOUT | PSTDOUT ) [options]
+ *   \copy (subquery) TO   ( 'file' | PROGRAM 'cmd' | STDOUT | PSTDOUT ) [options]
+ *
+ * `\copy (subquery) FROM ...` is rejected — COPY FROM requires a real
+ * destination table, so the subquery form only makes sense with `TO`.
+ *
+ * Limitations vs upstream:
+ *   - Binary COPY (server-side `WITH (FORMAT BINARY)` option) works for the
+ *     I/O path but the BINARY *keyword* legacy syntax is parsed and re-emitted
+ *     verbatim; we don't attempt to validate options.
+ *   - The "EOF marker" (`\.` on its own line) handling that psql does when
+ *     stdin is the same as the current input file is NOT implemented: we
+ *     stream the whole file as-is. Standalone scripts that embed COPY data
+ *     inline keep working because the server's text-format parser handles
+ *     the `\.` terminator itself.
+ *   - PSTDIN/PSTDOUT are treated as STDIN/STDOUT (no separate "psql stdin
+ *     vs current input source" distinction — REPL plumbing isn't wired yet).
+ */
+
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import {
+  createReadStream,
+  createWriteStream,
+  promises as fsPromises,
+} from 'node:fs';
+import { Buffer } from 'node:buffer';
+import type { Readable, Writable } from 'node:stream';
+
+import type {
+  BackslashCmdSpec,
+  BackslashContext,
+  BackslashRegistry,
+  BackslashResult,
+} from '../types/backslash.js';
+import type { Connection } from '../types/connection.js';
+
+import { pumpReadable } from '../wire/copy.js';
+
+import { writeErr, writeOut } from './shared.js';
+
+// ---------------------------------------------------------------------------
+// parse_slash_copy
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of {@link parseSlashCopy}: a normalized description of the COPY the
+ * user asked for. `before_tofrom` is everything to the left of `FROM`/`TO` in
+ * the form the backend expects (table + optional column list, or a
+ * parenthesized subquery). `after_tofrom` is the post-filename options blob
+ * we shovel through verbatim. The client-side `file` / `program` / `direction`
+ * fields drive the I/O side of {@link doCopy}.
+ */
+export type ParsedCopy = {
+  /** Text emitted between `COPY` and `FROM`/`TO` on the server side. */
+  beforeToFrom: string;
+  /** Verbatim post-filename options (the `WITH (...)` blob), or null. */
+  afterToFrom: string | null;
+  /** Filename / shell command, or null when STDIN/STDOUT. */
+  file: string | null;
+  /** True when `PROGRAM 'cmd'` was given; runs via `sh -c`. */
+  program: boolean;
+  /** PSTDIN/PSTDOUT — pipe to psql's own stdio. We ignore the distinction. */
+  psqlInOut: boolean;
+  /** Direction of the transfer. */
+  direction: 'from' | 'to';
+};
+
+const WHITESPACE = ' \t\n\r';
+
+/**
+ * Tokenise the next term of the `\copy` tail. Mirrors upstream's `strtokx`
+ * call sites: each call passes a different combination of (delim chars,
+ * quote chars, allow-doubled-quotes, allow-E-strings). We faithfully replay
+ * those: this isn't a general lexer, it's a state machine indexed by the
+ * caller's intent.
+ *
+ * Returns `{ token, rest }`. `token === null` ⇒ end-of-input.
+ *
+ * Key differences from upstream `strtokx`:
+ *   - We return tokens WITH outer quotes intact when the caller asked for
+ *     them. `dequote` handles strip if desired. Upstream stores quotes
+ *     in-place and optionally strips via `strip_quotes`.
+ *   - Delimiter characters in `delim` are returned as single-char tokens
+ *     when they're the first non-whitespace byte.
+ */
+const tokenize = (
+  input: string,
+  delim: string,
+  quote: string,
+  doubleQuoteEscape: boolean,
+): { token: string | null; rest: string } => {
+  let i = 0;
+  const n = input.length;
+  // 1. Skip leading whitespace.
+  while (i < n && WHITESPACE.includes(input[i])) i++;
+  if (i >= n) return { token: null, rest: '' };
+
+  // 2. Delimiter character returned as single-char token.
+  if (delim.length > 0 && delim.includes(input[i])) {
+    const token = input[i];
+    i++;
+    while (i < n && WHITESPACE.includes(input[i])) i++;
+    return { token, rest: input.slice(i) };
+  }
+
+  // 3. Quoted token. Upstream allows backslash-escape inside `(query)` forms
+  // when standard_conforming_strings is off; we model that with the
+  // `doubleQuoteEscape` flag (true ⇒ backslash escapes any next char).
+  if (quote.length > 0 && quote.includes(input[i])) {
+    const thisQuote = input[i];
+    const start = i;
+    i++;
+    while (i < n) {
+      const c = input[i];
+      if (doubleQuoteEscape && c === '\\' && i + 1 < n) {
+        i += 2;
+        continue;
+      }
+      if (c === thisQuote && input[i + 1] === thisQuote) {
+        // Doubled quote — stays in token; caller dequotes if needed.
+        i += 2;
+        continue;
+      }
+      if (c === thisQuote) {
+        i++;
+        break;
+      }
+      i++;
+    }
+    const token = input.slice(start, i);
+    while (i < n && WHITESPACE.includes(input[i])) i++;
+    return { token, rest: input.slice(i) };
+  }
+
+  // 4. Bareword: scan to next whitespace, delim, or quote.
+  const start = i;
+  while (i < n) {
+    const c = input[i];
+    if (WHITESPACE.includes(c)) break;
+    if (delim.length > 0 && delim.includes(c)) break;
+    if (quote.length > 0 && quote.includes(c)) break;
+    i++;
+  }
+  const token = input.slice(start, i);
+  while (i < n && WHITESPACE.includes(input[i])) i++;
+  return { token, rest: input.slice(i) };
+};
+
+/**
+ * Strip surrounding single quotes from a filename / program argument and
+ * undouble any embedded quotes. Mirrors upstream's `strip_quotes(token, '\'', 0)`.
+ */
+const stripSingleQuotes = (token: string): string => {
+  if (token.length < 2 || !token.startsWith("'") || !token.endsWith("'")) {
+    return token;
+  }
+  let out = '';
+  let i = 1;
+  const end = token.length - 1;
+  while (i < end) {
+    if (token[i] === "'" && token[i + 1] === "'") {
+      out += "'";
+      i += 2;
+    } else {
+      out += token[i];
+      i++;
+    }
+  }
+  return out;
+};
+
+/**
+ * Expand a leading `~/` in filename arguments. Upstream `expand_tilde` only
+ * touches the very first character; we do the same (no `~user/` form, since
+ * Node doesn't expose `getpwnam` cleanly).
+ */
+const expandTilde = (filePath: string): string => {
+  if (!filePath.startsWith('~')) return filePath;
+  if (filePath === '~' || filePath.startsWith('~/')) {
+    const home = process.env.HOME ?? process.env.USERPROFILE;
+    if (home === undefined) return filePath;
+    return home + filePath.slice(1);
+  }
+  return filePath;
+};
+
+export type ParseSlashCopyResult =
+  | { ok: true; value: ParsedCopy }
+  | { ok: false; error: string };
+
+/**
+ * Parse the tail of a `\copy ...` line. Returns a {@link ParsedCopy} on
+ * success or an error message on syntax failure (mirroring upstream's
+ * `pg_log_error("\\copy: parse error at \"%s\"")`).
+ *
+ * The input is everything after `\copy` (the command name itself is stripped
+ * by the dispatcher's `BackslashContext.rawArgs`).
+ */
+export const parseSlashCopy = (input: string): ParseSlashCopyResult => {
+  let beforeToFrom = '';
+  let rest = input;
+  let token: string | null;
+
+  // Helper to keep the failure messages consistent with upstream.
+  const errAt = (tok: string | null): ParseSlashCopyResult => ({
+    ok: false,
+    error:
+      tok !== null && tok.length > 0
+        ? `parse error at "${tok}"`
+        : 'parse error at end of line',
+  });
+
+  // First token: optional BINARY, or table-name / "(" for subquery.
+  let r1 = tokenize(rest, '.,()', '"', false);
+  token = r1.token;
+  rest = r1.rest;
+  if (token === null) return errAt(null);
+
+  // Optional legacy BINARY keyword (pre-7.3 syntax). Re-emit then read next.
+  if (token.toLowerCase() === 'binary') {
+    beforeToFrom += token;
+    r1 = tokenize(rest, '.,()', '"', false);
+    token = r1.token;
+    rest = r1.rest;
+    if (token === null) return errAt(null);
+  }
+
+  // `(query)` subquery form? Re-emit balanced-paren contents verbatim.
+  let isSubquery = false;
+  if (token === '(') {
+    isSubquery = true;
+    let parens = 1;
+    while (parens > 0) {
+      beforeToFrom += ' ';
+      beforeToFrom += token;
+      const r = tokenize(rest, '()', '"\'', true);
+      token = r.token;
+      rest = r.rest;
+      if (token === null) return errAt(null);
+      if (token === '(') parens++;
+      else if (token === ')') parens--;
+    }
+  }
+
+  beforeToFrom += beforeToFrom.length > 0 ? ' ' : '';
+  beforeToFrom += token;
+
+  // Next token: schema-separator `.`, column-list opener `(`, or FROM/TO.
+  let r2 = tokenize(rest, '.,()', '"', false);
+  token = r2.token;
+  rest = r2.rest;
+  if (token === null) return errAt(null);
+
+  // Schema-qualified `schema.table` — upstream just re-emits all three tokens.
+  if (token === '.') {
+    beforeToFrom += token;
+    r2 = tokenize(rest, '.,()', '"', false);
+    token = r2.token;
+    rest = r2.rest;
+    if (token === null) return errAt(null);
+    beforeToFrom += token;
+    r2 = tokenize(rest, '.,()', '"', false);
+    token = r2.token;
+    rest = r2.rest;
+    if (token === null) return errAt(null);
+  }
+
+  // Parenthesised column list `(col1, col2, …)`.
+  if (token === '(') {
+    for (;;) {
+      beforeToFrom += ' ';
+      beforeToFrom += token;
+      const r = tokenize(rest, '()', '"', false);
+      token = r.token;
+      rest = r.rest;
+      if (token === null) return errAt(null);
+      if (token === ')') break;
+    }
+    beforeToFrom += ' ';
+    beforeToFrom += token;
+    r2 = tokenize(rest, '.,()', '"', false);
+    token = r2.token;
+    rest = r2.rest;
+    if (token === null) return errAt(null);
+  }
+
+  // FROM / TO keyword.
+  let direction: 'from' | 'to';
+  if (token.toLowerCase() === 'from') {
+    direction = 'from';
+  } else if (token.toLowerCase() === 'to') {
+    direction = 'to';
+  } else {
+    return errAt(token);
+  }
+
+  // \copy (subquery) FROM is invalid — subqueries only make sense with TO.
+  if (isSubquery && direction === 'from') {
+    return {
+      ok: false,
+      error: 'cannot use COPY FROM with a (subquery) source',
+    };
+  }
+
+  // Filename / PROGRAM / STDIN / STDOUT / PSTDIN / PSTDOUT.
+  let r3 = tokenize(rest, ';', "'", false);
+  token = r3.token;
+  rest = r3.rest;
+  if (token === null) return errAt(null);
+
+  let file: string | null = null;
+  let program = false;
+  let psqlInOut = false;
+  const lower = token.toLowerCase();
+
+  if (lower === 'program') {
+    r3 = tokenize(rest, ';', "'", false);
+    token = r3.token;
+    rest = r3.rest;
+    if (token === null) return errAt(null);
+    if (!token.startsWith("'") || !token.endsWith("'") || token.length < 2) {
+      return errAt(token);
+    }
+    file = stripSingleQuotes(token);
+    program = true;
+  } else if (lower === 'stdin' || lower === 'stdout') {
+    file = null;
+  } else if (lower === 'pstdin' || lower === 'pstdout') {
+    file = null;
+    psqlInOut = true;
+  } else {
+    file = expandTilde(stripSingleQuotes(token));
+  }
+
+  // Collect the rest as the post-filename options blob (verbatim).
+  let afterToFrom: string | null = null;
+  rest = rest.trim();
+  if (rest.length > 0) {
+    afterToFrom = rest;
+  }
+
+  return {
+    ok: true,
+    value: {
+      beforeToFrom,
+      afterToFrom,
+      file,
+      program,
+      psqlInOut,
+      direction,
+    },
+  };
+};
+
+// ---------------------------------------------------------------------------
+// do_copy
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the SQL string sent to the backend. The server always sees
+ * `STDIN`/`STDOUT` here — client-side `'file'` / `PROGRAM 'cmd'` plumbing is
+ * invisible to the server because that's what frontend-driven COPY is for.
+ */
+const buildCopySql = (opts: ParsedCopy): string => {
+  const tail = opts.direction === 'from' ? ' FROM STDIN ' : ' TO STDOUT ';
+  const after = opts.afterToFrom !== null ? opts.afterToFrom : '';
+  return `COPY ${opts.beforeToFrom}${tail}${after}`.trimEnd();
+};
+
+/**
+ * Parse a CommandComplete tag like `"COPY 17"` into its numeric row count.
+ * Returns `null` when the tag is unparseable; callers print it verbatim then.
+ */
+const parseCopyTagRows = (tag: string | null): number | null => {
+  if (tag === null) return null;
+  const m = /^COPY (\d+)$/.exec(tag.trim());
+  if (!m) return null;
+  return parseInt(m[1], 10);
+};
+
+/**
+ * Spawn `sh -c cmd` for `PROGRAM '...'`. Returns the child process plus the
+ * appropriate stream end depending on COPY direction. Stderr is inherited so
+ * the user sees diagnostics in their terminal.
+ */
+type ProgramHandles = {
+  child: ChildProcessWithoutNullStreams;
+  readable: Readable | null;
+  writable: Writable | null;
+  closed: Promise<void>;
+};
+
+const spawnProgram = (
+  cmd: string,
+  direction: 'from' | 'to',
+): ProgramHandles => {
+  const child = spawn('sh', ['-c', cmd], {
+    stdio: [
+      direction === 'to' ? 'pipe' : 'inherit',
+      direction === 'from' ? 'pipe' : 'inherit',
+      'inherit',
+    ],
+  }) as ChildProcessWithoutNullStreams;
+  const closed = new Promise<void>((resolve) => {
+    child.once('close', () => {
+      resolve();
+    });
+    child.once('error', () => {
+      resolve();
+    });
+  });
+  return {
+    child,
+    readable: direction === 'from' ? child.stdout : null,
+    writable: direction === 'to' ? child.stdin : null,
+    closed,
+  };
+};
+
+/**
+ * Drain a `CopyOutStream` (AsyncIterable<Buffer>) into a Node Writable. We
+ * await each write to honour backpressure. Mirrors upstream's `handleCopyOut`
+ * inner loop.
+ */
+const drainCopyTo = async (
+  conn: Connection,
+  sql: string,
+  out: Writable,
+): Promise<void> => {
+  const copyOut = await conn.startCopyOut(sql);
+  for await (const chunk of copyOut) {
+    if (chunk.length === 0) continue;
+    await new Promise<void>((resolve, reject) => {
+      out.write(chunk, (err) => {
+        if (err !== null && err !== undefined) reject(err);
+        else resolve();
+      });
+    });
+  }
+};
+
+export type DoCopyResult =
+  | { ok: true; tag: string | null }
+  | { ok: false; error: string };
+
+/**
+ * Execute a parsed `\copy`. Opens the file (or spawns the program), wires the
+ * stream into `startCopyIn` / `startCopyOut`, and returns the resulting
+ * CommandComplete tag (e.g. `"COPY 17"`) on success.
+ */
+export const doCopy = async (
+  conn: Connection,
+  opts: ParsedCopy,
+): Promise<DoCopyResult> => {
+  const sql = buildCopySql(opts);
+
+  // Helper to surface a uniform error shape. We deliberately keep the upstream
+  // wording for the common "could not execute command" / "<file>: <reason>"
+  // variants so tests / users that grep stderr keep working.
+  const failWith = (msg: string): DoCopyResult => ({ ok: false, error: msg });
+
+  // Resolve file path / program command into a Readable/Writable.
+  let readable: Readable | null = null;
+  let writable: Writable | null = null;
+  let program: ProgramHandles | null = null;
+  /** Cleanup callbacks run in `finally`. */
+  const cleanups: (() => Promise<void> | void)[] = [];
+
+  if (opts.direction === 'from') {
+    if (opts.file !== null) {
+      if (opts.program) {
+        try {
+          program = spawnProgram(opts.file, 'from');
+        } catch (err) {
+          return failWith(
+            `could not execute command "${opts.file}": ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        readable = program.readable;
+        const p = program;
+        cleanups.push(async () => {
+          try {
+            p.child.stdout?.destroy();
+          } catch {
+            // ignore
+          }
+          await p.closed;
+        });
+      } else {
+        try {
+          // fstat the path to reject directories before we open a stream.
+          const stat = await fsPromises.stat(opts.file);
+          if (stat.isDirectory()) {
+            return failWith(`${opts.file}: cannot copy from/to a directory`);
+          }
+        } catch (err) {
+          return failWith(
+            `${opts.file}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        const stream = createReadStream(opts.file);
+        readable = stream;
+        cleanups.push(
+          () =>
+            new Promise<void>((resolve) => {
+              if (stream.destroyed) {
+                resolve();
+                return;
+              }
+              stream.once('close', () => {
+                resolve();
+              });
+              stream.destroy();
+            }),
+        );
+      }
+    } else {
+      // STDIN form — read from process.stdin. We don't differentiate
+      // PSTDIN/STDIN here (see file header limitations).
+      readable = process.stdin;
+    }
+  } else {
+    // direction === 'to'
+    if (opts.file !== null) {
+      if (opts.program) {
+        try {
+          program = spawnProgram(opts.file, 'to');
+        } catch (err) {
+          return failWith(
+            `could not execute command "${opts.file}": ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        writable = program.writable;
+        const p = program;
+        cleanups.push(async () => {
+          try {
+            p.child.stdin?.end();
+          } catch {
+            // ignore
+          }
+          await p.closed;
+        });
+      } else {
+        try {
+          // Reject if the path exists and is a directory.
+          const stat = await fsPromises.stat(opts.file).catch(() => null);
+          if (stat?.isDirectory()) {
+            return failWith(`${opts.file}: cannot copy from/to a directory`);
+          }
+        } catch {
+          // ENOENT is fine for write — createWriteStream will create it.
+        }
+        const stream = createWriteStream(opts.file);
+        writable = stream;
+        cleanups.push(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              stream.end((err?: Error | null) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            }),
+        );
+      }
+    } else {
+      // STDOUT form. Cast through unknown because process.stdout's `Writable`
+      // type isn't strictly compatible with the generic interface.
+      writable = process.stdout as unknown as Writable;
+    }
+  }
+
+  // Drive the COPY.
+  let tag: string | null = null;
+  try {
+    if (opts.direction === 'from') {
+      if (readable === null) {
+        return failWith('no input stream for COPY FROM');
+      }
+      const copyIn = await conn.startCopyIn(sql);
+      await pumpReadable(conn, readable, copyIn);
+    } else {
+      if (writable === null) {
+        return failWith('no output stream for COPY TO');
+      }
+      await drainCopyTo(conn, sql, writable);
+    }
+    // The connection records the trailing CommandComplete tag for us. We
+    // narrow via a duck-type check so we don't tighten the Connection type.
+    tag = readLastCopyTag(conn);
+  } catch (err) {
+    return failWith(err instanceof Error ? err.message : String(err));
+  } finally {
+    for (const c of cleanups) {
+      try {
+        await c();
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+
+  return { ok: true, tag };
+};
+
+/**
+ * Read the connection's `lastCopyTag` if the implementation exposes it.
+ * PgConnection sets this property after each COPY; mock connections in tests
+ * may not, in which case we return null and the caller prints just `COPY`.
+ */
+const readLastCopyTag = (conn: Connection): string | null => {
+  const maybe = (conn as { lastCopyTag?: unknown }).lastCopyTag;
+  if (typeof maybe === 'string') return maybe;
+  return null;
+};
+
+// ---------------------------------------------------------------------------
+// Backslash command registration
+// ---------------------------------------------------------------------------
+
+/**
+ * `\copy` command spec. Mirrors upstream's `exec_command_a_or_copy` path
+ * (well, just the copy half). On success we print the trailing `COPY <N>`
+ * footer to stdout, matching `do_copy`'s expectation that SendQuery's normal
+ * result-printing pipeline emits the tag.
+ */
+export const cmdCopy: BackslashCmdSpec = {
+  name: 'copy',
+  helpKey: 'copy',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    if (!ctx.settings.db) {
+      ctx.settings.lastErrorResult = { message: 'no connection to the server' };
+      writeErr('\\copy: no connection to the server\n');
+      return { status: 'error' };
+    }
+
+    const raw = ctx.restOfLine();
+    if (raw.trim().length === 0) {
+      ctx.settings.lastErrorResult = { message: 'arguments required' };
+      writeErr('\\copy: arguments required\n');
+      return { status: 'error' };
+    }
+
+    const parsed = parseSlashCopy(raw);
+    if (!parsed.ok) {
+      ctx.settings.lastErrorResult = { message: parsed.error };
+      writeErr(`\\copy: ${parsed.error}\n`);
+      return { status: 'error' };
+    }
+
+    const result = await doCopy(ctx.settings.db, parsed.value);
+    if (!result.ok) {
+      ctx.settings.lastErrorResult = { message: result.error };
+      writeErr(`\\copy: ${result.error}\n`);
+      return { status: 'error' };
+    }
+
+    // Print the upstream-style command tag (e.g. "COPY 17") so users see the
+    // same summary as `psql`. If the connection didn't surface a tag, just
+    // print `COPY` — the operation still succeeded.
+    const rows = parseCopyTagRows(result.tag);
+    if (result.tag !== null && rows !== null) {
+      writeOut(`COPY ${String(rows)}\n`);
+    } else if (result.tag !== null) {
+      writeOut(`${result.tag}\n`);
+    } else {
+      writeOut('COPY\n');
+    }
+    return { status: 'ok' };
+  },
+};
+
+/**
+ * Register the `\copy` command on the supplied registry. Called from
+ * `dispatch.ts::defaultRegistry()` (one new line).
+ */
+export const registerCopyCommands = (registry: BackslashRegistry): void => {
+  registry.register(cmdCopy);
+};
+
+// Re-export for direct callers that want to bypass the dispatcher (tests).
+export { buildCopySql };
+
+/**
+ * Convenience: encode a JS string as UTF-8 bytes for COPY FROM. Exposed so
+ * tests can feed a `Buffer` to {@link doCopy} without re-implementing the
+ * Readable shim.
+ */
+export const toBuffer = (s: string): Buffer => Buffer.from(s, 'utf8');

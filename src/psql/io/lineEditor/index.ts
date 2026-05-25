@@ -1,0 +1,717 @@
+/**
+ * Public-facing line editor.
+ *
+ * Glues the streaming VT100 decoder, the keymap, the line buffer, and
+ * the completion engine into a `readLine(prompt)` Promise-returning API.
+ *
+ * Architecture
+ * ------------
+ *
+ *   stdin (raw mode)
+ *      │ bytes
+ *      ▼
+ *   Vt100Decoder ─── KeyEvent[]
+ *      │
+ *      ▼
+ *   dispatch(state, ev) ─── EditorAction
+ *      │
+ *      ▼
+ *   render(prompt, state, stdout)  (CSI writes)
+ *      │
+ *      └── on submit: resolve readLine() with state.buffer.text
+ *      └── on ^C:    reject with SignalError
+ *      └── on ^D:    resolve with EOF symbol
+ *
+ * Rendering strategy
+ * ------------------
+ *
+ *  Naive but robust: track the number of rows last drawn, on every
+ *  redraw move the cursor up to the prompt's anchor row and rewrite the
+ *  whole `prompt + buffer.text` block. This avoids per-keystroke diffing
+ *  bugs at the cost of a few extra bytes per keystroke. For the
+ *  ~80-char lines users actually type interactively this is invisible.
+ *
+ *  Wrapping uses the inlined `displayWidth` (port of WP-09's table) so
+ *  East-Asian wide characters and zero-width combining marks render
+ *  correctly. We never call `stdout.write` with embedded `\n`; line
+ *  breaks come from explicit `\r\n` only on submit or when we need to
+ *  display multi-row output (paste-mode newlines, candidate listings).
+ */
+
+import { LineBuffer } from './buffer.js';
+import {
+  dispatch,
+  makeState,
+  type EditorAction,
+  type EditorState,
+} from './keymap.js';
+import {
+  CompletionState,
+  type Completer,
+  type CompletionResult,
+  formatCandidates,
+} from './complete.js';
+import {
+  BEL,
+  CR,
+  LF,
+  Vt100Decoder,
+  csiClearScreen,
+  csiDown,
+  csiEraseToEol,
+  csiLeft,
+  csiRight,
+  csiUp,
+  disableBracketedPaste,
+  enableBracketedPaste,
+  type KeyEvent,
+} from './vt100.js';
+
+export type LineEditorOptions = {
+  stdin?: NodeJS.ReadStream | NodeJS.ReadableStream;
+  stdout?: NodeJS.WritableStream;
+  history?: string[];
+  completer?: Completer;
+  bracketedPaste?: boolean;
+};
+
+/** Thrown when ^C cancels the current line. */
+export class SignalError extends Error {
+  readonly signal: 'SIGINT';
+  constructor() {
+    super('SIGINT');
+    this.name = 'SignalError';
+    this.signal = 'SIGINT';
+  }
+}
+
+export type { Completer, CompletionResult };
+
+/**
+ * Sentinel for "Ctrl-D on an empty line". Compared with `===` by callers
+ * so we don't accidentally match a literal string.
+ */
+const EOF_SYMBOL = Symbol('LineEditor.EOF');
+
+export type ReadLineResult = string | typeof EOF_SYMBOL;
+
+export class LineEditor {
+  readonly EOF = EOF_SYMBOL;
+
+  private readonly stdin: NodeJS.ReadStream | NodeJS.ReadableStream;
+  private readonly stdout: NodeJS.WritableStream;
+  private readonly bracketedPaste: boolean;
+  private readonly completer?: Completer;
+
+  private state: EditorState;
+  private decoder = new Vt100Decoder();
+  private completion = new CompletionState();
+
+  /** Event queue; processed serially so async completion blocks subsequent keys. */
+  private eventQueue: KeyEvent[] = [];
+  private processing = false;
+
+  /** Active readLine, if any. */
+  private active: {
+    prompt: string;
+    resolve: (v: ReadLineResult) => void;
+    reject: (e: Error) => void;
+    /** Number of terminal rows currently occupied by prompt+line. */
+    rowsDrawn: number;
+    /** Cursor row within the drawn block (0-based). */
+    cursorRow: number;
+    /** Cursor column within its row (0-based). */
+    cursorCol: number;
+    /** Search mode state, when active. */
+    search: SearchState | null;
+  } | null = null;
+
+  /** Listeners attached to stdin while readLine is active. */
+  private dataListener: ((chunk: Buffer) => void) | null = null;
+  private wasRaw = false;
+  /** TTY state restoration handlers. */
+  private exitListener: (() => void) | null = null;
+
+  constructor(opts: LineEditorOptions = {}) {
+    this.stdin = opts.stdin ?? process.stdin;
+    this.stdout = opts.stdout ?? process.stdout;
+    this.bracketedPaste = opts.bracketedPaste ?? true;
+    this.completer = opts.completer;
+    this.state = makeState(opts.history ?? []);
+  }
+
+  /** Read one line. Resolves on Enter; rejects on Ctrl-C. */
+  readLine(prompt: string): Promise<ReadLineResult> {
+    if (this.active !== null) {
+      return Promise.reject(
+        new Error('LineEditor.readLine called re-entrantly'),
+      );
+    }
+    return new Promise<ReadLineResult>((resolve, reject) => {
+      // Fresh buffer for the new prompt.
+      this.state.buffer = new LineBuffer();
+      this.state.historyIndex = -1;
+      this.state.liveSnapshot = null;
+      this.completion.reset();
+      this.active = {
+        prompt,
+        resolve,
+        reject,
+        rowsDrawn: 0,
+        cursorRow: 0,
+        cursorCol: 0,
+        search: null,
+      };
+      try {
+        this.enterRaw();
+      } catch (err) {
+        this.active = null;
+        reject(err as Error);
+        return;
+      }
+      this.render();
+    });
+  }
+
+  /** Force redraw (call from SIGWINCH handler). */
+  redraw(): void {
+    if (this.active !== null) this.render(true);
+  }
+
+  /** Cleanup raw mode and restore TTY. Idempotent. */
+  close(): void {
+    this.exitRaw();
+  }
+
+  /** Push a line into the in-memory history. */
+  pushHistory(line: string): void {
+    if (line.length === 0) return;
+    const last = this.state.history[this.state.history.length - 1];
+    if (last === line) return;
+    this.state.history.push(line);
+  }
+
+  /** Replace the in-memory history list. */
+  setHistory(lines: string[]): void {
+    this.state.history = lines.slice();
+    this.state.historyIndex = -1;
+    this.state.liveSnapshot = null;
+  }
+
+  // -------------------------------------------------------------------------
+  // I/O wiring
+  // -------------------------------------------------------------------------
+
+  private enterRaw(): void {
+    const s = this.stdin;
+    if (isTtyReadStream(s)) {
+      this.wasRaw = Boolean(s.isRaw);
+      s.setRawMode(true);
+    }
+    s.resume();
+    this.decoder.reset();
+    if (this.bracketedPaste) this.stdout.write(enableBracketedPaste());
+
+    this.dataListener = (chunk: Buffer): void => {
+      this.handleChunk(chunk);
+    };
+    s.on('data', this.dataListener);
+
+    if (!this.exitListener) {
+      this.exitListener = (): void => {
+        this.exitRaw();
+      };
+      process.once('exit', this.exitListener);
+      process.once('SIGTERM', this.exitListener);
+    }
+  }
+
+  private exitRaw(): void {
+    const s = this.stdin;
+    if (this.dataListener !== null) {
+      s.off('data', this.dataListener);
+      this.dataListener = null;
+    }
+    if (isTtyReadStream(s) && !this.wasRaw) {
+      try {
+        s.setRawMode(false);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (this.bracketedPaste) {
+      try {
+        this.stdout.write(disableBracketedPaste());
+      } catch {
+        /* ignore */
+      }
+    }
+    if (this.exitListener !== null) {
+      process.off('exit', this.exitListener);
+      process.off('SIGTERM', this.exitListener);
+      this.exitListener = null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Chunk processing
+  // -------------------------------------------------------------------------
+
+  private handleChunk(chunk: Buffer): void {
+    if (this.active === null) return;
+    const events = this.decoder.push(new Uint8Array(chunk));
+    for (const ev of events) this.eventQueue.push(ev);
+    void this.drainQueue();
+  }
+
+  /**
+   * Serially drain the event queue. Each event may kick off async work
+   * (notably Tab completion); we await it before processing the next
+   * event so keystrokes don't race ahead of pending completion results.
+   */
+  private async drainQueue(): Promise<void> {
+    if (this.processing) return;
+    this.processing = true;
+    try {
+      while (this.eventQueue.length > 0 && this.active !== null) {
+        const ev = this.eventQueue.shift();
+        if (ev === undefined) break;
+        await this.handleEvent(ev);
+      }
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  private async handleEvent(ev: KeyEvent): Promise<void> {
+    if (this.active === null) return;
+    const a = this.active;
+
+    // Search mode handling is local: events go into the search state machine
+    // instead of the keymap.
+    if (a.search !== null) {
+      await this.handleSearchKey(ev);
+      return;
+    }
+
+    const action = dispatch(this.state, ev);
+    await this.applyAction(action, ev);
+  }
+
+  private async applyAction(action: EditorAction, ev: KeyEvent): Promise<void> {
+    if (this.active === null) return;
+    const a = this.active;
+    switch (action.kind) {
+      case 'noop':
+        return;
+      case 'redraw':
+        this.completion.reset();
+        this.render();
+        return;
+      case 'bell':
+        this.stdout.write(BEL);
+        return;
+      case 'submit': {
+        this.completion.reset();
+        const text = this.state.buffer.text;
+        // Move cursor past the end of the rendered block and emit a newline.
+        this.moveCursorToEnd();
+        this.stdout.write(LF);
+        const resolve = a.resolve;
+        this.active = null;
+        this.exitRaw();
+        resolve(text);
+        return;
+      }
+      case 'cancel': {
+        this.completion.reset();
+        this.moveCursorToEnd();
+        this.stdout.write(`^C${LF}`);
+        const reject = a.reject;
+        this.active = null;
+        this.exitRaw();
+        reject(new SignalError());
+        return;
+      }
+      case 'eof': {
+        this.completion.reset();
+        this.moveCursorToEnd();
+        this.stdout.write(LF);
+        const resolve = a.resolve;
+        this.active = null;
+        this.exitRaw();
+        resolve(EOF_SYMBOL);
+        return;
+      }
+      case 'complete': {
+        if (!this.completer) {
+          this.stdout.write(BEL);
+          return;
+        }
+        await this.runCompletion();
+        return;
+      }
+      case 'clear-screen':
+        this.completion.reset();
+        this.stdout.write(csiClearScreen());
+        a.rowsDrawn = 0;
+        a.cursorRow = 0;
+        a.cursorCol = 0;
+        this.render(true);
+        return;
+      case 'search-start':
+        this.completion.reset();
+        a.search = {
+          pattern: '',
+          matchIndex: null,
+          savedBuffer: this.state.buffer.text,
+        };
+        this.render();
+        return;
+      case 'paste-start':
+      case 'paste-end':
+        // Bracketed paste markers are otherwise transparent.
+        void ev;
+        return;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Completion
+  // -------------------------------------------------------------------------
+
+  private async runCompletion(): Promise<void> {
+    if (this.completer === undefined || this.active === null) return;
+    const step = await this.completion.apply(this.state.buffer, this.completer);
+    if (this.active === null) return;
+    switch (step.kind) {
+      case 'bell':
+        this.stdout.write(BEL);
+        return;
+      case 'inserted':
+      case 'cycled':
+        this.render();
+        return;
+      case 'list': {
+        // Print listing on a new row, then redraw the prompt+line below it.
+        this.moveCursorToEnd();
+        this.stdout.write(LF);
+        const w = this.termWidth();
+        const block = formatCandidates(step.candidates, w);
+        this.stdout.write(block + LF);
+        this.active.rowsDrawn = 0;
+        this.active.cursorRow = 0;
+        this.active.cursorCol = 0;
+        this.render(true);
+        return;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Reverse-incremental-search
+  // -------------------------------------------------------------------------
+
+  private async handleSearchKey(ev: KeyEvent): Promise<void> {
+    if (this.active?.search == null) return;
+    const s = this.active.search;
+
+    // ^G or Escape cancels and restores the saved line.
+    if (
+      (ev.key === 'char' && ev.ctrl && ev.char === 'g') ||
+      ev.key === 'escape'
+    ) {
+      this.state.buffer.setText(s.savedBuffer);
+      this.active.search = null;
+      this.render();
+      return;
+    }
+    // Enter accepts the current match (whatever's in the buffer).
+    if (ev.key === 'enter') {
+      this.active.search = null;
+      await this.applyAction({ kind: 'submit' }, ev);
+      return;
+    }
+    // ^C bubbles to cancel.
+    if (ev.key === 'char' && ev.ctrl && ev.char === 'c') {
+      await this.applyAction({ kind: 'cancel' }, ev);
+      return;
+    }
+    // ^R again: search further back.
+    if (ev.key === 'char' && ev.ctrl && ev.char === 'r') {
+      this.searchStep(-1);
+      return;
+    }
+    // Backspace: shrink the pattern.
+    if (ev.key === 'backspace') {
+      s.pattern = s.pattern.slice(0, -1);
+      s.matchIndex = null;
+      this.searchStep(0);
+      return;
+    }
+    // Printable char: extend the pattern.
+    if (ev.key === 'char' && !ev.ctrl && !ev.meta && ev.char !== undefined) {
+      s.pattern += ev.char;
+      s.matchIndex = null;
+      this.searchStep(0);
+      return;
+    }
+    // Anything else (arrows, etc) accepts the match and processes the key.
+    this.active.search = null;
+    await this.handleEvent(ev);
+  }
+
+  /** Walk history backward looking for the current pattern. */
+  private searchStep(delta: number): void {
+    if (this.active?.search == null) return;
+    const s = this.active.search;
+    const hist = this.state.history;
+    const startFrom =
+      s.matchIndex === null ? hist.length - 1 : s.matchIndex + delta;
+    for (let i = startFrom; i >= 0 && i < hist.length; i--) {
+      if (s.pattern === '' || hist[i].includes(s.pattern)) {
+        s.matchIndex = i;
+        this.state.buffer.setText(hist[i]);
+        this.render();
+        return;
+      }
+    }
+    // No match: ring bell, keep current buffer.
+    this.stdout.write(BEL);
+    this.render();
+  }
+
+  // -------------------------------------------------------------------------
+  // Rendering
+  // -------------------------------------------------------------------------
+
+  /**
+   * Repaint the prompt + buffer. If `full` is true, skip the cursor-up
+   * optimisation (we don't know the previous geometry).
+   */
+  private render(full = false): void {
+    if (this.active === null) return;
+    const a = this.active;
+
+    // Move the cursor back to row 0 of the previously drawn block.
+    if (!full && a.rowsDrawn > 0) {
+      // Move up to the anchor row.
+      const up = a.cursorRow;
+      this.stdout.write(CR + (up > 0 ? csiUp(up) : ''));
+    } else {
+      this.stdout.write(CR);
+    }
+
+    // Compose the output: prompt + buffer text, with line wrapping computed
+    // virtually so we know where the cursor ends up.
+    const width = Math.max(1, this.termWidth());
+    const promptStr =
+      a.search === null
+        ? a.prompt
+        : `(reverse-i-search)\`${a.search.pattern}': `;
+    const renderText = this.state.buffer.text.replace(/\n/g, '⏎'); // newline glyph
+
+    const promptWidth = displayWidth(promptStr);
+    const before = this.codePointsBeforeCursor();
+    const beforeText = renderText.slice(0, before.length);
+    const allText = renderText;
+
+    // Compute physical row/col for cursor.
+    const { row: cursorRow, col: cursorCol } = positionAfter(
+      promptWidth,
+      beforeText,
+      width,
+    );
+    // Compute final row/col for the full block (so we know how many rows).
+    const { row: lastRow } = positionAfter(promptWidth, allText, width);
+    const rowsDrawn = lastRow + 1;
+
+    // Write the line. We erase each row first so leftover chars from a longer
+    // previous render are scrubbed.
+    this.stdout.write(csiEraseToEol());
+    this.stdout.write(promptStr);
+    this.stdout.write(allText);
+
+    // After writing, if the previous render had more rows than this one,
+    // erase the leftover rows.
+    if (a.rowsDrawn > rowsDrawn) {
+      const extra = a.rowsDrawn - rowsDrawn;
+      for (let i = 0; i < extra; i++) {
+        this.stdout.write(LF + csiEraseToEol());
+      }
+      // Move back up to where we are.
+      this.stdout.write(csiUp(extra));
+    }
+
+    // Reposition cursor.
+    // After writing `allText`, cursor is at (lastRow, lastCol). We want
+    // (cursorRow, cursorCol).
+    const rowDelta = cursorRow - lastRow;
+    if (rowDelta < 0) this.stdout.write(csiUp(-rowDelta));
+    if (rowDelta > 0) this.stdout.write(csiDown(rowDelta));
+
+    this.stdout.write(CR);
+    if (cursorCol > 0) this.stdout.write(csiRight(cursorCol));
+
+    a.rowsDrawn = rowsDrawn;
+    a.cursorRow = cursorRow;
+    a.cursorCol = cursorCol;
+    // Silence unused.
+    void csiLeft;
+  }
+
+  private moveCursorToEnd(): void {
+    if (this.active === null) return;
+    const a = this.active;
+    // Step down to the final row of the current render.
+    const down = a.rowsDrawn - 1 - a.cursorRow;
+    if (down > 0) this.stdout.write(csiDown(down));
+    this.stdout.write(CR);
+    a.cursorRow = a.rowsDrawn - 1;
+    a.cursorCol = 0;
+  }
+
+  private codePointsBeforeCursor(): { length: number } {
+    return { length: this.state.buffer.cursor };
+  }
+
+  private termWidth(): number {
+    const s = this.stdout as NodeJS.WriteStream;
+    if (typeof s.columns === 'number' && s.columns > 0) return s.columns;
+    return 80;
+  }
+}
+
+type SearchState = {
+  pattern: string;
+  /** Index in history of the current match, or null if none. */
+  matchIndex: number | null;
+  /** Buffer contents at the time search started. */
+  savedBuffer: string;
+};
+
+const isTtyReadStream = (
+  s: NodeJS.ReadStream | NodeJS.ReadableStream,
+): s is NodeJS.ReadStream =>
+  typeof (s as NodeJS.ReadStream).setRawMode === 'function';
+
+// ---------------------------------------------------------------------------
+// Display-width helpers (inlined copy of WP-09's tables; kept minimal).
+// ---------------------------------------------------------------------------
+
+const WIDE_RANGES: readonly (readonly [number, number])[] = [
+  [0x1100, 0x115f],
+  [0x2329, 0x232a],
+  [0x2e80, 0x303e],
+  [0x3041, 0x33ff],
+  [0x3400, 0x4dbf],
+  [0x4e00, 0x9fff],
+  [0xa000, 0xa4cf],
+  [0xac00, 0xd7a3],
+  [0xf900, 0xfaff],
+  [0xfe10, 0xfe19],
+  [0xfe30, 0xfe6f],
+  [0xff00, 0xff60],
+  [0xffe0, 0xffe6],
+  [0x1f300, 0x1f64f],
+  [0x1f900, 0x1f9ff],
+  [0x20000, 0x2fffd],
+  [0x30000, 0x3fffd],
+];
+
+const ZERO_RANGES: readonly (readonly [number, number])[] = [
+  [0x0300, 0x036f],
+  [0x0483, 0x0489],
+  [0x0591, 0x05bd],
+  [0x05bf, 0x05bf],
+  [0x05c1, 0x05c2],
+  [0x05c4, 0x05c5],
+  [0x05c7, 0x05c7],
+  [0x0610, 0x061a],
+  [0x064b, 0x065f],
+  [0x0670, 0x0670],
+  [0x06d6, 0x06dc],
+  [0x06df, 0x06e4],
+  [0x06e7, 0x06e8],
+  [0x06ea, 0x06ed],
+  [0x0711, 0x0711],
+  [0x0730, 0x074a],
+  [0x200b, 0x200f],
+  [0x202a, 0x202e],
+  [0x2060, 0x206f],
+  [0x20d0, 0x20f0],
+  [0xfe00, 0xfe0f],
+  [0xfe20, 0xfe2f],
+  [0xfeff, 0xfeff],
+  [0xe0100, 0xe01ef],
+];
+
+const inRange = (
+  cp: number,
+  ranges: readonly (readonly [number, number])[],
+): boolean => {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const entry = ranges[mid];
+    if (cp < entry[0]) hi = mid - 1;
+    else if (cp > entry[1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+};
+
+const codePointWidth = (cp: number): number => {
+  if (cp === 0) return 0;
+  if (cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) return 0;
+  if (inRange(cp, ZERO_RANGES)) return 0;
+  if (inRange(cp, WIDE_RANGES)) return 2;
+  return 1;
+};
+
+const displayWidth = (text: string): number => {
+  let w = 0;
+  for (const ch of text) w += codePointWidth(ch.codePointAt(0) ?? 0);
+  return w;
+};
+
+/**
+ * Compute the final (row, col) position after writing `text` to a
+ * terminal whose cursor starts at column `startCol` and is `width`
+ * columns wide. Wrapping happens by display column count, not code points.
+ */
+const positionAfter = (
+  startCol: number,
+  text: string,
+  width: number,
+): { row: number; col: number } => {
+  let row = 0;
+  let col = startCol % width;
+  // Initial wrap if startCol exactly hit the width boundary.
+  if (col === 0 && startCol > 0) {
+    row += Math.floor(startCol / width);
+  } else {
+    row += Math.floor(startCol / width);
+  }
+  for (const ch of text) {
+    if (ch === '\n') {
+      row += 1;
+      col = 0;
+      continue;
+    }
+    const w = codePointWidth(ch.codePointAt(0) ?? 0);
+    if (col + w > width) {
+      row += 1;
+      col = w;
+    } else {
+      col += w;
+      if (col === width) {
+        // Stay on this row; next char triggers the wrap.
+        // (Real terminals differ here; the conservative choice that matches
+        // most xterm derivatives is to NOT advance row until the next glyph.)
+      }
+    }
+  }
+  return { row, col };
+};

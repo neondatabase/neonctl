@@ -1,0 +1,430 @@
+import { describe, expect, test } from 'vitest';
+
+import { applyStartupArgs, parseStartupArgs } from './startup.js';
+import type { ParsedArgs, ParseError } from './startup.js';
+import { createVarStore } from './variables.js';
+import { defaultSettings } from './settings.js';
+import type { ConnectOptions } from '../types/connection.js';
+
+const ok = (r: ParsedArgs | ParseError): ParsedArgs => {
+  if ('kind' in r) {
+    throw new Error(`expected ParsedArgs, got error: ${r.message}`);
+  }
+  return r;
+};
+
+const err = (r: ParsedArgs | ParseError): ParseError => {
+  if (!('kind' in r)) {
+    throw new Error('expected ParseError, got ParsedArgs');
+  }
+  return r;
+};
+
+describe('parseStartupArgs — actions', () => {
+  test('-c "SELECT 1" appends a command action', () => {
+    const a = ok(parseStartupArgs(['-c', 'SELECT 1']));
+    expect(a.actions).toEqual([{ kind: 'command', sql: 'SELECT 1' }]);
+  });
+
+  test('--command=SQL appends a command action', () => {
+    const a = ok(parseStartupArgs(['--command=SELECT 2']));
+    expect(a.actions).toEqual([{ kind: 'command', sql: 'SELECT 2' }]);
+  });
+
+  test('-f and -c preserve order', () => {
+    const a = ok(parseStartupArgs(['-f', 'a.sql', '-c', 'b']));
+    expect(a.actions).toEqual([
+      { kind: 'file', path: 'a.sql' },
+      { kind: 'command', sql: 'b' },
+    ]);
+  });
+
+  test('multiple -c -f -c interleave in order', () => {
+    const a = ok(parseStartupArgs(['-c', 'A', '-f', 'b.sql', '-c', 'C']));
+    expect(a.actions).toEqual([
+      { kind: 'command', sql: 'A' },
+      { kind: 'file', path: 'b.sql' },
+      { kind: 'command', sql: 'C' },
+    ]);
+  });
+
+  test('--file=path appends a file action', () => {
+    const a = ok(parseStartupArgs(['--file=script.sql']));
+    expect(a.actions).toEqual([{ kind: 'file', path: 'script.sql' }]);
+  });
+});
+
+describe('parseStartupArgs — connection target', () => {
+  test('--host / -p / -U / DBNAME positional', () => {
+    const a = ok(
+      parseStartupArgs(['--host', 'foo', '-p', '5433', '-U', 'me', 'mydb']),
+    );
+    expect(a.host).toBe('foo');
+    expect(a.port).toBe(5433);
+    expect(a.user).toBe('me');
+    expect(a.positional).toEqual(['mydb']);
+  });
+
+  test('-d DBNAME overrides positional', () => {
+    const a = ok(parseStartupArgs(['-d', 'explicit', 'fromPositional']));
+    expect(a.database).toBe('explicit');
+    expect(a.positional).toEqual(['fromPositional']);
+  });
+
+  test('-w sets promptPassword=false; -W sets promptPassword=true', () => {
+    expect(ok(parseStartupArgs(['-w'])).promptPassword).toBe(false);
+    expect(ok(parseStartupArgs(['-W'])).promptPassword).toBe(true);
+  });
+
+  test('long-form --username and --port and --dbname work', () => {
+    const a = ok(
+      parseStartupArgs(['--username', 'alice', '--port=6543', '--dbname=db1']),
+    );
+    expect(a.user).toBe('alice');
+    expect(a.port).toBe(6543);
+    expect(a.database).toBe('db1');
+  });
+
+  test('invalid port returns invalid-value error', () => {
+    const e = err(parseStartupArgs(['-p', 'not-a-port']));
+    expect(e.kind).toBe('invalid-value');
+  });
+
+  test('port out of range returns invalid-value', () => {
+    expect(err(parseStartupArgs(['-p', '0'])).kind).toBe('invalid-value');
+    expect(err(parseStartupArgs(['-p', '70000'])).kind).toBe('invalid-value');
+  });
+});
+
+describe('parseStartupArgs — variables', () => {
+  test('-v NAME=VAL and --set NAME=VAL aggregate in order', () => {
+    const a = ok(parseStartupArgs(['-v', 'X=1', '--set', 'Y=2']));
+    expect(a.variables).toEqual([
+      { name: 'X', value: '1' },
+      { name: 'Y', value: '2' },
+    ]);
+  });
+
+  test('--variable=NAME=VALUE works (long with `=`)', () => {
+    const a = ok(parseStartupArgs(['--variable=Z=3']));
+    expect(a.variables).toEqual([{ name: 'Z', value: '3' }]);
+  });
+
+  test('-v NAME without value emits empty (delete)', () => {
+    const a = ok(parseStartupArgs(['-v', 'FOO']));
+    expect(a.variables).toEqual([{ name: 'FOO', value: '' }]);
+  });
+
+  test('--on-error-stop also sets ON_ERROR_STOP variable', () => {
+    const a = ok(parseStartupArgs(['--on-error-stop']));
+    expect(a.onErrorStop).toBe(true);
+    expect(a.variables.some((v) => v.name === 'ON_ERROR_STOP')).toBe(true);
+  });
+});
+
+describe('parseStartupArgs — formatting flags', () => {
+  test('-A -t --csv -x flags combine', () => {
+    const a = ok(parseStartupArgs(['-A', '-t', '--csv', '-x']));
+    expect(a.noAlign).toBe(true);
+    expect(a.tuplesOnly).toBe(true);
+    expect(a.csvOutput).toBe(true);
+    expect(a.expanded).toBe(true);
+  });
+
+  test('-H sets htmlMode', () => {
+    expect(ok(parseStartupArgs(['-H'])).htmlMode).toBe(true);
+  });
+
+  test('-q --quiet sets quiet', () => {
+    expect(ok(parseStartupArgs(['-q'])).quiet).toBe(true);
+    expect(ok(parseStartupArgs(['--quiet'])).quiet).toBe(true);
+  });
+
+  test('-a echoAll', () => {
+    expect(ok(parseStartupArgs(['-a'])).echoAll).toBe(true);
+  });
+
+  test('-e --echo-queries', () => {
+    expect(ok(parseStartupArgs(['-e'])).echoQueries).toBe(true);
+    expect(ok(parseStartupArgs(['--echo-queries'])).echoQueries).toBe(true);
+  });
+
+  test('-E echoHidden on; --echo-hidden=noexec sets noexec', () => {
+    expect(ok(parseStartupArgs(['-E'])).echoHidden).toBe('on');
+    expect(ok(parseStartupArgs(['--echo-hidden=noexec'])).echoHidden).toBe(
+      'noexec',
+    );
+    expect(ok(parseStartupArgs(['--echo-hidden'])).echoHidden).toBe('on');
+  });
+
+  test('-F sets fieldSep; -R sets recordSep', () => {
+    const a = ok(parseStartupArgs(['-F', ',', '-R', '|']));
+    expect(a.fieldSep).toBe(',');
+    expect(a.recordSep).toBe('|');
+  });
+
+  test('-z fieldSepZero and -0 recordSepZero', () => {
+    const a = ok(parseStartupArgs(['-z', '-0']));
+    expect(a.fieldSepZero).toBe(true);
+    expect(a.recordSepZero).toBe(true);
+  });
+
+  test('-P NAME=VAL accumulates raw pset directives', () => {
+    const a = ok(parseStartupArgs(['-P', 'format=html', '-P', 'border=2']));
+    expect(a.pset).toEqual(['format=html', 'border=2']);
+  });
+
+  test('-T TEXT pushes tableattr through pset', () => {
+    const a = ok(parseStartupArgs(['-T', 'class="t"']));
+    expect(a.pset).toEqual(['tableattr=class="t"']);
+  });
+
+  test('--no-pager sets noPager', () => {
+    expect(ok(parseStartupArgs(['--no-pager'])).noPager).toBe(true);
+  });
+});
+
+describe('parseStartupArgs — psqlrc and friends', () => {
+  test('-X sets noPsqlrc', () => {
+    expect(ok(parseStartupArgs(['-X'])).noPsqlrc).toBe(true);
+  });
+
+  test('--no-psqlrc sets noPsqlrc', () => {
+    expect(ok(parseStartupArgs(['--no-psqlrc'])).noPsqlrc).toBe(true);
+  });
+
+  test('-n sets noReadline', () => {
+    expect(ok(parseStartupArgs(['-n'])).noReadline).toBe(true);
+  });
+
+  test('-l sets list', () => {
+    expect(ok(parseStartupArgs(['-l'])).list).toBe(true);
+  });
+
+  test('-1 single-transaction', () => {
+    expect(ok(parseStartupArgs(['-1'])).singleTransaction).toBe(true);
+  });
+});
+
+describe('parseStartupArgs — help / version', () => {
+  test('-V returns version sentinel', () => {
+    const e = err(parseStartupArgs(['-V']));
+    expect(e.kind).toBe('version');
+    expect(e.message).toMatch(/psql/);
+  });
+
+  test('--version returns version sentinel', () => {
+    const e = err(parseStartupArgs(['--version']));
+    expect(e.kind).toBe('version');
+  });
+
+  test('--help renders top-level usage', () => {
+    const e = err(parseStartupArgs(['--help']));
+    expect(e.kind).toBe('help');
+    expect(e.message).toMatch(/Usage/);
+  });
+
+  test('--help=commands renders backslash help', () => {
+    const e = err(parseStartupArgs(['--help=commands']));
+    expect(e.kind).toBe('help');
+    expect(e.message).toMatch(/copyright/);
+  });
+
+  test('--help=variables renders variables help', () => {
+    const e = err(parseStartupArgs(['--help=variables']));
+    expect(e.kind).toBe('help');
+    expect(e.message).toMatch(/AUTOCOMMIT/);
+  });
+
+  test('-? renders top-level usage', () => {
+    const e = err(parseStartupArgs(['-?']));
+    expect(e.kind).toBe('help');
+  });
+
+  test('--help=garbage returns invalid-option', () => {
+    const e = err(parseStartupArgs(['--help=garbage']));
+    expect(e.kind).toBe('invalid-option');
+  });
+});
+
+describe('parseStartupArgs — errors', () => {
+  test('--bogus returns invalid-option', () => {
+    const e = err(parseStartupArgs(['--bogus']));
+    expect(e.kind).toBe('invalid-option');
+    expect(e.message).toMatch(/bogus/);
+  });
+
+  test('-c with no value returns missing-arg', () => {
+    const e = err(parseStartupArgs(['-c']));
+    expect(e.kind).toBe('missing-arg');
+  });
+
+  test('--command without value returns missing-arg', () => {
+    const e = err(parseStartupArgs(['--command']));
+    expect(e.kind).toBe('missing-arg');
+  });
+
+  test('--csv=value is rejected', () => {
+    expect(err(parseStartupArgs(['--csv=yes'])).kind).toBe('invalid-option');
+  });
+
+  test('unknown short letter returns invalid-option', () => {
+    const e = err(parseStartupArgs(['-Q']));
+    expect(e.kind).toBe('invalid-option');
+  });
+});
+
+describe('parseStartupArgs — edge cases', () => {
+  test('empty argv produces empty parsed shape', () => {
+    const a = ok(parseStartupArgs([]));
+    expect(a.actions).toEqual([]);
+    expect(a.variables).toEqual([]);
+    expect(a.positional).toEqual([]);
+    expect(a.echoAll).toBe(false);
+    expect(a.noPsqlrc).toBe(false);
+  });
+
+  test('-- ends option parsing', () => {
+    const a = ok(parseStartupArgs(['--', '-c', 'not-a-flag']));
+    expect(a.actions).toEqual([]);
+    expect(a.positional).toEqual(['-c', 'not-a-flag']);
+  });
+
+  test('clustered short flags -aA work', () => {
+    const a = ok(parseStartupArgs(['-aA']));
+    expect(a.echoAll).toBe(true);
+    expect(a.noAlign).toBe(true);
+  });
+
+  test('clustered short with value: -hfoo', () => {
+    const a = ok(parseStartupArgs(['-hfoo']));
+    expect(a.host).toBe('foo');
+  });
+
+  test('two positionals: dbname and username', () => {
+    const a = ok(parseStartupArgs(['dbname1', 'user1']));
+    expect(a.positional).toEqual(['dbname1', 'user1']);
+  });
+
+  test('-C is accepted as a no-op', () => {
+    const a = ok(parseStartupArgs(['-C']));
+    expect(a).toBeDefined();
+  });
+
+  test('-c with backslash command preserved', () => {
+    // psql converts leading "\" into ACT_SINGLE_SLASH; we keep it as a
+    // command action with the leading backslash. The dispatch layer handles
+    // routing in WP-26 integration.
+    const a = ok(parseStartupArgs(['-c', '\\dt']));
+    expect(a.actions).toEqual([{ kind: 'command', sql: '\\dt' }]);
+  });
+});
+
+describe('applyStartupArgs', () => {
+  const buildBaseSettings = (): ReturnType<typeof defaultSettings> => {
+    const v = createVarStore();
+    return defaultSettings(v);
+  };
+  const baseConn: ConnectOptions = {
+    host: 'localhost',
+    port: 5432,
+    user: 'pg',
+    database: 'postgres',
+    ssl: 'prefer',
+  };
+
+  test('connection overrides apply', () => {
+    const parsed = ok(
+      parseStartupArgs(['-h', 'remote', '-p', '6543', '-U', 'me', 'maindb']),
+    );
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, baseConn);
+    expect(connect.host).toBe('remote');
+    expect(connect.port).toBe(6543);
+    expect(connect.user).toBe('me');
+    expect(connect.database).toBe('maindb');
+  });
+
+  test('variables flow into vars store', () => {
+    const parsed = ok(parseStartupArgs(['-v', 'X=hi', '-v', 'PROMPT1=mine ']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.vars.get('X')).toBe('hi');
+    // PROMPT1 trips the registered hook.
+    expect(settings.prompt1).toBe('mine ');
+  });
+
+  test('-q sets settings.quiet', () => {
+    const parsed = ok(parseStartupArgs(['-q']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.quiet).toBe(true);
+  });
+
+  test('--csv flips format', () => {
+    const parsed = ok(parseStartupArgs(['--csv']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.popt.topt.format).toBe('csv');
+  });
+
+  test('-A flips format to unaligned', () => {
+    const parsed = ok(parseStartupArgs(['-A']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.popt.topt.format).toBe('unaligned');
+  });
+
+  test('-t flips tuplesOnly', () => {
+    const parsed = ok(parseStartupArgs(['-t']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.popt.topt.tuplesOnly).toBe(true);
+  });
+
+  test('-x flips expanded on', () => {
+    const parsed = ok(parseStartupArgs(['-x']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.popt.topt.expanded).toBe('on');
+  });
+
+  test('--on-error-stop flips onErrorStop', () => {
+    const parsed = ok(parseStartupArgs(['--on-error-stop']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.onErrorStop).toBe(true);
+  });
+
+  test('preActions reflect -c/-f order', () => {
+    const parsed = ok(parseStartupArgs(['-f', 'a.sql', '-c', 'b']));
+    const settings = buildBaseSettings();
+    const { preActions } = applyStartupArgs(parsed, settings, baseConn);
+    expect(preActions).toEqual([
+      { kind: 'file', path: 'a.sql' },
+      { kind: 'command', sql: 'b' },
+    ]);
+  });
+
+  test('-T pushes through to tableAttr', () => {
+    const parsed = ok(parseStartupArgs(['-T', 'class="x"']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.popt.topt.tableAttr).toBe('class="x"');
+  });
+
+  test('-F sets fieldSep on print opts', () => {
+    const parsed = ok(parseStartupArgs(['-F', ';']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.popt.topt.fieldSep).toBe(';');
+  });
+
+  test('positional[1] is user when -U not set', () => {
+    const parsed = ok(parseStartupArgs(['mydb', 'alice']));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, baseConn);
+    expect(connect.database).toBe('mydb');
+    expect(connect.user).toBe('alice');
+  });
+});

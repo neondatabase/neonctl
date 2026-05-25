@@ -1,0 +1,533 @@
+/**
+ * Tests for `core/common.ts` — AUTOCOMMIT, ON_ERROR_ROLLBACK, FETCH_COUNT,
+ * SINGLESTEP, and timing behaviour around the unified send-query path.
+ *
+ * Strategy: build a mock `Connection` whose `execSimple` records every SQL
+ * string it sees and, optionally, drives `txStatus` transitions based on the
+ * verb (so AUTOCOMMIT / savepoint flows can be observed end-to-end).
+ */
+
+import { Readable, Writable } from 'node:stream';
+import { describe, expect, test } from 'vitest';
+
+import type {
+  Connection,
+  FieldDescription,
+  ResultSet,
+} from '../types/connection.js';
+import type { BackslashRegistry } from '../types/backslash.js';
+import type { REPLContext } from '../types/repl.js';
+import type { PsqlSettings } from '../types/settings.js';
+
+import { createVarStore } from './variables.js';
+import { defaultSettings } from './settings.js';
+import { createCondStack } from '../command/cmd_cond.js';
+import { sendQuery, executeAndPrint, psqlExec } from './common.js';
+
+// ---------------------------------------------------------------------------
+// Mock Connection. Tracks calls in order; updates txStatus based on the
+// verb so AUTOCOMMIT / savepoint flows behave realistically.
+// ---------------------------------------------------------------------------
+
+type Canned = ResultSet[] | (() => ResultSet[]) | Error;
+
+type MockConn = Connection & {
+  calls: string[];
+  txStatus: 'I' | 'T' | 'E';
+};
+
+const buildResultSet = (
+  cmd: string,
+  fields: { name: string }[],
+  rows: unknown[][],
+): ResultSet => ({
+  command: cmd,
+  rowCount: rows.length,
+  oid: null,
+  fields: fields.map(
+    (f): FieldDescription => ({
+      name: f.name,
+      tableID: 0,
+      columnID: 0,
+      dataTypeID: 25,
+      dataTypeSize: -1,
+      dataTypeModifier: -1,
+      format: 0,
+    }),
+  ),
+  rows,
+  notices: [],
+});
+
+const emptyResult = (cmd: string): ResultSet => buildResultSet(cmd, [], []);
+
+const makeMockConn = (canned: Map<string, Canned> = new Map()): MockConn => {
+  const calls: string[] = [];
+  const conn = {
+    serverVersion: 170000,
+    calls,
+    txStatus: 'I' as 'I' | 'T' | 'E',
+    parameterStatus: (): string | undefined => undefined,
+    query: () => Promise.reject(new Error('not implemented')),
+    execSimple(sql: string): Promise<ResultSet[]> {
+      const trimmed = sql.trim();
+      calls.push(trimmed);
+      // Track transaction status transitions for AUTOCOMMIT/SAVEPOINT tests.
+      const verb = trimmed.split(/\s+/u, 1)[0].toUpperCase();
+      if (verb === 'BEGIN' || verb === 'START') conn.txStatus = 'T';
+      else if (verb === 'COMMIT' || verb === 'ROLLBACK' || verb === 'END')
+        conn.txStatus = 'I';
+      // CLOSE / FETCH / DECLARE / SAVEPOINT / RELEASE leave us inside the
+      // transaction.
+
+      const lookup = canned.get(trimmed);
+      if (lookup === undefined) {
+        // Default: return a SELECT result with one row.
+        if (
+          verb === 'SELECT' ||
+          verb === 'WITH' ||
+          verb === 'VALUES' ||
+          verb === 'TABLE'
+        ) {
+          return Promise.resolve([
+            buildResultSet('SELECT', [{ name: '?column?' }], [[1]]),
+          ]);
+        }
+        if (verb === 'FETCH') {
+          // Return an empty fetch by default — overridden via canned where
+          // chunking tests want data.
+          return Promise.resolve([
+            buildResultSet('FETCH', [{ name: '?column?' }], []),
+          ]);
+        }
+        return Promise.resolve([emptyResult(verb || 'OK')]);
+      }
+      if (lookup instanceof Error) return Promise.reject(lookup);
+      const result = typeof lookup === 'function' ? lookup() : lookup;
+      return Promise.resolve(result);
+    },
+    prepare: () => Promise.reject(new Error('not implemented')),
+    startCopyIn: () => Promise.reject(new Error('not implemented')),
+    startCopyOut: () => Promise.reject(new Error('not implemented')),
+    pipeline: () => {
+      throw new Error('not implemented');
+    },
+    cancel: (): Promise<void> => Promise.resolve(),
+    escapeIdentifier: (v: string) => `"${v}"`,
+    escapeLiteral: (v: string) => `'${v}'`,
+    onNotice: (): (() => void) => () => undefined,
+    onNotification: (): (() => void) => () => undefined,
+    close: () => Promise.resolve(),
+    isClosed: () => false,
+  };
+  return conn as unknown as MockConn;
+};
+
+const makeBuffer = (): NodeJS.WritableStream & { text(): string } => {
+  const chunks: Buffer[] = [];
+  const w = new Writable({
+    write(chunk: Buffer | string, _enc, cb): void {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      cb();
+    },
+  });
+  (w as unknown as { text: () => string }).text = (): string =>
+    Buffer.concat(chunks).toString('utf8');
+  return w as unknown as NodeJS.WritableStream & { text(): string };
+};
+
+const makeRegistry = (): BackslashRegistry => {
+  const map = new Map();
+  return {
+    register: (spec): void => {
+      map.set(spec.name, spec);
+    },
+    lookup: (name) => map.get(name),
+    all: () => map.values(),
+  };
+};
+
+type CtxOpts = {
+  canned?: Map<string, Canned>;
+  noConnection?: boolean;
+  settingsOverride?: (s: PsqlSettings) => void;
+  stdinLines?: string[];
+};
+
+const buildCtxWithBuffers = (
+  opts: CtxOpts = {},
+): {
+  ctx: REPLContext;
+  stdout: ReturnType<typeof makeBuffer>;
+  stderr: ReturnType<typeof makeBuffer>;
+  db: MockConn | null;
+} => {
+  const vars = createVarStore();
+  const settings = defaultSettings(vars);
+  settings.notty = true;
+  const db = opts.noConnection ? null : makeMockConn(opts.canned);
+  settings.db = db;
+  opts.settingsOverride?.(settings);
+  const stdin = Readable.from((opts.stdinLines ?? []).map((l) => l + '\n'));
+  const stdout = makeBuffer();
+  const stderr = makeBuffer();
+  return {
+    ctx: {
+      settings,
+      registry: makeRegistry(),
+      cond: createCondStack(),
+      stdin,
+      stdout,
+      stderr,
+    } as REPLContext,
+    stdout,
+    stderr,
+    db,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// AUTOCOMMIT
+// ---------------------------------------------------------------------------
+
+describe('sendQuery — AUTOCOMMIT', () => {
+  test('AUTOCOMMIT=off issues BEGIN before first DML', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+      },
+    });
+    const stats = await sendQuery(ctx, 'SELECT 1;');
+    expect(stats.hadError).toBe(false);
+    expect(db?.calls).toEqual(['BEGIN', 'SELECT 1;']);
+  });
+
+  test('AUTOCOMMIT=off skips BEGIN for transaction-control verbs', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+      },
+    });
+    await sendQuery(ctx, 'BEGIN;');
+    expect(db?.calls).toEqual(['BEGIN;']);
+  });
+
+  test('AUTOCOMMIT=on issues no BEGIN', async () => {
+    const { ctx, db } = buildCtxWithBuffers();
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(db?.calls).toEqual(['SELECT 1;']);
+  });
+
+  test('AUTOCOMMIT=off does not double-BEGIN once inside a transaction', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+      },
+    });
+    // First statement opens the implicit transaction; the mock flips
+    // txStatus -> 'T' on BEGIN.
+    await sendQuery(ctx, 'SELECT 1;');
+    await sendQuery(ctx, 'SELECT 2;');
+    expect(db?.calls).toEqual(['BEGIN', 'SELECT 1;', 'SELECT 2;']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ON_ERROR_ROLLBACK
+// ---------------------------------------------------------------------------
+
+describe('sendQuery — ON_ERROR_ROLLBACK', () => {
+  test('on success: SAVEPOINT issued and RELEASE on success', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+        s.vars.set('ON_ERROR_ROLLBACK', 'on');
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    await sendQuery(ctx, 'SELECT 2;');
+    // After the implicit BEGIN the connection is in 'T', so every
+    // subsequent statement (including the first SELECT *after* the BEGIN)
+    // gets a SAVEPOINT/RELEASE pair.
+    expect(db?.calls).toEqual([
+      'BEGIN',
+      'SAVEPOINT pg_psql_temporary_savepoint',
+      'SELECT 1;',
+      'RELEASE SAVEPOINT pg_psql_temporary_savepoint',
+      'SAVEPOINT pg_psql_temporary_savepoint',
+      'SELECT 2;',
+      'RELEASE SAVEPOINT pg_psql_temporary_savepoint',
+    ]);
+  });
+
+  test('on error: ROLLBACK TO + RELEASE', async () => {
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('syntax error')],
+    ]);
+    const { ctx, db } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+        s.vars.set('ON_ERROR_ROLLBACK', 'on');
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    await sendQuery(ctx, 'SELECT bad;');
+    expect(db?.calls).toEqual([
+      'BEGIN',
+      'SAVEPOINT pg_psql_temporary_savepoint',
+      'SELECT 1;',
+      'RELEASE SAVEPOINT pg_psql_temporary_savepoint',
+      'SAVEPOINT pg_psql_temporary_savepoint',
+      'SELECT bad;',
+      'ROLLBACK TO SAVEPOINT pg_psql_temporary_savepoint',
+      'RELEASE SAVEPOINT pg_psql_temporary_savepoint',
+    ]);
+  });
+
+  test('off: no SAVEPOINT', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    await sendQuery(ctx, 'SELECT 2;');
+    expect(db?.calls).toEqual(['BEGIN', 'SELECT 1;', 'SELECT 2;']);
+  });
+
+  test('interactive: only fires when notty is false', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+        s.vars.set('ON_ERROR_ROLLBACK', 'interactive');
+        s.notty = true;
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    await sendQuery(ctx, 'SELECT 2;');
+    // notty=true means non-interactive — savepoints disabled.
+    expect(db?.calls).toEqual(['BEGIN', 'SELECT 1;', 'SELECT 2;']);
+  });
+
+  test('skip RELEASE when user issues COMMIT (svpt_gone)', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+        s.vars.set('ON_ERROR_ROLLBACK', 'on');
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    await sendQuery(ctx, 'COMMIT;');
+    expect(db?.calls).toEqual([
+      'BEGIN',
+      'SAVEPOINT pg_psql_temporary_savepoint',
+      'SELECT 1;',
+      'RELEASE SAVEPOINT pg_psql_temporary_savepoint',
+      'SAVEPOINT pg_psql_temporary_savepoint',
+      'COMMIT;',
+      // No RELEASE here because COMMIT collapsed the savepoint and the
+      // connection is back at txStatus='I'.
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FETCH_COUNT
+// ---------------------------------------------------------------------------
+
+describe('sendQuery — FETCH_COUNT', () => {
+  test('FETCH_COUNT>0 on SELECT wraps in DECLARE CURSOR + FETCH FORWARD', async () => {
+    const fetchResults = new Map<string, Canned>([
+      [
+        'FETCH FORWARD 2 FROM _psql_cursor',
+        // First chunk: 2 rows; second chunk: 0 rows (loop exits).
+        (() => {
+          let call = 0;
+          return () => {
+            call += 1;
+            return [
+              buildResultSet(
+                'FETCH',
+                [{ name: '?column?' }],
+                call === 1 ? [[1], [2]] : [],
+              ),
+            ];
+          };
+        })(),
+      ],
+    ]);
+    const { ctx, db } = buildCtxWithBuffers({
+      canned: fetchResults,
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '2');
+      },
+    });
+    const stats = await sendQuery(ctx, 'SELECT * FROM t;');
+    expect(stats.fetched).toBe(true);
+    expect(stats.hadError).toBe(false);
+    // We expect BEGIN (from cursor loop, because we were idle), DECLARE,
+    // at least one FETCH, CLOSE, COMMIT.
+    expect(db?.calls.slice(0, 2)).toEqual([
+      'BEGIN',
+      'DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT * FROM t',
+    ]);
+    expect(db?.calls).toContain('FETCH FORWARD 2 FROM _psql_cursor');
+    expect(db?.calls).toContain('CLOSE _psql_cursor');
+    expect(db?.calls).toContain('COMMIT');
+  });
+
+  test('FETCH_COUNT>0 on non-SELECT falls back to simple path', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '5');
+      },
+    });
+    await sendQuery(ctx, 'INSERT INTO t VALUES (1);');
+    expect(db?.calls).toEqual(['INSERT INTO t VALUES (1);']);
+  });
+
+  test('FETCH_COUNT=0 disables chunking', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '0');
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(db?.calls).toEqual(['SELECT 1;']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SINGLESTEP
+// ---------------------------------------------------------------------------
+
+describe('sendQuery — SINGLESTEP', () => {
+  test('prompts on stderr and executes on empty line', async () => {
+    const { ctx, db, stderr } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.singlestep = true;
+      },
+      stdinLines: [''],
+    });
+    const stats = await sendQuery(ctx, 'SELECT 1;');
+    expect(stats.hadError).toBe(false);
+    expect(db?.calls).toEqual(['SELECT 1;']);
+    expect(stderr.text()).toContain('Single step mode: verify command');
+    expect(stderr.text()).toContain('SELECT 1;');
+  });
+
+  test("'x' on the prompt cancels the statement", async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.singlestep = true;
+      },
+      stdinLines: ['x'],
+    });
+    const stats = await sendQuery(ctx, 'SELECT 1;');
+    expect(stats.hadError).toBe(true);
+    expect(db?.calls).toEqual([]);
+    expect(ctx.settings.lastErrorResult?.message).toMatch(/cancelled/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Timing
+// ---------------------------------------------------------------------------
+
+describe('sendQuery — \\timing', () => {
+  test('emits Time: line on stdout when timing is on', async () => {
+    const { ctx, stdout } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.timing = true;
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(stdout.text()).toMatch(/^Time: \d+\.\d{3} ms$/m);
+  });
+
+  test('no Time: line when timing is off', async () => {
+    const { ctx, stdout } = buildCtxWithBuffers();
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(stdout.text()).not.toMatch(/^Time: /m);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error propagation
+// ---------------------------------------------------------------------------
+
+describe('sendQuery — errors', () => {
+  test('hadError true on server failure', async () => {
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('boom')],
+    ]);
+    const { ctx, stderr } = buildCtxWithBuffers({ canned });
+    const stats = await sendQuery(ctx, 'SELECT bad;');
+    expect(stats.hadError).toBe(true);
+    expect(stderr.text()).toMatch(/boom/);
+    expect(ctx.settings.lastErrorResult?.message).toBe('boom');
+  });
+
+  test('no connection: returns hadError without crashing', async () => {
+    const { ctx, stderr } = buildCtxWithBuffers({ noConnection: true });
+    const stats = await sendQuery(ctx, 'SELECT 1;');
+    expect(stats.hadError).toBe(true);
+    expect(stderr.text()).toMatch(/no connection to the server/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// executeAndPrint — bypasses AUTOCOMMIT/savepoint scaffolding
+// ---------------------------------------------------------------------------
+
+describe('executeAndPrint', () => {
+  test('does not issue BEGIN even with AUTOCOMMIT=off', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('AUTOCOMMIT', 'off');
+        s.vars.set('ON_ERROR_ROLLBACK', 'on');
+      },
+    });
+    await executeAndPrint(ctx, 'SELECT 1;');
+    expect(db?.calls).toEqual(['SELECT 1;']);
+  });
+
+  test('still honours FETCH_COUNT', async () => {
+    const { ctx, db } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '10');
+      },
+    });
+    await executeAndPrint(ctx, 'SELECT * FROM t;');
+    expect(db?.calls).toContain(
+      'DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT * FROM t',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// psqlExec
+// ---------------------------------------------------------------------------
+
+describe('psqlExec', () => {
+  test('returns the last ResultSet on success', async () => {
+    const db = makeMockConn();
+    const rs = await psqlExec(db, 'SELECT 1');
+    expect(rs).not.toBeNull();
+    expect(rs?.command).toBe('SELECT');
+  });
+
+  test('returns null when ignoreError is true and the call throws', async () => {
+    const canned = new Map<string, Canned>([['SELECT bad', new Error('boom')]]);
+    const db = makeMockConn(canned);
+    const rs = await psqlExec(db, 'SELECT bad', true);
+    expect(rs).toBeNull();
+  });
+
+  test('throws when ignoreError is false', async () => {
+    const canned = new Map<string, Canned>([['SELECT bad', new Error('boom')]]);
+    const db = makeMockConn(canned);
+    await expect(psqlExec(db, 'SELECT bad', false)).rejects.toThrow('boom');
+  });
+});

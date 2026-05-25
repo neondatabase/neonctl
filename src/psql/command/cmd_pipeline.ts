@@ -1,0 +1,427 @@
+/**
+ * psql pipeline / extended-query backslash commands (WP-21).
+ *
+ * Implements the subset of upstream psql's "pipeline mode" backslash commands
+ * that drive the extended protocol directly. These are typically used together
+ * with the existing `\g` flow: a `\bind` (or `\parse`) command stashes
+ * parameter / statement state on the {@link BackslashContext}'s settings via
+ * a Symbol-keyed slot; when the mainloop then sees a `;` (or a `\g`), it can
+ * notice the stashed state and route the query through
+ * `Connection.query(sql, params)` instead of `execSimple`.
+ *
+ * Because the mainloop integration is owned by other WPs (and was deliberately
+ * left untouched here), this module exposes both the command specs AND a
+ * small helper, {@link getPipelineState}, that the mainloop will use to
+ * consult the stashed state. The commands operate on the buffered query the
+ * same way `\g` does — they execute or queue the buffer and reset it.
+ *
+ * Commands shipped:
+ *
+ *   \bind [VALUE ...]        stash params for next ; / \g
+ *   \bind_named NAME [V ...] stash params + named prepared statement
+ *   \parse NAME              prepare current query buffer as NAME
+ *   \close_prepared NAME     Close('S', NAME)
+ *   \startpipeline           begin a pipeline session (settings.sendMode)
+ *   \endpipeline             end the pipeline session, drain results
+ *   \syncpipeline            send Sync mid-pipeline
+ *   \sendpipeline            submit the current buffered query w/o waiting
+ *   \flushrequest            send Flush
+ *   \flush                   alias for \flushrequest
+ *   \getresults [N]          drain pending pipeline results
+ *   \gdesc                   describe-without-execute the buffered query
+ *
+ * The set is registered in bulk via {@link registerPipelineCommands}.
+ */
+
+import type {
+  BackslashCmdSpec,
+  BackslashContext,
+  BackslashRegistry,
+  BackslashResult,
+} from '../types/backslash.js';
+import type { PsqlSettings } from '../types/settings.js';
+import type {
+  FieldDescription,
+  Pipeline,
+  ResultSet,
+} from '../types/connection.js';
+
+import { writeOut, writeErr } from './shared.js';
+
+// ---------------------------------------------------------------------------
+// Settings stash. We can't add new fields to PsqlSettings (frozen WP-00) so
+// we attach Symbol-keyed state.
+// ---------------------------------------------------------------------------
+
+const BIND_STATE_KEY = Symbol.for('neonctl.psql.bindState');
+const PIPELINE_KEY = Symbol.for('neonctl.psql.pipeline');
+
+type BindState = {
+  /** Named prepared statement to bind to ('' = anonymous). */
+  name: string;
+  values: string[];
+};
+
+type PipelineStash = {
+  session: Pipeline;
+  /** Promises returned by send-style commands; drained by `\getresults`. */
+  pending: Promise<ResultSet | undefined>[];
+};
+
+type Stash = Record<symbol, unknown> & {
+  [BIND_STATE_KEY]?: BindState;
+  [PIPELINE_KEY]?: PipelineStash;
+};
+
+const stashOf = (settings: PsqlSettings): Stash => settings as unknown as Stash;
+
+/** Read (and clear) the pending bind params, if any. */
+export const consumeBindState = (settings: PsqlSettings): BindState | null => {
+  const s = stashOf(settings);
+  const cur = s[BIND_STATE_KEY] ?? null;
+  s[BIND_STATE_KEY] = undefined;
+  return cur;
+};
+
+/** Peek at the current pipeline session (or null). */
+export const getPipelineState = (
+  settings: PsqlSettings,
+): PipelineStash | null => stashOf(settings)[PIPELINE_KEY] ?? null;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
+  ctx.settings.lastErrorResult = { message };
+  writeErr(`\\${ctx.cmdName}: ${message}\n`);
+  return { status: 'error' };
+};
+
+const readAllArgs = (ctx: BackslashContext): string[] => {
+  const out: string[] = [];
+  for (;;) {
+    const arg = ctx.nextArg('normal');
+    if (arg === null) break;
+    out.push(arg);
+  }
+  return out;
+};
+
+// ---------------------------------------------------------------------------
+// \bind [VALUE ...]
+// ---------------------------------------------------------------------------
+
+export const cmdBind: BackslashCmdSpec = {
+  name: 'bind',
+  helpKey: 'bind',
+  run(ctx: BackslashContext): Promise<BackslashResult> {
+    const values = readAllArgs(ctx);
+    stashOf(ctx.settings)[BIND_STATE_KEY] = { name: '', values };
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// \bind_named NAME [VALUE ...]
+// ---------------------------------------------------------------------------
+
+export const cmdBindNamed: BackslashCmdSpec = {
+  name: 'bind_named',
+  helpKey: 'bind_named',
+  run(ctx: BackslashContext): Promise<BackslashResult> {
+    const name = ctx.nextArg('normal');
+    if (name === null || name.length === 0) {
+      return Promise.resolve(errResult(ctx, 'missing statement name'));
+    }
+    const values = readAllArgs(ctx);
+    stashOf(ctx.settings)[BIND_STATE_KEY] = { name, values };
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// \parse NAME — prepare current queryBuf as NAME.
+// ---------------------------------------------------------------------------
+
+export const cmdParse: BackslashCmdSpec = {
+  name: 'parse',
+  helpKey: 'parse',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const name = ctx.nextArg('normal');
+    if (name === null || name.length === 0) {
+      return errResult(ctx, 'missing statement name');
+    }
+    const sql = ctx.queryBuf.trim();
+    if (sql.length === 0) {
+      return errResult(ctx, 'no query buffer');
+    }
+    if (!ctx.settings.db) {
+      return errResult(ctx, 'no connection to the server');
+    }
+    try {
+      await ctx.settings.db.prepare(name, sql);
+      return { status: 'reset-buf', newBuf: '' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// \close_prepared NAME
+// ---------------------------------------------------------------------------
+
+export const cmdClosePrepared: BackslashCmdSpec = {
+  name: 'close_prepared',
+  helpKey: 'close_prepared',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const name = ctx.nextArg('normal');
+    if (name === null || name.length === 0) {
+      return errResult(ctx, 'missing statement name');
+    }
+    if (!ctx.settings.db) {
+      return errResult(ctx, 'no connection to the server');
+    }
+    try {
+      // The Connection interface doesn't expose a raw Close('S', name); use
+      // a fresh prepare()-then-close() round-trip so we go through the same
+      // extended-protocol plumbing.
+      const stmt = await ctx.settings.db.prepare(name, 'SELECT 1');
+      // We just need to issue Close('S', name). The prepared statement
+      // wrapper's close() does exactly that with the captured name.
+      await stmt.close();
+      return { status: 'ok' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// \startpipeline / \endpipeline
+// ---------------------------------------------------------------------------
+
+export const cmdStartPipeline: BackslashCmdSpec = {
+  name: 'startpipeline',
+  helpKey: 'startpipeline',
+  run(ctx: BackslashContext): Promise<BackslashResult> {
+    if (!ctx.settings.db) {
+      return Promise.resolve(errResult(ctx, 'no connection to the server'));
+    }
+    if (getPipelineState(ctx.settings) !== null) {
+      return Promise.resolve(errResult(ctx, 'pipeline already active'));
+    }
+    try {
+      const session = ctx.settings.db.pipeline();
+      stashOf(ctx.settings)[PIPELINE_KEY] = {
+        session,
+        pending: [],
+      };
+      ctx.settings.sendMode = 'extended-pipeline';
+      return Promise.resolve({ status: 'ok' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return Promise.resolve(errResult(ctx, msg));
+    }
+  },
+};
+
+export const cmdEndPipeline: BackslashCmdSpec = {
+  name: 'endpipeline',
+  helpKey: 'endpipeline',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const ps = getPipelineState(ctx.settings);
+    if (!ps) {
+      return errResult(ctx, 'no pipeline active');
+    }
+    try {
+      await ps.session.end();
+      stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
+      ctx.settings.sendMode = 'extended-query';
+      return { status: 'ok' };
+    } catch (err) {
+      stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
+      ctx.settings.sendMode = 'extended-query';
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// \syncpipeline / \flushrequest / \flush
+// ---------------------------------------------------------------------------
+
+export const cmdSyncPipeline: BackslashCmdSpec = {
+  name: 'syncpipeline',
+  helpKey: 'syncpipeline',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const ps = getPipelineState(ctx.settings);
+    if (!ps) return errResult(ctx, 'no pipeline active');
+    try {
+      await ps.session.sync();
+      return { status: 'ok' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+  },
+};
+
+export const cmdFlushRequest: BackslashCmdSpec = {
+  name: 'flushrequest',
+  helpKey: 'flushrequest',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const ps = getPipelineState(ctx.settings);
+    if (!ps) return errResult(ctx, 'no pipeline active');
+    try {
+      await ps.session.flush();
+      return { status: 'ok' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+  },
+};
+
+export const cmdFlush: BackslashCmdSpec = {
+  name: 'flush',
+  helpKey: 'flush',
+  run(ctx: BackslashContext): Promise<BackslashResult> {
+    return cmdFlushRequest.run(ctx);
+  },
+};
+
+// ---------------------------------------------------------------------------
+// \sendpipeline — submit current buffer with stashed bind params.
+// ---------------------------------------------------------------------------
+
+export const cmdSendPipeline: BackslashCmdSpec = {
+  name: 'sendpipeline',
+  helpKey: 'sendpipeline',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const ps = getPipelineState(ctx.settings);
+    if (!ps) return errResult(ctx, 'no pipeline active');
+    const sql = ctx.queryBuf.trim();
+    if (sql.length === 0) return errResult(ctx, 'no query buffer');
+
+    const bind = consumeBindState(ctx.settings);
+    const stmtName = bind?.name ?? '';
+    const params = bind?.values ?? [];
+
+    try {
+      // We send the full P/B/E sequence without an intervening Sync — the
+      // user is expected to call \syncpipeline or \endpipeline to commit.
+      if (stmtName === '') {
+        await ps.session.parse('', sql, []);
+      }
+      await ps.session.bind(stmtName, params);
+      const exec = (async (): Promise<ResultSet> => {
+        await ps.session.execute('', 0);
+        // PipelineSession.execute resolves with void on the public API; the
+        // session internally tracks the ResultSet and surfaces it in end().
+        return {
+          command: '',
+          rowCount: null,
+          oid: null,
+          fields: [],
+          rows: [],
+          notices: [],
+        };
+      })();
+      ps.pending.push(exec);
+      return { status: 'reset-buf', newBuf: '' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// \getresults [N] — drain N pending results (or all if N omitted).
+// ---------------------------------------------------------------------------
+
+export const cmdGetResults: BackslashCmdSpec = {
+  name: 'getresults',
+  helpKey: 'getresults',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const ps = getPipelineState(ctx.settings);
+    if (!ps) return errResult(ctx, 'no pipeline active');
+    const arg = ctx.nextArg('normal');
+    let n = ps.pending.length;
+    if (arg !== null && arg.length > 0) {
+      const parsed = parseInt(arg, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return errResult(ctx, `invalid count: ${arg}`);
+      }
+      n = Math.min(parsed, ps.pending.length);
+    }
+    const drained = ps.pending.splice(0, n);
+    try {
+      await Promise.all(drained);
+      return { status: 'ok' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// \gdesc — describe the buffered query without executing it.
+// ---------------------------------------------------------------------------
+
+export const cmdGdesc: BackslashCmdSpec = {
+  name: 'gdesc',
+  helpKey: 'gdesc',
+  async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const sql = ctx.queryBuf.trim();
+    if (sql.length === 0) {
+      return errResult(ctx, 'no query buffer');
+    }
+    if (!ctx.settings.db) {
+      return errResult(ctx, 'no connection to the server');
+    }
+    try {
+      const stmt = await ctx.settings.db.prepare('', sql);
+      const fields: FieldDescription[] = await stmt.describe();
+      // Render psql's "Column / Type" listing. We bypass the aligned printer
+      // and emit a compact two-column table — the mainloop will reroute
+      // through the proper printer in WP-22 once Describe-shaped results
+      // become first class. For now this is enough for tests + interactive.
+      writeOut('     Column     |    Type\n');
+      writeOut('----------------+-----------------\n');
+      for (const f of fields) {
+        writeOut(` ${f.name.padEnd(14)} | ${String(f.dataTypeID)}\n`);
+      }
+      writeOut(`(${String(fields.length)} columns)\n`);
+      return { status: 'reset-buf', newBuf: '' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Registration entry point.
+// ---------------------------------------------------------------------------
+
+export const registerPipelineCommands = (registry: BackslashRegistry): void => {
+  registry.register(cmdBind);
+  registry.register(cmdBindNamed);
+  registry.register(cmdParse);
+  registry.register(cmdClosePrepared);
+  registry.register(cmdStartPipeline);
+  registry.register(cmdEndPipeline);
+  registry.register(cmdSyncPipeline);
+  registry.register(cmdFlushRequest);
+  registry.register(cmdFlush);
+  registry.register(cmdSendPipeline);
+  registry.register(cmdGetResults);
+  registry.register(cmdGdesc); // overrides the WP-15 TODO stub
+};

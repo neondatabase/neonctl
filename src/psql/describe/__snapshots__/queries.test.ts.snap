@@ -1,0 +1,1092 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`describe/queries — pg17 snapshots > describeAccessMethods / pg17 1`] = `
+{
+  "description": "List of access methods",
+  "params": [],
+  "sql": "SELECT amname AS "Name",
+  CASE amtype WHEN 'i' THEN 'Index' WHEN 't' THEN 'Table' END AS "Type"
+FROM pg_catalog.pg_am
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeAggregates > pg17 / verbose=false 1`] = `
+{
+  "description": "List of aggregate functions",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  p.proname AS "Name",
+  pg_catalog.format_type(p.prorettype, NULL) AS "Result data type",
+  CASE WHEN p.pronargs = 0
+    THEN CAST('*' AS pg_catalog.text)
+    ELSE pg_catalog.pg_get_function_arguments(p.oid)
+  END AS "Argument data types",
+  pg_catalog.obj_description(p.oid, 'pg_proc') as "Description"
+FROM pg_catalog.pg_proc p
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+WHERE p.prokind = 'a'
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2, 4;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeAggregates > pg17 / verbose=true 1`] = `
+{
+  "description": "List of aggregate functions",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  p.proname AS "Name",
+  pg_catalog.format_type(p.prorettype, NULL) AS "Result data type",
+  CASE WHEN p.pronargs = 0
+    THEN CAST('*' AS pg_catalog.text)
+    ELSE pg_catalog.pg_get_function_arguments(p.oid)
+  END AS "Argument data types",
+  pg_catalog.obj_description(p.oid, 'pg_proc') as "Description"
+FROM pg_catalog.pg_proc p
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+WHERE p.prokind = 'a'
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2, 4;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeConfigurationParameters / pg17 1`] = `
+{
+  "description": "List of non-default configuration parameters",
+  "params": [],
+  "sql": "SELECT s.name AS "Parameter", pg_catalog.current_setting(s.name) AS "Value"
+FROM pg_catalog.pg_settings s
+WHERE s.source <> 'default' AND s.setting IS DISTINCT FROM s.boot_val
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeFunctions > pg17 / functypes=ap (aggregates+procedures) 1`] = `
+{
+  "description": "List of functions",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  p.proname as "Name",
+  pg_catalog.pg_get_function_result(p.oid) as "Result data type",
+  pg_catalog.pg_get_function_arguments(p.oid) as "Argument data types",
+ CASE p.prokind
+  WHEN 'a' THEN 'agg'
+  WHEN 'w' THEN 'window'
+  WHEN 'p' THEN 'proc'
+  ELSE 'func'
+ END as "Type"
+FROM pg_catalog.pg_proc p
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+WHERE (
+       p.prokind = 'a'
+       OR p.prokind = 'p'
+      )
+  AND true /* TODO(WP-20): pattern matching */
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+ORDER BY 1, 2, 4;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeFunctions > pg17 / verbose=false 1`] = `
+{
+  "description": "List of functions",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  p.proname as "Name",
+  pg_catalog.pg_get_function_result(p.oid) as "Result data type",
+  pg_catalog.pg_get_function_arguments(p.oid) as "Argument data types",
+ CASE p.prokind
+  WHEN 'a' THEN 'agg'
+  WHEN 'w' THEN 'window'
+  WHEN 'p' THEN 'proc'
+  ELSE 'func'
+ END as "Type"
+FROM pg_catalog.pg_proc p
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+WHERE true /* TODO(WP-20): pattern matching */
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+ORDER BY 1, 2, 4;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeFunctions > pg17 / verbose=true 1`] = `
+{
+  "description": "List of functions",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  p.proname as "Name",
+  pg_catalog.pg_get_function_result(p.oid) as "Result data type",
+  pg_catalog.pg_get_function_arguments(p.oid) as "Argument data types",
+ CASE p.prokind
+  WHEN 'a' THEN 'agg'
+  WHEN 'w' THEN 'window'
+  WHEN 'p' THEN 'proc'
+  ELSE 'func'
+ END as "Type",
+ CASE
+  WHEN p.provolatile = 'i' THEN 'immutable'
+  WHEN p.provolatile = 's' THEN 'stable'
+  WHEN p.provolatile = 'v' THEN 'volatile'
+ END as "Volatility",
+ CASE
+  WHEN p.proparallel = 'r' THEN 'restricted'
+  WHEN p.proparallel = 's' THEN 'safe'
+  WHEN p.proparallel = 'u' THEN 'unsafe'
+ END as "Parallel",
+ pg_catalog.pg_get_userbyid(p.proowner) as "Owner",
+ CASE WHEN prosecdef THEN 'definer' ELSE 'invoker' END AS "Security",
+ CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END as "Leakproof?",
+ CASE WHEN pg_catalog.array_length(p.proacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(p.proacl, E'\\n') END AS "Access privileges",
+ l.lanname as "Language",
+ CASE WHEN l.lanname IN ('internal', 'c') THEN p.prosrc END as "Internal name",
+ pg_catalog.obj_description(p.oid, 'pg_proc') as "Description"
+FROM pg_catalog.pg_proc p
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+     LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+WHERE true /* TODO(WP-20): pattern matching */
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+ORDER BY 1, 2, 4;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeOneTSParser / fixed oid 1`] = `
+{
+  "description": "Text search parser details",
+  "params": [],
+  "sql": "SELECT 'Start parse' AS "Method",
+   p.prsstart::pg_catalog.regproc AS "Function",
+   pg_catalog.obj_description(p.prsstart, 'pg_proc') as "Description"
+ FROM pg_catalog.pg_ts_parser p WHERE p.oid = '3722'
+UNION ALL
+SELECT 'Get next token', p.prstoken::pg_catalog.regproc, pg_catalog.obj_description(p.prstoken, 'pg_proc')
+ FROM pg_catalog.pg_ts_parser p WHERE p.oid = '3722'
+UNION ALL
+SELECT 'End parse', p.prsend::pg_catalog.regproc, pg_catalog.obj_description(p.prsend, 'pg_proc')
+ FROM pg_catalog.pg_ts_parser p WHERE p.oid = '3722'
+UNION ALL
+SELECT 'Get headline', p.prsheadline::pg_catalog.regproc, pg_catalog.obj_description(p.prsheadline, 'pg_proc')
+ FROM pg_catalog.pg_ts_parser p WHERE p.oid = '3722'
+UNION ALL
+SELECT 'Get token types', p.prslextype::pg_catalog.regproc, pg_catalog.obj_description(p.prslextype, 'pg_proc')
+ FROM pg_catalog.pg_ts_parser p WHERE p.oid = '3722';",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeOperators / pg17 1`] = `
+{
+  "description": "List of operators",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  o.oprname AS "Name",
+  CASE WHEN o.oprkind='l' THEN NULL ELSE pg_catalog.format_type(o.oprleft, NULL) END AS "Left arg type",
+  CASE WHEN o.oprkind='r' THEN NULL ELSE pg_catalog.format_type(o.oprright, NULL) END AS "Right arg type",
+  pg_catalog.format_type(o.oprresult, NULL) AS "Result type",
+  coalesce(pg_catalog.obj_description(o.oid, 'pg_operator'),
+           pg_catalog.obj_description(o.oprcode, 'pg_proc')) AS "Description"
+FROM pg_catalog.pg_operator o
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace
+WHERE n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2, 3, 4;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describePublications / pg17 1`] = `
+{
+  "description": "Details of publications",
+  "params": [],
+  "sql": "SELECT oid, pubname,
+  pg_catalog.pg_get_userbyid(pubowner) AS owner,
+  puballtables, false AS puballsequences, pubinsert, pubupdate, pubdelete, pubtruncate, 'none' AS pubgencols, pubviaroot, pg_catalog.obj_description(oid, 'pg_publication')
+FROM pg_catalog.pg_publication
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeRoleGrants / pg17 1`] = `
+{
+  "description": "List of role grants",
+  "params": [],
+  "sql": "SELECT m.rolname AS "Role name", r.rolname AS "Member of",
+  pg_catalog.concat_ws(', ',
+    CASE WHEN pam.admin_option THEN 'ADMIN' END,
+    CASE WHEN pam.inherit_option THEN 'INHERIT' END,
+    CASE WHEN pam.set_option THEN 'SET' END
+  ) AS "Options",
+  g.rolname AS "Grantor"
+FROM pg_catalog.pg_roles m
+     JOIN pg_catalog.pg_auth_members pam ON (pam.member = m.oid)
+     LEFT JOIN pg_catalog.pg_roles r ON (pam.roleid = r.oid)
+     LEFT JOIN pg_catalog.pg_roles g ON (pam.grantor = g.oid)
+WHERE m.rolname !~ '^pg_'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2, 4;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeRoles > pg17 / verbose=false 1`] = `
+{
+  "description": "List of roles",
+  "params": [],
+  "sql": "SELECT r.rolname, r.rolsuper, r.rolinherit,
+  r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
+  r.rolconnlimit, r.rolvaliduntil
+, r.rolreplication
+, r.rolbypassrls
+FROM pg_catalog.pg_roles r
+WHERE r.rolname !~ '^pg_'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeRoles > pg17 / verbose=true 1`] = `
+{
+  "description": "List of roles",
+  "params": [],
+  "sql": "SELECT r.rolname, r.rolsuper, r.rolinherit,
+  r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
+  r.rolconnlimit, r.rolvaliduntil
+, pg_catalog.shobj_description(r.oid, 'pg_authid') AS description
+, r.rolreplication
+, r.rolbypassrls
+FROM pg_catalog.pg_roles r
+WHERE r.rolname !~ '^pg_'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeSubscriptions / pg17 1`] = `
+{
+  "description": "List of subscriptions",
+  "params": [],
+  "sql": "SELECT subname AS "Name"
+,  pg_catalog.pg_get_userbyid(subowner) AS "Owner"
+,  subenabled AS "Enabled"
+,  subpublications AS "Publication"
+FROM pg_catalog.pg_subscription
+WHERE subdbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeTableDetails > pg17 / verbose=false 1`] = `
+{
+  "description": "Get matching relations to describe",
+  "params": [],
+  "sql": "SELECT c.oid,
+  n.nspname,
+  c.relname
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 2, 3;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeTableDetails > pg17 / verbose=true / showSystem 1`] = `
+{
+  "description": "Get matching relations to describe",
+  "params": [],
+  "sql": "SELECT c.oid,
+  n.nspname,
+  c.relname
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 2, 3;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeTablespaces / pg17 1`] = `
+{
+  "description": "List of tablespaces",
+  "params": [],
+  "sql": "SELECT spcname AS "Name",
+  pg_catalog.pg_get_userbyid(spcowner) AS "Owner",
+  pg_catalog.pg_tablespace_location(oid) AS "Location"
+FROM pg_catalog.pg_tablespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > describeTypes / pg17 1`] = `
+{
+  "description": "List of data types",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  pg_catalog.format_type(t.oid, NULL) AS "Name",
+  pg_catalog.obj_description(t.oid, 'pg_type') as "Description"
+FROM pg_catalog.pg_type t
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+WHERE (t.typrelid = 0 OR (SELECT c.relkind = 'c' FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid))
+  AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_type el WHERE el.oid = t.typelem AND el.typarray = t.oid)
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listAllDbs > pg17 / verbose=false 1`] = `
+{
+  "description": "List of databases",
+  "params": [],
+  "sql": "SELECT
+  d.datname as "Name",
+  pg_catalog.pg_get_userbyid(d.datdba) as "Owner",
+  pg_catalog.pg_encoding_to_char(d.encoding) as "Encoding",
+  CASE d.datlocprovider WHEN 'b' THEN 'builtin' WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS "Locale Provider",
+  d.datcollate as "Collate",
+  d.datctype as "Ctype",
+  d.datlocale as "Locale",
+  d.daticurules as "ICU Rules",
+  CASE WHEN pg_catalog.array_length(d.datacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(d.datacl, E'\\n') END AS "Access privileges"
+FROM pg_catalog.pg_database d
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listAllDbs > pg17 / verbose=true 1`] = `
+{
+  "description": "List of databases",
+  "params": [],
+  "sql": "SELECT
+  d.datname as "Name",
+  pg_catalog.pg_get_userbyid(d.datdba) as "Owner",
+  pg_catalog.pg_encoding_to_char(d.encoding) as "Encoding",
+  CASE d.datlocprovider WHEN 'b' THEN 'builtin' WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS "Locale Provider",
+  d.datcollate as "Collate",
+  d.datctype as "Ctype",
+  d.datlocale as "Locale",
+  d.daticurules as "ICU Rules",
+  CASE WHEN pg_catalog.array_length(d.datacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(d.datacl, E'\\n') END AS "Access privileges",
+  CASE WHEN pg_catalog.has_database_privilege(d.datname, 'CONNECT')
+       THEN pg_catalog.pg_size_pretty(pg_catalog.pg_database_size(d.datname))
+       ELSE 'No Access'
+  END as "Size",
+  t.spcname as "Tablespace",
+  pg_catalog.shobj_description(d.oid, 'pg_database') as "Description"
+FROM pg_catalog.pg_database d
+  JOIN pg_catalog.pg_tablespace t on d.dattablespace = t.oid
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listCasts / pg17 1`] = `
+{
+  "description": "List of casts",
+  "params": [],
+  "sql": "SELECT pg_catalog.format_type(castsource, NULL) AS "Source type",
+       pg_catalog.format_type(casttarget, NULL) AS "Target type",
+       CASE WHEN c.castmethod = 'b' THEN '(binary coercible)'
+            WHEN c.castmethod = 'i' THEN '(with inout)'
+            ELSE p.proname
+       END AS "Function",
+       CASE WHEN c.castcontext = 'e' THEN 'no'
+            WHEN c.castcontext = 'a' THEN 'in assignment'
+            ELSE 'yes'
+       END AS "Implicit?"
+FROM pg_catalog.pg_cast c LEFT JOIN pg_catalog.pg_proc p
+     ON c.castfunc = p.oid
+     LEFT JOIN pg_catalog.pg_type ts ON c.castsource = ts.oid
+     LEFT JOIN pg_catalog.pg_namespace ns ON ns.oid = ts.typnamespace
+     LEFT JOIN pg_catalog.pg_type tt ON c.casttarget = tt.oid
+     LEFT JOIN pg_catalog.pg_namespace nt ON nt.oid = tt.typnamespace
+WHERE ( (true  AND true /* TODO(WP-20): pattern matching */
+) OR (true  AND true /* TODO(WP-20): pattern matching */
+) )
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listCollations / pg17 1`] = `
+{
+  "description": "List of collations",
+  "params": [],
+  "sql": "SELECT
+  n.nspname AS "Schema",
+  c.collname AS "Name",
+  CASE c.collprovider WHEN 'd' THEN 'default' WHEN 'b' THEN 'builtin' WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS "Provider",
+  c.collcollate AS "Collate",
+  c.collctype AS "Ctype",
+  c.colllocale AS "Locale",
+  c.collicurules AS "ICU Rules",
+  CASE WHEN c.collisdeterministic THEN 'yes' ELSE 'no' END AS "Deterministic?"
+FROM pg_catalog.pg_collation c, pg_catalog.pg_namespace n
+WHERE n.oid = c.collnamespace
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+      AND c.collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding()))
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listConversions / pg17 1`] = `
+{
+  "description": "List of conversions",
+  "params": [],
+  "sql": "SELECT n.nspname AS "Schema",
+       c.conname AS "Name",
+       pg_catalog.pg_encoding_to_char(c.conforencoding) AS "Source",
+       pg_catalog.pg_encoding_to_char(c.contoencoding) AS "Destination",
+       CASE WHEN c.condefault THEN 'yes' ELSE 'no' END AS "Default?"
+FROM pg_catalog.pg_conversion c
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.connamespace
+WHERE true
+  AND n.nspname <> 'pg_catalog'
+  AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listDbRoleSettings / pg17 1`] = `
+{
+  "description": "List of settings",
+  "params": [],
+  "sql": "SELECT rolname AS "Role", datname AS "Database",
+pg_catalog.array_to_string(setconfig, E'\\n') AS "Settings"
+FROM pg_catalog.pg_db_role_setting s
+LEFT JOIN pg_catalog.pg_database d ON d.oid = setdatabase
+LEFT JOIN pg_catalog.pg_roles r ON r.oid = setrole
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listDefaultACLs / pg17 1`] = `
+{
+  "description": "Default access privileges",
+  "params": [],
+  "sql": "SELECT pg_catalog.pg_get_userbyid(d.defaclrole) AS "Owner",
+  n.nspname AS "Schema",
+  CASE d.defaclobjtype WHEN 'r' THEN 'table' WHEN 'S' THEN 'sequence' WHEN 'f' THEN 'function' WHEN 'T' THEN 'type' WHEN 'n' THEN 'schema' WHEN 'L' THEN 'large object' END AS "Type",
+  CASE WHEN pg_catalog.array_length(d.defaclacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(d.defaclacl, E'\\n') END AS "Access privileges"
+FROM pg_catalog.pg_default_acl d
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = d.defaclnamespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2, 3;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listDomains / pg17 1`] = `
+{
+  "description": "List of domains",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+       t.typname as "Name",
+       pg_catalog.format_type(t.typbasetype, t.typtypmod) as "Type",
+       (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type bt
+        WHERE c.oid = t.typcollation AND bt.oid = t.typbasetype AND t.typcollation <> bt.typcollation) as "Collation",
+       CASE WHEN t.typnotnull THEN 'not null' END as "Nullable",
+       t.typdefault as "Default",
+       pg_catalog.array_to_string(ARRAY(
+         SELECT pg_catalog.pg_get_constraintdef(r.oid, true) FROM pg_catalog.pg_constraint r WHERE t.oid = r.contypid AND r.contype = 'c' ORDER BY r.conname
+       ), ' ') as "Check"
+FROM pg_catalog.pg_type t
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+WHERE t.typtype = 'd'
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listEventTriggers / pg17 1`] = `
+{
+  "description": "List of event triggers",
+  "params": [],
+  "sql": "SELECT evtname as "Name", evtevent as "Event", pg_catalog.pg_get_userbyid(e.evtowner) as "Owner",
+ case evtenabled when 'O' then 'enabled' when 'R' then 'replica' when 'A' then 'always' when 'D' then 'disabled' end as "Enabled",
+ e.evtfoid::pg_catalog.regproc as "Function", pg_catalog.array_to_string(array(select x from pg_catalog.unnest(evttags) as t(x)), ', ') as "Tags"
+FROM pg_catalog.pg_event_trigger e
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listExtendedStats / pg17 1`] = `
+{
+  "description": "List of extended statistics",
+  "params": [],
+  "sql": "SELECT
+es.stxnamespace::pg_catalog.regnamespace::pg_catalog.text AS "Schema",
+es.stxname AS "Name",
+pg_catalog.format('%s FROM %s', pg_catalog.pg_get_statisticsobjdef_columns(es.oid), es.stxrelid::pg_catalog.regclass) AS "Definition",
+CASE WHEN 'd' = any(es.stxkind) THEN 'defined' END AS "Ndistinct",
+CASE WHEN 'f' = any(es.stxkind) THEN 'defined' END AS "Dependencies",
+CASE WHEN 'm' = any(es.stxkind) THEN 'defined' END AS "MCV"
+FROM pg_catalog.pg_statistic_ext es
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listExtensionContents / pg17 1`] = `
+{
+  "description": "Get matching extensions to list contents for",
+  "params": [],
+  "sql": "SELECT e.extname, e.oid
+FROM pg_catalog.pg_extension e
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listExtensions / pg17 1`] = `
+{
+  "description": "List of installed extensions",
+  "params": [],
+  "sql": "SELECT e.extname AS "Name", e.extversion AS "Version", ae.default_version AS "Default version",n.nspname AS "Schema", d.description AS "Description"
+FROM pg_catalog.pg_extension e LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace LEFT JOIN pg_catalog.pg_description d ON d.objoid = e.oid AND d.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass LEFT JOIN pg_catalog.pg_available_extensions() ae(name, default_version, comment) ON ae.name = e.extname
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listForeignDataWrappers / pg17 1`] = `
+{
+  "description": "List of foreign-data wrappers",
+  "params": [],
+  "sql": "SELECT fdw.fdwname AS "Name",
+  pg_catalog.pg_get_userbyid(fdw.fdwowner) AS "Owner",
+  fdw.fdwhandler::pg_catalog.regproc AS "Handler",
+  fdw.fdwvalidator::pg_catalog.regproc AS "Validator"
+FROM pg_catalog.pg_foreign_data_wrapper fdw
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listForeignServers / pg17 1`] = `
+{
+  "description": "List of foreign servers",
+  "params": [],
+  "sql": "SELECT s.srvname AS "Name",
+  pg_catalog.pg_get_userbyid(s.srvowner) AS "Owner",
+  f.fdwname AS "Foreign-data wrapper"
+FROM pg_catalog.pg_foreign_server s
+     JOIN pg_catalog.pg_foreign_data_wrapper f ON f.oid=s.srvfdw
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listForeignTables / pg17 1`] = `
+{
+  "description": "List of foreign tables",
+  "params": [],
+  "sql": "SELECT n.nspname AS "Schema",
+  c.relname AS "Table",
+  s.srvname AS "Server"
+FROM pg_catalog.pg_foreign_table ft
+  INNER JOIN pg_catalog.pg_class c ON c.oid = ft.ftrelid
+  INNER JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  INNER JOIN pg_catalog.pg_foreign_server s ON s.oid = ft.ftserver
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listLanguages / pg17 1`] = `
+{
+  "description": "List of languages",
+  "params": [],
+  "sql": "SELECT l.lanname AS "Name",
+       pg_catalog.pg_get_userbyid(l.lanowner) as "Owner",
+       l.lanpltrusted AS "Trusted",
+       d.description AS "Description"
+FROM pg_catalog.pg_language l
+LEFT JOIN pg_catalog.pg_description d
+  ON d.classoid = l.tableoid AND d.objoid = l.oid AND d.objsubid = 0
+WHERE l.lanplcallfoid != 0
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listLargeObjects / pg17 1`] = `
+{
+  "description": "Large objects",
+  "params": [],
+  "sql": "SELECT oid as "ID",
+  pg_catalog.pg_get_userbyid(lomowner) as "Owner",
+  pg_catalog.obj_description(oid, 'pg_largeobject') as "Description"
+FROM pg_catalog.pg_largeobject_metadata
+ORDER BY oid",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listOneExtensionContents / fixed oid 1`] = `
+{
+  "description": "Objects in extension",
+  "params": [],
+  "sql": "SELECT pg_catalog.pg_describe_object(classid, objid, 0) AS "Object description"
+FROM pg_catalog.pg_depend
+WHERE refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass AND refobjid = '12345' AND deptype = 'e'
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listOpFamilyFunctions / pg17 1`] = `
+{
+  "description": "List of support functions of operator families",
+  "params": [],
+  "sql": "SELECT
+  am.amname AS "AM",
+  CASE
+    WHEN pg_catalog.pg_opfamily_is_visible(of.oid)
+    THEN pg_catalog.format('%I', of.opfname)
+    ELSE pg_catalog.format('%I.%I', ns.nspname, of.opfname)
+  END AS "Operator family",
+  pg_catalog.format_type(ap.amproclefttype, NULL) AS "Registered left type",
+  pg_catalog.format_type(ap.amprocrighttype, NULL) AS "Registered right type",
+  ap.amprocnum AS "Number"
+, p.proname AS "Function"
+FROM pg_catalog.pg_amproc ap
+  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = ap.amprocfamily
+  LEFT JOIN pg_catalog.pg_am am ON am.oid = of.opfmethod
+  LEFT JOIN pg_catalog.pg_namespace ns ON of.opfnamespace = ns.oid
+  LEFT JOIN pg_catalog.pg_proc p ON ap.amproc = p.oid
+ORDER BY 1, 2,
+  ap.amproclefttype = ap.amprocrighttype DESC,
+  3, 4, 5;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listOpFamilyOperators / pg17 1`] = `
+{
+  "description": "List of operators of operator families",
+  "params": [],
+  "sql": "SELECT
+  am.amname AS "AM",
+  CASE
+    WHEN pg_catalog.pg_opfamily_is_visible(of.oid)
+    THEN pg_catalog.format('%I', of.opfname)
+    ELSE pg_catalog.format('%I.%I', nsf.nspname, of.opfname)
+  END AS "Operator family",
+  o.amopopr::pg_catalog.regoperator AS "Operator"
+,  o.amopstrategy AS "Strategy",
+  CASE o.amoppurpose
+    WHEN 'o' THEN 'ordering'
+    WHEN 's' THEN 'search'
+  END AS "Purpose"
+FROM pg_catalog.pg_amop o
+  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = o.amopfamily
+  LEFT JOIN pg_catalog.pg_am am ON am.oid = of.opfmethod AND am.oid = o.amopmethod
+  LEFT JOIN pg_catalog.pg_namespace nsf ON of.opfnamespace = nsf.oid
+ORDER BY 1, 2,
+  o.amoplefttype = o.amoprighttype DESC,
+  pg_catalog.format_type(o.amoplefttype, NULL),
+  pg_catalog.format_type(o.amoprighttype, NULL),
+  o.amopstrategy;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listOperatorClasses / pg17 1`] = `
+{
+  "description": "List of operator classes",
+  "params": [],
+  "sql": "SELECT
+  am.amname AS "AM",
+  pg_catalog.format_type(c.opcintype, NULL) AS "Input type",
+  CASE
+    WHEN c.opckeytype <> 0 AND c.opckeytype <> c.opcintype
+    THEN pg_catalog.format_type(c.opckeytype, NULL)
+    ELSE NULL
+  END AS "Storage type",
+  CASE
+    WHEN pg_catalog.pg_opclass_is_visible(c.oid)
+    THEN pg_catalog.format('%I', c.opcname)
+    ELSE pg_catalog.format('%I.%I', n.nspname, c.opcname)
+  END AS "Operator class",
+  (CASE WHEN c.opcdefault THEN 'yes' ELSE 'no' END) AS "Default?"
+FROM pg_catalog.pg_opclass c
+  LEFT JOIN pg_catalog.pg_am am on am.oid = c.opcmethod
+  LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.opcnamespace
+  LEFT JOIN pg_catalog.pg_type t ON t.oid = c.opcintype
+  LEFT JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace
+ORDER BY 1, 2, 4;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listOperatorFamilies / pg17 1`] = `
+{
+  "description": "List of operator families",
+  "params": [],
+  "sql": "SELECT
+  am.amname AS "AM",
+  CASE
+    WHEN pg_catalog.pg_opfamily_is_visible(f.oid)
+    THEN pg_catalog.format('%I', f.opfname)
+    ELSE pg_catalog.format('%I.%I', n.nspname, f.opfname)
+  END AS "Operator family",
+  (SELECT
+     pg_catalog.string_agg(pg_catalog.format_type(oc.opcintype, NULL), ', ')
+   FROM pg_catalog.pg_opclass oc
+   WHERE oc.opcfamily = f.oid) "Applicable types"
+FROM pg_catalog.pg_opfamily f
+  LEFT JOIN pg_catalog.pg_am am on am.oid = f.opfmethod
+  LEFT JOIN pg_catalog.pg_namespace n ON n.oid = f.opfnamespace
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listPartitionedTables / pg17 1`] = `
+{
+  "description": "List of partitioned relations",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  c.relname as "Name",
+  pg_catalog.pg_get_userbyid(c.relowner) as "Owner",
+  CASE c.relkind WHEN 'p' THEN 'partitioned table' WHEN 'I' THEN 'partitioned index' END as "Type",
+ c2.oid::pg_catalog.regclass as "Table"
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     LEFT JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
+     LEFT JOIN pg_catalog.pg_class c2 ON i.indrelid = c2.oid
+WHERE c.relkind IN ('p','I','')
+ AND NOT c.relispartition
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname !~ '^pg_toast'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY "Schema", "Type" DESC, "Name";",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listPublications / pg17 1`] = `
+{
+  "description": "List of publications",
+  "params": [],
+  "sql": "SELECT pubname AS "Name",
+  pg_catalog.pg_get_userbyid(pubowner) AS "Owner",
+  puballtables AS "All tables",
+  pubinsert AS "Inserts",
+  pubupdate AS "Updates",
+  pubdelete AS "Deletes",
+  pubtruncate AS "Truncates",
+  pubviaroot AS "Via root"
+FROM pg_catalog.pg_publication
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listSchemas > pg17 / verbose=false 1`] = `
+{
+  "description": "List of schemas",
+  "params": [],
+  "sql": "SELECT n.nspname AS "Name",
+  pg_catalog.pg_get_userbyid(n.nspowner) AS "Owner"
+FROM pg_catalog.pg_namespace n
+WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listSchemas > pg17 / verbose=true 1`] = `
+{
+  "description": "List of schemas",
+  "params": [],
+  "sql": "SELECT n.nspname AS "Name",
+  pg_catalog.pg_get_userbyid(n.nspowner) AS "Owner",
+  CASE WHEN pg_catalog.array_length(n.nspacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(n.nspacl, E'\\n') END AS "Access privileges",
+  pg_catalog.obj_description(n.oid, 'pg_namespace') AS "Description"
+FROM pg_catalog.pg_namespace n
+WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTSConfigs / pg17 verbose=false 1`] = `
+{
+  "description": "List of text search configurations",
+  "params": [],
+  "sql": "SELECT
+   n.nspname as "Schema",
+   c.cfgname as "Name",
+   pg_catalog.obj_description(c.oid, 'pg_ts_config') as "Description"
+FROM pg_catalog.pg_ts_config c
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.cfgnamespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTSConfigs / pg17 verbose=true 1`] = `
+{
+  "description": "List of text search configurations (verbose)",
+  "params": [],
+  "sql": "SELECT c.oid, c.cfgname, n.nspname, p.prsname, np.nspname as pnspname
+FROM pg_catalog.pg_ts_config c
+   LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.cfgnamespace,
+ pg_catalog.pg_ts_parser p
+   LEFT JOIN pg_catalog.pg_namespace np ON np.oid = p.prsnamespace
+WHERE p.oid = c.cfgparser
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 3, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTSDictionaries / pg17 1`] = `
+{
+  "description": "List of text search dictionaries",
+  "params": [],
+  "sql": "SELECT
+  n.nspname as "Schema",
+  d.dictname as "Name",
+  pg_catalog.obj_description(d.oid, 'pg_ts_dict') as "Description"
+FROM pg_catalog.pg_ts_dict d
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = d.dictnamespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTSParsers / pg17 verbose=false 1`] = `
+{
+  "description": "List of text search parsers",
+  "params": [],
+  "sql": "SELECT
+  n.nspname as "Schema",
+  p.prsname as "Name",
+  pg_catalog.obj_description(p.oid, 'pg_ts_parser') as "Description"
+FROM pg_catalog.pg_ts_parser p
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.prsnamespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTSParsers / pg17 verbose=true 1`] = `
+{
+  "description": "List of text search parsers (verbose)",
+  "params": [],
+  "sql": "SELECT p.oid,
+  n.nspname,
+  p.prsname
+FROM pg_catalog.pg_ts_parser p
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.prsnamespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTSTemplates / pg17 1`] = `
+{
+  "description": "List of text search templates",
+  "params": [],
+  "sql": "SELECT
+  n.nspname AS "Schema",
+  t.tmplname AS "Name",
+  pg_catalog.obj_description(t.oid, 'pg_ts_template') AS "Description"
+FROM pg_catalog.pg_ts_template t
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = t.tmplnamespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTables > pg12 / verbose=true (no tableam join semantics differ) 1`] = `
+{
+  "description": "List of relations",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  c.relname as "Name",
+  CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view' WHEN 'i' THEN 'index' WHEN 'S' THEN 'sequence' WHEN 't' THEN 'TOAST table' WHEN 'f' THEN 'foreign table' WHEN 'p' THEN 'partitioned table' WHEN 'I' THEN 'partitioned index' END as "Type",
+  pg_catalog.pg_get_userbyid(c.relowner) as "Owner",
+  CASE c.relpersistence WHEN 'p' THEN 'permanent' WHEN 't' THEN 'temporary' WHEN 'u' THEN 'unlogged' END as "Persistence",
+  am.amname as "Access method",
+  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as "Size",
+  pg_catalog.obj_description(c.oid, 'pg_class') as "Description"
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam
+WHERE c.relkind IN ('r','p','')
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname !~ '^pg_toast'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1,2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTables > pg17 / verbose=false / default tabtypes 1`] = `
+{
+  "description": "List of relations",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  c.relname as "Name",
+  CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view' WHEN 'i' THEN 'index' WHEN 'S' THEN 'sequence' WHEN 't' THEN 'TOAST table' WHEN 'f' THEN 'foreign table' WHEN 'p' THEN 'partitioned table' WHEN 'I' THEN 'partitioned index' END as "Type",
+  pg_catalog.pg_get_userbyid(c.relowner) as "Owner"
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r','p','v','m','S','f','')
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname !~ '^pg_toast'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1,2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listTables > pg17 / verbose=true / tabtypes=ti 1`] = `
+{
+  "description": "List of relations",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  c.relname as "Name",
+  CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view' WHEN 'i' THEN 'index' WHEN 'S' THEN 'sequence' WHEN 't' THEN 'TOAST table' WHEN 'f' THEN 'foreign table' WHEN 'p' THEN 'partitioned table' WHEN 'I' THEN 'partitioned index' END as "Type",
+  pg_catalog.pg_get_userbyid(c.relowner) as "Owner",
+  c2.relname as "Table",
+  CASE c.relpersistence WHEN 'p' THEN 'permanent' WHEN 't' THEN 'temporary' WHEN 'u' THEN 'unlogged' END as "Persistence",
+  am.amname as "Access method",
+  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as "Size",
+  pg_catalog.obj_description(c.oid, 'pg_class') as "Description"
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam
+     LEFT JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
+     LEFT JOIN pg_catalog.pg_class c2 ON i.indrelid = c2.oid
+WHERE c.relkind IN ('r','p','i','I','')
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname !~ '^pg_toast'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1,2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > listUserMappings / pg17 1`] = `
+{
+  "description": "List of user mappings",
+  "params": [],
+  "sql": "SELECT um.srvname AS "Server",
+  um.usename AS "User name"
+FROM pg_catalog.pg_user_mappings um
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > objectDescription / pg17 1`] = `
+{
+  "description": "Object descriptions",
+  "params": [],
+  "sql": "SELECT DISTINCT tt.nspname AS "Schema", tt.name AS "Name", tt.object AS "Object", d.description AS "Description"
+FROM (
+  SELECT pgc.oid as oid, pgc.tableoid AS tableoid, n.nspname as nspname,
+  CAST(pgc.conname AS pg_catalog.text) as name,  CAST('table constraint' AS pg_catalog.text) as object
+  FROM pg_catalog.pg_constraint pgc
+    JOIN pg_catalog.pg_class c ON c.oid = pgc.conrelid
+    LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname <> 'pg_catalog' AND n.nspname <> 'information_schema' /* table constraint */ 
+UNION ALL
+  SELECT pgc.oid, pgc.tableoid, n.nspname,
+  CAST(pgc.conname AS pg_catalog.text),  CAST('domain constraint' AS pg_catalog.text)
+  FROM pg_catalog.pg_constraint pgc
+    JOIN pg_catalog.pg_type t ON t.oid = pgc.contypid
+    LEFT JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+WHERE n.nspname <> 'pg_catalog' AND n.nspname <> 'information_schema' /* domain constraint */ 
+UNION ALL
+  SELECT o.oid, o.tableoid, n.nspname,
+  CAST(o.opcname AS pg_catalog.text),  CAST('operator class' AS pg_catalog.text)
+  FROM pg_catalog.pg_opclass o
+    JOIN pg_catalog.pg_am am ON o.opcmethod = am.oid
+    JOIN pg_catalog.pg_namespace n ON n.oid = o.opcnamespace
+WHERE n.nspname <> 'pg_catalog' AND n.nspname <> 'information_schema' /* operator class */ 
+UNION ALL
+  SELECT opf.oid, opf.tableoid, n.nspname,
+  CAST(opf.opfname AS pg_catalog.text),  CAST('operator family' AS pg_catalog.text)
+  FROM pg_catalog.pg_opfamily opf
+    JOIN pg_catalog.pg_am am ON opf.opfmethod = am.oid
+    JOIN pg_catalog.pg_namespace n ON opf.opfnamespace = n.oid
+WHERE n.nspname <> 'pg_catalog' AND n.nspname <> 'information_schema' /* operator family */ 
+UNION ALL
+  SELECT r.oid, r.tableoid, n.nspname,
+  CAST(r.rulename AS pg_catalog.text),  CAST('rule' AS pg_catalog.text)
+  FROM pg_catalog.pg_rewrite r
+       JOIN pg_catalog.pg_class c ON c.oid = r.ev_class
+       LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE r.rulename != '_RETURN'
+UNION ALL
+  SELECT t.oid, t.tableoid, n.nspname,
+  CAST(t.tgname AS pg_catalog.text),  CAST('trigger' AS pg_catalog.text)
+  FROM pg_catalog.pg_trigger t
+       JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+       LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname <> 'pg_catalog' AND n.nspname <> 'information_schema' /* trigger */ 
+) AS tt
+  JOIN pg_catalog.pg_description d ON (tt.oid = d.objoid AND tt.tableoid = d.classoid AND d.objsubid = 0)
+ORDER BY 1, 2, 3;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > permissionsList / pg17 1`] = `
+{
+  "description": "Access privileges",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  c.relname as "Name",
+  CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view' WHEN 'S' THEN 'sequence' WHEN 'f' THEN 'foreign table' WHEN 'p' THEN 'partitioned table' END as "Type",
+  CASE WHEN pg_catalog.array_length(c.relacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(c.relacl, E'\\n') END AS "Access privileges",
+  pg_catalog.array_to_string(ARRAY(
+    SELECT attname || E':\\n  ' || pg_catalog.array_to_string(attacl, E'\\n  ')
+    FROM pg_catalog.pg_attribute a
+    WHERE attrelid = c.oid AND NOT attisdropped AND attacl IS NOT NULL
+  ), E'\\n') AS "Column privileges",
+  pg_catalog.array_to_string(ARRAY(
+    SELECT polname
+    || CASE WHEN NOT polpermissive THEN E' (RESTRICTIVE)' ELSE '' END
+    || CASE WHEN polcmd != '*' THEN E' (' || polcmd::pg_catalog.text || E'):' ELSE E':' END
+    || CASE WHEN polqual IS NOT NULL THEN E'\\n  (u): ' || pg_catalog.pg_get_expr(polqual, polrelid) ELSE E'' END
+    || CASE WHEN polwithcheck IS NOT NULL THEN E'\\n  (c): ' || pg_catalog.pg_get_expr(polwithcheck, polrelid) ELSE E'' END
+    || CASE WHEN polroles <> '{0}' THEN E'\\n  to: ' || pg_catalog.array_to_string(
+             ARRAY(SELECT rolname FROM pg_catalog.pg_roles WHERE oid = ANY (polroles) ORDER BY 1)
+             , E', ') ELSE E'' END
+    FROM pg_catalog.pg_policy pol
+    WHERE polrelid = c.oid), E'\\n') AS "Policies"
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r','v','m','S','f','p')
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > showFunction / fixed name 1`] = `
+{
+  "description": "Function definition",
+  "params": [],
+  "sql": "SELECT pg_catalog.pg_get_functiondef('myschema.fn(int)'::pg_catalog.regprocedure) AS def;",
+}
+`;
+
+exports[`describe/queries — pg17 snapshots > showView / fixed name 1`] = `
+{
+  "description": "View definition",
+  "params": [],
+  "sql": "SELECT pg_catalog.pg_get_viewdef('public.my_view'::pg_catalog.regclass, true) AS def;",
+}
+`;
