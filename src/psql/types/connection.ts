@@ -92,6 +92,12 @@ export type Connection = {
 };
 
 export type ConnectOptions = {
+  /**
+   * Host to connect to. Either a TCP hostname / IP, or — if the value
+   * starts with `/` — the directory holding a Postgres Unix-domain socket
+   * (the wire layer appends `/.s.PGSQL.<port>` to form the actual socket
+   * path, matching libpq's `pqUnixSocketPath()`).
+   */
   host: string;
   port: number;
   user: string;
@@ -103,6 +109,14 @@ export type ConnectOptions = {
   connectTimeoutMs?: number;
   clientEncoding?: string;
   options?: string;
+  /** Path to client cert (PEM). Mapped to tls.connect's `cert` option. */
+  sslcert?: string;
+  /** Path to client key (PEM). Mapped to tls.connect's `key` option. */
+  sslkey?: string;
+  /** Path to CA cert(s) (PEM, may contain bundle). Mapped to `ca`. */
+  sslrootcert?: string;
+  /** Path to CRL (PEM). Mapped to `crl`. */
+  sslcrl?: string;
   /**
    * Open the connection in replication mode (walsender). Values:
    *   - 'true': physical replication (libpq accepts 'true' / 'on' / 'yes' /
@@ -119,4 +133,33 @@ export type ConnectOptions = {
    * handshake + Query / ErrorResponse path only.
    */
   replication?: 'true' | 'database';
+  /**
+   * Multi-host list. When set, PgConnection.connect iterates the list
+   * trying each in order; on connect/auth failure or target_session_attrs
+   * mismatch, the next is tried. The single-host `host` / `port` fields
+   * are still accepted (and are equivalent to `hosts: [{host, port}]`).
+   */
+  hosts?: readonly { host: string; port: number }[];
+  /**
+   * Filter accepting hosts by session role. After a successful handshake,
+   * we query pg_is_in_recovery() to determine primary vs standby and
+   * keep / abandon the connection accordingly.
+   *
+   *   - 'any' (default) — accept any host
+   *   - 'read-write' / 'primary' — only when NOT in recovery
+   *   - 'read-only' / 'standby' — only when IN recovery
+   *   - 'prefer-standby' — try standby first, fall back to primary
+   */
+  targetSessionAttrs?:
+    | 'any'
+    | 'read-write'
+    | 'read-only'
+    | 'primary'
+    | 'standby'
+    | 'prefer-standby';
+  /**
+   * Shuffle the hosts list before iteration. `'random'` to shuffle,
+   * `'disable'` (default) for order-preserved.
+   */
+  loadBalanceHosts?: 'disable' | 'random';
 };

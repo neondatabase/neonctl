@@ -18,10 +18,17 @@
 
 import { afterEach, describe, expect, test } from 'vitest';
 import * as net from 'node:net';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { createHmac, pbkdf2Sync } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 
-import { PgConnection } from './connection.js';
+import {
+  isUnixSocketHost,
+  PgConnection,
+  unixSocketPath,
+} from './connection.js';
 import { CancelRequest } from './protocol.js';
 
 // ---------------------------------------------------------------------------
@@ -1343,6 +1350,227 @@ describe('PgConnection', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Multi-host iteration: target_session_attrs and load_balance_hosts.
+//
+// The fake server harness above is single-port; for multi-host we spin up
+// two servers on different ports and observe which one we land on. The
+// first server in each scenario is the "wrong" host (refuses, or wrong
+// role); the second is the acceptable host.
+// ---------------------------------------------------------------------------
+
+describe('PgConnection multi-host', () => {
+  let servers: FakeServer[] = [];
+
+  afterEach(async () => {
+    for (const s of servers) {
+      try {
+        await s.close();
+      } catch {
+        // ignore
+      }
+    }
+    servers = [];
+  });
+
+  /**
+   * Spin up a fake server that drives a standard auth + ReadyForQuery
+   * handshake, replies to `SELECT pg_is_in_recovery()` with the supplied
+   * boolean ('t' / 'f' in text-format DataRow), and ignores everything else.
+   * `acceptStartup=false` causes the server to drop connections at startup,
+   * simulating an unreachable host.
+   */
+  const startRoleServer = async (input: {
+    inRecovery: boolean;
+    acceptStartup?: boolean;
+  }): Promise<FakeServer> => {
+    const { inRecovery, acceptStartup = true } = input;
+    return startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        if (!acceptStartup) {
+          client.end();
+          return;
+        }
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(
+          rowDescription([{ name: 'pg_is_in_recovery', oid: 16, size: 1 }]),
+        );
+        client.send(dataRow([inRecovery ? 't' : 'f']));
+        client.send(commandComplete('SELECT 1'));
+        client.send(readyForQuery('I'));
+      }
+    });
+  };
+
+  test('falls through to the second host when the first refuses the connection', async () => {
+    // First server: never replies — we close the listener so the TCP
+    // connect attempt fails immediately. Second server: accepts.
+    const refusingServer = await startFakeServer(() => {
+      // never called; we close it below before connecting
+    });
+    const refusedPort = refusingServer.port;
+    await refusingServer.close();
+
+    const second = await startRoleServer({ inRecovery: false });
+    servers.push(second);
+
+    const conn = await PgConnection.connect({
+      // Single-host scalar fields are placeholders; the wire layer
+      // prefers `hosts`.
+      host: '127.0.0.1',
+      port: refusedPort,
+      hosts: [
+        { host: '127.0.0.1', port: refusedPort },
+        { host: '127.0.0.1', port: second.port },
+      ],
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    // We land on the second server — verify by checking the saved opts.
+    expect(conn.host).toBe('127.0.0.1');
+    expect(conn.port).toBe(second.port);
+    await conn.close();
+  });
+
+  test('target_session_attrs=read-write skips a standby and lands on the primary', async () => {
+    const standby = await startRoleServer({ inRecovery: true });
+    const primary = await startRoleServer({ inRecovery: false });
+    servers.push(standby, primary);
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: standby.port,
+      hosts: [
+        { host: '127.0.0.1', port: standby.port },
+        { host: '127.0.0.1', port: primary.port },
+      ],
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+      targetSessionAttrs: 'read-write',
+    });
+    expect(conn.port).toBe(primary.port);
+    await conn.close();
+  });
+
+  test('prefer-standby picks a standby in the first pass even when the primary comes first', async () => {
+    const primary = await startRoleServer({ inRecovery: false });
+    const standby = await startRoleServer({ inRecovery: true });
+    servers.push(primary, standby);
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: primary.port,
+      hosts: [
+        // Primary appears FIRST. With `prefer-standby`, the first pass
+        // accepts only standbys, so we skip the primary and land on the
+        // standby (the second entry).
+        { host: '127.0.0.1', port: primary.port },
+        { host: '127.0.0.1', port: standby.port },
+      ],
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+      targetSessionAttrs: 'prefer-standby',
+    });
+    expect(conn.port).toBe(standby.port);
+    await conn.close();
+  });
+
+  test('prefer-standby falls back to the primary on the second pass when no standby is available', async () => {
+    const primaryA = await startRoleServer({ inRecovery: false });
+    const primaryB = await startRoleServer({ inRecovery: false });
+    servers.push(primaryA, primaryB);
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: primaryA.port,
+      hosts: [
+        { host: '127.0.0.1', port: primaryA.port },
+        { host: '127.0.0.1', port: primaryB.port },
+      ],
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+      targetSessionAttrs: 'prefer-standby',
+    });
+    // First pass tries both as 'standby' (rejected), second pass accepts
+    // 'any' — we land on the first primary.
+    expect(conn.port).toBe(primaryA.port);
+    await conn.close();
+  });
+
+  test('load_balance_hosts=random shuffles the candidate list (deterministic RNG)', async () => {
+    const first = await startRoleServer({ inRecovery: false });
+    const second = await startRoleServer({ inRecovery: false });
+    servers.push(first, second);
+
+    // Inject an RNG that returns 0.0 every time. Fisher-Yates with rng()=0
+    // always picks j=0 for every step, which (for n=2) swaps index 1 with
+    // index 0 — reversing the list. So [first, second] -> [second, first].
+    (
+      PgConnection as unknown as { _loadBalanceRng: (() => number) | null }
+    )._loadBalanceRng = (): number => 0;
+    try {
+      const conn = await PgConnection.connect({
+        host: '127.0.0.1',
+        port: first.port,
+        hosts: [
+          { host: '127.0.0.1', port: first.port },
+          { host: '127.0.0.1', port: second.port },
+        ],
+        user: 'u',
+        database: 'db',
+        ssl: 'disable',
+        loadBalanceHosts: 'random',
+      });
+      // With our deterministic shuffle, the list reverses: the SECOND host
+      // is tried first and accepted.
+      expect(conn.port).toBe(second.port);
+      await conn.close();
+    } finally {
+      (
+        PgConnection as unknown as { _loadBalanceRng: (() => number) | null }
+      )._loadBalanceRng = null;
+    }
+  });
+
+  test('throws the last error when every candidate fails', async () => {
+    // Two servers that immediately close the socket on startup — both
+    // refuse, and the orchestrator surfaces the last error.
+    const a = await startRoleServer({
+      inRecovery: false,
+      acceptStartup: false,
+    });
+    const b = await startRoleServer({
+      inRecovery: false,
+      acceptStartup: false,
+    });
+    servers.push(a, b);
+
+    await expect(
+      PgConnection.connect({
+        host: '127.0.0.1',
+        port: a.port,
+        hosts: [
+          { host: '127.0.0.1', port: a.port },
+          { host: '127.0.0.1', port: b.port },
+        ],
+        user: 'u',
+        database: 'db',
+        ssl: 'disable',
+      }),
+    ).rejects.toBeInstanceOf(Error);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Identifier / literal escaping (no server required)
 // ---------------------------------------------------------------------------
 
@@ -1363,5 +1591,158 @@ describe('PgConnection escaping (offline)', () => {
   test('escapeLiteral switches to E-string when backslashes present', () => {
     expect(conn.escapeLiteral('a\\b')).toBe("E'a\\\\b'");
     expect(conn.escapeLiteral("a'\\b")).toBe("E'a''\\\\b'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unix-domain socket helpers + end-to-end open.
+//
+// Most CI environments don't have a local Postgres socket, so we stand up a
+// `net.createServer({...}).listen(<sockPath>)` and drive the same fake-PG
+// handler used above. The directory layout matches libpq's:
+//
+//   <opts.host>/.s.PGSQL.<opts.port>
+//
+// — i.e. opts.host is the directory and we synthesize the file path inside
+// the wire layer.
+// ---------------------------------------------------------------------------
+
+describe('isUnixSocketHost / unixSocketPath', () => {
+  test('classifies "/var/run/postgresql" as a socket directory', () => {
+    expect(isUnixSocketHost('/var/run/postgresql')).toBe(true);
+    expect(isUnixSocketHost('/tmp')).toBe(true);
+  });
+
+  test('classifies "localhost", IPs, and "example.com" as TCP', () => {
+    expect(isUnixSocketHost('localhost')).toBe(false);
+    expect(isUnixSocketHost('127.0.0.1')).toBe(false);
+    expect(isUnixSocketHost('::1')).toBe(false);
+    expect(isUnixSocketHost('example.com')).toBe(false);
+  });
+
+  test('layout matches libpq: <dir>/.s.PGSQL.<port>', () => {
+    expect(unixSocketPath('/tmp', 5432)).toBe('/tmp/.s.PGSQL.5432');
+    expect(unixSocketPath('/var/run/postgresql', 5433)).toBe(
+      '/var/run/postgresql/.s.PGSQL.5433',
+    );
+  });
+});
+
+describe('PgConnection over Unix-domain socket', () => {
+  // Each test gets its own ephemeral directory so the socket files don't
+  // collide. Cleanup happens in afterEach.
+  let sockDir: string | null = null;
+  let server: net.Server | null = null;
+
+  afterEach(async () => {
+    if (server) {
+      await new Promise<void>((res) => {
+        server?.close(() => {
+          res();
+        });
+      });
+      server = null;
+    }
+    if (sockDir !== null) {
+      try {
+        fs.rmSync(sockDir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+      sockDir = null;
+    }
+  });
+
+  test('opens a connection over <dir>/.s.PGSQL.<port>', async () => {
+    sockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-sock-'));
+    const port = 5432;
+    const sockFile = unixSocketPath(sockDir, port);
+
+    server = net.createServer((socket) => {
+      let accum = Buffer.alloc(0);
+      let startupSeen = false;
+      socket.on('data', (chunk: Buffer) => {
+        accum = Buffer.concat([accum, chunk]);
+        if (!startupSeen) {
+          if (accum.length < 8) return;
+          const declared = accum.readInt32BE(0);
+          if (accum.length < declared) return;
+          const code = accum.readInt32BE(4);
+          if (code === 80877103) {
+            // SSLRequest: reply 'N' so the client falls back to plain. The
+            // connect path passes sslmode='disable' for unix sockets so we
+            // shouldn't actually see this byte, but be defensive.
+            socket.write(Buffer.from('N'));
+            accum = accum.subarray(declared);
+          } else if (code === 196608) {
+            // StartupMessage — accept and complete handshake.
+            accum = accum.subarray(declared);
+            startupSeen = true;
+            socket.write(backendMessage('R', Buffer.from([0, 0, 0, 0])));
+            socket.write(
+              backendMessage(
+                'S',
+                Buffer.concat([cstring('server_version'), cstring('16.2')]),
+              ),
+            );
+            const keyBuf = Buffer.alloc(8);
+            keyBuf.writeInt32BE(1, 0);
+            keyBuf.writeInt32BE(2, 4);
+            socket.write(backendMessage('K', keyBuf));
+            socket.write(backendMessage('Z', Buffer.from('I')));
+          }
+        }
+      });
+      socket.on('error', () => {
+        // swallow — tests assert via the connect promise
+      });
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server?.once('error', reject);
+      server?.listen(sockFile, () => {
+        resolve();
+      });
+    });
+
+    const conn = await PgConnection.connect({
+      host: sockDir,
+      port,
+      user: 'u',
+      database: 'db',
+      // sslmode=prefer is the libpq default; we expect the wire layer to
+      // silently downgrade to 'disable' over a unix socket so no SSLRequest
+      // byte hits the wire.
+      ssl: 'prefer',
+    });
+
+    expect(conn.parameterStatus('server_version')).toBe('16.2');
+    expect(conn.host).toBe(sockDir);
+    await conn.close();
+  });
+
+  test('rejects sslmode=require for unix-socket host with a clear diagnostic', async () => {
+    // No server needed — the early sslmode check fires before openSocket.
+    await expect(
+      PgConnection.connect({
+        host: '/no/such/dir',
+        port: 5432,
+        user: 'u',
+        database: 'db',
+        ssl: 'require',
+      }),
+    ).rejects.toThrow(/sslmode=require.*Unix-domain/);
+  });
+
+  test('rejects sslmode=verify-full for unix-socket host', async () => {
+    await expect(
+      PgConnection.connect({
+        host: '/no/such/dir',
+        port: 5432,
+        user: 'u',
+        database: 'db',
+        ssl: 'verify-full',
+      }),
+    ).rejects.toThrow(/sslmode=verify-full.*Unix-domain/);
   });
 });

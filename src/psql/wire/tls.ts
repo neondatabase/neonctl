@@ -31,6 +31,7 @@
 import type * as net from 'node:net';
 import * as tls from 'node:tls';
 import { createHash } from 'node:crypto';
+import { promises as fs } from 'node:fs';
 import { SSLRequest } from './protocol.js';
 
 export type SslMode =
@@ -55,6 +56,25 @@ export type TlsResult =
     };
 
 /**
+ * libpq-style PEM file paths to be loaded and passed into `tls.connect`.
+ * Each path is resolved exactly once per negotiateTls call. A missing file
+ * surfaces as a clear "could not read ssl<file>: <ENOENT|EACCES>" error;
+ * we deliberately do NOT silently fall back to system CAs / no-cert mode,
+ * matching libpq's behaviour where an explicit `sslrootcert=` that fails
+ * to read aborts the connection.
+ */
+export type TlsFileOptions = {
+  /** Path to client cert (PEM). Mapped to tls.connect's `cert`. */
+  sslcert?: string;
+  /** Path to client key (PEM). Mapped to tls.connect's `key`. */
+  sslkey?: string;
+  /** Path to CA cert(s) (PEM, may contain a bundle). Mapped to `ca`. */
+  sslrootcert?: string;
+  /** Path to CRL (PEM). Mapped to `crl`. */
+  sslcrl?: string;
+};
+
+/**
  * Hash of the peer cert for `tls-server-end-point`. libpq always uses SHA-256
  * of the DER-encoded certificate; we match that.
  *
@@ -76,11 +96,19 @@ export function computeChannelBindingData(cert: tls.PeerCertificate): Buffer {
  *
  * `tlsOpts` is passed through to `tls.connect` — the connection layer fills
  * in `host`, `servername`, `ca`, `rejectUnauthorized`, etc. before calling.
+ *
+ * `fileOpts` carries libpq-style PEM file paths (`sslcert`, `sslkey`,
+ * `sslrootcert`, `sslcrl`). Each present path is read from disk before the
+ * TLS handshake and threaded into the corresponding tls.connect option
+ * (`cert` / `key` / `ca` / `crl`). Read failures bubble out as
+ * `could not read ssl<…>: <message>` so the caller sees the libpq diagnostic
+ * shape rather than a bare ENOENT.
  */
 export async function negotiateTls(
   socket: net.Socket,
   sslMode: SslMode,
   tlsOpts: tls.ConnectionOptions = {},
+  fileOpts: TlsFileOptions = {},
 ): Promise<TlsResult> {
   if (sslMode === 'disable') {
     return { kind: 'plain', socket };
@@ -89,7 +117,8 @@ export async function negotiateTls(
   const reply = await sendSslRequest(socket);
 
   if (reply === 'S') {
-    return upgradeToTls(socket, tlsOpts);
+    const mergedOpts = await loadTlsFileOptions(tlsOpts, fileOpts);
+    return upgradeToTls(socket, mergedOpts);
   }
 
   // reply === 'N': server refused TLS.
@@ -104,6 +133,45 @@ export async function negotiateTls(
   }
   // 'allow' / 'prefer': fall back to plain text.
   return { kind: 'plain', socket };
+}
+
+/**
+ * Read each non-empty file path in `fileOpts` and merge the bytes onto a
+ * shallow copy of `tlsOpts`. Each ENOENT / EACCES / permission error is
+ * surfaced as `could not read ssl<file>: <reason>` so users immediately
+ * know which option pointed at a bad path.
+ *
+ * Exported for tests (`tls.test.ts` swaps in a mocked `tls.connect`).
+ */
+export async function loadTlsFileOptions(
+  tlsOpts: tls.ConnectionOptions,
+  fileOpts: TlsFileOptions,
+): Promise<tls.ConnectionOptions> {
+  const merged: tls.ConnectionOptions = { ...tlsOpts };
+
+  if (fileOpts.sslrootcert !== undefined && fileOpts.sslrootcert !== '') {
+    merged.ca = await readPem('sslrootcert', fileOpts.sslrootcert);
+  }
+  if (fileOpts.sslcert !== undefined && fileOpts.sslcert !== '') {
+    merged.cert = await readPem('sslcert', fileOpts.sslcert);
+  }
+  if (fileOpts.sslkey !== undefined && fileOpts.sslkey !== '') {
+    merged.key = await readPem('sslkey', fileOpts.sslkey);
+  }
+  if (fileOpts.sslcrl !== undefined && fileOpts.sslcrl !== '') {
+    merged.crl = await readPem('sslcrl', fileOpts.sslcrl);
+  }
+
+  return merged;
+}
+
+async function readPem(label: string, path: string): Promise<Buffer> {
+  try {
+    return await fs.readFile(path);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`could not read ${label} "${path}": ${reason}`);
+  }
 }
 
 /**

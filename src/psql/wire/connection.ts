@@ -137,6 +137,78 @@ function md5AuthPayload(user: string, password: string, salt: Buffer): string {
   return 'md5' + outer;
 }
 
+/**
+ * Fisher-Yates in-place shuffle of the candidate hosts list. Used by
+ * `load_balance_hosts=random`. Hook the random source so tests can inject a
+ * deterministic permutation.
+ */
+function shuffleInPlace(
+  arr: { host: string; port: number }[],
+  rng: () => number = Math.random,
+): void {
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+}
+
+/**
+ * After a successful handshake, decide whether this connection matches the
+ * caller's `target_session_attrs` constraint by running
+ * `SELECT pg_is_in_recovery()`. Returns `true` if the connection is
+ * acceptable, `false` if it should be torn down and the next host tried.
+ *
+ *   - 'any' (or undefined) — always accepts.
+ *   - 'read-write' / 'primary' — accepts when NOT in recovery.
+ *   - 'read-only' / 'standby' — accepts when IN recovery.
+ *
+ * If the probe query itself fails we treat the connection as unacceptable
+ * (returns false) so the orchestrator falls through to the next candidate
+ * rather than handing the caller a half-broken connection.
+ */
+async function checkSessionAttrs(
+  conn: PgConnection,
+  tsa: ConnectOptions['targetSessionAttrs'],
+): Promise<boolean> {
+  if (tsa === undefined || tsa === 'any') return true;
+  let inRecovery: boolean;
+  try {
+    const sets = await conn.execSimple('SELECT pg_is_in_recovery()');
+    if (sets.length === 0 || sets[0].rows.length === 0) {
+      return false;
+    }
+    const raw = sets[0].rows[0][0];
+    // pg_is_in_recovery returns boolean; text-format rows surface as
+    // 't' / 'f'. Be liberal: also handle 'true' / 'false'.
+    if (raw === true) {
+      inRecovery = true;
+    } else if (raw === false) {
+      inRecovery = false;
+    } else if (typeof raw === 'string') {
+      inRecovery = raw === 't' || raw.toLowerCase() === 'true';
+    } else {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  switch (tsa) {
+    case 'read-write':
+    case 'primary':
+      return !inRecovery;
+    case 'read-only':
+    case 'standby':
+      return inRecovery;
+    // 'prefer-standby' is unwrapped by the orchestrator into two passes
+    // ('standby' then 'any'), so we never see it here. Fall through to
+    // accept-any for safety.
+    default:
+      return true;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // PgConnection
 // ---------------------------------------------------------------------------
@@ -337,29 +409,168 @@ export class PgConnection implements Connection {
   // Public factory
   // -------------------------------------------------------------------------
 
+  /**
+   * Pluggable random source for `load_balance_hosts=random`. Public so tests
+   * can inject a deterministic permutation; production code leaves it `null`
+   * and falls back to `Math.random`. NOT part of the connection's external
+   * contract — internal-only escape hatch.
+   */
+  public static _loadBalanceRng: (() => number) | null = null;
+
+  /**
+   * Open a Postgres connection. Supports multi-host (`opts.hosts`) with
+   * sequential or random iteration, a `target_session_attrs` filter, and the
+   * libpq-style `prefer-standby` two-pass fallback.
+   *
+   * Iteration semantics:
+   *   1. Build the candidate list from `opts.hosts` (preferred) or
+   *      `[{host: opts.host, port: opts.port}]`.
+   *   2. If `loadBalanceHosts === 'random'`, Fisher-Yates shuffle in place.
+   *   3. For each candidate (in order), attempt: openSocket → TLS → auth →
+   *      startup. On failure, record the error and try the next.
+   *   4. On successful handshake, if `target_session_attrs` is restrictive,
+   *      run `SELECT pg_is_in_recovery()`. If the role doesn't match, close
+   *      this connection and try the next.
+   *   5. `prefer-standby` runs TWO passes: first accepting only standbys,
+   *      second falling back to any host.
+   *   6. If no candidate succeeds, throw the LAST encountered error
+   *      (preserves the most-recent failure mode for diagnostics).
+   */
   public static async connect(opts: ConnectOptions): Promise<PgConnection> {
+    const candidates =
+      opts.hosts !== undefined && opts.hosts.length > 0
+        ? [...opts.hosts]
+        : [{ host: opts.host, port: opts.port }];
+
+    if (opts.loadBalanceHosts === 'random') {
+      shuffleInPlace(candidates, PgConnection._loadBalanceRng ?? Math.random);
+    }
+
+    const tsa = opts.targetSessionAttrs ?? 'any';
+    // `prefer-standby` runs two passes: first 'standby', then 'any'. Every
+    // other mode runs a single pass with the literal target.
+    const passes: ConnectOptions['targetSessionAttrs'][] =
+      tsa === 'prefer-standby' ? ['standby', 'any'] : [tsa];
+
+    let lastErr: unknown = null;
+    for (const passTsa of passes) {
+      for (const candidate of candidates) {
+        const candidateOpts: ConnectOptions = {
+          ...opts,
+          host: candidate.host,
+          port: candidate.port,
+        };
+        let conn: PgConnection;
+        try {
+          conn = await PgConnection.connectSingle(candidateOpts);
+        } catch (err) {
+          lastErr = err;
+          continue;
+        }
+        // Apply target_session_attrs filter via pg_is_in_recovery().
+        const accepted = await checkSessionAttrs(conn, passTsa);
+        if (accepted) {
+          return conn;
+        }
+        // Mismatch: close this connection and move on.
+        try {
+          await conn.close();
+        } catch {
+          // ignore
+        }
+        lastErr = new Error(
+          `target_session_attrs=${String(passTsa)} did not match host ${candidate.host}:${String(candidate.port)}`,
+        );
+      }
+    }
+    if (lastErr !== null) {
+      // `throw lastErr` would trip the `only-throw-error` lint rule because
+      // `lastErr` is typed `unknown`. Normalise to an Error for the throw
+      // while preserving the original via `cause` so callers can introspect.
+      if (lastErr instanceof Error) throw lastErr;
+      let message: string;
+      if (
+        typeof lastErr === 'object' &&
+        lastErr !== null &&
+        'message' in lastErr &&
+        typeof (lastErr as { message: unknown }).message === 'string'
+      ) {
+        message = (lastErr as { message: string }).message;
+      } else if (
+        typeof lastErr === 'string' ||
+        typeof lastErr === 'number' ||
+        typeof lastErr === 'boolean'
+      ) {
+        message = String(lastErr);
+      } else {
+        message = 'PgConnection.connect: unknown error';
+      }
+      const wrapped = new Error(message);
+      (wrapped as Error & { cause?: unknown }).cause = lastErr;
+      throw wrapped;
+    }
+    throw new Error('PgConnection.connect: no candidate hosts configured');
+  }
+
+  /**
+   * Per-host connect attempt: open the socket, negotiate TLS, run the auth
+   * dance, complete startup. Same shape as the pre-multihost `connect()`;
+   * the multi-host orchestrator above wraps this for each candidate.
+   */
+  private static async connectSingle(
+    opts: ConnectOptions,
+  ): Promise<PgConnection> {
+    // TLS over Unix-domain sockets is meaningless (the kernel guarantees
+    // the channel) and libpq refuses `sslmode=require|verify-*` for socket
+    // connections. We mirror the early rejection so a misconfigured caller
+    // gets a clear diagnostic instead of a confused TLS handshake.
+    if (
+      isUnixSocketHost(opts.host) &&
+      (opts.ssl === 'require' ||
+        opts.ssl === 'verify-ca' ||
+        opts.ssl === 'verify-full')
+    ) {
+      throw new Error(
+        `sslmode=${opts.ssl} is not supported over Unix-domain sockets (host=${opts.host})`,
+      );
+    }
+
     const rawSocket = await openSocket(opts);
     let socket: AnySocket = rawSocket;
     let channelBindingData: Buffer | null = null;
     try {
-      const tlsResult = await negotiateTls(rawSocket, opts.ssl, {
-        servername: opts.host,
-        // verify-ca skips hostname check; verify-full = default Node behavior.
-        // require/prefer/allow accept any cert chain (libpq default).
-        rejectUnauthorized:
-          opts.ssl === 'verify-ca' || opts.ssl === 'verify-full',
-        checkServerIdentity:
-          opts.ssl === 'verify-full' ? undefined : () => undefined,
-        // PG 17+ advertises ALPN for the 'postgresql' protocol; libpq sets
-        // this so a future-proof TLS proxy can route on ALPN instead of
-        // probing the wire. Always offer it — older servers ignore.
-        ALPNProtocols: ['postgresql'],
-        // Cipher preference is left to Node/OpenSSL defaults. Vanilla psql
-        // may negotiate AES_256_GCM where we land on AES_128_GCM under TLS
-        // 1.3; both are secure (TLS 1.3 only ships these three suites) and
-        // Node's `ciphers` option only accepts TLS-1.2 spec syntax, not the
-        // TLS_AES_* TLS-1.3 names.
-      });
+      const tlsResult = await negotiateTls(
+        rawSocket,
+        // libpq refuses TLS on a socket connection even for sslmode=allow /
+        // prefer — instead of negotiating it just stays plain. We short-
+        // circuit by passing 'disable' to negotiateTls; the caller's
+        // requested sslmode is preserved on opts for error reporting.
+        isUnixSocketHost(opts.host) ? 'disable' : opts.ssl,
+        {
+          servername: opts.host,
+          // verify-ca skips hostname check; verify-full = default Node behavior.
+          // require/prefer/allow accept any cert chain (libpq default).
+          rejectUnauthorized:
+            opts.ssl === 'verify-ca' || opts.ssl === 'verify-full',
+          checkServerIdentity:
+            opts.ssl === 'verify-full' ? undefined : () => undefined,
+          // PG 17+ advertises ALPN for the 'postgresql' protocol; libpq sets
+          // this so a future-proof TLS proxy can route on ALPN instead of
+          // probing the wire. Always offer it — older servers ignore.
+          ALPNProtocols: ['postgresql'],
+          // Cipher preference is left to Node/OpenSSL defaults. Vanilla psql
+          // may negotiate AES_256_GCM where we land on AES_128_GCM under TLS
+          // 1.3; both are secure (TLS 1.3 only ships these three suites) and
+          // Node's `ciphers` option only accepts TLS-1.2 spec syntax, not the
+          // TLS_AES_* TLS-1.3 names.
+        },
+        {
+          sslcert: opts.sslcert,
+          sslkey: opts.sslkey,
+          sslrootcert: opts.sslrootcert,
+          sslcrl: opts.sslcrl,
+        },
+      );
       if (tlsResult.kind === 'tls') {
         socket = tlsResult.socket;
         channelBindingData = tlsResult.channelBindingData;
@@ -742,14 +953,25 @@ export class PgConnection implements Connection {
     const cancelSocket = await openSocket(this.opts);
     let writeSocket: AnySocket = cancelSocket;
     try {
-      const t = await negotiateTls(cancelSocket, this.opts.ssl, {
-        servername: this.opts.host,
-        rejectUnauthorized:
-          this.opts.ssl === 'verify-ca' || this.opts.ssl === 'verify-full',
-        checkServerIdentity:
-          this.opts.ssl === 'verify-full' ? undefined : () => undefined,
-        ALPNProtocols: ['postgresql'],
-      });
+      const t = await negotiateTls(
+        cancelSocket,
+        // Unix-domain socket: no TLS, regardless of caller's sslmode.
+        isUnixSocketHost(this.opts.host) ? 'disable' : this.opts.ssl,
+        {
+          servername: this.opts.host,
+          rejectUnauthorized:
+            this.opts.ssl === 'verify-ca' || this.opts.ssl === 'verify-full',
+          checkServerIdentity:
+            this.opts.ssl === 'verify-full' ? undefined : () => undefined,
+          ALPNProtocols: ['postgresql'],
+        },
+        {
+          sslcert: this.opts.sslcert,
+          sslkey: this.opts.sslkey,
+          sslrootcert: this.opts.sslrootcert,
+          sslcrl: this.opts.sslcrl,
+        },
+      );
       writeSocket = t.kind === 'tls' ? t.socket : t.socket;
       await new Promise<void>((resolve, reject) => {
         writeSocket.write(
@@ -2021,12 +2243,34 @@ export class PgConnection implements Connection {
 }
 
 // ---------------------------------------------------------------------------
-// Socket open helper (TCP only; Unix socket support is out of scope for now)
+// Socket open helper. Supports TCP (default) and Unix-domain sockets when
+// `opts.host` starts with `/` — matching libpq's `pqUnixSocketPath()` which
+// reads the directory from PGHOST and builds `<dir>/.s.PGSQL.<port>` as the
+// actual filesystem socket path.
 // ---------------------------------------------------------------------------
+
+/**
+ * `true` if the host value should be interpreted as a Unix-domain socket
+ * directory. libpq's rule: any value starting with `/` is a path.
+ */
+export function isUnixSocketHost(host: string): boolean {
+  return host.startsWith('/');
+}
+
+/**
+ * Build the actual filesystem path Postgres listens on under a socket
+ * directory: `<dir>/.s.PGSQL.<port>`. Mirrors the libpq layout so any
+ * server started with `unix_socket_directories=<dir>` is reachable.
+ */
+export function unixSocketPath(dir: string, port: number): string {
+  return `${dir}/.s.PGSQL.${String(port)}`;
+}
 
 function openSocket(opts: ConnectOptions): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const socket = net.connect({ host: opts.host, port: opts.port });
+    const socket = isUnixSocketHost(opts.host)
+      ? net.connect({ path: unixSocketPath(opts.host, opts.port) })
+      : net.connect({ host: opts.host, port: opts.port });
     const timeout = opts.connectTimeoutMs;
     let timer: ReturnType<typeof setTimeout> | null = null;
     if (timeout !== undefined && timeout > 0) {
