@@ -370,6 +370,73 @@ export class PgConnection implements Connection {
     return this.params.get(name);
   }
 
+  /**
+   * Expose the connection target as `meta.database` / `meta.user` / `meta.host`
+   * / `meta.port` / `meta.pid` so the prompt renderer (which duck-types these
+   * via `MaybeWithMeta`) can render `%/`, `%n`, `%m`, `%>`, `%p` without
+   * additional plumbing. Postgres doesn't emit a `database` ParameterStatus,
+   * so these come from the connect opts / BackendKeyData.
+   */
+  public get database(): string {
+    return this.opts.database;
+  }
+  public get user(): string {
+    return this.opts.user;
+  }
+  public get host(): string {
+    return this.opts.host;
+  }
+  public get port(): number {
+    return this.opts.port;
+  }
+  public get pid(): number {
+    return this.processId;
+  }
+
+  /**
+   * If the connection was upgraded to TLS during negotiation, return the
+   * cipher info for the active session. Returns `null` for plain-text
+   * connections. Used by the startup banner to render an `SSL connection
+   * (protocol: …, cipher: …)` line that mirrors upstream psql.
+   */
+  public getTlsInfo(): {
+    protocol: string;
+    cipher: string;
+    standardName?: string;
+    /** "off" for TLS≥1.3 (compression disabled by spec) or no support. */
+    compression: string;
+    /** ALPN protocol negotiated, or null if none. */
+    alpn: string | null;
+  } | null {
+    const s = this.socket as tls.TLSSocket;
+    if (typeof s.getCipher !== 'function') return null;
+    try {
+      const cipher = s.getCipher();
+      const protocol = s.getProtocol?.() ?? cipher.version ?? 'unknown';
+      if (!cipher.name) return null;
+      // TLS compression has been disabled by every modern stack since CRIME
+      // (2012); Node's TLS doesn't expose a compression accessor, so we
+      // always report "off". libpq does the same.
+      const compression = 'off';
+      // Node exposes the negotiated ALPN protocol on TLSSocket.alpnProtocol
+      // (string when negotiated, false when not). Postgres 17+ uses
+      // 'postgresql' here.
+      const alpnRaw = (s as unknown as { alpnProtocol?: string | false })
+        .alpnProtocol;
+      const alpn =
+        typeof alpnRaw === 'string' && alpnRaw.length > 0 ? alpnRaw : null;
+      return {
+        protocol: String(protocol),
+        cipher: cipher.standardName ?? cipher.name,
+        standardName: cipher.standardName,
+        compression,
+        alpn,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   public async query(sql: string, params?: unknown[]): Promise<ResultSet> {
     if (!params || params.length === 0) {
       const sets = await this.execSimple(sql);

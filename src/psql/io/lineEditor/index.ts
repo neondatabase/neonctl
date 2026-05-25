@@ -324,9 +324,11 @@ export class LineEditor {
         return;
       }
       case 'cancel': {
+        // Upstream psql doesn't echo `^C` to the screen on Ctrl-C — it just
+        // breaks to the next prompt line silently. Match that behaviour.
         this.completion.reset();
         this.moveCursorToEnd();
-        this.stdout.write(`^C${LF}`);
+        this.stdout.write(LF);
         const reject = a.reject;
         this.active = null;
         this.exitRaw();

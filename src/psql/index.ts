@@ -98,6 +98,15 @@ export const runPsql = async (
   };
 
   try {
+    // Startup banner — mirrors upstream psql's
+    //   psql (<client>, server <server>)
+    //   SSL connection (protocol: …, cipher: …)
+    //   Type "help" for help.
+    // Suppressed in quiet mode and when stdin isn't a TTY (scripted use).
+    if (!settings.quiet && !settings.notty && preActions.length === 0) {
+      writeStartupBanner(connection, stdout);
+    }
+
     // Run .psqlrc unless -X was specified.
     await loadPsqlrc(ctx, { skip: parsed.noPsqlrc, env: process.env });
 
@@ -140,6 +149,31 @@ export const runPsql = async (
       // ignore close errors
     }
   }
+};
+
+const writeStartupBanner = (
+  connection: PgConnection,
+  out: NodeJS.WritableStream,
+): void => {
+  const serverVersion =
+    connection.parameterStatus('server_version') ?? 'unknown';
+  // Client identifier. Matches upstream's `psql (18.4, server X.Y)` shape
+  // but signals that this is the embedded TS implementation so users can tell
+  // when they're on the fallback path.
+  out.write(`psql-ts (neonctl, server ${serverVersion})\n`);
+
+  const tls = connection.getTlsInfo();
+  if (tls) {
+    const parts = [
+      `protocol: ${tls.protocol}`,
+      `cipher: ${tls.cipher}`,
+      `compression: ${tls.compression}`,
+    ];
+    if (tls.alpn) parts.push(`ALPN: ${tls.alpn}`);
+    out.write(`SSL connection (${parts.join(', ')})\n`);
+  }
+
+  out.write('Type "help" for help.\n\n');
 };
 
 const parseConnectionUri = (uri: string): ConnectOptions => {

@@ -64,6 +64,7 @@ import {
 } from '../io/history.js';
 import type { HistControl } from '../types/settings.js';
 import { LineEditor } from '../io/lineEditor/index.js';
+import { psqlCompleter } from '../complete/index.js';
 
 // ---------------------------------------------------------------------------
 // Exit codes — mirror psql's `EXIT_*` constants.
@@ -147,6 +148,7 @@ const makeEditorLineReader = async (ctx: REPLContext): Promise<LineReader> => {
     stdin: ctx.stdin as NodeJS.ReadStream,
     stdout: ctx.stdout,
     history,
+    completer: psqlCompleter({ settings: ctx.settings }),
   });
   return {
     readLine: async (prompt: string): Promise<string | null> => {
@@ -177,14 +179,62 @@ const makeEditorLineReader = async (ctx: REPLContext): Promise<LineReader> => {
   };
 };
 
+/**
+ * Recognize upstream psql's `exit` / `quit` shortcut: when typed at the start
+ * of a fresh statement (queryBuf empty), they exit the REPL. Accepts a
+ * trailing `;` and/or whitespace.
+ */
+const isQuitKeyword = (line: string): boolean => {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return false;
+  const stripped = trimmed.replace(/;+\s*$/u, '').trimEnd();
+  return stripped === 'exit' || stripped === 'quit';
+};
+
+/**
+ * Recognize the bare `help` keyword the same way upstream does: at the start
+ * of a fresh statement, it prints a one-screen reminder of the most useful
+ * meta-commands and continues the REPL.
+ */
+const isHelpKeyword = (line: string): boolean => {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return false;
+  const stripped = trimmed.replace(/;+\s*$/u, '').trimEnd();
+  return stripped === 'help';
+};
+
+const HELP_TEXT =
+  'You are using psql-ts, the embedded TypeScript psql in neonctl.\n' +
+  'Type:  \\copyright for distribution terms\n' +
+  '       \\h for help with SQL commands\n' +
+  '       \\? for help with psql commands\n' +
+  '       \\g or terminate with semicolon to execute query\n' +
+  '       \\q to quit\n';
+
 const makeLineReader = async (ctx: REPLContext): Promise<LineReader> => {
+  const debug = process.env.NEONCTL_PSQL_DEBUG === '1';
   if (ctx.settings.notty) {
+    if (debug) {
+      ctx.stderr.write(
+        '[psql-debug] notty=true; using stream reader (no line editor / no Tab completion)\n',
+      );
+    }
     return makeStreamLineReader(ctx.stdin);
   }
   try {
-    return await makeEditorLineReader(ctx);
-  } catch {
-    // Fall back to the dumb reader if raw-mode setup fails (e.g., tests).
+    const r = await makeEditorLineReader(ctx);
+    if (debug) {
+      ctx.stderr.write(
+        '[psql-debug] LineEditor engaged (raw mode, Tab completion active)\n',
+      );
+    }
+    return r;
+  } catch (err) {
+    if (debug) {
+      ctx.stderr.write(
+        `[psql-debug] LineEditor setup failed, falling back to stream reader: ${(err as Error).message}\n`,
+      );
+    }
     return makeStreamLineReader(ctx.stdin);
   }
 };
@@ -553,8 +603,16 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   // -----------------------------------------------------------------------
   try {
     while (!exitRequested) {
+      // Prompt status drives `%R`. When the query buffer holds an incomplete
+      // statement but the scanner isn't inside any special context (paren,
+      // comment, quoted-string), it still reports `'ready'`; map that to
+      // `'continue'` so PROMPT2 renders `-` instead of `=`.
       const status: PromptContext['promptStatus'] =
-        queryBuf.length === 0 ? 'ready' : scanState.promptStatus;
+        queryBuf.length === 0
+          ? 'ready'
+          : scanState.promptStatus === 'ready'
+            ? 'continue'
+            : scanState.promptStatus;
       const prompt = computePrompt(status);
 
       // 1. Pending input from \i: process as a single chunk and loop again.
@@ -578,6 +636,38 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         throw err;
       }
       if (line === null) break; // EOF
+
+      // 2a. `exit`/`quit` keyword handling.
+      //
+      //   - Empty buffer  → exit the REPL.
+      //   - Non-empty buf → print "Use \\q to quit." hint and continue
+      //     (buffer is preserved so the user can resume editing).
+      //
+      // The buffer may carry whitespace from a prior line's tail, so we
+      // trim before checking.
+      if (isQuitKeyword(line)) {
+        if (queryBuf.trim().length === 0) {
+          reader.pushHistory(line);
+          exitRequested = true;
+          break;
+        }
+        ctx.stdout.write('Use \\q to quit.\n');
+        continue;
+      }
+
+      // 2b. `help` keyword handling, same shape.
+      //
+      //   - Empty buffer  → print the help text, continue.
+      //   - Non-empty buf → print "Use \\? for help." hint, continue.
+      if (isHelpKeyword(line)) {
+        if (queryBuf.trim().length === 0) {
+          reader.pushHistory(line);
+          ctx.stdout.write(HELP_TEXT);
+        } else {
+          ctx.stdout.write('Use \\? for help.\n');
+        }
+        continue;
+      }
 
       // 3. Push to history once we have a complete submitted line (only
       //    when there's something non-blank to record).

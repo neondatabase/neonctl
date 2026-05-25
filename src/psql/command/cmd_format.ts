@@ -54,8 +54,15 @@ const OUTPUT_FORMATS: readonly OutputFormat[] = [
 /** Convert OutputFormat to its human-readable display string. */
 const formatName = (f: OutputFormat): string => f;
 
-/** Stringify a triple-state for status lines (`\x`, `\t`). */
-const tripleLabel = (value: 'on' | 'off' | 'auto'): string => value;
+/**
+ * Stringify a triple-state for status lines (`\x`, `\pset expanded`).
+ * Matches upstream psql phrasing:
+ *   on   → "Expanded display is on."
+ *   off  → "Expanded display is off."
+ *   auto → "Expanded display is used automatically."
+ */
+const tripleLabel = (value: 'on' | 'off' | 'auto'): string =>
+  value === 'auto' ? 'used automatically' : value;
 
 /** `\a` — toggle aligned/unaligned. */
 export const cmdA: BackslashCmdSpec = {
