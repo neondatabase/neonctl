@@ -248,6 +248,17 @@ export const cmdPrompt: BackslashCmdSpec = {
  *   stdout. Upstream uses single-quotes around the value.
  * - One arg → set the variable to the empty string.
  * - More args → join the rest with a single space and set the variable.
+ *
+ * Diagnostics mirror upstream `exec_command_set` in `src/bin/psql/command.c`:
+ *
+ *   - Names containing characters outside `[A-Za-z_][A-Za-z0-9_]*` produce
+ *     `invalid variable name: "<name>"` (prefixed with `psql: `).
+ *   - Per-variable hook rejections (AUTOCOMMIT / FETCH_COUNT /
+ *     ON_ERROR_ROLLBACK / VERBOSITY / etc.) carry the hook's message
+ *     verbatim; we add only the `psql: ` prefix.
+ *   - Hook vetoes with no message fall back to a generic line. This
+ *     should not happen in practice — every registered hook either
+ *     accepts or returns a wording string.
  */
 export const cmdSet: BackslashCmdSpec = {
   name: 'set',
@@ -272,8 +283,23 @@ export const cmdSet: BackslashCmdSpec = {
       values.push(a);
     }
     const value = values.join(' ');
-    if (!ctx.settings.vars.set(name, value)) {
-      writeErr(`\\${ctx.cmdName}: error while setting variable "${name}"\n`);
+    const result = ctx.settings.vars.trySet(name, value);
+    if (!result.ok) {
+      const prefix = psqlErrorPrefix(ctx.settings);
+      if (result.reason === 'invalid-name') {
+        writeErr(`${prefix}invalid variable name: "${name}"\n`);
+      } else if (result.error !== undefined) {
+        // Hook supplied its own wording — emit verbatim, prefixed with
+        // `psql: `. The message intentionally does NOT carry a severity
+        // (`error:` / `ERROR:`) because upstream's per-variable hooks
+        // also emit just `psql: <msg>` (see `bool_substitute_hook` etc.).
+        writeErr(`${prefix}${result.error}\n`);
+      } else {
+        // Hook returned `false` without a message — fall back to a
+        // generic line so callers still see something. None of the
+        // built-in hooks take this path, but third-party callers might.
+        writeErr(`${prefix}error while setting variable "${name}"\n`);
+      }
       return Promise.resolve({ status: 'error' });
     }
     return Promise.resolve({ status: 'ok' });

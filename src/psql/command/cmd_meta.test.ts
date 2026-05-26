@@ -247,12 +247,22 @@ describe('\\set', () => {
     expect(settings.vars.get('X')).toBe('Y Z W');
   });
 
-  test('invalid name errors', async () => {
+  test('invalid name errors with upstream "invalid variable name" wording', async () => {
     const settings = defaultSettings(createVarStore());
     const ctx = makeMockCtx('set', '1bad value', settings);
     const r = await run(cmdSet, ctx);
     expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/error while setting/);
+    // Upstream `exec_command_set` emits `invalid variable name: "<name>"`
+    // via `pg_log_error`, which prepends the `psql:` diagnostic prefix.
+    expect(stderr()).toMatch(/^psql: invalid variable name: "1bad"\n$/);
+  });
+
+  test('invalid characters in name (e.g. "/" — regress/psql line 9)', async () => {
+    const settings = defaultSettings(createVarStore());
+    const ctx = makeMockCtx('set', 'invalid/name foo', settings);
+    const r = await run(cmdSet, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toBe('psql: invalid variable name: "invalid/name"\n');
   });
 });
 

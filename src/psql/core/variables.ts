@@ -29,6 +29,7 @@
 
 import type {
   OnOffAuto,
+  SetResult,
   VarHook,
   VarStore as VarStoreType,
 } from '../types/variables.js';
@@ -136,18 +137,33 @@ export class VarStore implements VarStoreType {
   private readonly hooks = new Map<string, VarHook[]>();
 
   set(name: string, value: string): boolean {
-    if (!VALID_NAME_RE.test(name)) return false;
+    return this.trySet(name, value).ok;
+  }
+
+  trySet(name: string, value: string): SetResult {
+    if (!VALID_NAME_RE.test(name)) {
+      return { ok: false, reason: 'invalid-name' };
+    }
 
     const hooks = this.hooks.get(name);
     if (hooks) {
       // All hooks must accept the new value. If any rejects, the store is
-      // left untouched (mirrors upstream `assign_hook` veto semantics).
+      // left untouched (mirrors upstream `assign_hook` veto semantics). A
+      // hook may return a string error message; we propagate it to the
+      // caller verbatim so `\set` can emit the upstream-shaped diagnostic
+      // (e.g. `unrecognized value "x" for "AUTOCOMMIT": Boolean expected`).
       for (const hook of hooks) {
-        if (!hook(value)) return false;
+        const result = hook(value);
+        if (result === false) {
+          return { ok: false, reason: 'hook-veto' };
+        }
+        if (typeof result === 'string') {
+          return { ok: false, reason: 'hook-veto', error: result };
+        }
       }
     }
     this.values.set(name, value);
-    return true;
+    return { ok: true };
   }
 
   get(name: string): string | undefined {
@@ -160,6 +176,9 @@ export class VarStore implements VarStoreType {
     if (hooks) {
       // Notify hooks of deletion so they can clear derived state. Hook
       // return values are ignored on unset — deletion is unconditional.
+      // A hook may return a string here; we still treat the unset as
+      // successful (upstream behaviour: assign hooks are notified, but
+      // the slot is gone).
       for (const hook of hooks) hook(null);
     }
     return had;
