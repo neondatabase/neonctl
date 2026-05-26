@@ -120,6 +120,16 @@ const SETUP_SQL = [
   'DROP TABLE IF EXISTS mytab123 CASCADE;',
   'DROP TABLE IF EXISTS mytab246 CASCADE;',
   'DROP TABLE IF EXISTS "mixedName" CASCADE;',
+  // Defensive cleanup of fixture tables created by sibling specs that share
+  // the testcontainers Postgres instance (e.g. `tab_psql_single` from
+  // `001_basic.spec.ts`). When these tables linger in the catalog they
+  // pollute prefix matches like `from t<tab>` (which should resolve
+  // uniquely to `tab1`) into multi-candidate completions whose common
+  // prefix is just `tab`, breaking the upstream-parity assertions. The
+  // spec passes in isolation but fails in the full conformance suite
+  // without this cleanup. Listed by name (not pattern) so we don't drop
+  // anything we don't own.
+  'DROP TABLE IF EXISTS tab_psql_single CASCADE;',
   'DROP TYPE IF EXISTS enum1 CASCADE;',
   'DROP PUBLICATION IF EXISTS some_publication;',
   'CREATE TABLE tab1 (c1 int primary key constraint foo not null, c2 text);',
