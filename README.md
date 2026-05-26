@@ -106,7 +106,7 @@ The embedded implementation covers the common psql use cases, including:
 ### Known limitations
 
 - The `--fallback` flag is hidden in `--help` until we finish building out the conformance test suite. The behavior is safe to use today; the hide is a signal of "not yet flipped to default."
-- The conformance test suite is non-blocking in CI until the `KNOWN_FAILURES.yml` ledger has been seeded.
+- The conformance test suite is non-blocking in CI until coverage stabilises; deferred subtests are marked inline via `it.todo` / `it.skip` in the spec files.
 
 ## Configure autocompletion
 
@@ -218,5 +218,4 @@ The embedded TypeScript psql implementation has its own conformance test suite t
 ```shell
 bun run test:conformance         # run against $PSQL_BINARY (defaults to the system psql)
 bun run test:conformance:matrix  # run across PG 14/15/16/17/18 locally (requires Docker)
-bun run test:conformance:seed    # re-baseline KNOWN_FAILURES.yml after a major change
 ```

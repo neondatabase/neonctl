@@ -1,30 +1,19 @@
 # psql conformance harness (WP-T).
 #
-# Drives `tests/psql-conformance/regress.spec.ts` against the TypeScript
-# psql implementation, using upstream PostgreSQL 18.0 regression scripts
-# as ground truth. The harness consults `KNOWN_FAILURES.yml` so a known
-# parity gap is recorded once and stops generating noise.
+# Drives `tests/psql-conformance/regress.spec.ts` and the TAP spec ports
+# against the TypeScript psql implementation, using upstream PostgreSQL
+# 18.0 regression scripts as ground truth. Per-subtest deferred work is
+# tracked inline in the spec files via `it.todo(...)` (engine gap) or
+# `it.skip(...)` (out of scope) — see tests/psql-conformance/README.md.
 #
 # MATRIX: Neon supports PG 14-18, so we exercise the harness against
-# every supported major version. Per-version output deltas (e.g. PG 18's
-# new \df+ columns) are handled via the optional `pg:` field in
-# KNOWN_FAILURES.yml — see tests/psql-conformance/README.md.
+# every supported major version.
 #
 # NON-BLOCKING: each matrix job's conformance step has
 # `continue-on-error: true` so unexpected failures appear in the PR
-# check list as warnings but do NOT gate merge. This matches the
-# bootstrap phase of the WP-T plan — TS-psql is still being burned in
-# and the KNOWN_FAILURES ledger is wide open.
-#
-# WHEN TO FLIP TO BLOCKING:
-#   * `KNOWN_FAILURES.yml` reflects the real coverage gap (no stale
-#     entries; conformance reporter's `coverage` is >= 95%);
-#   * a maintainer has re-seeded the ledger via
-#     `bun run test:conformance:seed` after the last major TS-psql change;
-#   * a green run on `main` has been observed for at least one week.
-# At that point, drop `continue-on-error: true` from the
-# `Run conformance suite` step and (optionally) hoist this job into the
-# required-checks set in branch protection.
+# check list as warnings but do NOT gate merge. TS-psql is still being
+# burned in; once coverage stabilises this flag can be dropped and the
+# job hoisted into the required-checks set in branch protection.
 
 name: psql conformance
 
@@ -106,8 +95,9 @@ jobs:
         continue-on-error: true
         env:
           # `dist/cli.js` is the neonctl entrypoint; the harness invokes
-          # it with libpq-style flags. The conformance gate is the
-          # KNOWN_FAILURES ledger; raw stderr surfaces in the run log.
+          # it with libpq-style flags. Per-subtest deferred work is
+          # tracked inline via it.todo/it.skip; raw stderr surfaces in
+          # the run log.
           PSQL_BINARY: ${{ github.workspace }}/dist/cli.js
           # Point the harness's pg-fixture at the GHA service container
           # instead of booting a testcontainer in CI.
@@ -116,9 +106,6 @@ jobs:
           PGCONFORMANCE_PG_USER: postgres
           PGCONFORMANCE_PG_PASSWORD: postgres
           PGCONFORMANCE_PG_DB: regression
-          # Tell the harness which PG major is running so per-version
-          # KNOWN_FAILURES entries (`pg: '14'` etc.) filter correctly.
-          PGCONFORMANCE_PG_MAJOR: ${{ matrix.pg }}
         run: |
           set -o pipefail
           bun run test:conformance 2>&1 | tee psql-conformance.log
