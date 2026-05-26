@@ -130,10 +130,31 @@ function awaitOnExit(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    const onExit = (code: number | null) => {
+      settle(() => {
+        if (code === expectedCode) resolve();
+        else
+          reject(
+            new Error(
+              `local-command exited with code ${code} (expected ${expectedCode}).`,
+            ),
+          );
+      });
+    };
+    // Spawn-layer failure (ENOENT etc.) emits 'error' instead of (or in
+    // addition to) 'exit'. Without this listener readiness would hang
+    // the full budget waiting for an 'exit' that never fires.
+    const onError = (err: Error) => {
+      settle(() => {
+        reject(err);
+      });
+    };
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.off('exit', onExit);
+      child.off('error', onError);
       fn();
     };
     const timer = setTimeout(() => {
@@ -145,25 +166,8 @@ function awaitOnExit(
         );
       });
     }, budgetMs);
-    child.once('exit', (code) => {
-      settle(() => {
-        if (code === expectedCode) resolve();
-        else
-          reject(
-            new Error(
-              `local-command exited with code ${code} (expected ${expectedCode}).`,
-            ),
-          );
-      });
-    });
-    // Spawn-layer failure (ENOENT etc.) emits 'error' instead of (or in
-    // addition to) 'exit'. Without this listener readiness would hang
-    // the full budget waiting for an 'exit' that never fires.
-    child.once('error', (err: Error) => {
-      settle(() => {
-        reject(err);
-      });
-    });
+    child.once('exit', onExit);
+    child.once('error', onError);
   });
 }
 
@@ -266,6 +270,7 @@ function awaitLogMatch(
       settled = true;
       clearTimeout(timer);
       child.off('exit', onExit);
+      child.off('error', onError);
       unsubscribe();
       fn();
     };
@@ -281,6 +286,11 @@ function awaitLogMatch(
         );
       });
     };
+    const onError = (err: Error) => {
+      finish(() => {
+        reject(err);
+      });
+    };
     const timer = setTimeout(() => {
       finish(() => {
         reject(
@@ -291,6 +301,7 @@ function awaitLogMatch(
       });
     }, budgetMs);
     child.once('exit', onExit);
+    child.once('error', onError);
     const unsubscribe = subscribe(onLine);
   });
 }

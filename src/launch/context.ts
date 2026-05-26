@@ -159,22 +159,29 @@ export function buildLaunchContext(opts: {
 }): LaunchContext {
   const flags: Record<string, FlagValue> = {};
   for (const [k, v] of Object.entries(opts.argv)) {
-    // Skip yargs internals + recognized flags (those go elsewhere).
+    // Skip parser internals + recognized flags (those go elsewhere).
     if (k === '_' || k === '--' || k === '$0') continue;
     if (opts.recognizedFlags.has(k)) continue;
-    if (
-      typeof v === 'string' ||
-      typeof v === 'boolean' ||
-      typeof v === 'number'
-    ) {
+    if (typeof v === 'boolean' || typeof v === 'number') {
       flags[k] = v;
+      continue;
+    }
+    if (typeof v === 'string') {
+      // Normalize the two boolean-string forms the parser hands us when
+      // the user writes `--prod=true` or `--prod=false` (vs. `--prod` /
+      // `--no-prod`, which already arrive as proper booleans). Without
+      // this, spec callers would have to special-case both `true` and
+      // `'true'` themselves — a leaky parser-implementation detail.
+      if (v === 'true') flags[k] = true;
+      else if (v === 'false') flags[k] = false;
+      else flags[k] = v;
       continue;
     }
     if (Array.isArray(v) && v.every((x) => typeof x === 'string')) {
       flags[k] = v;
       continue;
     }
-    // Skip anything else (objects from yargs internals, etc.).
+    // Skip anything else (objects from parser internals, etc.).
   }
 
   const gitBranch = resolveGitBranch({

@@ -195,17 +195,19 @@ async function resolveEnv(
  * 'inherit' passes the parent's TTY straight through — preserves Windows
  * native SIGINT routing into child prompts, lets the user interact with
  * `next dev` / `vite` shortcuts. But the child's stdout/stderr are null,
- * so logMatch readiness can never see lines. Force 'prefixed' for those.
+ * so logMatch readiness can never see lines. Force 'prefixed' there.
  *
- * Also force 'prefixed' if the stage runs anything in parallel — the user
- * needs prefixed log lines to tell which process is talking.
+ * Also force 'prefixed' when ANOTHER local-command shares the stage —
+ * they'd otherwise interleave on the same TTY. Non-local-command stage
+ * members (postgres, vercel-deployment) don't write to the TTY so they
+ * don't count.
  */
 function pickStdioMode(
   node: PlanNode,
-  stageSize: number,
+  _stageSize: number,
   localCmdCount: number,
 ): StdioMode {
-  if (stageSize !== 1 || localCmdCount !== 1) return 'prefixed';
+  if (localCmdCount !== 1) return 'prefixed';
   const spec = node.spec as { readiness?: { logMatch?: RegExp } };
   if (spec.readiness && 'logMatch' in spec.readiness) return 'prefixed';
   return 'inherit';
@@ -354,6 +356,59 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   };
   process.on('SIGINT', onSigint);
 
+  try {
+    await provisionStages({
+      stages,
+      api,
+      projectId,
+      repoRoot,
+      cwd,
+      gitBranch: ctx.gitBranch,
+      branchTimeoutSeconds: opts.branchTimeoutSeconds,
+      liveLocalCommands,
+      neonLaunchEnv,
+    });
+
+    log.info('[launch] all resources ready.');
+
+    // 5. Foreground phase. Hold the process while any local-command runs.
+    // Ctrl-C → SIGTERM all children, exit 130.
+    if (liveLocalCommands.length === 0) {
+      log.info('[launch] no foreground processes; exiting 0.');
+      return;
+    }
+    await foregroundPhase(liveLocalCommands);
+  } finally {
+    // Match the handler's lifecycle to this invocation so library-mode
+    // callers don't accumulate one handler per runLaunch.
+    process.off('SIGINT', onSigint);
+  }
+}
+
+type StagesArgs = {
+  stages: PlanNode[][];
+  api: ApiClient;
+  projectId: string;
+  repoRoot: string;
+  cwd: string;
+  gitBranch: string;
+  branchTimeoutSeconds: number;
+  liveLocalCommands: LocalCommandHandle[];
+  neonLaunchEnv: Record<string, string>;
+};
+
+async function provisionStages(args: StagesArgs): Promise<void> {
+  const {
+    stages,
+    api,
+    projectId,
+    repoRoot,
+    cwd,
+    gitBranch,
+    branchTimeoutSeconds,
+    liveLocalCommands,
+    neonLaunchEnv,
+  } = args;
   for (const [idx, stage] of stages.entries()) {
     log.info(
       `[launch] stage ${idx + 1}/${stages.length}: ${stage.map((n) => n.name).join(', ')}`,
@@ -362,46 +417,42 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
       (n) => n.resource.__kind === 'local-command',
     ).length;
 
-    try {
-      await Promise.all(
-        stage.map((node) =>
-          provisionOne({
-            node,
-            api,
-            projectId,
-            repoRoot,
-            cwd,
-            gitBranch: ctx.gitBranch,
-            branchTimeoutSeconds: opts.branchTimeoutSeconds,
-            // 'inherit' only when this is the sole local-command in a
-            // sole-occupant stage AND it doesn't read stdout via logMatch
-            // (inherit-mode child has stdout=null; logMatch would deadlock
-            // on its budget). All other cases use 'prefixed' streaming.
-            stdioMode: pickStdioMode(node, stage.length, localCmdCount),
-            liveLocalCommands,
-            neonLaunchEnv,
-          }),
-        ),
-      );
-    } catch (err) {
-      // Stage failure: tear down any local-commands that came up either in
-      // this stage or an earlier one. Without this they leak as orphan
-      // processes (compounded by detached shells holding ports).
+    // Provisioning siblings in parallel: when one rejects, we kill the
+    // rest — which makes their `await handle.ready` reject too. Use
+    // allSettled so those secondary rejections are observed (not left
+    // dangling for Node to surface as 'unhandled promise rejection'
+    // racing the user-facing error in commands/launch.ts).
+    const results = await Promise.allSettled(
+      stage.map((node) =>
+        provisionOne({
+          node,
+          api,
+          projectId,
+          repoRoot,
+          cwd,
+          gitBranch,
+          branchTimeoutSeconds,
+          // 'inherit' only when this is the sole local-command in a
+          // sole-occupant stage AND it doesn't read stdout via logMatch
+          // (inherit-mode child has stdout=null; logMatch would deadlock
+          // on its budget). All other cases use 'prefixed' streaming.
+          stdioMode: pickStdioMode(node, stage.length, localCmdCount),
+          liveLocalCommands,
+          neonLaunchEnv,
+        }),
+      ),
+    );
+    const firstRejection = results.find(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    if (firstRejection) {
+      // Tear down any local-commands that came up either in this stage
+      // or an earlier one. Without this they leak as orphan processes
+      // (compounded by detached shells holding ports).
       await Promise.all(liveLocalCommands.map((h) => h.kill()));
-      throw err;
+      throw firstRejection.reason as Error;
     }
   }
-
-  log.info('[launch] all resources ready.');
-
-  // 5. Foreground phase. Hold the process while any local-command runs.
-  // Ctrl-C → SIGTERM all children, exit 130.
-  if (liveLocalCommands.length === 0) {
-    log.info('[launch] no foreground processes; exiting 0.');
-    return;
-  }
-
-  await foregroundPhase(liveLocalCommands);
 }
 
 // =============================================================================
@@ -581,12 +632,19 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
   // races us to exit. Defer to it instead of emitting a misleading
   // "exited with code null" error log.
   const firstExit = await Promise.race(handles.map((h) => h.exited));
-  if (isShuttingDown()) {
-    // Our SIGINT handler is in flight (killed children + closeAnalytics
-    // → process.exit). Don't gate on `firstExit.signal` alone: an
-    // external SIGTERM to the child (process supervisor, sidecar) does
-    // NOT mean our parent is shutting down — parking on that would hang
-    // the parent forever while siblings keep the event loop alive.
+  if (isShuttingDown() || firstExit.signal === 'SIGINT') {
+    // Two ways to land here:
+    //   1. Our SIGINT handler ran first and set `interrupted` — defer
+    //      to its closeAnalytics → process.exit(130).
+    //   2. TTY Ctrl-C delivered SIGINT to both parent and child; the
+    //      child's exit microtask raced ahead of the parent's signal
+    //      handler. `firstExit.signal === 'SIGINT'` is the unambiguous
+    //      signature of TTY-initiated shutdown — defer to the handler
+    //      that's about to run.
+    // We deliberately do NOT match SIGTERM here: an external supervisor
+    // SIGTERM'ing only the child does NOT mean our parent is shutting
+    // down, and parking on that would hang the parent forever while
+    // siblings keep the event loop alive.
     await new Promise(() => undefined);
     return;
   }

@@ -156,7 +156,7 @@ async function* iterateBranches(
       }),
     );
     for (const b of data.branches as Branch[]) yield b;
-    const next = (data as { pagination?: { next?: string } }).pagination?.next;
+    const next = data.pagination?.next;
     if (!next) return;
     cursor = next;
   }
@@ -454,7 +454,7 @@ export async function provisionPostgres(opts: {
   );
 
   const role = await firstNonSystemRole(api, projectId, branch.id);
-  const database = await firstNonSystemDatabase(api, projectId, branch.id);
+  const database = await firstDatabase(api, projectId, branch.id);
   if (!database) {
     throw new Error(
       `[neon launch] Branch ${branch.id} has no database. Create one via \`neon databases create\` or pick a branch that has one.`,
@@ -490,7 +490,7 @@ async function firstNonSystemRole(
   return userRole.name;
 }
 
-async function firstNonSystemDatabase(
+async function firstDatabase(
   api: NeonApi,
   projectId: string,
   branchId: string,

@@ -1,25 +1,25 @@
 /**
  * Public surface of `neonctl/config`.
  *
- * The `stack({ spec })` exported here is what users default-export from their
- * `neon.ts`; the four `postgres / vercelDeployment / localCommand / stack`
- * factories build the resource tree the launcher provisions.
+ * The `stack({ spec })` exported here is what users default-export from
+ * their `neon.ts`; the four `postgres / vercelDeployment / localCommand /
+ * stack` factories build the resource tree the launcher provisions.
  *
- * Design invariants — DO NOT REVERSE these in review (every one was
- * rejected at design time after multiple rounds of review):
- *   #1  No CLI-side mode detection. Policy lives in the user's stack spec.
- *   #2  No `defineConfig` helper alongside `stack`. `stack({...})` IS the
- *       typing helper.
- *   #3  No top-level `postgres:` slot in NeonConfig. Postgres is a resource
- *       declared inside the stack like any other (kills the noun-collision).
- *   #4  No `type:` string discriminator on resources. Factory functions
- *       give narrow per-kind intellisense.
- *   #5  No `name` positional arg on factories. Names come from the parent
- *       record key — single source of truth.
- *   #6  No string-array `dependsOn`. It's a value-record `dependsOn: { db }`
- *       — TypeScript narrows via value identity.
- *   #7  No polymorphic specs (object OR function). Every spec is
- *       `(deps, ctx) => SpecObject`. Uniform shape, one mental model.
+ * Design invariants that shape the API:
+ *   - Policy lives in the user's stack spec. The CLI does no mode
+ *     detection of its own.
+ *   - `stack({...})` IS the typing helper; no separate `defineConfig`.
+ *   - Postgres is a resource declared inside the stack like any other —
+ *     no top-level `postgres:` slot.
+ *   - Resources are factory functions, not objects with a `type:`
+ *     discriminator. Each factory carries its own narrow intellisense.
+ *   - Resource names come from the parent stack's record key — no
+ *     positional `name` arg on factories.
+ *   - `dependsOn: { db }` is a value record, not a string array.
+ *     TypeScript narrows the spec callback's first argument via value
+ *     identity.
+ *   - Every spec is `(deps, ctx) => SpecObject`. One shape across all
+ *     four resource kinds.
  */
 import type { Ref } from './refs.js';
 
