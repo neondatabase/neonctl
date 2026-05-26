@@ -3,7 +3,7 @@ import { PassThrough } from 'stream';
 import { describe, test, expect } from 'vitest';
 
 import type { OpenPagerOpts } from './pager.js';
-import { isPagerNeeded, openPager } from './pager.js';
+import { isPagerNeeded, openPager, shouldPage } from './pager.js';
 
 const isWindows = process.platform === 'win32';
 
@@ -321,4 +321,150 @@ describe('openPager — spawn cases', () => {
       expect(code).toBe(0);
     },
   );
+});
+
+describe('shouldPage', () => {
+  const ttyStream = (): NodeJS.WritableStream => {
+    const s = new PassThrough();
+    Object.assign(s, { isTTY: true, rows: 24 });
+    return s as unknown as NodeJS.WritableStream;
+  };
+  const pipeStream = (): NodeJS.WritableStream => {
+    const s = new PassThrough();
+    Object.assign(s, { isTTY: false });
+    return s as unknown as NodeJS.WritableStream;
+  };
+
+  test("pager 'off' never pages, even with thousands of rows", () => {
+    expect(
+      shouldPage({
+        pager: 'off',
+        pagerMinLines: 0,
+        rowCount: 10_000,
+        colCount: 5,
+        output: ttyStream(),
+        redirectedOutput: false,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(false);
+  });
+
+  test("pager 'always' pages on a TTY", () => {
+    expect(
+      shouldPage({
+        pager: 'always',
+        pagerMinLines: 0,
+        rowCount: 0,
+        colCount: 1,
+        output: ttyStream(),
+        redirectedOutput: false,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(true);
+  });
+
+  test("pager 'always' but redirected output (`\\o FILE`) never pages", () => {
+    expect(
+      shouldPage({
+        pager: 'always',
+        pagerMinLines: 0,
+        rowCount: 10_000,
+        colCount: 5,
+        output: ttyStream(),
+        redirectedOutput: true,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(false);
+  });
+
+  test("pager 'always' on a non-TTY output never pages", () => {
+    expect(
+      shouldPage({
+        pager: 'always',
+        pagerMinLines: 0,
+        rowCount: 10_000,
+        colCount: 5,
+        output: pipeStream(),
+        redirectedOutput: false,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(false);
+  });
+
+  test("pager 'on' (default) under the threshold does not page", () => {
+    expect(
+      shouldPage({
+        pager: 'on',
+        pagerMinLines: 0,
+        rowCount: 5,
+        colCount: 1,
+        output: ttyStream(),
+        redirectedOutput: false,
+        terminalHeight: 24,
+        isTty: true,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(false);
+  });
+
+  test("pager 'on' (default) at the threshold pages", () => {
+    expect(
+      shouldPage({
+        pager: 'on',
+        pagerMinLines: 0,
+        rowCount: 24,
+        colCount: 1,
+        output: ttyStream(),
+        redirectedOutput: false,
+        terminalHeight: 24,
+        isTty: true,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(true);
+  });
+
+  test('pagerMinLines raises the threshold above terminal height', () => {
+    // 50 rows + 4 overhead < pagerMinLines=100 → no page.
+    expect(
+      shouldPage({
+        pager: 'on',
+        pagerMinLines: 100,
+        rowCount: 50,
+        colCount: 1,
+        output: ttyStream(),
+        redirectedOutput: false,
+        terminalHeight: 24,
+        isTty: true,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(false);
+    // 100 rows + 4 overhead >= 100 → page.
+    expect(
+      shouldPage({
+        pager: 'on',
+        pagerMinLines: 100,
+        rowCount: 100,
+        colCount: 1,
+        output: ttyStream(),
+        redirectedOutput: false,
+        terminalHeight: 24,
+        isTty: true,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(true);
+  });
+
+  test('whitespace-only PAGER disables the pager entirely', () => {
+    expect(
+      shouldPage({
+        pager: 'always',
+        pagerMinLines: 0,
+        rowCount: 10,
+        colCount: 1,
+        output: ttyStream(),
+        redirectedOutput: false,
+        env: { PAGER: '   ' },
+      }),
+    ).toBe(false);
+  });
 });

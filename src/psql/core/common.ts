@@ -67,6 +67,7 @@ import { latexLongtablePrinter, latexPrinter } from '../print/latex.js';
 import { troffMsPrinter } from '../print/troff.js';
 import { unalignedPrinter } from '../print/unaligned.js';
 import { formatDurationMs } from '../print/units.js';
+import { openPager, shouldPage } from '../print/pager.js';
 import { getQueryFout } from '../command/cmd_io.js';
 import { formatErrorReport } from '../command/cmd_meta.js';
 
@@ -485,6 +486,45 @@ const formatCommandTag = (rs: ResultSet): string => {
   return command;
 };
 
+/**
+ * Decide whether the pager should activate for the given batch of result
+ * sets. We page when ANY of the sets-that-will-be-printed (i.e. tuples-
+ * producing, and not gated out by SHOW_ALL_RESULTS) crosses the threshold.
+ * The decision is centralised here so callers can override individual
+ * decision inputs (e.g. tests that inject a fake `output`).
+ */
+const pickPagerDecision = (
+  ctx: REPLContext,
+  results: ResultSet[],
+  out: NodeJS.WritableStream,
+): boolean => {
+  const popt = ctx.settings.popt.topt;
+  // Pager off → never page (cheap exit, no looping needed).
+  if (popt.pager === 'off') return false;
+  // `\o FILE` (or `\g FILE`) wins over pager. If the queryFout is set, the
+  // pager must not activate even when popt.pager === 'always'.
+  const redirectedOutput = getQueryFout(ctx.settings) !== null;
+  if (redirectedOutput) return false;
+
+  const showAll = readShowAllResults(ctx.settings);
+  const lastIdx = results.length - 1;
+  for (let i = 0; i < results.length; i++) {
+    const rs = results[i];
+    if (rs.fields.length === 0) continue;
+    if (!(showAll || i === lastIdx)) continue;
+    const decision = shouldPage({
+      pager: popt.pager,
+      pagerMinLines: popt.pagerMinLines,
+      rowCount: rs.rows.length,
+      colCount: rs.fields.length,
+      output: out,
+      redirectedOutput,
+    });
+    if (decision) return true;
+  }
+  return false;
+};
+
 const renderResultSets = async (
   ctx: REPLContext,
   results: ResultSet[],
@@ -499,25 +539,56 @@ const renderResultSets = async (
   const showAll = readShowAllResults(ctx.settings);
   const lastIdx = results.length - 1;
   const tuplesOnly = ctx.settings.popt.topt.tuplesOnly;
-  for (let i = 0; i < results.length; i++) {
-    const rs = results[i];
-    const shouldEmit = showAll || i === lastIdx;
-    if (rs.fields.length === 0) {
-      // Non-tuples-producing commands (INSERT/UPDATE/DELETE/DDL) — emit the
-      // CommandComplete tag instead of running the table printer (which would
-      // render an empty `(0 rows)` block). Suppressed in tuples-only mode
-      // (`\t`) to match upstream.
-      if (shouldEmit && !tuplesOnly) {
-        const tag = formatCommandTag(rs);
-        if (tag.length > 0) out.write(`${tag}\n`);
+
+  // Pager wrapping. If the active topt.pager + heuristics call for it, route
+  // the printer through a spawned pager (PAGER / PSQL_PAGER, default `less`
+  // on POSIX). The pager is opened ONCE per renderResultSets call so a `\;`
+  // batch ends up in a single pager session, matching upstream. SIGPIPE /
+  // EPIPE handling lives inside the pager module.
+  const wantPager = pickPagerDecision(ctx, results, out);
+  const pager = wantPager
+    ? openPager({
+        pager: ctx.settings.popt.topt.pager,
+        pagerMinLines: ctx.settings.popt.topt.pagerMinLines,
+        stdout: out,
+        // shouldPage already verified pager-on conditions; force-spawn at
+        // the openPager level by re-passing the topt setting.
+      })
+    : null;
+  const sink: NodeJS.WritableStream = pager?.spawned ? pager.out : out;
+
+  try {
+    for (let i = 0; i < results.length; i++) {
+      const rs = results[i];
+      const shouldEmit = showAll || i === lastIdx;
+      if (rs.fields.length === 0) {
+        // Non-tuples-producing commands (INSERT/UPDATE/DELETE/DDL) — emit the
+        // CommandComplete tag instead of running the table printer (which
+        // would render an empty `(0 rows)` block). Suppressed in tuples-only
+        // mode (`\t`) to match upstream.
+        if (shouldEmit && !tuplesOnly) {
+          const tag = formatCommandTag(rs);
+          if (tag.length > 0) sink.write(`${tag}\n`);
+        }
+        // rowCount is the affected-row total when libpq sets it.
+        rowsAffected += rs.rowCount ?? 0;
+      } else {
+        if (shouldEmit) {
+          await printer.printQuery(rs, ctx.settings.popt, sink);
+        }
+        rowsPrinted += rs.rows.length;
       }
-      // rowCount is the affected-row total when libpq sets it.
-      rowsAffected += rs.rowCount ?? 0;
-    } else {
-      if (shouldEmit) {
-        await printer.printQuery(rs, ctx.settings.popt, out);
+    }
+  } finally {
+    if (pager?.spawned) {
+      // End the pager stdin and wait for it to exit. We swallow errors here:
+      // the user may have closed the pager early (SIGPIPE → EPIPE) and our
+      // callers should not see that as a query failure.
+      try {
+        await pager.close();
+      } catch {
+        // ignore
       }
-      rowsPrinted += rs.rows.length;
     }
   }
   return { rowsAffected, rowsPrinted };

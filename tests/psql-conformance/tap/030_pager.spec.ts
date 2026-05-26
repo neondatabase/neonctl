@@ -17,20 +17,26 @@
 // conformance run does NOT execute it. It also skips when `dist/psql/`
 // does not exist — there is no auto-build step.
 //
-// Caveat: at time of writing, the TS psql REPL's query-printing path does
-// not yet invoke the pager (the `print/pager.ts` module is fully unit-
-// tested but not wired into `print/aligned.ts` / `core/common.ts`). Tests
-// that depend on the pager actually being spawned are therefore expected
-// to fail today; they are kept in the spec as the contract we want to
-// honour once the wiring lands, and skipped by default behind
-// `RUN_INTEGRATION` so they do not block the conformance run.
+// Pager-spawn detection: the original version of this spec used content-
+// based assertions (e.g. "PSQL_PAGER=cat → rows still appear on stdout"),
+// which conflated "pager was invoked" with "output happened to land here".
+// The current version uses BEHAVIOUR-based probes: PAGER points at a small
+// shell script that writes a marker file (and the captured stdin) before
+// exiting. Checking for the marker file after the run proves the pager
+// actually ran, regardless of whether its stdout reached the parent.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll } from 'vitest';
 
 import { getPgConn } from '../harness/pg-fixture.js';
 
@@ -142,6 +148,39 @@ const runChild = async (opts: {
   });
 };
 
+/**
+ * Build a tiny pager-probe shell script that, when invoked, writes a marker
+ * file containing the captured stdin. Used by the behavioural assertions
+ * below: the marker's presence after a `pager=always` run proves the pager
+ * was spawned; its contents prove psql wrote the rendered rows into the
+ * pager's stdin.
+ */
+const makeProbeScript = (dir: string, name = 'probe.sh'): string => {
+  const script = join(dir, name);
+  const markerPath = join(dir, `${name}.marker`);
+  // shellcheck disable=SC2148 — runs under /bin/sh.
+  writeFileSync(
+    script,
+    [
+      '#!/bin/sh',
+      // Capture stdin into the marker. The marker's presence is a
+      // sufficient proof of "pager was spawned"; its body proves "psql
+      // piped output through it".
+      `cat > "${markerPath}"`,
+      'exit 0',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  chmodSync(script, 0o755);
+  return script;
+};
+
+const readMarker = (probePath: string): string | null => {
+  const marker = `${probePath}.marker`;
+  return existsSync(marker) ? readFileSync(marker, 'utf8') : null;
+};
+
 describe.skipIf(!SHOULD_RUN)('tap/030_pager', () => {
   let paths: LauncherPaths;
   let uri: string;
@@ -149,12 +188,6 @@ describe.skipIf(!SHOULD_RUN)('tap/030_pager', () => {
   beforeAll(() => {
     paths = makeLauncher();
     uri = buildUri();
-  });
-
-  afterAll(() => {
-    // Best-effort cleanup; mkdtempSync makes a unique dir, leave it on
-    // failures so a maintainer can inspect. We don't aggressively rm
-    // here — the OS tmpdir cleaner reclaims it eventually.
   });
 
   it('runs a query via the launcher and exits cleanly (smoke test)', async () => {
@@ -169,18 +202,16 @@ describe.skipIf(!SHOULD_RUN)('tap/030_pager', () => {
       },
     });
     expect(result.exitCode).toBe(0);
-    // The aligned printer renders the column name and value.
     expect(result.stdout).toMatch(/one/);
     expect(result.stdout).toMatch(/\b1\b/);
   });
 
-  it('PAGER=cat is invoked when pager output is forced', async () => {
-    // `\pset pager always` forces the pager regardless of TTY / line count.
-    // We use a sentinel marker that only flows when `cat` is exec'd: the
-    // child sets PAGER_SENTINEL via the env, and `cat` is given as the
-    // pager. If cat fires, the rendered rows reach our stdout via cat's
-    // stdout; if it doesn't, output still appears (no pager → direct
-    // stdout), so the assertion is on the content being present.
+  it('PAGER probe is spawned and receives query output via its stdin', async () => {
+    // Behaviour-based: PAGER is a probe script that copies its stdin into
+    // a marker file. After the run, the marker MUST exist AND contain the
+    // rendered rows. If the wiring didn't engage, the marker file is absent
+    // and the test fails.
+    const probe = makeProbeScript(paths.dir, 'probe-on.sh');
     const result = await runChild({
       launcher: paths.launcher,
       argv: [
@@ -190,44 +221,26 @@ describe.skipIf(!SHOULD_RUN)('tap/030_pager', () => {
       ],
       env: {
         ...process.env,
-        PAGER: 'cat',
+        PAGER: probe,
         PSQL_PAGER: '',
         LC_ALL: 'C',
       },
     });
     expect(result.exitCode).toBe(0);
-    // Rows must reach stdout one way or the other.
+    const marker = readMarker(probe);
+    // Pager spawned → marker exists.
+    expect(marker).not.toBeNull();
+    if (marker === null) return;
+    // Pager received the rendered output → marker contains the row values.
     for (let i = 1; i <= 5; i++) {
-      expect(result.stdout).toMatch(new RegExp(`\\b${i}\\b`));
+      expect(marker).toMatch(new RegExp(`\\b${i}\\b`));
     }
   });
 
-  it('PAGER receives query output via its stdin', async () => {
-    // `head -n 1` consumes the first line and exits; if the pager truly
-    // sits between psql and our captured stdout, only that one line will
-    // survive. If the pager wasn't invoked, the whole result body shows up.
-    // We accept BOTH outcomes today (the wiring is pending — see the file
-    // header) and just assert that the child doesn't crash.
-    const result = await runChild({
-      launcher: paths.launcher,
-      argv: [
-        uri,
-        '-c',
-        '\\pset pager always\nSELECT g FROM generate_series(1,200) g',
-      ],
-      env: {
-        ...process.env,
-        PAGER: 'head -n 1',
-        PSQL_PAGER: '',
-        LC_ALL: 'C',
-      },
-    });
-    expect(result.exitCode).toBe(0);
-  });
-
-  it('`\\pset pager off` suppresses the pager', async () => {
-    // With pager explicitly off, even PAGER=/bin/false should not spawn
-    // the pager (no pager spawn → no error from /bin/false).
+  it('`\\pset pager off` suppresses the pager (no marker is written)', async () => {
+    // With pager explicitly off, the probe MUST NOT be invoked: the marker
+    // file should be absent after the run.
+    const probe = makeProbeScript(paths.dir, 'probe-off.sh');
     const result = await runChild({
       launcher: paths.launcher,
       argv: [
@@ -237,24 +250,22 @@ describe.skipIf(!SHOULD_RUN)('tap/030_pager', () => {
       ],
       env: {
         ...process.env,
-        PAGER: '/bin/false',
+        PAGER: probe,
         PSQL_PAGER: '',
         LC_ALL: 'C',
       },
     });
     expect(result.exitCode).toBe(0);
-    // The five rows must still appear on stdout.
+    expect(readMarker(probe)).toBeNull();
+    // And the rows must reach stdout directly (no pager between us and them).
     expect(result.stdout).toMatch(/\b1\b/);
     expect(result.stdout).toMatch(/\b5\b/);
   });
 
-  it('PSQL_PAGER overrides PAGER', async () => {
-    // PSQL_PAGER=cat (works) vs PAGER=/bin/false (would error). If PSQL_PAGER
-    // takes precedence, the child exits 0; if PAGER were picked instead,
-    // we would see a non-zero pager-related exit. The pager wiring is
-    // pending, so today the assertion is content-based: rows present and
-    // child exited cleanly regardless of which env var would have been
-    // chosen.
+  it('PSQL_PAGER takes precedence over PAGER', async () => {
+    // Two probe scripts; only the one referenced by PSQL_PAGER should run.
+    const winner = makeProbeScript(paths.dir, 'probe-win.sh');
+    const loser = makeProbeScript(paths.dir, 'probe-lose.sh');
     const result = await runChild({
       launcher: paths.launcher,
       argv: [
@@ -264,14 +275,20 @@ describe.skipIf(!SHOULD_RUN)('tap/030_pager', () => {
       ],
       env: {
         ...process.env,
-        PSQL_PAGER: 'cat',
-        PAGER: '/bin/false',
+        PSQL_PAGER: winner,
+        PAGER: loser,
         LC_ALL: 'C',
       },
     });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/\b1\b/);
-    expect(result.stdout).toMatch(/\b3\b/);
+    // PSQL_PAGER's probe must have run …
+    const winnerOut = readMarker(winner);
+    expect(winnerOut).not.toBeNull();
+    if (winnerOut !== null) {
+      expect(winnerOut).toMatch(/\b1\b/);
+    }
+    // … and PAGER's probe must NOT have run.
+    expect(readMarker(loser)).toBeNull();
   });
 });
 

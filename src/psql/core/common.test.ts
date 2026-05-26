@@ -653,3 +653,62 @@ describe('psqlExec', () => {
     await expect(psqlExec(db, 'SELECT bad', false)).rejects.toThrow('boom');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pager integration. We don't fork an actual pager here — the routing into
+// `shouldPage` / `openPager` lives in `renderResultSets`. Instead these tests
+// verify the WIRED-IN decision logic by inspecting whether the printer
+// touched the configured output stream:
+//
+//   - `popt.pager = 'off'`         → printer writes to `stdout`.
+//   - `popt.pager = 'always'` on a non-TTY stream → still writes to stdout
+//     (the pager skips because of the TTY guard).
+//   - `\o FILE` redirect → output never reaches stdout, regardless of pager.
+//
+// The "spawn an actual pager" path is exercised by `print/pager.test.ts`
+// against the real PAGER=cat plumbing.
+// ---------------------------------------------------------------------------
+
+describe('sendQuery — pager wiring', () => {
+  test("pager: 'off' lets output reach stdout unchanged", async () => {
+    const { ctx, stdout } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.popt.topt.pager = 'off';
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(stdout.text()).toContain('?column?');
+  });
+
+  test("pager: 'always' on a non-TTY stream falls back to stdout (no pager spawn)", async () => {
+    const { ctx, stdout } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.popt.topt.pager = 'always';
+      },
+    });
+    // The buffer isn't a TTY; shouldPage should bail and the printer should
+    // write directly to it.
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(stdout.text()).toContain('?column?');
+  });
+
+  test('\\o-redirected output bypasses the pager regardless of pager setting', async () => {
+    const { ctx, stdout } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.popt.topt.pager = 'always';
+      },
+    });
+    // Simulate `\o FILE` by stashing a queryFout sink — pickPagerDecision
+    // must see this and refuse to page.
+    const redirected = makeBuffer();
+    const QUERY_FOUT_KEY = Symbol.for('neonctl.psql.queryFout');
+    (ctx.settings as unknown as Record<symbol, unknown>)[QUERY_FOUT_KEY] = {
+      stream: redirected,
+      kind: 'pipe',
+    };
+    await sendQuery(ctx, 'SELECT 1;');
+    // The redirect stream got the output; the main stdout did not.
+    expect(redirected.text()).toContain('?column?');
+    expect(stdout.text()).not.toContain('?column?');
+  });
+});

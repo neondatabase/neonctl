@@ -110,6 +110,91 @@ export const isPagerNeeded = (opts: OpenPagerOpts): boolean => {
   return opts.lines >= threshold;
 };
 
+// ---------------------------------------------------------------------------
+// `shouldPage` — convenience for callers that have a query result in hand
+// and want to decide whether to route it through a pager, without needing to
+// pre-render to count lines.
+//
+// Decision logic:
+//   - `popt.pager === 'off'`           → never page
+//   - explicit `\o FILE` redirect      → never page (caller passes
+//                                         `redirectedOutput: true`)
+//   - target stream is not a TTY       → never page
+//   - `popt.pager === 'always'`        → always page (when a pager cmd is
+//                                         configured)
+//   - `popt.pager === 'on'` (default)  → page when estimated rendered lines
+//                                         exceed `terminalHeight ⨯
+//                                         pagerMinLines` threshold. We
+//                                         estimate as `rowCount + small
+//                                         header overhead`; the printer's
+//                                         actual line count may differ
+//                                         slightly but this matches
+//                                         upstream's `IsPagerNeeded` heuristic
+//                                         (rows-as-lines, plus a fixed
+//                                         per-table overhead).
+// ---------------------------------------------------------------------------
+
+export type ShouldPageOpts = {
+  /** topt.pager setting. */
+  pager: 'off' | 'on' | 'always';
+  /** topt.pagerMinLines — minimum lines before triggering. */
+  pagerMinLines: number;
+  /** Approximate row count of the result we're about to render. */
+  rowCount: number;
+  /**
+   * Approximate column count — unused by `IsPagerNeeded` itself, retained
+   * because callers may want it for a future wrap-aware heuristic.
+   */
+  colCount: number;
+  /** The actual stream the renderer would write to (used for the TTY check). */
+  output: NodeJS.WritableStream;
+  /**
+   * True when `\o FILE` (or `\g FILE`) has redirected the query output. In
+   * that case the pager MUST NOT activate — output should land in the file.
+   */
+  redirectedOutput: boolean;
+  /** Overrides for env / TTY / height (tests). */
+  env?: NodeJS.ProcessEnv;
+  isTty?: boolean;
+  terminalHeight?: number;
+  /** Forces a specific pager command (mirrors upstream's `--pager-cmd`). */
+  pagerCmd?: string;
+};
+
+/**
+ * Decide whether a result of `rowCount` rows by `colCount` columns should be
+ * routed through the pager when written to `output`.
+ */
+export const shouldPage = (opts: ShouldPageOpts): boolean => {
+  if (opts.pager === 'off') return false;
+  if (opts.redirectedOutput) return false;
+
+  // TTY check: explicit override wins, else inspect the stream's own isTTY.
+  const isTty =
+    opts.isTty !== undefined
+      ? opts.isTty
+      : Boolean((opts.output as NodeJS.WriteStream).isTTY);
+  if (!isTty) return false;
+
+  // Rough heuristic for "lines" — header (3) + rows + footer (1). Matches
+  // upstream `IsPagerNeeded` which counts rendered table lines.
+  const HEADER_LINES = 3;
+  const FOOTER_LINES = 1;
+  const estimatedLines =
+    HEADER_LINES + Math.max(0, opts.rowCount) + FOOTER_LINES;
+
+  return isPagerNeeded({
+    pager: opts.pager,
+    pagerMinLines: opts.pagerMinLines,
+    pagerCmd: opts.pagerCmd,
+    env: opts.env,
+    stdout: opts.output,
+    isTty,
+    terminalHeight: opts.terminalHeight,
+    lines: estimatedLines,
+  });
+};
+
 const SHELL_META = /[\s|;><]/;
 
 type SpawnArgs = {
