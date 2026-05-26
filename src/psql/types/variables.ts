@@ -6,20 +6,26 @@ export type PsqlVar = {
 /**
  * Hook callback fired on `\set NAME value` (and synchronously replayed on
  * registration). Mirrors upstream's substitute + assign hook duo in
- * `src/bin/psql/variables.c`.
+ * `src/bin/psql/variables.c`, collapsed into a single callback.
  *
  * Return semantics:
  *
- *   - `true`  — accept the value; the store keeps it.
- *   - `false` — reject the value with no caller-visible message. The store
- *     keeps the prior value. cmdSet emits a generic "error while setting"
- *     line.
- *   - `string` — reject the value with this error message (no `psql: `
- *     prefix; cmdSet prepends it). Used by special-variable validators so
- *     they can phrase the diagnostic exactly like upstream's
- *     `\<msg> for "<var>"` form.
+ *   - `true`                       — accept the value; the store keeps it.
+ *   - `false`                      — reject the value with no caller-visible
+ *     message. The store keeps the prior value. cmdSet emits a generic
+ *     "error while setting" line.
+ *   - `string`                     — reject the value with this error
+ *     message (no `psql: ` prefix; cmdSet prepends it). Used by
+ *     special-variable validators so they can phrase the diagnostic
+ *     exactly like upstream's `<msg> for "<var>"` form.
+ *   - `{ substitute: string }`     — accept the value, but rewrite the
+ *     stored representation. Mirrors upstream's substitute hooks (e.g.
+ *     `bool_substitute_hook` turning empty/null into `"on"` for AUTOCOMMIT,
+ *     `ON_ERROR_STOP`, and friends).
  */
-export type VarHook = (newValue: string | null) => boolean | string;
+export type VarHookResult = boolean | string | { substitute: string };
+
+export type VarHook = (newValue: string | null) => VarHookResult;
 
 /**
  * Rich result of `VarStore.trySet`. `cmdSet` consults `reason` to decide

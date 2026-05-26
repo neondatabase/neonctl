@@ -146,23 +146,36 @@ export class VarStore implements VarStoreType {
     }
 
     const hooks = this.hooks.get(name);
+    let toStore = value;
     if (hooks) {
-      // All hooks must accept the new value. If any rejects, the store is
-      // left untouched (mirrors upstream `assign_hook` veto semantics). A
-      // hook may return a string error message; we propagate it to the
-      // caller verbatim so `\set` can emit the upstream-shaped diagnostic
-      // (e.g. `unrecognized value "x" for "AUTOCOMMIT": Boolean expected`).
+      // All hooks must accept the value. Each hook can either:
+      //   - return `true` to accept as-is,
+      //   - return `false` to reject silently (the prior value is kept),
+      //   - return a `string` to reject with that error message
+      //     (cmdSet renders it with the `psql: ` prefix), or
+      //   - return `{ substitute: '<value>' }` to rewrite the stored value
+      //     before subsequent hooks see it.
+      //
+      // The substitute return is the collapsed equivalent of upstream's
+      // separate substitute/assign hook pair (see
+      // `bool_substitute_hook` + `bool_assign_hook` in `command.c`).
+      // Hooks are responsible for ensuring their substituted value passes
+      // their own validation — we do NOT re-run a hook against its own
+      // substitution.
       for (const hook of hooks) {
-        const result = hook(value);
+        const result = hook(toStore);
         if (result === false) {
           return { ok: false, reason: 'hook-veto' };
         }
         if (typeof result === 'string') {
           return { ok: false, reason: 'hook-veto', error: result };
         }
+        if (typeof result === 'object' && result !== null) {
+          toStore = result.substitute;
+        }
       }
     }
-    this.values.set(name, value);
+    this.values.set(name, toStore);
     return { ok: true };
   }
 
