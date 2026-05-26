@@ -20,6 +20,7 @@ import {
   type Api,
   type Branch,
   type Endpoint,
+  type Role,
 } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 
@@ -180,10 +181,13 @@ async function reconcileCompute(
   const compute = spec.compute ?? {};
   const wantMin = compute.minCu ?? DEFAULT_MIN_CU;
   const wantMax = compute.maxCu ?? DEFAULT_MAX_CU;
-  // sentinels: 0 / omitted = project default; -1 = never suspend. We don't
-  // know the project default cheaply here; treat omitted/0 as "match
-  // anything except literal -1". For literal-positive values, compare directly.
-  const wantSuspend = compute.suspendTimeoutSeconds;
+  // Spec §2.2.3 sentinels: omitted / 0 → project default; -1 → never suspend;
+  // positive integer → that many seconds. The project default is opaque
+  // here, so we treat omitted-and-0 identically (don't drive drift, don't
+  // write the field). -1 and positive values compare directly.
+  const wantSuspendRaw = compute.suspendTimeoutSeconds;
+  const useProjectDefault =
+    wantSuspendRaw === undefined || wantSuspendRaw === 0;
 
   const drifts: string[] = [];
   if (endpoint.autoscaling_limit_min_cu !== wantMin)
@@ -195,12 +199,11 @@ async function reconcileCompute(
       `maxCu ${endpoint.autoscaling_limit_max_cu ?? '?'} → ${wantMax}`,
     );
   if (
-    wantSuspend !== undefined &&
-    wantSuspend !== 0 &&
-    endpoint.suspend_timeout_seconds !== wantSuspend
+    !useProjectDefault &&
+    endpoint.suspend_timeout_seconds !== wantSuspendRaw
   ) {
     drifts.push(
-      `suspendTimeoutSeconds ${endpoint.suspend_timeout_seconds ?? '?'} → ${wantSuspend}`,
+      `suspendTimeoutSeconds ${endpoint.suspend_timeout_seconds ?? '?'} → ${wantSuspendRaw}`,
     );
   }
 
@@ -216,9 +219,7 @@ async function reconcileCompute(
     endpoint: {
       autoscaling_limit_min_cu: wantMin,
       autoscaling_limit_max_cu: wantMax,
-      ...(wantSuspend !== undefined
-        ? { suspend_timeout_seconds: wantSuspend }
-        : {}),
+      ...(useProjectDefault ? {} : { suspend_timeout_seconds: wantSuspendRaw }),
     },
   };
 
@@ -273,6 +274,10 @@ export async function provisionPostgres(opts: {
       `[postgres:${resourceFqn}] creating branch '${spec.name}' forked from '${parent.name}' (${parent.id}).`,
     );
 
+    // Spec §2.2.3: omitted OR 0 → project default → omit the field. -1 or
+    // positive integer → pass through verbatim.
+    const sus = spec.compute?.suspendTimeoutSeconds;
+    const sendSuspend = sus !== undefined && sus !== 0;
     const createBody: Parameters<Api<unknown>['createProjectBranch']>[1] = {
       branch: { name: spec.name, parent_id: parent.id },
       endpoints: [
@@ -280,9 +285,7 @@ export async function provisionPostgres(opts: {
           type: EndpointType.ReadWrite,
           autoscaling_limit_min_cu: spec.compute?.minCu ?? DEFAULT_MIN_CU,
           autoscaling_limit_max_cu: spec.compute?.maxCu ?? DEFAULT_MAX_CU,
-          ...(spec.compute?.suspendTimeoutSeconds !== undefined
-            ? { suspend_timeout_seconds: spec.compute.suspendTimeoutSeconds }
-            : {}),
+          ...(sendSuspend ? { suspend_timeout_seconds: sus } : {}),
         },
       ],
     };
@@ -403,7 +406,12 @@ async function firstNonSystemRole(
   const { data } = await retryOnLock(() =>
     api.listProjectBranchRoles(projectId, branchId),
   );
-  return data.roles[0]?.name;
+  // `protected: true` flags platform-managed roles (e.g. superuser). The
+  // launcher wants the first user-owned role for the connection string —
+  // otherwise app code authenticates as the system role and may hit
+  // unexpected ACLs.
+  const userRole = data.roles.find((r: Role) => !r.protected);
+  return userRole?.name ?? data.roles[0]?.name;
 }
 
 async function firstNonSystemDatabase(

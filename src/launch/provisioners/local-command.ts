@@ -135,37 +135,75 @@ function awaitOnExit(child: ChildProcess, expectedCode: number): Promise<void> {
   });
 }
 
-async function awaitPortListening(
+/**
+ * Wait until `predicate()` resolves truthy, with `budget` total ms and
+ * `interval` ms between probes. Rejects early if `child` exits before the
+ * predicate fires — a crashed child never becomes ready.
+ */
+async function pollUntilReady(opts: {
+  child: ChildProcess;
+  predicate: () => Promise<boolean>;
+  budget: number;
+  interval: number;
+  describeFailure: () => string;
+}): Promise<void> {
+  const deadline = Date.now() + opts.budget;
+  let childExited = false;
+  let exitCode: number | null = null;
+  const onExit = (code: number | null) => {
+    childExited = true;
+    exitCode = code;
+  };
+  opts.child.once('exit', onExit);
+  try {
+    while (Date.now() < deadline) {
+      if (childExited) {
+        throw new Error(
+          `local-command exited (code ${exitCode}) before readiness fired. ${opts.describeFailure()}`,
+        );
+      }
+      if (await opts.predicate()) return;
+      await sleep(opts.interval);
+    }
+    throw new Error(opts.describeFailure());
+  } finally {
+    opts.child.off('exit', onExit);
+  }
+}
+
+function awaitPortListening(
+  child: ChildProcess,
   port: number,
   host: string | undefined,
   budget: number,
   interval: number,
 ): Promise<void> {
-  const deadline = Date.now() + budget;
-  while (Date.now() < deadline) {
-    if (await probePort(port, host)) return;
-    await sleep(interval);
-  }
-  throw new Error(
-    `local-command readiness: port ${port} did not start listening within ${budget}ms.`,
-  );
+  return pollUntilReady({
+    child,
+    predicate: () => probePort(port, host),
+    budget,
+    interval,
+    describeFailure: () =>
+      `local-command readiness: port ${port} did not start listening within ${budget}ms.`,
+  });
 }
 
-async function awaitHttpGet(
+function awaitHttpGet(
+  child: ChildProcess,
   url: string,
   expectedStatus: number,
   perAttemptMs: number,
   budgetMs: number,
   intervalMs: number,
 ): Promise<void> {
-  const deadline = Date.now() + budgetMs;
-  while (Date.now() < deadline) {
-    if (await probeHttp(url, expectedStatus, perAttemptMs)) return;
-    await sleep(intervalMs);
-  }
-  throw new Error(
-    `local-command readiness: GET ${url} did not return ${expectedStatus} within ${budgetMs}ms.`,
-  );
+  return pollUntilReady({
+    child,
+    predicate: () => probeHttp(url, expectedStatus, perAttemptMs),
+    budget: budgetMs,
+    interval: intervalMs,
+    describeFailure: () =>
+      `local-command readiness: GET ${url} did not return ${expectedStatus} within ${budgetMs}ms.`,
+  });
 }
 
 function awaitLogMatch(
@@ -267,9 +305,24 @@ export function startLocalCommand(opts: {
   const exited = new Promise<{
     code: number | null;
     signal: NodeJS.Signals | null;
-  }>((resolve) => {
+  }>((resolve, reject) => {
+    let settled = false;
     child.once('exit', (code, signal) => {
+      if (settled) return;
+      settled = true;
       resolve({ code, signal });
+    });
+    // Surface spawn-level failures (ENOENT, EACCES, etc.) — without this
+    // listener Node would crash the parent on an unhandled 'error' event
+    // and `exited` would never resolve.
+    child.once('error', (err: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(
+        new Error(
+          `[${resourceFqn}] spawn failed: ${err.message}. (Is '${spec.command.split(/\s+/)[0]}' on PATH?)`,
+        ),
+      );
     });
   });
 
@@ -308,6 +361,7 @@ function buildReadiness(
   }
   if ('portListening' in readiness) {
     return awaitPortListening(
+      child,
       readiness.portListening,
       readiness.host,
       DEFAULT_PORT_BUDGET_MS,
@@ -317,6 +371,7 @@ function buildReadiness(
   if ('httpGet' in readiness) {
     const cfg = readiness.httpGet;
     return awaitHttpGet(
+      child,
       cfg.url,
       cfg.status ?? 200,
       cfg.timeoutMs ?? DEFAULT_HTTP_PER_ATTEMPT_MS,

@@ -13,7 +13,12 @@ import { resolve as resolvePath } from 'node:path';
 
 import { log } from '../log.js';
 import { getApiClient } from '../api.js';
-import { buildLaunchContext, findRepoRoot } from './context.js';
+import {
+  buildLaunchContext,
+  findRepoRoot,
+  readNeonLaunchEnv,
+  resolveStateValue,
+} from './context.js';
 import { buildPlan, type Plan, type PlanNode } from './plan.js';
 import {
   provisionPostgres,
@@ -243,18 +248,46 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     `[launch] plan: ${plan.registry.size} resources — ${[...plan.registry.values()].map((n) => `${n.name}(${n.resource.__kind})`).join(', ')}`,
   );
 
-  // 2. Resolve project id once (postgres provisioner needs it).
-  const projectId =
-    process.env.NEON_PROJECT_ID ??
-    (ctx.flags['project-id'] as string | undefined) ??
-    undefined;
+  // 2. Resolve state values with spec §3.3 precedence:
+  //   process.env > .neon-launch.env > .neon middleware context
+  const neonLaunchEnv = readNeonLaunchEnv(repoRoot);
+  const neonContext: Record<string, string | undefined> = {
+    NEON_PROJECT_ID:
+      (opts.argv['project-id'] as string | undefined) ?? undefined,
+  };
+  const projectId = resolveStateValue(
+    'NEON_PROJECT_ID',
+    process.env,
+    neonLaunchEnv,
+    neonContext,
+  );
   if (!projectId) {
     throw new Error(
       `[neon launch] NEON_PROJECT_ID is required.\n` +
-        `Set it in your environment, in .neon-launch.env, or via the existing neon CLI context. ` +
-        `If you haven't bootstrapped this repo, run \`neon launch\` interactively first.`,
+        `Set it in your environment, in .neon-launch.env, or pass --project-id. ` +
+        `Existing \`neon\` users: \`neon set-context\` (then commit \`.neon\`) ` +
+        `works too.`,
     );
   }
+
+  // 3. Resolve Neon API auth — OAuth via argv.apiClient (set by ensureAuth)
+  // or NEON_API_KEY env, in that order. apiHost flows through from the
+  // global --api-host flag.
+  const argvApiClient = opts.argv.apiClient as
+    | ReturnType<typeof getApiClient>
+    | undefined;
+  const apiKey =
+    (opts.argv.apiKey as string | undefined) ?? process.env.NEON_API_KEY ?? '';
+  const apiHost =
+    (opts.argv.apiHost as string | undefined) ??
+    process.env.NEON_API_HOST ??
+    undefined;
+  if (!argvApiClient && !apiKey) {
+    throw new Error(
+      `[neon launch] Neon auth required. Run \`neon auth\` (OAuth) or set NEON_API_KEY.`,
+    );
+  }
+  const api = argvApiClient ?? getApiClient({ apiKey, apiHost });
 
   // 3. Provision stage-by-stage.
   const stages = groupStages(plan);
@@ -276,6 +309,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
       stage.map((node) =>
         provisionOne({
           node,
+          api,
           projectId,
           repoRoot,
           cwd,
@@ -283,6 +317,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
           branchTimeoutSeconds: opts.branchTimeoutSeconds,
           stdioMode,
           liveLocalCommands,
+          neonLaunchEnv,
         }),
       ),
     );
@@ -306,6 +341,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
 
 async function provisionOne(args: {
   node: PlanNode;
+  api: ApiClient;
   projectId: string;
   repoRoot: string;
   cwd: string;
@@ -313,6 +349,7 @@ async function provisionOne(args: {
   branchTimeoutSeconds: number;
   stdioMode: StdioMode;
   liveLocalCommands: LocalCommandHandle[];
+  neonLaunchEnv: Record<string, string>;
 }): Promise<void> {
   const { node } = args;
   const kind = node.resource.__kind;
@@ -320,6 +357,7 @@ async function provisionOne(args: {
   if (kind === 'postgres') {
     await provisionPostgresNode({
       node,
+      api: args.api,
       projectId: args.projectId,
       branchTimeoutSeconds: args.branchTimeoutSeconds,
     });
@@ -331,6 +369,7 @@ async function provisionOne(args: {
       repoRoot: args.repoRoot,
       cwd: args.cwd,
       gitBranch: args.gitBranch,
+      neonLaunchEnv: args.neonLaunchEnv,
     });
     return;
   }
@@ -351,20 +390,13 @@ async function provisionOne(args: {
 
 async function provisionPostgresNode(args: {
   node: PlanNode;
+  api: ApiClient;
   projectId: string;
   branchTimeoutSeconds: number;
 }): Promise<PostgresProvisionResult> {
-  const apiKey = process.env.NEON_API_KEY ?? '';
-  if (!apiKey) {
-    throw new Error(
-      `[neon launch] NEON_API_KEY is required to provision a postgres branch. ` +
-        `Run \`neon auth\` or set NEON_API_KEY in your environment.`,
-    );
-  }
-  const api = getApiClient({ apiKey });
   const spec = args.node.spec as PostgresSpec;
   const result = await provisionPostgres({
-    api,
+    api: args.api,
     projectId: args.projectId,
     spec,
     branchTimeoutSeconds: args.branchTimeoutSeconds,
@@ -373,7 +405,7 @@ async function provisionPostgresNode(args: {
   // Seed the output table for this resource so downstream refs resolve.
   outputs.set(args.node.resource.__id, {
     kind: 'postgres',
-    api,
+    api: args.api,
     projectId: args.projectId,
     branchId: result.branch.id,
     endpointId: result.endpoint.id,
@@ -391,11 +423,17 @@ async function provisionVercelNode(args: {
   repoRoot: string;
   cwd: string;
   gitBranch: string;
+  neonLaunchEnv: Record<string, string>;
 }): Promise<void> {
   const spec = args.node.spec as VercelDeploymentSpec;
   const token = process.env.VERCEL_TOKEN ?? '';
   if (!token) throw new Error(vercelTokenMissingMessage());
-  const teamId = process.env.VERCEL_TEAM_ID ?? spec.teamId ?? undefined;
+  // Spec §3.3 precedence: process.env > .neon-launch.env > spec.teamId.
+  const teamId =
+    process.env.VERCEL_TEAM_ID ??
+    args.neonLaunchEnv.VERCEL_TEAM_ID ??
+    spec.teamId ??
+    undefined;
   const resolvedEnv = await resolveEnv(spec.env);
   const result = await provisionVercelDeployment({
     resourceFqn: args.node.name,

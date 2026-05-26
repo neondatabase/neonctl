@@ -104,15 +104,15 @@ async function vercelFetch<T>(
  * id (`prj_xxx`) or a name; the Vercel API's `GET /v9/projects/{idOrName}`
  * accepts both.
  */
-export async function resolveProjectId(
+export async function resolveProject(
   projectIdOrName: string,
   ctx: VercelClientCtx,
-): Promise<string> {
+): Promise<{ id: string; name: string }> {
   const project = await vercelFetch<VercelProject>(
     VERCEL_API.projectGet(projectIdOrName),
     ctx,
   );
-  return project.id;
+  return { id: project.id, name: project.name };
 }
 
 /**
@@ -197,7 +197,7 @@ function gitHeadSha(cwd: string): string | undefined {
  *   right git SHA.
  */
 export async function createDeployment(opts: {
-  projectId: string;
+  projectName: string;
   cwd: string;
   gitBranch: string;
   production: boolean;
@@ -223,10 +223,13 @@ export async function createDeployment(opts: {
     // client accepts boolean. Both serialize to the same query param.
     skipAutoDetectionConfirmation: true,
   };
+  // `name` is the Vercel *project name* (not the id) — Vercel matches the
+  // deployment to an existing project by name. Passing the id would 4xx or
+  // create a new project named after the id. Resolved via `resolveProject`
+  // upstream.
   const deploymentOpts = {
-    name: opts.projectId,
+    name: opts.projectName,
     target: opts.production ? 'production' : undefined,
-    projectSettings: { framework: null },
     gitMetadata: commitSha
       ? { commitRef: opts.gitBranch, commitSha }
       : undefined,
@@ -240,15 +243,17 @@ export async function createDeployment(opts: {
     deploymentOpts as Parameters<typeof vercelCreateDeployment>[1],
   )) {
     const payload = event.payload as { url?: string; readyState?: string };
-    if (payload.url && !url) url = `https://${payload.url}`;
+    if (payload.url) url = `https://${payload.url}`;
     if (payload.readyState) status = payload.readyState;
     if (event.type === 'ready') {
       return { url: url ?? '', status: 'READY' };
     }
     if (event.type === 'error' || event.type === 'canceled') {
-      throw new Error(
-        `[neon launch] Vercel deployment ${event.type}: ${JSON.stringify(event.payload)}`,
-      );
+      const msg =
+        event.payload instanceof Error
+          ? event.payload.message
+          : JSON.stringify(event.payload);
+      throw new Error(`[neon launch] Vercel deployment ${event.type}: ${msg}`);
     }
   }
 
@@ -298,12 +303,13 @@ export async function provisionVercelDeployment(opts: {
 
   const ctx: VercelClientCtx = { token: opts.ctx.token, teamId };
 
-  // 2. Project id resolution.
+  // 2. Project id + name resolution (spec.project may be an id or a name —
+  // the Vercel deployment endpoint requires the NAME).
   log.info(`[${opts.resourceFqn}] resolving Vercel project…`);
-  const projectId = await resolveProjectId(opts.spec.project, ctx);
+  const project = await resolveProject(opts.spec.project, ctx);
 
   // 3. Persist resolved ids (spec §3.3 step 3-4).
-  const persist: Record<string, string> = { VERCEL_PROJECT_ID: projectId };
+  const persist: Record<string, string> = { VERCEL_PROJECT_ID: project.id };
   if (teamId) persist.VERCEL_TEAM_ID = teamId;
   writeNeonLaunchEnv(opts.repoRoot, persist);
 
@@ -313,7 +319,7 @@ export async function provisionVercelDeployment(opts: {
     `[${opts.resourceFqn}] upserting ${Object.keys(opts.resolvedEnv).length} env vars (target: ${production ? 'production' : 'preview'})…`,
   );
   await upsertEnvVars({
-    projectId,
+    projectId: project.id,
     envs: opts.resolvedEnv,
     production,
     gitBranch: opts.gitBranch,
@@ -323,7 +329,7 @@ export async function provisionVercelDeployment(opts: {
   // 5. Deployment trigger.
   log.info(`[${opts.resourceFqn}] triggering deployment…`);
   const result = await createDeployment({
-    projectId,
+    projectName: project.name,
     cwd: opts.cwd,
     gitBranch: opts.gitBranch,
     production,
