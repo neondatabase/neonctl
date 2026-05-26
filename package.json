@@ -55,11 +55,13 @@
   "dependencies": {
     "@neondatabase/api-client": "2.6.0",
     "@segment/analytics-node": "1.3.0",
+    "@vercel/client": "^17.5.1",
     "axios": "1.7.2",
     "axios-debug-log": "1.0.0",
     "chalk": "5.3.0",
     "cli-table": "0.3.11",
     "diff": "5.2.0",
+    "envfile": "^7.1.0",
     "jiti": "2.7.0",
     "neon-init": "0.14.0",
     "open": "10.1.0",
