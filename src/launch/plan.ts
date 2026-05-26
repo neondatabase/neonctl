@@ -348,9 +348,24 @@ export async function buildPlan(
   const absPath = resolvePath(process.cwd(), configPath);
   if (!existsSync(absPath)) {
     throw new Error(
-      `[neon launch] Config file not found: ${absPath}\n` +
-        `Run \`neon launch\` once in TTY mode to bootstrap a neon.ts (Phase 7), ` +
-        `or pass --config <path>.`,
+      [
+        `[neon launch] Config file not found: ${absPath}`,
+        '',
+        `Create a \`neon.ts\` at the repo root. Minimal starter:`,
+        '',
+        `  import { stack, postgres } from 'neonctl/config';`,
+        '',
+        `  export default stack({`,
+        `    spec: (_, { gitBranch }) => {`,
+        `      const db = postgres({`,
+        `        spec: () => ({ name: gitBranch || 'main' }),`,
+        `      });`,
+        `      return { db };`,
+        `    },`,
+        `  });`,
+        '',
+        `Then run \`neon launch\` again. See the full announcement in the repo.`,
+      ].join('\n'),
     );
   }
 
