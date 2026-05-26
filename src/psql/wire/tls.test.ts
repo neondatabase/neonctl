@@ -303,6 +303,83 @@ describe('loadTlsFileOptions', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('plumbs sslpassword through to tls.connect as passphrase', async () => {
+    const f = fixtures();
+    try {
+      const merged = await loadTlsFileOptions(
+        {},
+        { sslkey: f.keyPath, sslpassword: 'sekret' },
+        'require',
+      );
+      expect(merged.passphrase).toBe('sekret');
+      expect(Buffer.isBuffer(merged.key)).toBe(true);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test('treats empty sslpassword as "not set"', async () => {
+    const merged = await loadTlsFileOptions({}, { sslpassword: '' });
+    expect(merged.passphrase).toBeUndefined();
+  });
+
+  test('sslmode=require + nonexistent sslrootcert never opens the file', async () => {
+    // libpq only opens sslrootcert in verify-ca / verify-full. The TS impl
+    // must mirror that — an unreadable placeholder path must not abort the
+    // require-mode handshake.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-pem-'));
+    try {
+      const missing = path.join(dir, 'definitely-missing.pem');
+      // No throw — and merged.ca stays undefined.
+      const merged = await loadTlsFileOptions(
+        {},
+        { sslrootcert: missing },
+        'require',
+      );
+      expect(merged.ca).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('sslmode=verify-ca + nonexistent sslrootcert still surfaces the read error', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-pem-'));
+    try {
+      const missing = path.join(dir, 'gone.pem');
+      await expect(
+        loadTlsFileOptions({}, { sslrootcert: missing }, 'verify-ca'),
+      ).rejects.toThrow(/could not read sslrootcert ".*gone\.pem"/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('sslmode=verify-full + nonexistent sslrootcert still surfaces the read error', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-pem-'));
+    try {
+      const missing = path.join(dir, 'gone.pem');
+      await expect(
+        loadTlsFileOptions({}, { sslrootcert: missing }, 'verify-full'),
+      ).rejects.toThrow(/could not read sslrootcert ".*gone\.pem"/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('omitted sslMode defaults to eager read (back-compat)', async () => {
+    // Older callers that don't thread the sslmode through must still see
+    // the read failure — this is the pre-existing diagnostic shape.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-pem-'));
+    try {
+      const missing = path.join(dir, 'unset.pem');
+      await expect(
+        loadTlsFileOptions({}, { sslrootcert: missing }),
+      ).rejects.toThrow(/could not read sslrootcert/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

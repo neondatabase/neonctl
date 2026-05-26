@@ -68,6 +68,14 @@ export type TlsFileOptions = {
   sslcert?: string;
   /** Path to client key (PEM). Mapped to tls.connect's `key`. */
   sslkey?: string;
+  /**
+   * Passphrase for an encrypted PEM key supplied via {@link sslkey}.
+   * Mapped to tls.connect's `passphrase` option; OpenSSL uses it to
+   * decrypt the key at handshake time. Required when sslkey is an
+   * encrypted PEM (PKCS#8 or legacy PEM-encrypted RSA/EC). Empty string
+   * is treated as "no passphrase" to mirror libpq's behaviour.
+   */
+  sslpassword?: string;
   /** Path to CA cert(s) (PEM, may contain a bundle). Mapped to `ca`. */
   sslrootcert?: string;
   /** Path to CRL (PEM). Mapped to `crl`. */
@@ -117,7 +125,7 @@ export async function negotiateTls(
   const reply = await sendSslRequest(socket);
 
   if (reply === 'S') {
-    const mergedOpts = await loadTlsFileOptions(tlsOpts, fileOpts);
+    const mergedOpts = await loadTlsFileOptions(tlsOpts, fileOpts, sslMode);
     return upgradeToTls(socket, mergedOpts);
   }
 
@@ -141,15 +149,40 @@ export async function negotiateTls(
  * surfaced as `could not read ssl<file>: <reason>` so users immediately
  * know which option pointed at a bad path.
  *
+ * Behaviour-defining details:
+ *
+ *   - `sslrootcert` is only read when `sslMode` is `verify-ca` /
+ *     `verify-full`. Lower modes (require / prefer / allow) accept the
+ *     server cert without consulting the trust anchor, matching libpq's
+ *     policy of never opening the file in those modes. Tests can pass
+ *     `'verify-ca'` as the sentinel to force the eager read for any
+ *     non-disable mode (the default if omitted).
+ *   - `sslpassword` is plumbed into `tls.connect` as `passphrase`; if
+ *     unset OpenSSL leaves an encrypted key un-decryptable and the
+ *     handshake errors with a "bad decrypt" diagnostic.
+ *
  * Exported for tests (`tls.test.ts` swaps in a mocked `tls.connect`).
  */
 export async function loadTlsFileOptions(
   tlsOpts: tls.ConnectionOptions,
   fileOpts: TlsFileOptions,
+  sslMode?: SslMode,
 ): Promise<tls.ConnectionOptions> {
   const merged: tls.ConnectionOptions = { ...tlsOpts };
 
-  if (fileOpts.sslrootcert !== undefined && fileOpts.sslrootcert !== '') {
+  // libpq only opens the trust-anchor file in modes that actually
+  // validate the chain. Mirror that so a stale / placeholder
+  // `sslrootcert=` doesn't blow up sslmode=require connections.
+  const needsRootCert =
+    sslMode === undefined ||
+    sslMode === 'verify-ca' ||
+    sslMode === 'verify-full';
+
+  if (
+    needsRootCert &&
+    fileOpts.sslrootcert !== undefined &&
+    fileOpts.sslrootcert !== ''
+  ) {
     merged.ca = await readPem('sslrootcert', fileOpts.sslrootcert);
   }
   if (fileOpts.sslcert !== undefined && fileOpts.sslcert !== '') {
@@ -160,6 +193,12 @@ export async function loadTlsFileOptions(
   }
   if (fileOpts.sslcrl !== undefined && fileOpts.sslcrl !== '') {
     merged.crl = await readPem('sslcrl', fileOpts.sslcrl);
+  }
+  // sslpassword is plumbed through verbatim — OpenSSL applies it when it
+  // sees an encrypted key. Empty string is "no passphrase" (libpq's
+  // convention) so we skip it.
+  if (fileOpts.sslpassword !== undefined && fileOpts.sslpassword !== '') {
+    merged.passphrase = fileOpts.sslpassword;
   }
 
   return merged;

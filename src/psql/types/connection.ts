@@ -113,6 +113,13 @@ export type ConnectOptions = {
   sslcert?: string;
   /** Path to client key (PEM). Mapped to tls.connect's `key` option. */
   sslkey?: string;
+  /**
+   * Passphrase for an encrypted PEM key supplied via {@link sslkey}.
+   * Mapped to tls.connect's `passphrase` option; OpenSSL uses it to
+   * decrypt PKCS#8 / legacy PEM-encrypted private keys at handshake time.
+   * Matches libpq's `sslpassword` connection parameter.
+   */
+  sslpassword?: string;
   /** Path to CA cert(s) (PEM, may contain bundle). Mapped to `ca`. */
   sslrootcert?: string;
   /** Path to CRL (PEM). Mapped to `crl`. */
