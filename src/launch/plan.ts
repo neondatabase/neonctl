@@ -24,6 +24,7 @@ import type {
   Resource,
 } from './config.js';
 import { dupKeyMessage, singletonMessage } from './errors.js';
+import { makeRef } from './refs.js';
 
 // =============================================================================
 // Types
@@ -223,21 +224,23 @@ function findResourceFqn(
  * The runtime resolver (`walkAndResolve`) substitutes the Ref with the
  * real value just before the dependent provisioner runs.
  */
-function makeOutputProxy(_dep: InternalResource): unknown {
-  void _dep;
-  // For Phase 4 the proxy is intentionally inert — spec callbacks don't
-  // touch the outputs at plan time (they're function bodies that build
-  // SpecObject shapes). The real ref construction happens in the
-  // provisioners (Phase 5). This placeholder satisfies the type contract.
-  // If a spec callback DOES read its deps at plan time (e.g. to log),
-  // it gets back `undefined` for any property access — which is fine
-  // unless the spec depends on a dep's value for branching, in which
-  // case the user is writing a non-pure spec, which is out of contract.
+function makeOutputProxy(dep: InternalResource): unknown {
+  // Spec callbacks read outputs (`db.connectionString`, `web.url`) at the
+  // moment the parent's `spec(deps, ctx)` runs — which is plan time. We
+  // hand them a Proxy that yields a Ref<T> for each property access, keyed
+  // on `<dep.__id>.<prop>`. The runner builds an outputTable with matching
+  // keys at provision time and walks the leaf's env to swap refs for real
+  // values (see refs.walkAndResolve + runner.resolveOutputs).
   return new Proxy(
     {},
     {
-      get() {
-        return undefined;
+      get(_t, prop) {
+        if (typeof prop !== 'string') return undefined;
+        // Skip the well-known protocol hooks JS engines probe ('then', etc).
+        // Returning a ref for `then` would make the proxy look thenable and
+        // break Promise.resolve(proxy).
+        if (prop === 'then' || prop === 'toJSON') return undefined;
+        return makeRef(`${dep.__id}.${prop}`);
       },
     },
   );
