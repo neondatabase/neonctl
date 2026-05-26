@@ -1,0 +1,334 @@
+/**
+ * Vercel-deployment provisioner — spec §3.2 step 5 (vercel-deployment path) +
+ * §3.3 (project/team resolution).
+ *
+ * - `@vercel/client` is **lazy-imported** here only (impl-plan Phase 1.2 +
+ *   spec §11 #41); never top-level — Node-18 callers of other neonctl
+ *   commands must not pay its load cost.
+ * - Project lookup, team-slug resolution, and env-var upsert hit the Vercel
+ *   REST API directly (Node 22 global `fetch`). The endpoint version per
+ *   surface is locked in `VERCEL_API` below — spec §11 #28.
+ * - `?teamId=<id>` is appended to every request when set, via `wrapTeam` —
+ *   spec §11 #34.
+ */
+import { execSync } from 'node:child_process';
+
+import { log } from '../../log.js';
+import type { VercelDeploymentSpec } from '../config.js';
+import { writeNeonLaunchEnv } from '../context.js';
+import { vercelTokenMissingMessage } from '../errors.js';
+
+// =============================================================================
+// Endpoint versions (spec §11 #28 — locked, do not change without re-checking)
+// =============================================================================
+
+const VERCEL_API = {
+  base: 'https://api.vercel.com',
+  /** Single-project read. v9 still current per Vercel docs 2026-05. */
+  projectGet: (idOrName: string) => `/v9/projects/${idOrName}`,
+  /** Project list (paginated `{ projects, pagination }`). */
+  projectList: () => `/v10/projects`,
+  /** Env-var upsert (array body). */
+  envUpsert: (id: string) => `/v10/projects/${id}/env?upsert=true`,
+  /** Team-slug → team-id resolution. */
+  teamBySlug: (slug: string) => `/v2/teams?slug=${encodeURIComponent(slug)}`,
+} as const;
+
+// =============================================================================
+// Types
+// =============================================================================
+
+export type VercelClientCtx = {
+  token: string;
+  teamId?: string;
+};
+
+type VercelProject = {
+  id: string;
+  name: string;
+};
+
+type VercelEnvVar = {
+  key: string;
+  value: string;
+  type: 'plain' | 'encrypted';
+  target: ('production' | 'preview' | 'development')[];
+  gitBranch?: string;
+};
+
+type VercelDeploymentResult = {
+  url: string;
+  status: string;
+};
+
+// =============================================================================
+// HTTP helpers
+// =============================================================================
+
+/**
+ * Append `?teamId=` to `path` if `ctx.teamId` is set. Returns the path with
+ * the merged query string. Handles both pre-existing query strings and bare
+ * paths. Spec §11 #34.
+ */
+function wrapTeam(path: string, ctx: VercelClientCtx): string {
+  if (!ctx.teamId) return path;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}teamId=${encodeURIComponent(ctx.teamId)}`;
+}
+
+async function vercelFetch<T>(
+  path: string,
+  ctx: VercelClientCtx,
+  init?: RequestInit,
+): Promise<T> {
+  const url = `${VERCEL_API.base}${wrapTeam(path, ctx)}`;
+  const headers = new Headers(init?.headers);
+  headers.set('Authorization', `Bearer ${ctx.token}`);
+  headers.set('Content-Type', 'application/json');
+  const res = await fetch(url, { ...init, headers });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(
+      `[neon launch] Vercel ${init?.method ?? 'GET'} ${path} returned ${res.status}: ${body}`,
+    );
+  }
+  return (await res.json()) as T;
+}
+
+// =============================================================================
+// Project + team resolution (spec §3.3)
+// =============================================================================
+
+/**
+ * Resolve a project identifier to a concrete `projectId`. Accepts either an
+ * id (`prj_xxx`) or a name; the Vercel API's `GET /v9/projects/{idOrName}`
+ * accepts both.
+ */
+export async function resolveProjectId(
+  projectIdOrName: string,
+  ctx: VercelClientCtx,
+): Promise<string> {
+  const project = await vercelFetch<VercelProject>(
+    VERCEL_API.projectGet(projectIdOrName),
+    ctx,
+  );
+  return project.id;
+}
+
+/**
+ * Resolve a team slug to a `team_xxx` id. Spec §3.3 last paragraph — call
+ * once, persist result.
+ */
+export async function resolveTeamSlug(
+  slug: string,
+  token: string,
+): Promise<string> {
+  type Resp = { id: string };
+  const resp = await vercelFetch<Resp>(VERCEL_API.teamBySlug(slug), { token });
+  return resp.id;
+}
+
+// =============================================================================
+// Env upsert
+// =============================================================================
+
+/**
+ * Upsert env vars on the Vercel project. Spec §11 #28 + #33.
+ *
+ * Target rule (spec §11 #33):
+ *   production: true  → target: ['production'] (no gitBranch)
+ *   production: false → target: ['preview'], gitBranch: ctx.gitBranch
+ */
+export async function upsertEnvVars(opts: {
+  projectId: string;
+  envs: Record<string, string>;
+  production: boolean;
+  gitBranch: string;
+  ctx: VercelClientCtx;
+}): Promise<void> {
+  const body: VercelEnvVar[] = Object.entries(opts.envs).map(([key, value]) => {
+    if (opts.production) {
+      return {
+        key,
+        value,
+        type: 'encrypted',
+        target: ['production'],
+      };
+    }
+    return {
+      key,
+      value,
+      type: 'encrypted',
+      target: ['preview'],
+      gitBranch: opts.gitBranch,
+    };
+  });
+  await vercelFetch(VERCEL_API.envUpsert(opts.projectId), opts.ctx, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+// =============================================================================
+// Deployment trigger
+// =============================================================================
+
+function gitHeadSha(cwd: string): string | undefined {
+  try {
+    return execSync('git rev-parse HEAD', {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Trigger a Vercel deployment via `@vercel/client.createDeployment`. The
+ * client streams `created`/`building`/`ready` events; we resolve when we see
+ * `ready` and reject on `error`/`canceled`.
+ *
+ * - `skipAutoDetectionConfirmation: 1` (spec §11 #29) — passed via the
+ *   client's options bag, which forwards it as a query param.
+ * - `gitMetadata: { commitRef, commitSha }` (spec §11 #32) — wires the
+ *   commit annotation so the Vercel dashboard links the deployment to the
+ *   right git SHA.
+ */
+export async function createDeployment(opts: {
+  projectId: string;
+  cwd: string;
+  gitBranch: string;
+  production: boolean;
+  ctx: VercelClientCtx;
+}): Promise<VercelDeploymentResult> {
+  // Lazy-import so Node-18 callers of other neonctl commands don't pay the
+  // @vercel/client load cost. eslint-disable-next-line is intentional —
+  // see impl-plan Phase 1.2 / spec §11 #41.
+  const { createDeployment: vercelCreateDeployment } = await import(
+    '@vercel/client'
+  );
+
+  const commitSha = gitHeadSha(opts.cwd);
+
+  let url: string | undefined;
+  let status: string | undefined;
+
+  const clientOpts = {
+    token: opts.ctx.token,
+    path: opts.cwd,
+    teamId: opts.ctx.teamId,
+    // Spec §11 #29 — `1` is the canonical form on the wire; the typed
+    // client accepts boolean. Both serialize to the same query param.
+    skipAutoDetectionConfirmation: true,
+  };
+  const deploymentOpts = {
+    name: opts.projectId,
+    target: opts.production ? 'production' : undefined,
+    projectSettings: { framework: null },
+    gitMetadata: commitSha
+      ? { commitRef: opts.gitBranch, commitSha }
+      : undefined,
+  };
+
+  // The client yields events. Loop until we see 'ready' or an error event.
+  for await (const event of vercelCreateDeployment(
+    // @vercel/client's exported types are looser than our ctx — runtime
+    // accepts the extra fields and ignores them. Cast at the boundary.
+    clientOpts as Parameters<typeof vercelCreateDeployment>[0],
+    deploymentOpts as Parameters<typeof vercelCreateDeployment>[1],
+  )) {
+    const payload = event.payload as { url?: string; readyState?: string };
+    if (payload.url && !url) url = `https://${payload.url}`;
+    if (payload.readyState) status = payload.readyState;
+    if (event.type === 'ready') {
+      return { url: url ?? '', status: 'READY' };
+    }
+    if (event.type === 'error' || event.type === 'canceled') {
+      throw new Error(
+        `[neon launch] Vercel deployment ${event.type}: ${JSON.stringify(event.payload)}`,
+      );
+    }
+  }
+
+  // Loop exited without 'ready' — treat as failure.
+  throw new Error(
+    `[neon launch] Vercel deployment stream ended without 'ready' (last status: ${status ?? 'unknown'}).`,
+  );
+}
+
+// =============================================================================
+// Top-level provisioner entry
+// =============================================================================
+
+/**
+ * Provision a vercel-deployment resource end-to-end. Returns the resolved
+ * outputs (just `url` for v1).
+ *
+ * Responsibilities:
+ *   1. Read VERCEL_TOKEN; exit 3 (caller decides) if missing.
+ *   2. Resolve team slug → teamId if `spec.team` is set.
+ *   3. Resolve project id (accepts id or name).
+ *   4. Persist resolved ids to `.neon-launch.env` (spec §3.3 step 3-4).
+ *   5. Upsert env vars (target depends on `production`).
+ *   6. Create deployment, await `ready`.
+ */
+export async function provisionVercelDeployment(opts: {
+  resourceFqn: string;
+  spec: VercelDeploymentSpec;
+  resolvedEnv: Record<string, string>;
+  ctx: VercelClientCtx;
+  gitBranch: string;
+  repoRoot: string;
+  cwd: string;
+}): Promise<{ url: string }> {
+  if (!opts.ctx.token) {
+    throw new Error(vercelTokenMissingMessage());
+  }
+
+  // 1. Team slug resolution + persistence.
+  let teamId = opts.ctx.teamId ?? opts.spec.teamId;
+  if (!teamId && opts.spec.team) {
+    log.info(
+      `[${opts.resourceFqn}] resolving Vercel team slug '${opts.spec.team}'…`,
+    );
+    teamId = await resolveTeamSlug(opts.spec.team, opts.ctx.token);
+  }
+
+  const ctx: VercelClientCtx = { token: opts.ctx.token, teamId };
+
+  // 2. Project id resolution.
+  log.info(`[${opts.resourceFqn}] resolving Vercel project…`);
+  const projectId = await resolveProjectId(opts.spec.project, ctx);
+
+  // 3. Persist resolved ids (spec §3.3 step 3-4).
+  const persist: Record<string, string> = { VERCEL_PROJECT_ID: projectId };
+  if (teamId) persist.VERCEL_TEAM_ID = teamId;
+  writeNeonLaunchEnv(opts.repoRoot, persist);
+
+  // 4. Env-var upsert.
+  const production = opts.spec.production === true;
+  log.info(
+    `[${opts.resourceFqn}] upserting ${Object.keys(opts.resolvedEnv).length} env vars (target: ${production ? 'production' : 'preview'})…`,
+  );
+  await upsertEnvVars({
+    projectId,
+    envs: opts.resolvedEnv,
+    production,
+    gitBranch: opts.gitBranch,
+    ctx,
+  });
+
+  // 5. Deployment trigger.
+  log.info(`[${opts.resourceFqn}] triggering deployment…`);
+  const result = await createDeployment({
+    projectId,
+    cwd: opts.cwd,
+    gitBranch: opts.gitBranch,
+    production,
+    ctx,
+  });
+
+  return { url: result.url };
+}
