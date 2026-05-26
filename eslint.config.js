@@ -4,7 +4,7 @@ import ts from 'typescript-eslint';
 // @ts-check
 export default ts.config({
   files: ['**/*.ts', '**/*.cts', '**.*.mts'],
-  ignores: ['**/*.js', '**/*.gen.ts'],
+  ignores: ['**/*.js', '**/*.gen.ts', 'examples/**'],
   rules: {
     'no-console': 'error',
     '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
