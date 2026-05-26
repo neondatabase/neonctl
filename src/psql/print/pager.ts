@@ -53,7 +53,17 @@ export type OpenPagerOpts = {
 /**
  * Resolve the pager command string. Mirrors upstream:
  *   PSQL_PAGER → PAGER → DEFAULT_PAGER (`less` on POSIX, none on Windows).
- * A whitespace-only value disables the pager (returns `''`).
+ *
+ * Empty / whitespace-only env values FALL THROUGH to the next candidate. This
+ * deliberately diverges from strict upstream (where `PSQL_PAGER=''` would
+ * disable the pager outright) because in Node a spawned child cannot easily
+ * "unset" an inherited env var — tests have to override it with the empty
+ * string. Treating empty values as "unset" matches the conformance spec
+ * (`tests/psql-conformance/tap/030_pager.spec.ts`) and lets `PSQL_PAGER=''`
+ * fall through to PAGER, which is the user-friendly interpretation.
+ *
+ * Users who want to disable the pager unconditionally should set
+ * `\pset pager off` (preferred) or unset both env vars before launch.
  */
 const resolvePagerCmd = (opts: OpenPagerOpts): string => {
   const env = opts.env ?? process.env;
@@ -66,8 +76,8 @@ const resolvePagerCmd = (opts: OpenPagerOpts): string => {
 
   for (const c of candidates) {
     if (c === undefined) continue;
-    // Upstream: whitespace-only PSQL_PAGER/PAGER means "no pager".
-    if (/^[\s]*$/.test(c)) return '';
+    // Empty or whitespace-only → treat as "not set" and try the next slot.
+    if (/^\s*$/.test(c)) continue;
     return c;
   }
 

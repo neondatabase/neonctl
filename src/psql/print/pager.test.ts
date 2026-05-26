@@ -42,10 +42,23 @@ describe('isPagerNeeded', () => {
     );
   });
 
-  test("returns false when pager is 'always' but command is whitespace-only", () => {
+  test('whitespace-only PSQL_PAGER falls through to PAGER', () => {
+    // PSQL_PAGER='   ' is treated as "not set" so PAGER provides the cmd.
+    expect(
+      isPagerNeeded(
+        baseOpts({
+          pager: 'always',
+          env: { PSQL_PAGER: '   \t  ', PAGER: 'cat' },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test('whitespace-only PAGER falls through to the default', () => {
+    if (isWindows) return; // DEFAULT_PAGER is empty on Windows
     expect(
       isPagerNeeded(baseOpts({ pager: 'always', env: { PAGER: '   \t  ' } })),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("returns false when pager is 'on' but not a TTY", () => {
@@ -474,7 +487,8 @@ describe('shouldPage', () => {
     ).toBe(true);
   });
 
-  test('whitespace-only PAGER disables the pager entirely', () => {
+  test('whitespace-only PSQL_PAGER falls through to PAGER', () => {
+    // Mirrors the conformance spec: PSQL_PAGER='' must not shadow PAGER.
     expect(
       shouldPage({
         pager: 'always',
@@ -483,7 +497,22 @@ describe('shouldPage', () => {
         colCount: 1,
         output: ttyStream(),
         redirectedOutput: false,
-        env: { PAGER: '   ' },
+        env: { PSQL_PAGER: '   ', PAGER: 'cat' },
+      }),
+    ).toBe(true);
+  });
+
+  test('all-empty env on Windows disables the pager (no default)', () => {
+    if (process.platform !== 'win32') return;
+    expect(
+      shouldPage({
+        pager: 'always',
+        pagerMinLines: 0,
+        rowCount: 10,
+        colCount: 1,
+        output: ttyStream(),
+        redirectedOutput: false,
+        env: { PAGER: '   ', PSQL_PAGER: '' },
       }),
     ).toBe(false);
   });
