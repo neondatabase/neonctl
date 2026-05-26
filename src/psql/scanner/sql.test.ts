@@ -724,3 +724,195 @@ describe('splitStatements — script-shaped inputs', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// :NAME / :'NAME' / :"NAME" variable substitution.
+//
+// Upstream `psqlscan.l` expands these inline in `<INITIAL>` only. We mirror
+// that scope: substitution fires at top level, never inside SQL strings,
+// dollar-quoted blocks, double-quoted identifiers, or comments. The
+// PostgreSQL `::` cast operator is preserved verbatim.
+// ---------------------------------------------------------------------------
+
+describe('scanSql — :NAME variable substitution', () => {
+  const lookup =
+    (vars: Record<string, string>) =>
+    (name: string): string | undefined =>
+      Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : undefined;
+
+  test('plain :NAME is substituted at top level', () => {
+    const r = scanSql('SELECT :myvar;', undefined, lookup({ myvar: '42' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT 42;');
+  });
+
+  test('plain :NAME with no varLookup keeps the literal', () => {
+    const r = scanSql('SELECT :myvar;');
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT :myvar;');
+  });
+
+  test(":'NAME' produces a SQL string literal with quoting", () => {
+    const r = scanSql("SELECT :'val';", undefined, lookup({ val: "it's" }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe("SELECT 'it''s';");
+  });
+
+  test(":'NAME' with a backslash emits the E'…' escape-string form", () => {
+    const r = scanSql("SELECT :'val';", undefined, lookup({ val: 'a\\b' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe("SELECT E'a\\\\b';");
+  });
+
+  test(':"NAME" produces a SQL identifier with quoting', () => {
+    const r = scanSql(
+      'SELECT * FROM :"tbl";',
+      undefined,
+      lookup({ tbl: 'My"Table' }),
+    );
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT * FROM "My""Table";');
+  });
+
+  test('unknown variable falls back to the literal :NAME', () => {
+    const r = scanSql('SELECT :unknown;', undefined, lookup({}));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT :unknown;');
+  });
+
+  test("unknown :'NAME' echoes literal :'NAME'", () => {
+    const r = scanSql("SELECT :'unk';", undefined, lookup({}));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe("SELECT :'unk';");
+  });
+
+  test(':: cast operator is NOT treated as a substitution', () => {
+    const r = scanSql("SELECT '1'::int;", undefined, lookup({ int: 'BOGUS' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe("SELECT '1'::int;");
+  });
+
+  test(':NAME inside a single-quoted string is NOT substituted', () => {
+    const r = scanSql("SELECT ':val';", undefined, lookup({ val: 'BOGUS' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe("SELECT ':val';");
+  });
+
+  test(':NAME inside a double-quoted identifier is NOT substituted', () => {
+    const r = scanSql('SELECT ":val";', undefined, lookup({ val: 'BOGUS' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT ":val";');
+  });
+
+  test(':NAME inside a dollar-quoted block is NOT substituted', () => {
+    const r = scanSql(
+      'DO $$ SELECT :val; $$;',
+      undefined,
+      lookup({ val: 'BOGUS' }),
+    );
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('DO $$ SELECT :val; $$;');
+  });
+
+  test(':NAME inside a line comment is NOT substituted', () => {
+    const r = scanSql(
+      '-- :val\nSELECT 1;',
+      undefined,
+      lookup({ val: 'BOGUS' }),
+    );
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('-- :val\nSELECT 1;');
+  });
+
+  test(':NAME inside a block comment is NOT substituted', () => {
+    const r = scanSql(
+      '/* :val */ SELECT 1;',
+      undefined,
+      lookup({ val: 'BOGUS' }),
+    );
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('/* :val */ SELECT 1;');
+  });
+
+  test('multiple substitutions in one statement', () => {
+    const r = scanSql('SELECT :a, :b;', undefined, lookup({ a: '1', b: '2' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT 1, 2;');
+  });
+
+  test('lone : at end of input is preserved verbatim', () => {
+    const r = scanSql('SELECT :', undefined, lookup({ foo: '1' }));
+    expect(r.kind).toBe('eof');
+    if (r.kind !== 'eof') return;
+    expect(r.sql).toBe('SELECT :');
+  });
+
+  test(': followed by non-identifier char is preserved verbatim', () => {
+    const r = scanSql('SELECT 1:+2;', undefined, lookup({ foo: '99' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT 1:+2;');
+  });
+
+  test(':1 (digit-prefixed) is not a variable — emits literal :', () => {
+    const r = scanSql('SELECT :1;', undefined, lookup({ '1': 'x' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT :1;');
+  });
+
+  test('substitution preserves surrounding statement boundary', () => {
+    const r = scanSql(
+      'SELECT :a; SELECT :b;',
+      undefined,
+      lookup({ a: '1', b: '2' }),
+    );
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    // First call returns just the first statement, with :a substituted.
+    expect(r.sql).toBe('SELECT 1;');
+  });
+
+  test('splitStatements with varLookup expands per-statement', () => {
+    const parts = splitStatements(
+      'SELECT :a; SELECT :b;',
+      lookup({ a: '11', b: '22' }),
+    );
+    expect(parts).toEqual(['SELECT 11;', ' SELECT 22;']);
+  });
+
+  test('chunked feeding: substitution within each chunk', () => {
+    // First chunk: `SELECT :a + ` — terminates at incomplete eof (no `;`).
+    const r1 = scanSql('SELECT :a + ', undefined, lookup({ a: '7', b: '8' }));
+    expect(r1.kind).toBe('eof');
+    if (r1.kind !== 'eof') return;
+    expect(r1.sql).toBe('SELECT 7 + ');
+
+    // Second chunk continues with state — `:b` still substitutes.
+    const r2 = scanSql(':b;', r1.nextState, lookup({ a: '7', b: '8' }));
+    expect(r2.kind).toBe('semicolon');
+    if (r2.kind !== 'semicolon') return;
+    expect(r2.sql).toBe('8;');
+  });
+
+  test('inside parentheses, substitution still happens', () => {
+    const r = scanSql('SELECT (:x);', undefined, lookup({ x: '99' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT (99);');
+  });
+});

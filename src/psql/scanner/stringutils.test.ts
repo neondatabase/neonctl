@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
-import { dequote, quoteIfNeeded, strtokx } from './stringutils.js';
+import {
+  dequote,
+  quoteIfNeeded,
+  quoteSqlIdent,
+  quoteSqlLiteral,
+  strtokx,
+  tryConsumeVarSubstitution,
+} from './stringutils.js';
 
 const WS = ' \t\n';
 const DELIM = ',;';
@@ -156,5 +163,133 @@ describe('dequote', () => {
     const v = 'he said "hi"';
     const q = quoteIfNeeded(v, ' ', '"');
     expect(dequote(q, '"')).toBe(v);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// quoteSqlLiteral / quoteSqlIdent — shared with the slash scanner.
+// ---------------------------------------------------------------------------
+
+describe('quoteSqlLiteral', () => {
+  test('wraps a plain string in single quotes', () => {
+    expect(quoteSqlLiteral('hello')).toBe("'hello'");
+  });
+
+  test('doubles embedded single quotes', () => {
+    expect(quoteSqlLiteral("it's")).toBe("'it''s'");
+  });
+
+  test("emits E'…' form when value contains a backslash", () => {
+    expect(quoteSqlLiteral('a\\b')).toBe("E'a\\\\b'");
+  });
+
+  test('empty string', () => {
+    expect(quoteSqlLiteral('')).toBe("''");
+  });
+});
+
+describe('quoteSqlIdent', () => {
+  test('wraps a plain string in double quotes', () => {
+    expect(quoteSqlIdent('foo')).toBe('"foo"');
+  });
+
+  test('doubles embedded double quotes', () => {
+    expect(quoteSqlIdent('My"Table')).toBe('"My""Table"');
+  });
+
+  test('preserves single quotes and backslashes verbatim', () => {
+    expect(quoteSqlIdent("a'b\\c")).toBe('"a\'b\\c"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tryConsumeVarSubstitution — the substitution helper used by the SQL
+// scanner. Behavioural coverage here lets the scanner test focus on
+// integration with the surrounding state machine.
+// ---------------------------------------------------------------------------
+
+describe('tryConsumeVarSubstitution', () => {
+  const lookup =
+    (vars: Record<string, string>) =>
+    (name: string): string | undefined =>
+      Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : undefined;
+
+  test('returns null without varLookup (substitution disabled)', () => {
+    expect(tryConsumeVarSubstitution(':foo', 0, undefined)).toBeNull();
+  });
+
+  test('plain :NAME substitution', () => {
+    const r = tryConsumeVarSubstitution(':foo', 0, lookup({ foo: 'bar' }));
+    expect(r).toEqual({ end: 4, text: 'bar' });
+  });
+
+  test("':NAME' SQL-literal substitution", () => {
+    const r = tryConsumeVarSubstitution(":'val'", 0, lookup({ val: "it's" }));
+    expect(r).toEqual({ end: 6, text: "'it''s'" });
+  });
+
+  test(':"NAME" SQL-identifier substitution', () => {
+    const r = tryConsumeVarSubstitution(
+      ':"tbl"',
+      0,
+      lookup({ tbl: 'My"Table' }),
+    );
+    expect(r).toEqual({ end: 6, text: '"My""Table"' });
+  });
+
+  test('unknown variable echoes the literal :NAME', () => {
+    const r = tryConsumeVarSubstitution(':unk', 0, lookup({}));
+    expect(r).toEqual({ end: 4, text: ':unk' });
+  });
+
+  test("unknown variable echoes the literal :'NAME'", () => {
+    const r = tryConsumeVarSubstitution(":'unk'", 0, lookup({}));
+    expect(r).toEqual({ end: 6, text: ":'unk'" });
+  });
+
+  test(':: cast operator yields null (caller emits literally)', () => {
+    expect(tryConsumeVarSubstitution('::', 0, lookup({}))).toBeNull();
+  });
+
+  test(': followed by non-identifier returns null', () => {
+    expect(tryConsumeVarSubstitution(':+', 0, lookup({}))).toBeNull();
+    expect(tryConsumeVarSubstitution(': ', 0, lookup({}))).toBeNull();
+  });
+
+  test(': followed by digit returns null (no leading-digit names)', () => {
+    expect(tryConsumeVarSubstitution(':1', 0, lookup({ '1': 'x' }))).toBeNull();
+  });
+
+  test(': at end of input returns null', () => {
+    expect(tryConsumeVarSubstitution(':', 0, lookup({}))).toBeNull();
+  });
+
+  test("empty name inside :'' returns null", () => {
+    expect(tryConsumeVarSubstitution(":''", 0, lookup({}))).toBeNull();
+  });
+
+  test("unterminated :'NAME (no closing quote) returns null", () => {
+    expect(
+      tryConsumeVarSubstitution(":'foo", 0, lookup({ foo: 'x' })),
+    ).toBeNull();
+  });
+
+  test('greedy name match stops at non-name char', () => {
+    const r = tryConsumeVarSubstitution(
+      ':foo.bar',
+      0,
+      lookup({ foo: 'X', bar: 'Y' }),
+    );
+    expect(r).toEqual({ end: 4, text: 'X' });
+  });
+
+  test('substitution at non-zero offset advances correctly', () => {
+    // Mid-string call (caller has already advanced past leading text).
+    const r = tryConsumeVarSubstitution(
+      'pre :foo post',
+      4,
+      lookup({ foo: 'X' }),
+    );
+    expect(r).toEqual({ end: 8, text: 'X' });
   });
 });

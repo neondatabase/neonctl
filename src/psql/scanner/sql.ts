@@ -42,9 +42,14 @@
  *    only consumes it for PROMPT3 selection. See {@link computePromptStatus}.
  *    No scanner API change is required for COPY support to land — only the
  *    mainloop bypass logic.
- *  - Variable substitution `:var`, `:'var'`, `:"var"`. Upstream expands these inline
- *    via callbacks; we leave the colon-prefixed text in place and let the REPL
- *    expand on the assembled SQL string. The boundary detector doesn't need it.
+ *  - Variable substitution `:var`, `:'var'`, `:"var"`. Upstream expands these
+ *    inline via callbacks; we do the same when {@link scanSql} is given a
+ *    `varLookup`. Substitution fires at top-level only — never inside SQL
+ *    string literals, double-quoted identifiers, dollar-quoted blocks, or
+ *    comments (matches upstream's `<INITIAL>` flex rule scope). The token
+ *    `::` (PostgreSQL cast operator) is preserved verbatim. When no
+ *    `varLookup` is supplied (legacy call site or `\set NEW :OLD` chains
+ *    that should keep the literal), no substitution happens.
  *  - Tab-completion helpers (`psqlscan_test_*`). Not needed for the REPL.
  *  - PG's `BEGIN … END` block tracking for function bodies (`begin_depth`). Upstream
  *    uses it so that `;` inside a function body doesn't terminate the surrounding
@@ -69,6 +74,8 @@
 
 import type { PromptStatus, ScanState } from '../types/scanner.js';
 import { initialScanState } from '../types/scanner.js';
+import type { VarLookup } from './stringutils.js';
+import { tryConsumeVarSubstitution } from './stringutils.js';
 
 /**
  * All result shapes include `consumed` — the number of input code units that
@@ -104,8 +111,8 @@ export type ScanResult =
 // non-ASCII identifier characters in 8-bit encodings.
 // ---------------------------------------------------------------------------
 
-const IDENT_START_RE = /[A-Za-z_-￿]/;
-const IDENT_CONT_RE = /[A-Za-z0-9_-￿]/;
+const IDENT_START_RE = /[A-Za-z_-￿]/;
+const IDENT_CONT_RE = /[A-Za-z0-9_-￿]/;
 
 const isIdentStart = (c: string | undefined): boolean =>
   c !== undefined && IDENT_START_RE.test(c);
@@ -326,13 +333,28 @@ const computePromptStatus = (state: ScanState): PromptStatus => {
  *  - `'semicolon'`  a complete SQL statement was terminated by `;`. Caller
  *                   dispatches `sql`. State is reset for the next statement.
  *  - `'backslash'`  a backslash command at top level. Caller looks up `cmd`
- *                   and processes `rest`.
+ *                   and processes `rest`. `rest` is returned verbatim — the
+ *                   slash-arg scanner does its own variable expansion.
  *  - `'incomplete'` input ended mid-statement; caller should read more input.
  *                   `promptStatus` indicates what PROMPT2 should render.
  *  - `'eof'`        end of input with no statement boundary AND no open
  *                   quote/comment/paren/dollar. Buffer contains `sql`.
+ *
+ * `varLookup` (optional): when supplied, `:NAME`, `:'NAME'` and `:"NAME"`
+ * tokens at the top level are expanded inline into the `sql` accumulator.
+ * Expansion is suppressed inside SQL string literals (`'…'`, `E'…'`),
+ * double-quoted identifiers (`"…"`), dollar-quoted blocks (`$tag$…$tag$`),
+ * and inside block / line comments — matching upstream `psqlscan.l`'s
+ * `<INITIAL>`-only `{variable}` rule. `::` (PG cast) is preserved verbatim.
+ * Unknown variables echo the literal `:NAME` form. Omit `varLookup` to
+ * disable substitution; pre-existing call sites that pre-date the API gain
+ * keep their literal-`:NAME` behaviour.
  */
-export const scanSql = (input: string, state?: ScanState): ScanResult => {
+export const scanSql = (
+  input: string,
+  state?: ScanState,
+  varLookup?: VarLookup,
+): ScanResult => {
   // Local working copy; we mutate freely and clone at exit.
   const st = cloneState(state ?? initialScanState());
 
@@ -613,6 +635,32 @@ export const scanSql = (input: string, state?: ScanState): ScanResult => {
       continue;
     }
 
+    // Variable substitution (`:NAME`, `:'NAME'`, `:"NAME"`). Only fires at
+    // top level — not inside strings / dollar-quoted blocks / identifiers /
+    // comments, all of which are handled above this point.
+    //
+    // `::` (PostgreSQL cast operator): emit BOTH colons as a single unit so
+    // the second `:` doesn't get re-examined on the next iteration and
+    // wrongly interpreted as the start of a `:NAME` substitution. This is
+    // load-bearing for `'foo'::int`-style casts and matches upstream
+    // `psqlscan.l`, which absorbs the `::` via its `{op_chars}+` operator
+    // rule before the `:{variable}` rule can fire. We do not need to gate
+    // this on `varLookup` — without substitution the result is byte-
+    // identical to the catch-all path.
+    if (c === ':' && input[i + 1] === ':') {
+      sql += '::';
+      i += 2;
+      continue;
+    }
+    if (c === ':') {
+      const sub = tryConsumeVarSubstitution(input, i, varLookup);
+      if (sub !== null) {
+        sql += sub.text;
+        i = sub.end;
+        continue;
+      }
+    }
+
     // Anything else: just emit. This is the catch-all matching upstream's
     // `{self}`, `{operator}`, `{identifier}`, `{numeric}`, `{other}` rules —
     // none of which can change scanner state at the top level.
@@ -666,8 +714,17 @@ export const scanSql = (input: string, state?: ScanState): ScanResult => {
  * Backslash commands appear in the result as `\cmd rest…` strings so the caller
  * can dispatch them uniformly; this matches `psql -f script.sql` which mixes
  * SQL and backslash commands in a single stream.
+ *
+ * The optional `varLookup` is forwarded to {@link scanSql} so callers that
+ * want variable expansion in `-c`/`-f` input get it. NOTE: the consumed-slice
+ * round-trip property (sum of returned strings === `input`) is preserved
+ * **only** when `varLookup` is omitted; substitution legitimately changes
+ * the byte content of each returned statement.
  */
-export const splitStatements = (input: string): string[] => {
+export const splitStatements = (
+  input: string,
+  varLookup?: VarLookup,
+): string[] => {
   const out: string[] = [];
   let remaining = input;
   let state: ScanState = initialScanState();
@@ -676,19 +733,23 @@ export const splitStatements = (input: string): string[] => {
   let safety = 0;
   while (remaining.length > 0) {
     if (++safety > input.length + 10) break;
-    const r = scanSql(remaining, state);
+    const r = scanSql(remaining, state, varLookup);
     if (r.kind === 'semicolon') {
-      // For a clean round-trip we push the original slice the scanner consumed,
-      // not `r.sql` — they can differ when the scanner applies in-place
-      // transformations (notably `\;` → `;`).
-      out.push(remaining.slice(0, r.consumed));
+      // When the caller requested variable substitution, the scanner has
+      // already applied it to `r.sql` — we must push the transformed text,
+      // not the raw input slice. Without substitution the slice and `r.sql`
+      // are identical except for `\;`-style backslash transforms; for the
+      // round-trip property we keep pushing the consumed slice in that case.
+      out.push(varLookup ? r.sql : remaining.slice(0, r.consumed));
       remaining = remaining.slice(r.consumed);
       state = r.nextState;
       continue;
     }
     if (r.kind === 'backslash') {
       // Emit the consumed input slice verbatim (covers any leading whitespace
-      // that scanSql skipped over before the `\`, plus `\cmd rest`).
+      // that scanSql skipped over before the `\`, plus `\cmd rest`). The
+      // slash-arg scanner will do its own variable expansion when the
+      // command body is parsed — we don't preprocess it here.
       out.push(remaining.slice(0, r.consumed));
       remaining = remaining.slice(r.consumed);
       state = r.nextState;
@@ -696,7 +757,12 @@ export const splitStatements = (input: string): string[] => {
     }
     if (r.kind === 'eof' || r.kind === 'incomplete') {
       // No more boundaries in this input. Append residue if non-empty.
-      if (remaining.length > 0) out.push(remaining);
+      // Same as the semicolon branch: emit `r.sql` (with substitutions
+      // applied) when `varLookup` is set, otherwise pass the raw slice
+      // through for byte-identical round-tripping.
+      if (remaining.length > 0) {
+        out.push(varLookup ? r.sql : remaining);
+      }
       remaining = '';
       break;
     }

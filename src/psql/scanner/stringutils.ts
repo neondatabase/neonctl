@@ -18,6 +18,10 @@
  *                            single surrounding `quote` and undoubles any
  *                            embedded occurrences (the inverse of the wrap
  *                            done by `quoteIfNeeded`).
+ *  - {@link tryConsumeVarSubstitution} — `:NAME`/`:'NAME'`/`:"NAME"`
+ *                            substitution helper used by the SQL scanner.
+ *                            (The slash-arg scanner has its own local copy of
+ *                            the same logic; future work can collapse them.)
  *
  * Deviations from upstream that are intentional:
  *
@@ -244,4 +248,158 @@ export const dequote = (value: string, quote: string): string => {
     }
   }
   return out;
+};
+
+// ---------------------------------------------------------------------------
+// :NAME variable substitution helpers.
+//
+// Consumed primarily by the SQL scanner (`sql.ts`). The slash-arg scanner has
+// its own equivalent local copy in `slash.ts` (kept distinct because the
+// slash variant doesn't need to handle the `::` SQL cast operator). When
+// adding new substitution semantics, change both places.
+// ---------------------------------------------------------------------------
+
+/**
+ * Callback shape consumed by the substitution helper. Mirrors upstream's
+ * `psql_scan_callbacks.get_variable` — returns the variable's string value,
+ * or `undefined` when the variable is unset (in which case the scanner
+ * leaves the `:NAME` token verbatim to match psql's ECHO fallback).
+ */
+export type VarLookup = (name: string) => string | undefined;
+
+/**
+ * SQL-literal-quote a value for the `:'varname'` substitution form.
+ *
+ * Mirrors libpq's `PQescapeLiteral` for the common case: wrap in `'…'`,
+ * double any embedded `'`, and backslash-escape any embedded `\`. Upstream
+ * additionally emits an `E` prefix when the value contains backslashes; we
+ * preserve that behaviour for compatibility with code that round-trips
+ * through the SQL parser.
+ */
+export const quoteSqlLiteral = (value: string): string => {
+  let needsEscape = false;
+  let inner = '';
+  for (const c of value) {
+    if (c === "'") inner += "''";
+    else if (c === '\\') {
+      inner += '\\\\';
+      needsEscape = true;
+    } else {
+      inner += c;
+    }
+  }
+  return needsEscape ? `E'${inner}'` : `'${inner}'`;
+};
+
+/**
+ * SQL-identifier-quote a value for the `:"varname"` substitution form.
+ * Wraps the value in `"…"` and doubles any embedded `"`.
+ */
+export const quoteSqlIdent = (value: string): string => {
+  let inner = '';
+  for (const c of value) {
+    inner += c === '"' ? '""' : c;
+  }
+  return `"${inner}"`;
+};
+
+// Variable-name character class. Upstream's `variable_char` flex rule matches
+// `[A-Za-z0-9_\x80-\xff]+`. We do not allow a leading digit (matches
+// `VarStore`'s `[A-Za-z_][A-Za-z0-9_]*` validation rule) — a token like `:1`
+// is not a substitution. The literal `\xff` end-of-range char is written as
+// `ÿ` (U+00FF) in JS regex source — equivalent and avoids escape-handling
+// quirks across editors.
+const VAR_NAME_CONT_RE = /[A-Za-z0-9_-ÿ]/;
+const VAR_NAME_START_RE = /[A-Za-z_-ÿ]/;
+
+const isVarNameStart = (c: string | undefined): boolean =>
+  c !== undefined && VAR_NAME_START_RE.test(c);
+
+const isVarNameCont = (c: string | undefined): boolean =>
+  c !== undefined && VAR_NAME_CONT_RE.test(c);
+
+/**
+ * Attempt to consume one of the `:NAME`, `:'NAME'`, `:"NAME"` variable
+ * substitution forms at position `i` in `s`. Returns the new index plus the
+ * substituted text, or `null` if no recognised form is present (i.e. the
+ * caller should emit `s[i]` verbatim and advance one char).
+ *
+ * When `varLookup` is `undefined`, substitution is disabled outright (the
+ * function returns `null` for every call).
+ *
+ * Unknown variables: upstream still ECHOes the raw `:NAME` token rather than
+ * substituting an empty string, so a misspelled reference stays visible to
+ * the user. We mirror that for all three forms.
+ *
+ * Edge cases handled here so callers don't repeat them:
+ *
+ *  - `::` (PostgreSQL cast operator): when `s[i+1] === ':'`, we treat the
+ *    sequence as not-a-substitution and return `null`. The caller is then
+ *    responsible for advancing past both colons (the SQL scanner does that
+ *    in a dedicated branch before calling us).
+ *  - `:` followed by a non-identifier char: returns `null`. The caller emits
+ *    the literal `:` and continues.
+ *  - `:'` or `:"` with no matching closing quote or empty name: returns
+ *    `null`. We require at least one identifier character and a properly
+ *    closed quote, matching upstream's flex rules.
+ */
+export const tryConsumeVarSubstitution = (
+  s: string,
+  i: number,
+  varLookup: VarLookup | undefined,
+): { end: number; text: string } | null => {
+  if (varLookup === undefined) return null;
+  if (s[i] !== ':') return null;
+  const next = s[i + 1];
+  if (next === undefined) return null;
+  // `::` cast operator — never a substitution.
+  if (next === ':') return null;
+
+  // :"NAME" — SQL identifier quote
+  if (next === '"') {
+    let j = i + 2;
+    while (j < s.length && isVarNameCont(s[j])) j++;
+    if (j > i + 2 && s[j] === '"') {
+      const name = s.slice(i + 2, j);
+      const value = varLookup(name);
+      if (value === undefined) {
+        // Echo the literal `:"NAME"` for visibility.
+        return { end: j + 1, text: s.slice(i, j + 1) };
+      }
+      return { end: j + 1, text: quoteSqlIdent(value) };
+    }
+    return null;
+  }
+
+  // :'NAME' — SQL literal quote
+  if (next === "'") {
+    let j = i + 2;
+    while (j < s.length && isVarNameCont(s[j])) j++;
+    if (j > i + 2 && s[j] === "'") {
+      const name = s.slice(i + 2, j);
+      const value = varLookup(name);
+      if (value === undefined) {
+        return { end: j + 1, text: s.slice(i, j + 1) };
+      }
+      return { end: j + 1, text: quoteSqlLiteral(value) };
+    }
+    return null;
+  }
+
+  // :NAME — plain substitution. We require the first char to be an
+  // identifier-start char (no leading digit) to avoid eating `:1` etc.
+  if (isVarNameStart(next)) {
+    let j = i + 1;
+    while (j < s.length && isVarNameCont(s[j])) j++;
+    const name = s.slice(i + 1, j);
+    const value = varLookup(name);
+    if (value === undefined) {
+      // Unset → emit literally so it stays visible. Upstream ECHOes the
+      // entire `:name` text in this case.
+      return { end: j, text: s.slice(i, j) };
+    }
+    return { end: j, text: value };
+  }
+
+  return null;
 };
