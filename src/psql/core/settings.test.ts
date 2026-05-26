@@ -71,6 +71,34 @@ describe('defaultSettings', () => {
     expect(s.prompt1).toBe('foo> ');
   });
 
+  test('\\set COMP_KEYWORD_CASE … propagates to settings.compCase', () => {
+    const v = createVarStore();
+    const s = defaultSettings(v);
+    // Default is preserve-upper.
+    expect(s.compCase).toBe('preserve-upper');
+
+    // Each canonical spelling flips the field.
+    v.set('COMP_KEYWORD_CASE', 'lower');
+    expect(s.compCase).toBe('lower');
+
+    v.set('COMP_KEYWORD_CASE', 'upper');
+    expect(s.compCase).toBe('upper');
+
+    v.set('COMP_KEYWORD_CASE', 'preserve-lower');
+    expect(s.compCase).toBe('preserve-lower');
+
+    v.set('COMP_KEYWORD_CASE', 'preserve-upper');
+    expect(s.compCase).toBe('preserve-upper');
+
+    // Case-insensitive input.
+    v.set('COMP_KEYWORD_CASE', 'LOWER');
+    expect(s.compCase).toBe('lower');
+
+    // Unset restores the default.
+    v.unset('COMP_KEYWORD_CASE');
+    expect(s.compCase).toBe('preserve-upper');
+  });
+
   test('seeds LAST_ERROR_* sentinel vars', () => {
     const v = createVarStore();
     defaultSettings(v);

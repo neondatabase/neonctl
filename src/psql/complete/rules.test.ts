@@ -139,6 +139,58 @@ describe('findCompletions: SQL keyword completion at start of statement', () => 
     expect(r.candidates).toContain('SELECT');
     expect(r.candidates).not.toContain('select');
   });
+
+  // COMP_KEYWORD_CASE honoured. Mirrors upstream's 010_tab_completion.pl
+  // foreach loop over [lower, upper, preserve-lower, preserve-upper].
+  it('COMP_KEYWORD_CASE=lower forces lowercase regardless of input case', async () => {
+    const settings = makeSettings();
+    settings.compCase = 'lower';
+    const ctx = { settings };
+    const r = await findCompletions([], 'SEL', ctx);
+    expect(r.candidates).toContain('select');
+    expect(r.candidates).not.toContain('SELECT');
+  });
+
+  it('COMP_KEYWORD_CASE=upper forces uppercase regardless of input case', async () => {
+    const settings = makeSettings();
+    settings.compCase = 'upper';
+    const ctx = { settings };
+    const r = await findCompletions([], 'sel', ctx);
+    expect(r.candidates).toContain('SELECT');
+    expect(r.candidates).not.toContain('select');
+  });
+
+  it('COMP_KEYWORD_CASE=preserve-lower keeps lowercase when user types lowercase', async () => {
+    const settings = makeSettings();
+    settings.compCase = 'preserve-lower';
+    const ctx = { settings };
+    const r = await findCompletions([], 'sel', ctx);
+    expect(r.candidates).toContain('select');
+  });
+
+  it('COMP_KEYWORD_CASE=preserve-lower uppercases when user types uppercase', async () => {
+    const settings = makeSettings();
+    settings.compCase = 'preserve-lower';
+    const ctx = { settings };
+    const r = await findCompletions([], 'SEL', ctx);
+    expect(r.candidates).toContain('SELECT');
+  });
+
+  it('COMP_KEYWORD_CASE=preserve-upper uppercases when user types uppercase', async () => {
+    const settings = makeSettings();
+    settings.compCase = 'preserve-upper';
+    const ctx = { settings };
+    const r = await findCompletions([], 'SEL', ctx);
+    expect(r.candidates).toContain('SELECT');
+  });
+
+  it('COMP_KEYWORD_CASE=preserve-upper lowercases when user types lowercase', async () => {
+    const settings = makeSettings();
+    settings.compCase = 'preserve-upper';
+    const ctx = { settings };
+    const r = await findCompletions([], 'sel', ctx);
+    expect(r.candidates).toContain('select');
+  });
 });
 
 describe('findCompletions: catalog completion after FROM', () => {

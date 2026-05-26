@@ -223,7 +223,44 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
     return true;
   });
 
+  // COMP_KEYWORD_CASE assign hook. Upstream `assign_var_comp_keyword_case_hook`
+  // (in startup.c) reflects the spelling into `pset.comp_case`; the completer
+  // then consults that on every Tab to decide whether to upper/lower/preserve
+  // candidate casing. Accepts the four canonical spellings; anything else is
+  // silently ignored, matching upstream's "unsupported value" diagnostic
+  // behaviour (we omit the warning for brevity).
+  varStore.addHook('COMP_KEYWORD_CASE', (newValue) => {
+    if (newValue === null) {
+      settings.compCase = DEFAULT_COMP_CASE;
+      return true;
+    }
+    const parsed = parseCompCase(newValue);
+    if (parsed === null) return false;
+    settings.compCase = parsed;
+    return true;
+  });
+
   return settings;
+};
+
+/**
+ * Parse the COMP_KEYWORD_CASE spelling. Mirrors upstream's recognised values:
+ * `lower`, `upper`, `preserve-lower`, `preserve-upper`. Case-insensitive on
+ * the input — psql treats `LOWER` and `lower` as equivalent.
+ */
+const parseCompCase = (raw: string): CompCase | null => {
+  switch (raw.toLowerCase().trim()) {
+    case 'lower':
+      return 'lower';
+    case 'upper':
+      return 'upper';
+    case 'preserve-lower':
+      return 'preserve-lower';
+    case 'preserve-upper':
+      return 'preserve-upper';
+    default:
+      return null;
+  }
 };
 
 /**

@@ -848,9 +848,20 @@ const filterAndCase = (
 };
 
 /**
- * Render a candidate with the case psql would use. Default psql behaviour
- * is COMP_KEYWORD_CASE = preserve-upper: if the user is typing uppercase,
- * keep candidate uppercase; otherwise emit lowercase.
+ * Render a candidate with the case psql would use, based on `COMP_KEYWORD_CASE`:
+ *
+ *   - lower            → always lowercase, regardless of input.
+ *   - upper            → always uppercase, regardless of input.
+ *   - preserve-lower   → lowercase by default; uppercase if the user typed
+ *                        a fragment containing an UPPERCASE letter.
+ *   - preserve-upper   → (default) uppercase by default; lowercase if the
+ *                        user typed a fragment containing a lowercase letter.
+ *
+ * Per psql docs: "preserve-upper, the default, returns the keyword in upper
+ * case unless the partial word entered is in lower case". The dichotomy is
+ * really "did the user type ANY lowercase letter" (for preserve-upper) and
+ * "did the user type ANY uppercase letter" (for preserve-lower) — matching
+ * upstream's `pg_str_endswith` / `pg_str_islower` heuristics.
  */
 const applyCase = (
   candidate: string,
@@ -865,17 +876,27 @@ const applyCase = (
   if (containsNonKeywordChar(candidate)) return candidate;
 
   const mode = settings.compCase;
-  const typedIsUpper = typed.length > 0 && typed === typed.toUpperCase();
+  const hasUpper = /[A-Z]/.test(typed);
+  const hasLower = /[a-z]/.test(typed);
+  // With empty input we have no signal either way. Psql's interactive
+  // behaviour is to fall back to lowercase so the empty-prompt completion
+  // listing looks like the SQL the user typically writes (lowercase
+  // keywords). Unit tests pin this so a regression would be loud.
+  const empty = !hasUpper && !hasLower;
   switch (mode) {
     case 'lower':
       return candidate.toLowerCase();
     case 'upper':
       return candidate.toUpperCase();
     case 'preserve-lower':
-      return typedIsUpper ? candidate.toUpperCase() : candidate.toLowerCase();
+      // Default lowercase; uppercase only when user typed uppercase.
+      return hasUpper ? candidate.toUpperCase() : candidate.toLowerCase();
     case 'preserve-upper':
     default:
-      return typedIsUpper ? candidate.toUpperCase() : candidate.toLowerCase();
+      // Default uppercase; lowercase when user typed lowercase OR provided
+      // no case signal at all (empty prefix on the prompt).
+      if (empty) return candidate.toLowerCase();
+      return hasLower ? candidate.toLowerCase() : candidate.toUpperCase();
   }
 };
 
