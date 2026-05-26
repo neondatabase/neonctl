@@ -539,6 +539,28 @@ export class PgConnection implements Connection {
     let socket: AnySocket = rawSocket;
     let channelBindingData: Buffer | null = null;
     try {
+      // verify-ca skips hostname check; verify-full = default Node behavior.
+      // require/prefer/allow accept any cert chain (libpq default).
+      // NOTE: do NOT set `checkServerIdentity: undefined` — newer Node
+      // versions reject that with "must be of type function". Omit the
+      // property when verify-full so the default validator runs.
+      const tlsConnectionOptions: tls.ConnectionOptions = {
+        servername: opts.host,
+        rejectUnauthorized:
+          opts.ssl === 'verify-ca' || opts.ssl === 'verify-full',
+        // PG 17+ advertises ALPN for the 'postgresql' protocol; libpq sets
+        // this so a future-proof TLS proxy can route on ALPN instead of
+        // probing the wire. Always offer it — older servers ignore.
+        ALPNProtocols: ['postgresql'],
+        // Cipher preference is left to Node/OpenSSL defaults. Vanilla psql
+        // may negotiate AES_256_GCM where we land on AES_128_GCM under TLS
+        // 1.3; both are secure (TLS 1.3 only ships these three suites) and
+        // Node's `ciphers` option only accepts TLS-1.2 spec syntax, not the
+        // TLS_AES_* TLS-1.3 names.
+      };
+      if (opts.ssl !== 'verify-full') {
+        tlsConnectionOptions.checkServerIdentity = (): undefined => undefined;
+      }
       const tlsResult = await negotiateTls(
         rawSocket,
         // libpq refuses TLS on a socket connection even for sslmode=allow /
@@ -546,24 +568,7 @@ export class PgConnection implements Connection {
         // circuit by passing 'disable' to negotiateTls; the caller's
         // requested sslmode is preserved on opts for error reporting.
         isUnixSocketHost(opts.host) ? 'disable' : opts.ssl,
-        {
-          servername: opts.host,
-          // verify-ca skips hostname check; verify-full = default Node behavior.
-          // require/prefer/allow accept any cert chain (libpq default).
-          rejectUnauthorized:
-            opts.ssl === 'verify-ca' || opts.ssl === 'verify-full',
-          checkServerIdentity:
-            opts.ssl === 'verify-full' ? undefined : () => undefined,
-          // PG 17+ advertises ALPN for the 'postgresql' protocol; libpq sets
-          // this so a future-proof TLS proxy can route on ALPN instead of
-          // probing the wire. Always offer it — older servers ignore.
-          ALPNProtocols: ['postgresql'],
-          // Cipher preference is left to Node/OpenSSL defaults. Vanilla psql
-          // may negotiate AES_256_GCM where we land on AES_128_GCM under TLS
-          // 1.3; both are secure (TLS 1.3 only ships these three suites) and
-          // Node's `ciphers` option only accepts TLS-1.2 spec syntax, not the
-          // TLS_AES_* TLS-1.3 names.
-        },
+        tlsConnectionOptions,
         {
           sslcert: opts.sslcert,
           sslkey: opts.sslkey,
@@ -954,18 +959,20 @@ export class PgConnection implements Connection {
     const cancelSocket = await openSocket(this.opts);
     let writeSocket: AnySocket = cancelSocket;
     try {
+      const cancelTlsOpts: tls.ConnectionOptions = {
+        servername: this.opts.host,
+        rejectUnauthorized:
+          this.opts.ssl === 'verify-ca' || this.opts.ssl === 'verify-full',
+        ALPNProtocols: ['postgresql'],
+      };
+      if (this.opts.ssl !== 'verify-full') {
+        cancelTlsOpts.checkServerIdentity = (): undefined => undefined;
+      }
       const t = await negotiateTls(
         cancelSocket,
         // Unix-domain socket: no TLS, regardless of caller's sslmode.
         isUnixSocketHost(this.opts.host) ? 'disable' : this.opts.ssl,
-        {
-          servername: this.opts.host,
-          rejectUnauthorized:
-            this.opts.ssl === 'verify-ca' || this.opts.ssl === 'verify-full',
-          checkServerIdentity:
-            this.opts.ssl === 'verify-full' ? undefined : () => undefined,
-          ALPNProtocols: ['postgresql'],
-        },
+        cancelTlsOpts,
         {
           sslcert: this.opts.sslcert,
           sslkey: this.opts.sslkey,

@@ -528,12 +528,21 @@ CREATE USER anotheruser;
  *   - ssluser:      only `hostssl` matches (plaintext rejected at the
  *                   rule level with "no pg_hba.conf entry"). SSL trust.
  *   - nossluser:    only `hostnossl` matches.
- *   - ssltestuser:  `hostssl` with the `cert` method +
- *                   `clientcert=verify-full` — the user's connection must
- *                   present a client cert whose CN matches the username.
- *   - anotheruser:  `hostssl` with `cert clientcert=verify-ca` — a valid
- *                   client cert chain is required but the CN need not
- *                   match. Used by the cert-CN-mismatch subtest.
+ *   - ssltestuser:  `hostssl … cert clientcert=verify-full` — the
+ *                   `cert` HBA method validates the client cert chain
+ *                   AND requires the cert's CN to equal the username.
+ *                   PG 18 rejects `cert clientcert=verify-ca` outright
+ *                   (the `cert` method already implies chain validation,
+ *                   so `verify-ca` would be redundant). For verify-ca
+ *                   semantics — "validate the chain but accept any CN"
+ *                   — we use `trust clientcert=verify-ca` instead, which
+ *                   requires the chain via TLS but skips the
+ *                   user-mapping pass.
+ *   - anotheruser:  `hostssl … trust clientcert=verify-ca` — a valid
+ *                   client cert chain is required (the TLS handshake
+ *                   verifies it via ssl_ca_file) but the cert CN need
+ *                   not match the username. Used by the cert-CN-mismatch
+ *                   subtest.
  *   - testuser:     `host` matches both encryptions (trust).
  *   - The default superuser (`test` from POSTGRES_USER) keeps `local` +
  *     a `host all all` catch-all so the entrypoint's bootstrap continues
@@ -552,13 +561,15 @@ hostssl        all       ssluser      0.0.0.0/0       trust
 hostssl        all       ssluser      ::/0            trust
 hostnossl      all       nossluser    0.0.0.0/0       trust
 hostnossl      all       nossluser    ::/0            trust
-# Cert-based authentication for the 001 spec. verify-full requires the
-# client cert's CN to equal the username; verify-ca only validates the
-# chain (the CN is unchecked).
+# Cert-based authentication for the 001 spec. The cert HBA method
+# validates the client cert chain AND checks CN==username (verify-full).
+# For chain-only auth (libpq verify-ca semantics) we use the trust
+# method with the clientcert=verify-ca option, which requires the cert
+# chain at the TLS layer but does not run the user-mapping pass.
 hostssl        all       ssltestuser  0.0.0.0/0       cert clientcert=verify-full
 hostssl        all       ssltestuser  ::/0            cert clientcert=verify-full
-hostssl        all       anotheruser  0.0.0.0/0       cert clientcert=verify-ca
-hostssl        all       anotheruser  ::/0            cert clientcert=verify-ca
+hostssl        all       anotheruser  0.0.0.0/0       trust clientcert=verify-ca
+hostssl        all       anotheruser  ::/0            trust clientcert=verify-ca
 host           all       testuser     0.0.0.0/0       trust
 host           all       testuser     ::/0            trust
 # Default rules for the testcontainers superuser ("test" by default;
