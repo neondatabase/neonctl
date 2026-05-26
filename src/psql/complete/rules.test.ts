@@ -203,6 +203,29 @@ describe('findCompletions: catalog completion after FROM', () => {
     expect(r.candidates).toEqual(['pg_class', 'pg_constraint']);
   });
 
+  it('quoted prefix returns quoted relation candidates', async () => {
+    // Quoted-input variant of the FROM completion. The completer rewrites
+    // the query to a case-sensitive raw-relname LIKE; our mock matches by
+    // substring against the FROM clause `pg_catalog.pg_class c`, so this
+    // still resolves to the canned rows. Output candidates are wrapped in
+    // `"..."` so the trailing space lands outside the quoted region.
+    const conn = makeMockConn({
+      'pg_catalog.pg_class': ['mytab123', 'mytab246'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SELECT', '*', 'FROM'], '"my', ctx);
+    expect(r.candidates).toEqual(['"mytab123"', '"mytab246"']);
+  });
+
+  it('quoted mixed-case prefix matches preserving case', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_class': ['mixedName'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SELECT', '*', 'FROM'], '"mi', ctx);
+    expect(r.candidates).toEqual(['"mixedName"']);
+  });
+
   it('returns empty when no connection is available', async () => {
     const ctx = { settings: makeSettings(null) };
     const r = await findCompletions(['SELECT', '*', 'FROM'], 'pg_c', ctx);
