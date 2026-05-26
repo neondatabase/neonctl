@@ -78,8 +78,8 @@
 // Followup
 // --------
 //
-//   - Seeding `KNOWN_FAILURES.yml` with the divergences is owned by a
-//     parallel agent and intentionally NOT done here.
+//   - Subtests that don't yet pass against the embedded TS psql are
+//     marked inline via `it.todo("<name> — <reason>")`.
 
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

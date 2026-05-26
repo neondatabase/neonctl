@@ -4,13 +4,16 @@
  * Iterates a list of postgres major versions (Neon's support range: 14-18),
  * boots a separate testcontainer for each, runs the conformance suite
  * against `dist/cli.js` (the embedded TS psql), and prints a summary table
- * comparing pass / fail / expected-failure counts per version.
+ * comparing pass / fail / skipped counts per version.
  *
  * Mirrors `.github/workflows/psql-conformance.yml`'s matrix without
  * requiring GitHub Actions. Useful for:
  *   - Pre-PR sanity check across the full PG range
- *   - Verifying KNOWN_FAILURES.yml `pg`-scoped entries are correct
  *   - Local triage of a single failing version (`--pg 17` flag)
+ *
+ * Subtests that don't yet pass against the TS implementation should be
+ * marked `it.todo("reason")` (engine gap) or `it.skip("reason")` (out of
+ * scope) in their spec file — the matrix runner just collects counts.
  *
  * Usage:
  *   bun tests/psql-conformance/scripts/run-local-matrix.ts
@@ -18,8 +21,8 @@
  *   bun tests/psql-conformance/scripts/run-local-matrix.ts --skip-build
  *
  * Exit codes:
- *   0 — every requested version completed without unexpected failures
- *   1 — at least one version had unexpected failures (after KNOWN_FAILURES)
+ *   0 — every requested version completed without failures
+ *   1 — at least one version had failures
  *   2 — usage / setup error (Docker missing, build failure, etc.)
  */
 
@@ -42,9 +45,8 @@ type PerVersionResult = {
   pg: MajorVersion;
   passed: number;
   failed: number;
-  expectedFailure: number;
   total: number;
-  unexpectedFailure: boolean;
+  failedAny: boolean;
   errored: boolean;
   message?: string;
 };
@@ -213,7 +215,6 @@ const runConformance = (
     PGCONFORMANCE_PG_USER: pgConn.user,
     PGCONFORMANCE_PG_PASSWORD: pgConn.password,
     PGCONFORMANCE_PG_DB: pgConn.db,
-    PGCONFORMANCE_PG_MAJOR: pg,
   };
 
   const r = spawnSync(
@@ -234,9 +235,8 @@ const runConformance = (
       pg,
       passed: 0,
       failed: 0,
-      expectedFailure: 0,
       total: 0,
-      unexpectedFailure: true,
+      failedAny: true,
       errored: true,
       message:
         r.error?.message ??
@@ -263,28 +263,17 @@ const runConformance = (
       pg,
       passed: 0,
       failed: 0,
-      expectedFailure: 0,
       total: 0,
-      unexpectedFailure: true,
+      failedAny: true,
       errored: true,
       message: `failed to parse JSON report: ${(err as Error).message}`,
     };
   }
 
-  // Expected-failure messages come through as a vitest custom-reporter
-  // log; the JSON reporter records them as `passed` (since the assertion
-  // succeeds via the truth-table swap). The `failed` count here is the
-  // unexpected-failure count.
   const passed = report.numPassedTests ?? 0;
   const failed = report.numFailedTests ?? 0;
   const total = report.numTotalTests ?? passed + failed;
-
-  // Best-effort expected-failure inference: scan assertionResults for the
-  // "expected failure:" prefix our reporter writes. The JSON reporter
-  // doesn't surface custom-reporter output, so we leave this as 0 in the
-  // matrix view — the per-version log file has the detail.
-  const expectedFailure = 0;
-  const unexpectedFailure = failed > 0;
+  const failedAny = failed > 0;
 
   // Write the full report alongside the cwd for triage.
   const persistedDir = join(process.cwd(), 'tmp', 'psql-conformance');
@@ -302,9 +291,8 @@ const runConformance = (
     pg,
     passed,
     failed,
-    expectedFailure,
     total,
-    unexpectedFailure,
+    failedAny,
     errored: false,
   };
 };
@@ -318,7 +306,7 @@ const renderSummary = (results: readonly PerVersionResult[]): string => {
   lines.push('  PG    Total   Passed   Failed   Status');
   lines.push('  ----  ------  -------  -------  ------');
   for (const r of results) {
-    const status = r.errored ? 'ERRORED' : r.unexpectedFailure ? 'FAIL' : 'OK';
+    const status = r.errored ? 'ERRORED' : r.failedAny ? 'FAIL' : 'OK';
     lines.push(
       `  ${r.pg.padEnd(4)}  ${String(r.total).padStart(6)}  ${String(r.passed).padStart(7)}  ${String(r.failed).padStart(7)}  ${status}`,
     );
@@ -352,7 +340,7 @@ const main = async (): Promise<void> => {
       results.push(r);
       log(
         `done: total=${r.total} passed=${r.passed} failed=${r.failed} status=${
-          r.errored ? 'ERRORED' : r.unexpectedFailure ? 'FAIL' : 'OK'
+          r.errored ? 'ERRORED' : r.failedAny ? 'FAIL' : 'OK'
         }`,
       );
     } catch (err) {
@@ -360,9 +348,8 @@ const main = async (): Promise<void> => {
         pg: slot.pg,
         passed: 0,
         failed: 0,
-        expectedFailure: 0,
         total: 0,
-        unexpectedFailure: true,
+        failedAny: true,
         errored: true,
         message: (err as Error).message,
       });
@@ -379,7 +366,7 @@ const main = async (): Promise<void> => {
   }
 
   process.stdout.write(renderSummary(results));
-  const anyFail = results.some((r) => r.unexpectedFailure || r.errored);
+  const anyFail = results.some((r) => r.failedAny || r.errored);
   process.exit(anyFail ? 1 : 0);
 };
 
