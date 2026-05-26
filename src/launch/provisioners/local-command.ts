@@ -410,6 +410,16 @@ export function startLocalCommand(opts: {
       );
     });
   });
+  // Mark `exited` observed defensively. On the spawn-'error' path both
+  // `ready` and `exited` reject in the same microtask; the runner awaits
+  // ready and re-throws, but nothing awaits exited pre-foreground. Under
+  // Node 22's default --unhandled-rejections=throw the unobserved
+  // rejection would crash the process with a raw stack trace, racing
+  // the friendly error path in commands/launch.ts. Code that does await
+  // `exited` later (foregroundPhase, stage teardown) still sees the
+  // rejection via the same Promise instance — `.catch()` returns a new
+  // Promise; the original is untouched.
+  exited.catch(() => undefined);
 
   let ready: Promise<void>;
   if (spec.readiness === undefined) {
