@@ -96,6 +96,12 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
       env: { ...process.env, PGPASSWORD: conn.password, LC_ALL: 'C' },
       encoding: 'utf8',
       maxBuffer: 1024 * 1024 * 64,
+      // Hard kill if a buggy psql impl hangs (e.g., COPY-FROM-STDIN
+      // inside a multi-statement chain isn't currently driven by the
+      // mainloop — psql.sql line ~1468 triggers it). The test then
+      // fails on a real diff or a spawn error rather than freezing
+      // the whole suite.
+      timeout: 60_000,
     });
 
     if (result.error) {
