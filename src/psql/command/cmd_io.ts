@@ -102,7 +102,8 @@ import { unalignedPrinter } from '../print/unaligned.js';
 
 import { writeErr } from './shared.js';
 import { enqueue as enqueueInput } from './inputQueue.js';
-import { psqlErrorPrefix } from './cmd_meta.js';
+import { formatErrorReport, psqlErrorPrefix } from './cmd_meta.js';
+import { captureLastError } from '../core/common.js';
 
 // ---------------------------------------------------------------------------
 // Query-output (queryFout) stash.
@@ -730,8 +731,33 @@ export const cmdGdesc: BackslashCmdSpec = {
         // ignore
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      // Capture the full ErrorResponse-shaped payload (severity / code /
+      // position / file / line / routine) onto `settings.lastErrorResult`
+      // so a subsequent `\errverbose` can re-render the error with the
+      // LINE / `^` caret / LOCATION footer. Without this, `\errverbose`
+      // would only see `{ message }` and skip the rich layers.
+      const msg = captureLastError(ctx.settings, err, sql);
+      const e = ctx.settings.lastErrorResult;
+      if (e) {
+        // First report: emit the verbosity-aware error report, prefixed
+        // with `psql:[<file>:<n>]:` on the leading severity line — the
+        // same shape upstream's `pg_log_error` produces from
+        // `ExecQueryAndProcessResults` when Parse fails. Subsequent
+        // layers (LINE / caret / DETAIL / HINT / LOCATION) follow
+        // unprefixed to match libpq's `PQresultErrorMessage`.
+        const lines = formatErrorReport(
+          e,
+          ctx.settings.verbosity,
+          ctx.settings.showContext,
+        );
+        const prefix = psqlErrorPrefix(ctx.settings);
+        const prefixed = [prefix + lines[0], ...lines.slice(1)];
+        writeErr(prefixed.join('\n') + '\n');
+      } else {
+        const prefix = psqlErrorPrefix(ctx.settings);
+        writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
+      }
+      return { status: 'error' };
     }
 
     // Resolve canonical type names via a follow-up round trip when we have
