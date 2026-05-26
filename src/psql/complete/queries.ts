@@ -25,7 +25,7 @@ export const Query_for_list_of_tables = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   WHERE c.relkind IN ('r','p')
-    AND c.relname LIKE $1
+    AND c.relname ILIKE $1
     AND pg_catalog.pg_table_is_visible(c.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -36,7 +36,7 @@ export const Query_for_list_of_views = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   WHERE c.relkind = 'v'
-    AND c.relname LIKE $1
+    AND c.relname ILIKE $1
     AND pg_catalog.pg_table_is_visible(c.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -47,7 +47,7 @@ export const Query_for_list_of_matviews = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   WHERE c.relkind = 'm'
-    AND c.relname LIKE $1
+    AND c.relname ILIKE $1
     AND pg_catalog.pg_table_is_visible(c.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -58,7 +58,7 @@ export const Query_for_list_of_sequences = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   WHERE c.relkind = 'S'
-    AND c.relname LIKE $1
+    AND c.relname ILIKE $1
     AND pg_catalog.pg_table_is_visible(c.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -69,7 +69,7 @@ export const Query_for_list_of_indexes = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   WHERE c.relkind IN ('i','I')
-    AND c.relname LIKE $1
+    AND c.relname ILIKE $1
     AND pg_catalog.pg_table_is_visible(c.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -80,7 +80,7 @@ export const Query_for_list_of_foreign_tables = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   WHERE c.relkind = 'f'
-    AND c.relname LIKE $1
+    AND c.relname ILIKE $1
     AND pg_catalog.pg_table_is_visible(c.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -91,7 +91,7 @@ export const Query_for_list_of_relations = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   WHERE c.relkind IN ('r','v','m','S','f','p')
-    AND c.relname LIKE $1
+    AND c.relname ILIKE $1
     AND pg_catalog.pg_table_is_visible(c.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -102,7 +102,7 @@ export const Query_for_list_of_tables_views = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   WHERE c.relkind IN ('r','v','m','p','f')
-    AND c.relname LIKE $1
+    AND c.relname ILIKE $1
     AND pg_catalog.pg_table_is_visible(c.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -112,7 +112,7 @@ export const Query_for_list_of_tables_views = `
 export const Query_for_list_of_schemas = `
   SELECT pg_catalog.quote_ident(nspname)
   FROM pg_catalog.pg_namespace
-  WHERE nspname LIKE $1
+  WHERE nspname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -121,7 +121,7 @@ export const Query_for_list_of_schemas = `
 export const Query_for_list_of_functions = `
   SELECT pg_catalog.quote_ident(p.proname)
   FROM pg_catalog.pg_proc p
-  WHERE p.proname LIKE $1
+  WHERE p.proname ILIKE $1
     AND pg_catalog.pg_function_is_visible(p.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -131,7 +131,7 @@ export const Query_for_list_of_functions = `
 export const Query_for_list_of_roles = `
   SELECT pg_catalog.quote_ident(rolname)
   FROM pg_catalog.pg_roles
-  WHERE rolname LIKE $1
+  WHERE rolname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -140,7 +140,7 @@ export const Query_for_list_of_roles = `
 export const Query_for_list_of_extensions = `
   SELECT pg_catalog.quote_ident(extname)
   FROM pg_catalog.pg_extension
-  WHERE extname LIKE $1
+  WHERE extname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -149,7 +149,7 @@ export const Query_for_list_of_extensions = `
 export const Query_for_list_of_available_extensions = `
   SELECT pg_catalog.quote_ident(name)
   FROM pg_catalog.pg_available_extensions
-  WHERE name LIKE $1
+  WHERE name ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -158,7 +158,7 @@ export const Query_for_list_of_available_extensions = `
 export const Query_for_list_of_databases = `
   SELECT pg_catalog.quote_ident(datname)
   FROM pg_catalog.pg_database
-  WHERE datname LIKE $1
+  WHERE datname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -170,7 +170,7 @@ export const Query_for_list_of_types = `
   WHERE (t.typrelid = 0 OR
          (SELECT c.relkind = 'c' FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid))
     AND t.typname NOT LIKE E'\\\\_%'
-    AND t.typname LIKE $1
+    AND t.typname ILIKE $1
     AND pg_catalog.pg_type_is_visible(t.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -181,7 +181,7 @@ export const Query_for_list_of_languages = `
   SELECT pg_catalog.quote_ident(lanname)
   FROM pg_catalog.pg_language
   WHERE lanname != 'internal'
-    AND lanname LIKE $1
+    AND lanname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -190,7 +190,7 @@ export const Query_for_list_of_languages = `
 export const Query_for_list_of_tablespaces = `
   SELECT pg_catalog.quote_ident(spcname)
   FROM pg_catalog.pg_tablespace
-  WHERE spcname LIKE $1
+  WHERE spcname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -199,7 +199,7 @@ export const Query_for_list_of_tablespaces = `
 export const Query_for_list_of_operators = `
   SELECT pg_catalog.quote_ident(o.oprname)
   FROM pg_catalog.pg_operator o
-  WHERE o.oprname LIKE $1
+  WHERE o.oprname ILIKE $1
     AND pg_catalog.pg_operator_is_visible(o.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -213,7 +213,7 @@ export const Query_for_list_of_casts = `
   FROM pg_catalog.pg_cast
   WHERE pg_catalog.format_type(castsource, NULL)
         || ' AS '
-        || pg_catalog.format_type(casttarget, NULL) LIKE $1
+        || pg_catalog.format_type(casttarget, NULL) ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -222,7 +222,7 @@ export const Query_for_list_of_casts = `
 export const Query_for_list_of_set_vars = `
   SELECT pg_catalog.lower(name)
   FROM pg_catalog.pg_settings
-  WHERE name LIKE $1
+  WHERE name ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -231,7 +231,7 @@ export const Query_for_list_of_set_vars = `
 export const Query_for_list_of_access_methods = `
   SELECT pg_catalog.quote_ident(amname)
   FROM pg_catalog.pg_am
-  WHERE amname LIKE $1
+  WHERE amname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -240,7 +240,7 @@ export const Query_for_list_of_access_methods = `
 export const Query_for_list_of_index_access_methods = `
   SELECT pg_catalog.quote_ident(amname)
   FROM pg_catalog.pg_am
-  WHERE amname LIKE $1
+  WHERE amname ILIKE $1
     AND amtype = 'i'
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -256,7 +256,7 @@ export const Query_for_list_of_datatypes = `
       SELECT 1 FROM pg_catalog.pg_type el
       WHERE el.typarray = t.oid
     )
-    AND pg_catalog.format_type(t.oid, NULL) LIKE $1
+    AND pg_catalog.format_type(t.oid, NULL) ILIKE $1
     AND pg_catalog.pg_type_is_visible(t.oid)
   ORDER BY 1
   LIMIT ${LIMIT}
@@ -266,7 +266,7 @@ export const Query_for_list_of_datatypes = `
 export const Query_for_list_of_publications = `
   SELECT pg_catalog.quote_ident(pubname)
   FROM pg_catalog.pg_publication
-  WHERE pubname LIKE $1
+  WHERE pubname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
@@ -275,23 +275,24 @@ export const Query_for_list_of_publications = `
 export const Query_for_list_of_subscriptions = `
   SELECT pg_catalog.quote_ident(subname)
   FROM pg_catalog.pg_subscription
-  WHERE subname LIKE $1
+  WHERE subname ILIKE $1
   ORDER BY 1
   LIMIT ${LIMIT}
 `;
 
 /**
  * Relations qualified by an explicit schema. The caller passes the schema
- * name as $1 and the LIKE prefix as $2 — this lets `SELECT * FROM pg_catalog.x`
- * complete to `pg_catalog.xxxx`.
+ * name as $1 and the ILIKE prefix as $2 — this lets `SELECT * FROM pg_catalog.x`
+ * complete to `pg_catalog.xxxx`. The schema name is matched
+ * case-insensitively so `PUBLIC.t` resolves to relations in `public`.
  */
 export const Query_for_list_of_relations_in_schema = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
   WHERE c.relkind IN ('r','v','m','S','f','p','i')
-    AND n.nspname = $1
-    AND c.relname LIKE $2
+    AND pg_catalog.lower(n.nspname) = pg_catalog.lower($1)
+    AND c.relname ILIKE $2
   ORDER BY 1
   LIMIT ${LIMIT}
 `;

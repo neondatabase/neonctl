@@ -2243,13 +2243,28 @@ const tableCandidates = async (
 /**
  * Schema-aware relation completion. If the user typed `schema.x`, fetch
  * relations in `schema` matching `x`. Otherwise fetch unqualified relations
- * AND a list of schemas (so the user can dot through).
+ * AND a list of schemas (so the user can dot through to relations in any
+ * schema, mirroring upstream's `complete_from_schema_query`).
+ *
+ * Schema names are returned with a trailing `.` so the completion engine
+ * recognizes them as "in progress" and refrains from appending a space.
+ * When a unique candidate is a schema (e.g. `pub<tab>` → `public.`) the
+ * user can immediately Tab again to list relations within that schema.
+ *
+ * Quoted identifier handling: if the user's input starts with `"`, we
+ * search the catalog case-sensitively (stripping the opening quote) and
+ * return candidates pre-quoted with `"..."` so the line ends up in a
+ * valid quoted form — matching upstream readline's behaviour for
+ * `select * from "my<tab>` → `"mytab123 "mytab246`.
  */
 const completeSchemaOrRelations = async (
   conn: Connection,
   word: string,
   query: string,
 ): Promise<string[]> => {
+  if (word.startsWith('"')) {
+    return completeQuotedRelations(conn, word, query);
+  }
   const split = splitSchemaPrefix(word);
   if (split) {
     const rows = await runCatalogQuery(
@@ -2261,7 +2276,56 @@ const completeSchemaOrRelations = async (
     // Re-prefix with the schema name.
     return rows.map((r) => split.schema + '.' + r);
   }
-  return runCatalogQuery(conn, query, word);
+  // Unqualified: combine relations + schemas (schemas suffixed with `.`).
+  const [rels, schemas] = await Promise.all([
+    runCatalogQuery(conn, query, word),
+    runCatalogQuery(conn, Query_for_list_of_schemas, word),
+  ]);
+  return [...rels, ...schemas.map((s) => s + '.')];
+};
+
+/**
+ * Search the catalog for relations matching a user-supplied prefix that
+ * begins with `"`. We strip the opening quote, search the RAW relname
+ * case-sensitively (so `"mi` → `mixedName` rather than `mytab123`), and
+ * emit results wrapped in `"..."` with a closing quote so the editor's
+ * unique-completion handler appends the trailing space outside the
+ * quoted region (e.g. `"mixedName" `).
+ */
+const completeQuotedRelations = async (
+  conn: Connection,
+  word: string,
+  query: string,
+): Promise<string[]> => {
+  // Strip leading `"` (and any trailing `"` the user pre-typed).
+  const inside = word.slice(1).replace(/"$/, '');
+  // Use a case-sensitive raw-relname LIKE — the inside-the-quote portion
+  // is taken verbatim.
+  const sql = caseSensitiveRelnameVariant(query);
+  if (!sql) return [];
+  const rows = await runCatalogQuery(conn, sql, inside);
+  return rows.map((name) => '"' + name + '"');
+};
+
+/**
+ * Build a case-sensitive variant of a relation-list query for quoted
+ * input. The standard queries use `ILIKE` on `quote_ident(c.relname)`
+ * (which obscures the original case for identifiers like `mixedName`);
+ * we swap that for `LIKE` on the raw `c.relname` and return the raw
+ * relname so we control the quoting.
+ *
+ * Returns null if the query isn't a recognised relation query
+ * (defensive — keeps the quoted-completion code path bounded).
+ */
+const caseSensitiveRelnameVariant = (sql: string): string | null => {
+  // We rewrite the SELECT/WHERE clauses on the standard relation queries.
+  // The only shape we need to support is `c.relname ILIKE $1` against
+  // `pg_catalog.pg_class c`, with various `c.relkind IN (...)` filters.
+  if (!sql.includes('pg_catalog.pg_class c')) return null;
+  if (!sql.includes('c.relname ILIKE $1')) return null;
+  return sql
+    .replace('SELECT pg_catalog.quote_ident(c.relname)', 'SELECT c.relname')
+    .replace('c.relname ILIKE $1', 'c.relname LIKE $1');
 };
 
 /** Case-insensitive prefix filter; preserves the candidate's original casing. */
