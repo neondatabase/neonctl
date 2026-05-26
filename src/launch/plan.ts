@@ -16,17 +16,14 @@ import { resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { createJiti } from 'jiti';
 
-import type {
-  DepsRecord,
-  InternalResource,
-  LaunchContext,
-  Resource,
-} from './config.js';
+import type { InternalResource, LaunchContext } from './config.js';
 import {
   ExitCode,
   LaunchError,
+  cycleDetectedMessage,
   dupKeyMessage,
   singletonMessage,
+  stackSpecNotRecordMessage,
 } from './errors.js';
 import { makeRef } from './refs.js';
 
@@ -133,7 +130,10 @@ function walkTree(
     if (frame.resource.__kind === 'stack') {
       if (typeof spec !== 'object' || spec === null) {
         throw new LaunchError(
-          `[neon launch] Stack '${fqn || 'root'}' spec did not return a record of resources (got ${typeof spec}).`,
+          stackSpecNotRecordMessage({
+            stackName: fqn || 'root',
+            got: typeof spec,
+          }),
           ExitCode.CONFIG_ERROR,
         );
       }
@@ -347,8 +347,7 @@ function topoOrder(registry: Map<string, PlanNode>): string[] {
       .filter(([, d]) => d > 0)
       .map(([k]) => k);
     throw new LaunchError(
-      `[neon launch] Cycle detected in resource dependencies. ` +
-        `Involved resources: ${remaining.join(', ')}.`,
+      cycleDetectedMessage({ involved: remaining }),
       ExitCode.CONFIG_ERROR,
     );
   }
@@ -433,6 +432,3 @@ export async function buildPlan(
 
 // Re-export for testing.
 export { isInternalResource };
-
-// Re-export DepsRecord for callers that don't want to deep-import.
-export type { DepsRecord, Resource };

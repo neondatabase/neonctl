@@ -11,6 +11,7 @@ import type yargs from 'yargs';
 
 import { log } from '../log.js';
 import { closeAnalytics, sendError } from '../analytics.js';
+import { ExitCode } from '../launch/errors.js';
 
 const RECOGNIZED_FLAGS = new Set([
   'config',
@@ -111,7 +112,7 @@ export const handler = async (argv: LaunchArgs): Promise<void> => {
     // AUTH_MISSING for missing tokens, etc.); other errors fall through to
     // RESOURCE_FAILED. The SIGINT path exits 130 itself, never reaches here.
     const exitCode =
-      (error as { exitCode?: number }).exitCode ?? /* RESOURCE_FAILED */ 1;
+      (error as { exitCode?: number }).exitCode ?? ExitCode.RESOURCE_FAILED;
     process.exit(exitCode);
   }
 };

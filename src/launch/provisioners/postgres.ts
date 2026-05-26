@@ -189,27 +189,46 @@ async function pollOpsTerminal(
 ): Promise<void> {
   const deadline = Date.now() + timeoutSeconds * 1000;
   const remaining = new Set(operationIds);
+  // Keep the last-seen diagnostic per op so a final timeout can surface
+  // Neon's actual error instead of just the op id. `failed`/`error` are
+  // non-terminal — Neon retries internally — but `op.error` and
+  // `op.failures_count` accumulate on every poll, and the SDK exposes
+  // `retry_at` as "last retried at" (past tense), so we can't tell from
+  // one snapshot whether more retries are coming. We trust the
+  // `--branch-timeout` budget, but at least preserve the diagnostic.
+  const lastSeen = new Map<
+    string,
+    { error?: string; failures: number; status: string }
+  >();
   while (remaining.size > 0 && Date.now() < deadline) {
     for (const opId of [...remaining]) {
       const { data } = await withRetries(() =>
         api.getProjectOperation(projectId, opId),
       );
       const op = data.operation;
+      if (op.error || op.failures_count > 0) {
+        lastSeen.set(opId, {
+          error: op.error,
+          failures: op.failures_count,
+          status: op.status,
+        });
+      }
       if (TERMINAL_OP_STATUSES.has(op.status)) {
         remaining.delete(opId);
       }
-      // `failed`/`error` are non-terminal — Neon retries internally. We
-      // could in principle short-circuit on a permanent failure, but the
-      // SDK exposes `retry_at` as the "last retried at" timestamp (past
-      // tense), so a single snapshot can't reliably distinguish
-      // "between retries" from "no more retries planned". Trust the
-      // `--branch-timeout` budget instead.
     }
     if (remaining.size > 0) await sleep(DEFAULT_POLL_INTERVAL_MS);
   }
   if (remaining.size > 0) {
+    const detail = [...remaining]
+      .map((id) => {
+        const ls = lastSeen.get(id);
+        if (!ls) return id;
+        return `${id} (status=${ls.status}, failures=${ls.failures}, error=${ls.error ?? 'unknown'})`;
+      })
+      .join('; ');
     throw new Error(
-      `[neon launch] Timed out after ${timeoutSeconds}s waiting for Neon operations to reach terminal: ${[...remaining].join(', ')}.`,
+      `[neon launch] Timed out after ${timeoutSeconds}s waiting for Neon operations to reach terminal: ${detail}.`,
     );
   }
 }

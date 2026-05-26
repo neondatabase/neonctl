@@ -151,3 +151,43 @@ export function vercelTokenMissingMessage(): string {
     `Create one at https://vercel.com/account/tokens and re-run.`,
   ].join('\n');
 }
+
+// =============================================================================
+// Stack spec returned the wrong shape
+// =============================================================================
+
+export function stackSpecNotRecordMessage(opts: {
+  stackName: string;
+  got: string;
+}): string {
+  return [
+    `[neon launch] Stack '${opts.stackName}' spec did not return a record of resources (got ${opts.got}).`,
+    '',
+    `A stack's spec callback must return an object literal whose values are`,
+    `the result of factory calls (postgres, vercelDeployment, localCommand).`,
+    `Example:`,
+    '',
+    `  export default stack({`,
+    `    spec: (_, { gitBranch }) => {`,
+    `      const db = postgres({ spec: () => ({ name: gitBranch || 'main' }) });`,
+    `      return { db };`,
+    `    },`,
+    `  });`,
+  ].join('\n');
+}
+
+// =============================================================================
+// Cycle detected in resource dependencies
+// =============================================================================
+
+export function cycleDetectedMessage(opts: { involved: string[] }): string {
+  return [
+    `[neon launch] Cycle detected in resource dependencies.`,
+    `Involved resources: ${opts.involved.join(', ')}.`,
+    '',
+    `One resource depends on another (transitively) that depends back on it.`,
+    `Inspect the \`dependsOn:\` blocks on those resources and break the loop`,
+    `by inverting an edge, or by lifting shared init into a leaf both`,
+    `dependents can attach to.`,
+  ].join('\n');
+}

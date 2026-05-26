@@ -190,11 +190,6 @@ async function resolveEnv(
 // =============================================================================
 
 /**
- * Group the topo-ordered node list into stages: each stage contains all
- * nodes whose deps are satisfied by previous stages. Within a stage, nodes
- * run in parallel.
- */
-/**
  * Pick the stdio mode for a local-command node.
  *
  * 'inherit' passes the parent's TTY straight through — preserves Windows
@@ -216,6 +211,11 @@ function pickStdioMode(
   return 'inherit';
 }
 
+/**
+ * Group the topo-ordered node list into stages: each stage contains all
+ * nodes whose deps are satisfied by previous stages. Within a stage, nodes
+ * run in parallel.
+ */
 function groupStages(plan: Plan): PlanNode[][] {
   const stages: PlanNode[][] = [];
   const done = new Set<string>();
@@ -301,8 +301,9 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   // 3. Resolve Neon API auth — OAuth via argv.apiClient (set by ensureAuth)
   // or NEON_API_KEY env, in that order. apiHost flows through from the
   // global --api-host flag.
-  // `cli.ts` defaults `apiClient` to `null` (cast at the boundary); after
-  // `ensureAuth` middleware runs it gets the real client. Normalize to
+  // The yargs builder in `src/index.ts` defaults `apiClient` to `null`
+  // (cast at the boundary); after `ensureAuth` middleware runs it gets
+  // the real client. Normalize to
   // undefined so the `??` chain and the `!argvApiClient` check below
   // behave consistently.
   const argvApiClient =
@@ -324,7 +325,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   }
   const api = argvApiClient ?? getApiClient({ apiKey, apiHost });
 
-  // 3. Provision stage-by-stage.
+  // 4. Provision stage-by-stage.
   const stages = groupStages(plan);
   const liveLocalCommands: LocalCommandHandle[] = [];
 
@@ -337,14 +338,17 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   // to the handler's exit instead of racing it with a misleading
   // "exited with code null" error.
   interrupted = false; // reset for this invocation (module-scoped)
+  outputs.clear(); // ditto — would otherwise leak refs across re-invocations
   const onSigint = () => {
     if (interrupted) return;
     interrupted = true;
     log.info('[launch] SIGINT — stopping any running local commands.');
     for (const h of liveLocalCommands) void h.kill();
     // Flush analytics before exit so the SIGINT event isn't dropped.
-    // Fire-and-forget: if flush hangs we still exit on the next tick.
-    void closeAnalytics().finally(() => {
+    // Tight timeout so an unreachable Segment endpoint doesn't hang
+    // Ctrl-C for the SDK's ~12.5s default — at-most-once delivery is
+    // acceptable on the interactive shutdown path.
+    void closeAnalytics({ timeoutMs: 1_500 }).finally(() => {
       process.exit(ExitCode.SIGINT);
     });
   };
@@ -390,7 +394,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
 
   log.info('[launch] all resources ready.');
 
-  // 4. Foreground phase. Hold the process while any local-command runs.
+  // 5. Foreground phase. Hold the process while any local-command runs.
   // Ctrl-C → SIGTERM all children, exit 130.
   if (liveLocalCommands.length === 0) {
     log.info('[launch] no foreground processes; exiting 0.');
@@ -564,44 +568,37 @@ async function provisionLocalCommandNode(args: {
 // Foreground phase
 // =============================================================================
 
+// Caller (runLaunch) owns the SIGINT handler lifecycle: registered at
+// runner entry, observed here via `isShuttingDown()`.
 async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
   log.info(
     `[launch] foreground: holding for ${handles.length} local-command(s). Ctrl-C to stop.`,
   );
 
-  try {
-    // First-exit wins: if any local-command exits, tear down siblings.
-    // In inherit-stdio mode the parent + child share the TTY foreground
-    // group, so Ctrl-C delivers SIGINT to BOTH — `firstExit.signal` will
-    // be 'SIGINT' and the runner-entry SIGINT handler is mid-flight
-    // closing analytics + exiting. Defer to it: wait for the process to
-    // actually exit instead of racing it with a misleading "exited with
-    // code null" error log.
-    const firstExit = await Promise.race(handles.map((h) => h.exited));
-    if (signalIsInterrupt(firstExit.signal) || isShuttingDown()) {
-      // Park indefinitely — the SIGINT handler owns exit. If it somehow
-      // fails to call process.exit, Node's event loop draining naturally
-      // ends the process with code 0 once handles are released, which is
-      // still better than emitting a misleading error.
-      await new Promise(() => undefined);
-      return;
-    }
-    if (firstExit.code !== 0) {
-      log.error(
-        `[launch] a local-command exited with code ${firstExit.code ?? 'null'} — stopping siblings.`,
-      );
-      for (const h of handles) void h.kill();
-      await Promise.all(handles.map((h) => h.exited));
-      await closeAnalytics();
-      process.exit(ExitCode.RESOURCE_FAILED);
-    }
-    // Successful exit; wait for siblings too.
-    await Promise.all(handles.map((h) => h.exited));
-  } finally {
-    // Caller owns the SIGINT handler lifecycle (registered at runner entry).
+  // First-exit wins: if any local-command exits, tear down siblings.
+  // In inherit-stdio mode the parent + child share the TTY foreground
+  // group, so Ctrl-C delivers SIGINT to BOTH — the runner-entry handler
+  // races us to exit. Defer to it instead of emitting a misleading
+  // "exited with code null" error log.
+  const firstExit = await Promise.race(handles.map((h) => h.exited));
+  if (isShuttingDown()) {
+    // Our SIGINT handler is in flight (killed children + closeAnalytics
+    // → process.exit). Don't gate on `firstExit.signal` alone: an
+    // external SIGTERM to the child (process supervisor, sidecar) does
+    // NOT mean our parent is shutting down — parking on that would hang
+    // the parent forever while siblings keep the event loop alive.
+    await new Promise(() => undefined);
+    return;
   }
-}
-
-function signalIsInterrupt(signal: NodeJS.Signals | null): boolean {
-  return signal === 'SIGINT' || signal === 'SIGTERM';
+  if (firstExit.code !== 0) {
+    log.error(
+      `[launch] a local-command exited with code ${firstExit.code ?? 'null'} — stopping siblings.`,
+    );
+    for (const h of handles) void h.kill();
+    await Promise.all(handles.map((h) => h.exited));
+    await closeAnalytics();
+    process.exit(ExitCode.RESOURCE_FAILED);
+  }
+  // Successful exit; wait for siblings too.
+  await Promise.all(handles.map((h) => h.exited));
 }
