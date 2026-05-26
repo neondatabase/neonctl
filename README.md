@@ -92,18 +92,21 @@ The embedded implementation covers the common psql use cases, including:
 - All `\d*` describe commands with full upstream parity (columns, indexes, foreign keys, triggers, view definitions, sequences, RLS, replica identity, partitions, tablespaces, access methods, inheritance, FDW, stats objects, publications, subscriptions, per-column FDW options, TOAST owner)
 - `\copy` to/from file, `PROGRAM`, `STDIN`, and `STDOUT`, including the `\.` EOF marker
 - Extended query with `\bind` / `\bind_named` and pipeline mode (`\startpipeline`, `\parse`)
-- Tab completion (~50 rules)
+- Tab completion (~88 rules including live `pg_settings` GUC lookup, deep `ALTER` sub-actions, `JOIN` clauses, and window-function `OVER` clauses)
 - Persistent command history (`~/.psql_history`, libreadline format)
-- vi and emacs line-edit modes
+- vi and emacs line-edit modes (controlled via the `VI_MODE` psql variable)
 - `~/.psqlrc` autoload (including `$PGSYSCONFDIR/psqlrc` and version-suffixed variants)
 - Scripted modes: `-c "SQL"` and `-f script.sql`
 - SCRAM-SHA-256 authentication with channel binding (required for Neon)
+- libpq-equivalent connection-string lookup: argv flags > URI > `PG*` env vars > `~/.pgpass` > `pg_service.conf` > libpq defaults
+- Multi-host failover with `target_session_attrs` (any / read-write / read-only / primary / standby / prefer-standby) and `load_balance_hosts`
+- Unix-domain sockets (host beginning with `/`)
+- Client SSL PEM files via `sslcert` / `sslkey` / `sslrootcert` / `sslcrl`
 
 ### Known limitations
 
 - The `--fallback` flag is hidden in `--help` until we finish building out the conformance test suite. The behavior is safe to use today; the hide is a signal of "not yet flipped to default."
 - The conformance test suite is non-blocking in CI until the `KNOWN_FAILURES.yml` ledger has been seeded.
-- Multi-host load-balanced connection URIs are not yet supported by the embedded psql; it connects to the first host listed.
 
 ## Configure autocompletion
 
