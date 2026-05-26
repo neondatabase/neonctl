@@ -904,11 +904,17 @@ const containsNonKeywordChar = (s: string): boolean => /[^A-Za-z0-9 ]/.test(s);
 
 /**
  * Split a candidate like `pg_catalog.tab_` into [schema, prefix]. Returns
- * `null` if there's no schema qualifier.
+ * `null` if there's no schema qualifier. `schemaWasQuoted` records whether
+ * the user wrote the schema in `"..."` form so the caller can decide whether
+ * to fold its case in the rendered output.
  */
 const splitSchemaPrefix = (
   word: string,
-): { schema: string; prefix: string } | null => {
+): {
+  schema: string;
+  prefix: string;
+  schemaWasQuoted: boolean;
+} | null => {
   const dot = word.indexOf('.');
   if (dot < 0) return null;
   // Reject if anything after the dot looks like another dot (we only handle
@@ -917,10 +923,12 @@ const splitSchemaPrefix = (
   if (after.includes('.')) return null;
   // Strip optional quoting on the schema.
   let schema = word.slice(0, dot);
+  let schemaWasQuoted = false;
   if (schema.startsWith('"') && schema.endsWith('"')) {
+    schemaWasQuoted = true;
     schema = schema.slice(1, -1).replace(/""/g, '"');
   }
-  return { schema, prefix: after };
+  return { schema, prefix: after, schemaWasQuoted };
 };
 
 // ---------------------------------------------------------------------------
@@ -2294,8 +2302,15 @@ const completeSchemaOrRelations = async (
       split.prefix,
       [split.schema],
     );
-    // Re-prefix with the schema name.
-    return rows.map((r) => split.schema + '.' + r);
+    // Re-prefix with the catalog's canonical schema name. Upstream folds
+    // unquoted schema identifiers to lowercase in the output (mirroring
+    // the way Postgres downcases unquoted names), so `PUBLIC.t<tab>`
+    // completes to `public.tab1` instead of preserving `PUBLIC` in the
+    // returned candidate.
+    const canonicalSchema = split.schemaWasQuoted
+      ? split.schema
+      : split.schema.toLowerCase();
+    return rows.map((r) => canonicalSchema + '.' + r);
   }
   // Unqualified: combine relations + schemas (schemas suffixed with `.`).
   const [rels, schemas] = await Promise.all([

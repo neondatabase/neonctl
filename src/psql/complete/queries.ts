@@ -285,12 +285,17 @@ export const Query_for_list_of_subscriptions = `
  * name as $1 and the ILIKE prefix as $2 — this lets `SELECT * FROM pg_catalog.x`
  * complete to `pg_catalog.xxxx`. The schema name is matched
  * case-insensitively so `PUBLIC.t` resolves to relations in `public`.
+ *
+ * Note: deliberately excludes `relkind = 'i'` (indexes) so that
+ * `SELECT * FROM public.tab<tab>` doesn't include `tab1_pkey` alongside
+ * `tab1`. Index-qualifying completions (REINDEX, DROP INDEX, ALTER INDEX)
+ * have their own table-kind queries and don't route through this helper.
  */
 export const Query_for_list_of_relations_in_schema = `
   SELECT pg_catalog.quote_ident(c.relname)
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-  WHERE c.relkind IN ('r','v','m','S','f','p','i')
+  WHERE c.relkind IN ('r','v','m','S','f','p')
     AND pg_catalog.lower(n.nspname) = pg_catalog.lower($1)
     AND c.relname ILIKE $2
   ORDER BY 1

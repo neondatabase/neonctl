@@ -121,15 +121,22 @@ export class CompletionState {
         return { kind: 'inserted' };
       }
 
-      // Multiple candidates: insert common prefix if it extends the input.
-      const ext = res.commonPrefix.length - res.replaceLength;
-      if (ext > 0) {
+      // Multiple candidates: insert the common prefix when it differs from
+      // what's currently in the buffer at that position. The diff can be
+      // length (more chars to insert) OR case (COMP_KEYWORD_CASE flipping
+      // `CO` to `co`) — both should redraw with the canonical form so the
+      // user sees what they'd commit on the next keystroke.
+      const before = buffer.text.slice(
+        buffer.cursor - res.replaceLength,
+        buffer.cursor,
+      );
+      if (res.commonPrefix !== before) {
         replaceBeforeCursor(buffer, res.replaceLength, res.commonPrefix);
-        // Update the "what's currently inserted" to the common prefix length.
-        this.cycleLen = countCodePoints(res.commonPrefix);
-      } else {
-        this.cycleLen = countCodePoints(res.commonPrefix);
       }
+      // Update the "what's currently inserted" to the common prefix length
+      // so the cycle path knows how many code points to overwrite when it
+      // swaps in the next candidate.
+      this.cycleLen = countCodePoints(res.commonPrefix);
       return { kind: 'inserted' };
     }
 
