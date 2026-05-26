@@ -69,7 +69,7 @@ import { unalignedPrinter } from '../print/unaligned.js';
 import { formatDurationMs } from '../print/units.js';
 import { openPager, shouldPage } from '../print/pager.js';
 import { getQueryFout } from '../command/cmd_io.js';
-import { formatErrorReport } from '../command/cmd_meta.js';
+import { formatErrorReport, psqlErrorPrefix } from '../command/cmd_meta.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -326,15 +326,16 @@ const writeError = (ctx: REPLContext, message: string): void => {
 
 /**
  * Render the verbosity-aware error report for the most recently captured
- * query error and write it to `ctx.stderr`. Mirrors the bare libpq-style
- * shape upstream `ProcessResult` writes: the leading severity line has no
- * `psql: ` prefix because server-side error messages already include the
- * severity tag (`ERROR:  ...`). Subsequent layers (`LINE N: ...`, caret,
- * `DETAIL: ...`, ...) follow on their own lines per
- * {@link formatErrorReport}. When the captured error is missing (defensive
- * — callers should always pair this with a preceding `recordError`) we
- * fall back to the plain client-side {@link writeError} form so we never
- * swallow the message entirely.
+ * query error and write it to `ctx.stderr`. The leading severity line gets
+ * the same `psql:[<file>:<n>]:` diagnostic prefix that upstream's
+ * `pg_log_pre_callback` prepends — matching the format the regression-
+ * derived conformance suite expects (e.g. `psql:<stdin>:N: ERROR: ...`).
+ * Subsequent layers (`LINE N: ...`, caret, `DETAIL: ...`, ...) follow on
+ * their own lines per {@link formatErrorReport}, unprefixed, to match
+ * libpq's `PQresultErrorMessage` output shape. When the captured error is
+ * missing (defensive — callers should always pair this with a preceding
+ * `recordError`) we fall back to the plain client-side {@link writeError}
+ * form so we never swallow the message entirely.
  *
  * Exported so the bind-path in mainloop can share the renderer.
  */
@@ -352,7 +353,9 @@ export const writeQueryError = (
     ctx.settings.verbosity,
     ctx.settings.showContext,
   );
-  ctx.stderr.write(lines.join('\n') + '\n');
+  const prefix = psqlErrorPrefix(ctx.settings);
+  const prefixed = [prefix + lines[0], ...lines.slice(1)];
+  ctx.stderr.write(prefixed.join('\n') + '\n');
 };
 
 /**

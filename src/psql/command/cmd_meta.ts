@@ -44,6 +44,7 @@ import type {
 } from '../types/backslash.js';
 import type {
   LastErrorResult,
+  PsqlSettings,
   ShowContext,
   VerbosityLevel,
 } from '../types/settings.js';
@@ -356,6 +357,29 @@ export const cmdSetenv: BackslashCmdSpec = {
 };
 
 /**
+ * Build the `psql:` diagnostic prefix that upstream `pg_log_pre_callback`
+ * prepends to every error line:
+ *
+ *   - When no `inputfile` is active (interactive REPL, stdin script): `psql: `.
+ *   - When an `inputfile` is set (running under `\i`, `-f FILE`, or psqlrc):
+ *     `psql:<inputfile>:<lineno>: ` — pinning the line is best-effort and the
+ *     caller may pass `undefined` to suppress it.
+ *
+ * Returned string always ends in a single trailing space so callers can
+ * concatenate the severity directly (`prefix + 'ERROR:  msg'`).
+ */
+export const psqlErrorPrefix = (
+  settings: PsqlSettings,
+  lineNumber?: number,
+): string => {
+  if (settings.inputfile) {
+    const lineSuffix = lineNumber !== undefined ? String(lineNumber) : '';
+    return `psql:${settings.inputfile}:${lineSuffix}: `;
+  }
+  return 'psql: ';
+};
+
+/**
  * Render the `LINE N: …` re-print plus the `^` pointer underneath the
  * failing character, mirroring upstream psql's `report_error_query`
  * helper. Returns `null` when we don't have enough context (no SQL text
@@ -504,13 +528,21 @@ export const cmdErrverbose: BackslashCmdSpec = {
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
     const e = ctx.settings.lastErrorResult;
     if (!e || (!e.message && !e.sqlstate && !e.code)) {
+      // Upstream `exec_command_errverbose` writes the "no previous error"
+      // notice to stdout (via `printf`); only the verbose re-render goes to
+      // stderr (via `pg_log_error`).
       writeOut('There is no previous error.\n');
       return Promise.resolve({ status: 'ok' });
     }
     // `\errverbose` always emits the full verbose form regardless of the
-    // currently active VERBOSITY setting.
+    // currently active VERBOSITY setting. Output is prefixed with the same
+    // `psql:[<file>:<n>]:` tag upstream's `pg_log_pre_callback` adds — only
+    // on the leading severity line; subsequent layers (LINE / caret / DETAIL
+    // / HINT / LOCATION) stay unprefixed to match libpq's `PQresultErrorMessage`.
     const lines = formatErrorReport(e, 'verbose', 'always');
-    writeOut(lines.join('\n') + '\n');
+    const prefix = psqlErrorPrefix(ctx.settings);
+    const prefixed = [prefix + lines[0], ...lines.slice(1)];
+    writeErr(prefixed.join('\n') + '\n');
     return Promise.resolve({ status: 'ok' });
   },
 };

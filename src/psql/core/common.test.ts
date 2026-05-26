@@ -476,7 +476,7 @@ describe('sendQuery — errors', () => {
     expect(stderr.text()).toMatch(/no connection to the server/);
   });
 
-  test('server error renders the layered form (no psql: prefix, LINE / caret on default verbosity)', async () => {
+  test('server error renders the layered form (psql: prefix, LINE / caret on default verbosity)', async () => {
     // Build a throwable that carries the full ErrorResponse shape — this
     // mirrors what `asThrowable` in wire/connection.ts produces.
     const err = Object.assign(new Error('syntax error at or near "FOO"'), {
@@ -497,8 +497,11 @@ describe('sendQuery — errors', () => {
     expect(text).toMatch(/^\s+\^$/m);
     expect(text).toContain('DETAIL:  parse failed');
     expect(text).toContain('HINT:  check spelling');
-    // The bare-libpq shape: no `psql:` prefix on the severity line.
-    expect(text).not.toMatch(/^psql:/m);
+    // The leading severity line carries the upstream `psql: ` diagnostic
+    // prefix that `pg_log_pre_callback` prepends. Subsequent layers
+    // (LINE / caret / DETAIL / HINT / LOCATION) stay unprefixed to match
+    // libpq's `PQresultErrorMessage` output shape.
+    expect(text).toMatch(/^psql: ERROR: {2}syntax error at or near "FOO"$/m);
   });
 
   test('verbose verbosity exposes the SQLSTATE on the severity line', async () => {

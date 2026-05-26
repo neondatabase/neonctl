@@ -360,13 +360,17 @@ describe('\\errverbose', () => {
     expect(stdout()).toMatch(/no previous error/);
   });
 
-  test('prints stored error', async () => {
+  test('prints stored error to stderr with psql: prefix', async () => {
     const settings = defaultSettings(createVarStore());
     settings.lastErrorResult = { sqlstate: '42P01', message: 'oops' };
     const ctx = makeMockCtx('errverbose', '', settings);
     await run(cmdErrverbose, ctx);
-    expect(stdout()).toMatch(/oops/);
-    expect(stdout()).toMatch(/42P01/);
+    // Upstream `exec_command_errverbose` writes the verbose re-render to
+    // stderr (via `pg_log_error`), with the `psql: ` diagnostic prefix on
+    // the leading severity line.
+    expect(stderr()).toMatch(/^psql: /m);
+    expect(stderr()).toMatch(/oops/);
+    expect(stderr()).toMatch(/42P01/);
   });
 });
 
