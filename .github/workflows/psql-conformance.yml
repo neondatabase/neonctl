@@ -94,11 +94,13 @@ jobs:
         # Non-blocking until coverage stabilises — see top-of-file note.
         continue-on-error: true
         env:
-          # `dist/cli.js` is the neonctl entrypoint; the harness invokes
-          # it with libpq-style flags. Per-subtest deferred work is
+          # `dist/psql/cli.js` is the standalone psql shim — neonctl's
+          # `dist/cli.js` is the yargs CLI which intercepts libpq flags
+          # like `-v` (collides with --version), so we route the harness
+          # through the shim instead. Per-subtest deferred work is
           # tracked inline via it.todo/it.skip; raw stderr surfaces in
           # the run log.
-          PSQL_BINARY: ${{ github.workspace }}/dist/cli.js
+          PSQL_BINARY: ${{ github.workspace }}/dist/psql/cli.js
           # Point the harness's pg-fixture at the GHA service container
           # instead of booting a testcontainer in CI.
           PGCONFORMANCE_PG_HOST: 127.0.0.1
