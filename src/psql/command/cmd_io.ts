@@ -190,7 +190,11 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
   // command errors look like upstream when surfaced via `psql_fails_like`.
   const prefix = psqlErrorPrefix(ctx.settings);
   writeErr(`${prefix}\\${ctx.cmdName}: ${message}\n`);
-  return { status: 'error' };
+  // Tell the mainloop the error has already been surfaced — without this
+  // it would also write a `psql: ERROR:  <msg>` fallback, producing a stray
+  // duplicate that breaks the `\errverbose` ordering check on tests like
+  // `SELECT error\gdesc\n\errverbose`.
+  return { status: 'error', errorWritten: true };
 };
 
 /**
@@ -257,15 +261,20 @@ const openWriter = (target: string): QueryFoutEntry => {
 };
 
 /**
- * Render a `ResultSet` to the supplied writable stream using the aligned
- * printer with the settings' current `popt`.
+ * Render a `ResultSet` to the supplied writable stream using the printer
+ * picked from the active `\pset format`. Upstream's `do_watch`, `do_gset`,
+ * `do_gexec`, and `\i` all funnel results through the standard query
+ * output pipeline (`ExecQueryAndProcessResults` → `printQuery`), which
+ * honours `\pset format`. Hard-coding the aligned printer here breaks the
+ * conformance harness's `psql -A` runs (which expect unaligned tuples-only
+ * output for things like `\watch` polled rows).
  */
 const renderResult = async (
   settings: PsqlSettings,
   rs: ResultSet,
   out: NodeJS.WritableStream,
 ): Promise<void> => {
-  await alignedPrinter.printQuery(rs, settings.popt, out);
+  await pickActivePrinter(settings).printQuery(rs, settings.popt, out);
 };
 
 /**
@@ -757,7 +766,10 @@ export const cmdGdesc: BackslashCmdSpec = {
         const prefix = psqlErrorPrefix(ctx.settings);
         writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
       }
-      return { status: 'error' };
+      // We've already written the full error report; signal that to the
+      // mainloop so it doesn't add a duplicate `psql: ERROR:  <msg>` line
+      // between the LINE/`^` block and a subsequent `\errverbose` render.
+      return { status: 'error', errorWritten: true };
     }
 
     // Resolve canonical type names via a follow-up round trip when we have
@@ -841,7 +853,7 @@ export const cmdGexec: BackslashCmdSpec = {
             ctx.settings.lastErrorResult = { message: msg };
             const prefix = psqlErrorPrefix(ctx.settings);
             writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
-            return { status: 'error' };
+            return { status: 'error', errorWritten: true };
           }
         }
       }
@@ -1209,7 +1221,7 @@ export const cmdWatch: BackslashCmdSpec = {
           ctx.settings.lastErrorResult = { message: msg };
           const prefix = psqlErrorPrefix(ctx.settings);
           writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
-          return { status: 'error' };
+          return { status: 'error', errorWritten: true };
         }
         // Stop if `c=` reached the configured iteration cap, OR if `m=`
         // was set and the previous result returned FEWER than `min_rows`
