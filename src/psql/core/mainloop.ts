@@ -659,6 +659,12 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
     return renderPromptByName(name, promptCtx);
   };
 
+  // Resolves a psql variable for `:NAME` substitution in SQL bodies.
+  // Backslash command bodies do their own expansion via `scanSlashArgs` in
+  // `makeBackslashContext`, so this lookup only fires inside scanSql.
+  const sqlVarLookup = (name: string): string | undefined =>
+    ctx.settings.vars.get(name);
+
   /**
    * Process the assembled queryBuf+line through scanSql, dispatching the
    * boundaries it finds. Returns when we hit `incomplete`/`eof` and need
@@ -667,11 +673,13 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   const processChunk = async (chunk: string): Promise<void> => {
     let working = chunk;
     while (working.length > 0) {
-      const result = scanSql(working, scanState);
+      const result = scanSql(working, scanState, sqlVarLookup);
       scanState = result.nextState;
 
       if (result.kind === 'semicolon') {
-        const sqlText = queryBuf + working.slice(0, result.consumed);
+        // Use the substituted `result.sql` so `:NAME` references already
+        // resolved at scan time make it into the executed SQL.
+        const sqlText = queryBuf + result.sql;
         queryBuf = '';
         working = working.slice(result.consumed);
         scanState = initialScanState();
@@ -763,8 +771,14 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         continue;
       }
 
-      // incomplete or eof — keep accumulating.
-      queryBuf += working;
+      // incomplete or eof — keep accumulating. Use the substituted
+      // `result.sql` so `:NAME` tokens that were fully consumed in this
+      // chunk land in the buffer in expanded form. (A `:NAME` that
+      // straddles two chunks falls back to the literal — a corner case
+      // upstream also handles only when the variable name fits inside the
+      // current buffer; the line-reader feeds whole lines so this is
+      // effectively unreachable in interactive use.)
+      queryBuf += result.sql;
       working = '';
       return;
     }

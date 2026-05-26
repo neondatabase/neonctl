@@ -289,12 +289,21 @@ export const executeInputString = async (
     return false;
   };
 
+  // Inline `:NAME` substitution wired through SQL bodies (handled by
+  // scanSql). Slash-arg bodies are already substituted via
+  // `makeBackslashContext` above. Mirror the mainloop's wiring so `-c`/`-f`
+  // / .psqlrc inputs expand the same way as interactive input.
+  const sqlVarLookup = (name: string): string | undefined =>
+    ctx.settings.vars.get(name);
+
   while (working.length > 0) {
-    const r = scanSql(working, scanState);
+    const r = scanSql(working, scanState, sqlVarLookup);
     scanState = r.nextState;
 
     if (r.kind === 'semicolon') {
-      const sqlText = queryBuf + working.slice(0, r.consumed);
+      // Use the substituted text rather than the raw slice so `:NAME`
+      // expansions land in the executed SQL.
+      const sqlText = queryBuf + r.sql;
       queryBuf = '';
       working = working.slice(r.consumed);
       scanState = initialScanState();
@@ -377,8 +386,11 @@ export const executeInputString = async (
       continue;
     }
 
-    // eof / incomplete: stash residue and stop.
-    queryBuf += working;
+    // eof / incomplete: stash residue and stop. Use `r.sql` so any `:NAME`
+    // tokens fully consumed in this chunk make it into the buffer in
+    // substituted form. (Same caveat as the mainloop: cross-chunk colon
+    // references fall back to the literal.)
+    queryBuf += r.sql;
     working = '';
   }
 

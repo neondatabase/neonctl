@@ -304,6 +304,73 @@ describe('runMainLoop — backslash commands', () => {
 });
 
 // ---------------------------------------------------------------------------
+// :NAME variable substitution end-to-end through the mainloop. Confirms that
+// the wiring from scanSql → dispatched SQL and slash-arg → echo body both
+// honour the active VarStore. The defaultSettings hook seeds
+// WATCH_INTERVAL=2, so we use that for one of the cases without needing
+// any explicit `\set` step.
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — :NAME substitution', () => {
+  test('SQL body: :NAME expands before the query reaches the connection', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT :x;'],
+      settingsOverride: (s) => {
+        s.vars.set('x', '42');
+      },
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 42;']);
+  });
+
+  test("SQL body: :'NAME' produces a quoted SQL literal", async () => {
+    const { ctx, db } = buildCtx({
+      lines: ["SELECT :'v';"],
+      settingsOverride: (s) => {
+        s.vars.set('v', "it's");
+      },
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(["SELECT 'it''s';"]);
+  });
+
+  test('slash command body: \\echo :NAME substitutes through the registry', async () => {
+    const { ctx } = buildCtx({
+      lines: ['\\echo :greeting'],
+      settingsOverride: (s) => {
+        s.vars.set('greeting', 'hi');
+      },
+    });
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('hi');
+  });
+
+  test('built-in WATCH_INTERVAL (seeded to 2) is visible to \\echo', async () => {
+    const { ctx } = buildCtx({
+      lines: ['\\echo :WATCH_INTERVAL'],
+    });
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('2');
+  });
+
+  test(':: cast operator survives intact (no false substitution)', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ["SELECT '1'::int;"],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(["SELECT '1'::int;"]);
+  });
+
+  test('unknown :NAME falls back to literal — no silent empty string', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT :MISSING;'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT :MISSING;']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Conditional flow
 // ---------------------------------------------------------------------------
 
