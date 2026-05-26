@@ -88,6 +88,14 @@ type OutputResolver = PostgresOutputResolver | StaticOutputResolver;
 
 const outputs = new Map<string /* resource __id */, OutputResolver>();
 
+// Module-scoped because the SIGINT handler is registered at runner entry
+// but observed by foregroundPhase (which can't see the handler's closure
+// variable). Reset on each runLaunch invocation.
+let interrupted = false;
+function isShuttingDown(): boolean {
+  return interrupted;
+}
+
 async function resolveLeaf(ref: {
   __ref: string;
   __opts?: unknown;
@@ -293,9 +301,15 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   // 3. Resolve Neon API auth — OAuth via argv.apiClient (set by ensureAuth)
   // or NEON_API_KEY env, in that order. apiHost flows through from the
   // global --api-host flag.
-  const argvApiClient = opts.argv.apiClient as
-    | ReturnType<typeof getApiClient>
-    | undefined;
+  // `cli.ts` defaults `apiClient` to `null` (cast at the boundary); after
+  // `ensureAuth` middleware runs it gets the real client. Normalize to
+  // undefined so the `??` chain and the `!argvApiClient` check below
+  // behave consistently.
+  const argvApiClient =
+    (opts.argv.apiClient as
+      | ReturnType<typeof getApiClient>
+      | null
+      | undefined) ?? undefined;
   const apiKey =
     (opts.argv.apiKey as string | undefined) ?? process.env.NEON_API_KEY ?? '';
   const apiHost =
@@ -318,8 +332,11 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   // Ctrl-C during a slow branch-create or Vercel deploy lets Node's default
   // SIGINT exit immediately, leaving any local-commands spawned in an
   // earlier stage as orphans (compounded by the detached-shell process
-  // group on Unix). We kill them explicitly here, then exit 130.
-  let interrupted = false;
+  // group on Unix). We kill them explicitly here, then exit 130. The
+  // `interrupted` flag is also read by foregroundPhase so it can defer
+  // to the handler's exit instead of racing it with a misleading
+  // "exited with code null" error.
+  interrupted = false; // reset for this invocation (module-scoped)
   const onSigint = () => {
     if (interrupted) return;
     interrupted = true;
@@ -554,12 +571,24 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
 
   try {
     // First-exit wins: if any local-command exits, tear down siblings.
-    // SIGINT is handled at runner entry; the handler kills children and
-    // process.exit(130)s, so the Promise.race never resolves on Ctrl-C.
+    // In inherit-stdio mode the parent + child share the TTY foreground
+    // group, so Ctrl-C delivers SIGINT to BOTH — `firstExit.signal` will
+    // be 'SIGINT' and the runner-entry SIGINT handler is mid-flight
+    // closing analytics + exiting. Defer to it: wait for the process to
+    // actually exit instead of racing it with a misleading "exited with
+    // code null" error log.
     const firstExit = await Promise.race(handles.map((h) => h.exited));
+    if (signalIsInterrupt(firstExit.signal) || isShuttingDown()) {
+      // Park indefinitely — the SIGINT handler owns exit. If it somehow
+      // fails to call process.exit, Node's event loop draining naturally
+      // ends the process with code 0 once handles are released, which is
+      // still better than emitting a misleading error.
+      await new Promise(() => undefined);
+      return;
+    }
     if (firstExit.code !== 0) {
       log.error(
-        `[launch] a local-command exited with code ${firstExit.code} — stopping siblings.`,
+        `[launch] a local-command exited with code ${firstExit.code ?? 'null'} — stopping siblings.`,
       );
       for (const h of handles) void h.kill();
       await Promise.all(handles.map((h) => h.exited));
@@ -571,4 +600,8 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
   } finally {
     // Caller owns the SIGINT handler lifecycle (registered at runner entry).
   }
+}
+
+function signalIsInterrupt(signal: NodeJS.Signals | null): boolean {
+  return signal === 'SIGINT' || signal === 'SIGTERM';
 }

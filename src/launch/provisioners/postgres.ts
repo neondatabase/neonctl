@@ -197,27 +197,13 @@ async function pollOpsTerminal(
       const op = data.operation;
       if (TERMINAL_OP_STATUSES.has(op.status)) {
         remaining.delete(opId);
-        continue;
       }
-      // `failed`/`error` are non-terminal AS LONG AS Neon plans another
-      // retry — `retry_at` carries the next-attempt timestamp. When it's
-      // absent and the op has already failed at least once, the op is
-      // permanently failed; surface immediately with the server's error
-      // string instead of burning the full --branch-timeout budget.
-      if (
-        (op.status === 'failed' || op.status === 'error') &&
-        op.retry_at === undefined &&
-        op.failures_count > 0
-      ) {
-        throw new Error(
-          [
-            `[neon launch] Neon operation ${opId} (${op.action}) failed permanently after ${op.failures_count} attempt(s).`,
-            op.error ? `Error: ${op.error}` : '',
-          ]
-            .filter(Boolean)
-            .join('\n'),
-        );
-      }
+      // `failed`/`error` are non-terminal — Neon retries internally. We
+      // could in principle short-circuit on a permanent failure, but the
+      // SDK exposes `retry_at` as the "last retried at" timestamp (past
+      // tense), so a single snapshot can't reliably distinguish
+      // "between retries" from "no more retries planned". Trust the
+      // `--branch-timeout` budget instead.
     }
     if (remaining.size > 0) await sleep(DEFAULT_POLL_INTERVAL_MS);
   }
