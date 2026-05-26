@@ -356,10 +356,9 @@ export function startLocalCommand(opts: {
     stdio: stdioMode === 'inherit' ? 'inherit' : ['ignore', 'pipe', 'pipe'],
   });
 
-  // Subscribers receive each parsed line as it arrives. The streaming
-  // model avoids the prior approach's two failure modes: a buffer that
-  // grew unbounded for chatty processes, and a 200ms poll-interval that
-  // re-tested every prior line on each tick.
+  // Subscribers receive each parsed line as it arrives. No backing
+  // buffer — readiness probes that need to match a log line attach a
+  // per-call subscriber and unsubscribe on completion.
   const lineSubscribers = new Set<(line: string) => void>();
   const subscribeLines = (cb: (line: string) => void): (() => void) => {
     lineSubscribers.add(cb);
@@ -434,12 +433,21 @@ export function startLocalCommand(opts: {
     }
     // Unix + detached: kill the whole process group (-pid). The shell was
     // spawned as its own group leader, so the dev server / grandchildren
-    // receive the signal too. ESRCH means the group already exited.
+    // receive the signal too. Swallow all errors here — kill() is
+    // declared `Promise<void>`, callers loop over multiple handles with
+    // `void h.kill()` and a sync throw would abort the loop and leak the
+    // remaining children. The common error is ESRCH (group already gone);
+    // EPERM can fire for sudo-wrapped children and we'd rather log than
+    // crash the teardown.
     try {
       if (child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
     } catch (err: unknown) {
       const code = (err as { code?: string }).code;
-      if (code !== 'ESRCH') throw err;
+      if (code !== 'ESRCH') {
+        log.info(
+          `[${resourceFqn}] kill(-${String(child.pid)}, SIGTERM) failed: ${code ?? String(err)}`,
+        );
+      }
     }
     return Promise.resolve();
   };

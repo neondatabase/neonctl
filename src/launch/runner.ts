@@ -202,11 +202,7 @@ async function resolveEnv(
  * members (postgres, vercel-deployment) don't write to the TTY so they
  * don't count.
  */
-function pickStdioMode(
-  node: PlanNode,
-  _stageSize: number,
-  localCmdCount: number,
-): StdioMode {
+function pickStdioMode(node: PlanNode, localCmdCount: number): StdioMode {
   if (localCmdCount !== 1) return 'prefixed';
   const spec = node.spec as { readiness?: { logMatch?: RegExp } };
   if (spec.readiness && 'logMatch' in spec.readiness) return 'prefixed';
@@ -432,11 +428,7 @@ async function provisionStages(args: StagesArgs): Promise<void> {
           cwd,
           gitBranch,
           branchTimeoutSeconds,
-          // 'inherit' only when this is the sole local-command in a
-          // sole-occupant stage AND it doesn't read stdout via logMatch
-          // (inherit-mode child has stdout=null; logMatch would deadlock
-          // on its budget). All other cases use 'prefixed' streaming.
-          stdioMode: pickStdioMode(node, stage.length, localCmdCount),
+          stdioMode: pickStdioMode(node, localCmdCount),
           liveLocalCommands,
           neonLaunchEnv,
         }),
@@ -632,21 +624,32 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
   // races us to exit. Defer to it instead of emitting a misleading
   // "exited with code null" error log.
   const firstExit = await Promise.race(handles.map((h) => h.exited));
-  if (isShuttingDown() || firstExit.signal === 'SIGINT') {
-    // Two ways to land here:
-    //   1. Our SIGINT handler ran first and set `interrupted` — defer
-    //      to its closeAnalytics → process.exit(130).
-    //   2. TTY Ctrl-C delivered SIGINT to both parent and child; the
-    //      child's exit microtask raced ahead of the parent's signal
-    //      handler. `firstExit.signal === 'SIGINT'` is the unambiguous
-    //      signature of TTY-initiated shutdown — defer to the handler
-    //      that's about to run.
-    // We deliberately do NOT match SIGTERM here: an external supervisor
-    // SIGTERM'ing only the child does NOT mean our parent is shutting
-    // down, and parking on that would hang the parent forever while
-    // siblings keep the event loop alive.
+
+  // Defer to the SIGINT handler ONLY when we have positive evidence the
+  // parent is shutting down. Two cases:
+  //   1. `isShuttingDown()` true — handler already ran (set interrupted).
+  //   2. Child exited with signal 'SIGINT' AND the parent's handler is
+  //      about to run (TTY Ctrl-C delivered to whole foreground group).
+  //      The handler runs in the same process tick as the signal; yield
+  //      with setImmediate so it has a chance to set `interrupted`, then
+  //      re-check. If still not shutting down after the yield, the
+  //      SIGINT was delivered only to the child (external `kill -INT
+  //      <child-pid>`, debugger, etc.) — fall through and treat as a
+  //      sibling crash rather than parking forever.
+  // SIGTERM is never used as a deferral signal — external supervisors
+  // SIGTERM children all the time and we have no business hanging the
+  // parent for that.
+  if (isShuttingDown()) {
     await new Promise(() => undefined);
     return;
+  }
+  if (firstExit.signal === 'SIGINT') {
+    await new Promise((r) => setImmediate(r));
+    if (isShuttingDown()) {
+      await new Promise(() => undefined);
+      return;
+    }
+    // Stray SIGINT to the child only — fall through to the crash branch.
   }
   if (firstExit.code !== 0) {
     log.error(

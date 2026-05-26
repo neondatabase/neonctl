@@ -193,10 +193,14 @@ export type LocalCommandSpec = {
   readiness?: LocalCommandReadiness;
 };
 
-export type LocalCommandOutputs = {
-  /** Populated for `onExit`-readiness one-shots once they exit. */
-  exitCode?: number;
-};
+/**
+ * Local commands don't expose outputs in v1. Use `readiness: { onExit: 0 }`
+ * as a gate to sequence dependents — the command's exit code itself is
+ * not available as a Ref. (Reserved as a non-empty object so the
+ * Resource<'local-command', LocalCommandOutputs> generic narrows
+ * symmetrically with the other resource kinds.)
+ */
+export type LocalCommandOutputs = Record<string, never>;
 
 // =============================================================================
 // Internal resource representation
@@ -359,10 +363,12 @@ export function stack<
   dependsOn?: D;
   spec: SpecFn<D, Children>;
 }): Resource<'stack', never> {
-  // Outputs typed as `never` so a downstream `dependsOn: { x: someStack }`
-  // produces an unusable `x` in the spec callback — TS catches the misuse
-  // at compile time, matching plan.ts's runtime "nested stacks not
-  // supported" reject. Drop `never` when nested-stack composition lands.
+  // Outputs typed as `never` so a spec callback reading a stack dep's
+  // properties gets `never`-typed values — a soft hint that something is
+  // off (autocomplete shows nothing useful). The hard reject for
+  // nested-stack-as-dep lives in plan.ts; TS does NOT catch it on its
+  // own because `never` is assignable to any target type. Drop the
+  // `never` when nested-stack composition lands.
   return buildResource<'stack', never, D>('stack', opts);
 }
 
