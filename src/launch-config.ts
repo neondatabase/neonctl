@@ -14,10 +14,6 @@ export {
   localCommand,
   stack,
   type Ref,
-  type Resource,
-  type DepsRecord,
-  type Resolved,
-  type SpecFn,
   type LaunchContext,
   type FlagValue,
   type PostgresSpec,
@@ -29,3 +25,11 @@ export {
   type LocalCommandReadiness,
   type LocalCommandOutputs,
 } from './launch/config.js';
+
+// Intentionally NOT re-exported:
+//   Resource, DepsRecord, Resolved, SpecFn — these are internal shapes
+//     used to type the factory generics. User-land helpers can rely on
+//     factory return-type inference (`const makeSeed = (t: string) =>
+//     localCommand({...})`) without naming the underlying types.
+//   InternalResource, isInternalResource, makeRef, isRef — launcher
+//     internals; would prevent us from refactoring the runtime carriers.

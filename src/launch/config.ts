@@ -358,12 +358,12 @@ export function stack<
 >(opts: {
   dependsOn?: D;
   spec: SpecFn<D, Children>;
-}): Resource<'stack', { [K in keyof Children]: Children[K]['__outputs'] }> {
-  return buildResource<
-    'stack',
-    { [K in keyof Children]: Children[K]['__outputs'] },
-    D
-  >('stack', opts);
+}): Resource<'stack', never> {
+  // Outputs typed as `never` so a downstream `dependsOn: { x: someStack }`
+  // produces an unusable `x` in the spec callback — TS catches the misuse
+  // at compile time, matching plan.ts's runtime "nested stacks not
+  // supported" reject. Drop `never` when nested-stack composition lands.
+  return buildResource<'stack', never, D>('stack', opts);
 }
 
 // =============================================================================

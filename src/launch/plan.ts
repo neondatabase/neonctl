@@ -22,7 +22,12 @@ import type {
   LaunchContext,
   Resource,
 } from './config.js';
-import { LaunchError, dupKeyMessage, singletonMessage } from './errors.js';
+import {
+  ExitCode,
+  LaunchError,
+  dupKeyMessage,
+  singletonMessage,
+} from './errors.js';
 import { makeRef } from './refs.js';
 
 // =============================================================================
@@ -119,11 +124,9 @@ function walkTree(
     const fqn =
       frame.localKey === '' ? '' : joinFqn(frame.parentFqn, frame.localKey);
 
-    // Invoke the spec callback. For the root stack, deps={}; for nested
-    // stacks the launcher will substitute resolved outputs at provision
-    // time — until then we pass proxy refs. For Phase 4 (plan time) we
-    // pass `{}` to nested stacks too; the spec callback only uses the
-    // typed shape, not values at this stage.
+    // Invoke the spec callback. The root stack gets `deps = {}`; each
+    // child leaf gets a record of Ref-bearing proxies (see makeOutputProxy
+    // below) the runner swaps for real values before that leaf runs.
     const spec = frame.resource.__spec(frame.depsArg as never, ctx);
 
     // Stacks return a record; leaves return a spec object.
@@ -131,6 +134,7 @@ function walkTree(
       if (typeof spec !== 'object' || spec === null) {
         throw new LaunchError(
           `[neon launch] Stack '${fqn || 'root'}' spec did not return a record of resources (got ${typeof spec}).`,
+          ExitCode.CONFIG_ERROR,
         );
       }
       // Track per-stack dup-key check via reference identity.
@@ -142,6 +146,7 @@ function walkTree(
           throw new LaunchError(
             `[neon launch] Stack '${fqn || 'root'}' returned key '${key}' that is not a resource. ` +
               `Every value in a stack's returned record must be the result of a factory call.`,
+            ExitCode.CONFIG_ERROR,
           );
         }
         // Nested stacks aren't supported in v1 — the registry only holds
@@ -162,6 +167,7 @@ function walkTree(
               `  const buildData = () => ({ primary: postgres({...}) });`,
               `  return { ...buildData(), web };`,
             ].join('\n'),
+            ExitCode.CONFIG_ERROR,
           );
         }
         // Dup-key invariant — checked HERE per stack so the error template
@@ -175,6 +181,7 @@ function walkTree(
               keyB: key,
               kind: value.__kind,
             }),
+            ExitCode.CONFIG_ERROR,
           );
         }
         seenValues.set(value, key);
@@ -237,19 +244,16 @@ function findResourceFqn(
 
 /**
  * Build a minimal proxy for a dep's outputs at plan time. Property access
- * yields a Ref<string> keyed on the dep's FQN (or `__id` if FQN isn't
- * known yet during walk — second pass rewrites).
- *
- * The runtime resolver (`walkAndResolve`) substitutes the Ref with the
- * real value just before the dependent provisioner runs.
+ * yields a `Ref<string>` keyed on `<dep.__id>.<prop>`. The runner's
+ * `resolveLeaf` looks the id up in its `outputs` map at provision time
+ * and swaps the ref for the real value before passing env to the
+ * dependent.
  */
 function makeOutputProxy(dep: InternalResource): unknown {
   // Spec callbacks read outputs (`db.connectionString`, `web.url`) at the
-  // moment the parent's `spec(deps, ctx)` runs — which is plan time. We
-  // hand them a Proxy that yields a Ref<T> for each property access, keyed
-  // on `<dep.__id>.<prop>`. The runner builds an outputTable with matching
-  // keys at provision time and walks the leaf's env to swap refs for real
-  // values (see refs.walkAndResolve + runner.resolveOutputs).
+  // moment the parent's `spec(deps, ctx)` runs — which is plan time. The
+  // returned ref encodes which resource + which property; the runner does
+  // the actual lookup.
   return new Proxy(
     {},
     {
@@ -280,6 +284,7 @@ function enforceSingletonPostgres(registry: Map<string, PlanNode>): void {
         count: postgresNodes.length,
         names: postgresNodes.map((n) => n.name),
       }),
+      ExitCode.CONFIG_ERROR,
     );
   }
 }
@@ -293,6 +298,7 @@ function enforceDepsInTree(registry: Map<string, PlanNode>): void {
           `[neon launch] Resource '${node.name}' depends on '${depKey}', ` +
             `but that resource is not in the resolved tree. ` +
             `Did you declare it but forget to include it in some stack's return record?`,
+          ExitCode.CONFIG_ERROR,
         );
       }
     }
@@ -343,6 +349,7 @@ function topoOrder(registry: Map<string, PlanNode>): string[] {
     throw new LaunchError(
       `[neon launch] Cycle detected in resource dependencies. ` +
         `Involved resources: ${remaining.join(', ')}.`,
+      ExitCode.CONFIG_ERROR,
     );
   }
 
@@ -385,6 +392,7 @@ export async function buildPlan(
         '',
         `Then run \`neon launch\` again. See the full announcement in the repo.`,
       ].join('\n'),
+      ExitCode.CONFIG_ERROR,
     );
   }
 
@@ -399,6 +407,7 @@ export async function buildPlan(
         : typeof def;
     throw new LaunchError(
       `[neon launch] ${configPath} must default-export a stack({...}) from 'neonctl/config'. Found: ${found}.`,
+      ExitCode.CONFIG_ERROR,
     );
   }
 

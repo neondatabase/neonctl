@@ -64,6 +64,16 @@ async function with5xxRetry<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Compose retryOnLock (423) + with5xxRetry. All Neon API calls in this
+ * provisioner go through here so transient outages and lock contention
+ * are handled consistently — a single 502 from the read path shouldn't
+ * fail a 5-minute branch-create poll.
+ */
+function withRetries<T>(fn: () => Promise<T>): Promise<T> {
+  return with5xxRetry(() => retryOnLock(fn));
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -84,27 +94,34 @@ export type PostgresProvisionResult = {
 
 type NeonApi = Api<unknown>;
 
+/**
+ * Find a branch by exact name. Uses the server-side `search` filter so we
+ * don't miss matches that fall off the first page on large projects, then
+ * narrows to exact-equal in code (search is substring-match per the API).
+ */
 async function findBranchByName(
   api: NeonApi,
   projectId: string,
   name: string,
 ): Promise<Branch | undefined> {
-  const { data } = await retryOnLock(() =>
-    api.listProjectBranches({ projectId }),
-  );
-  return data.branches.find((b: Branch) => b.name === name);
+  for await (const branch of iterateBranches(api, projectId, name)) {
+    if (branch.name === name) return branch;
+  }
+  return undefined;
 }
 
+/**
+ * Resolve the parent branch for a new fork. Explicit `branchFrom` uses the
+ * search-by-name path; omitted falls back to the project's default branch
+ * (paginated since the default may be older than the first page's window).
+ */
 async function resolveBranchFromId(
   api: NeonApi,
   projectId: string,
   branchFrom: string | undefined,
 ): Promise<{ id: string; name: string }> {
-  const { data } = await retryOnLock(() =>
-    api.listProjectBranches({ projectId }),
-  );
   if (branchFrom !== undefined) {
-    const match = data.branches.find((b: Branch) => b.name === branchFrom);
+    const match = await findBranchByName(api, projectId, branchFrom);
     if (!match) {
       throw new Error(
         `[neon launch] branchFrom='${branchFrom}' was specified but no branch with that name exists in project ${projectId}.`,
@@ -112,14 +129,37 @@ async function resolveBranchFromId(
     }
     return { id: match.id, name: match.name };
   }
-  // Omitted → use the project's default branch.
-  const def = data.branches.find((b: Branch) => b.default);
-  if (!def) {
-    throw new Error(
-      `[neon launch] Project ${projectId} has no default branch — cannot resolve branchFrom. Set branchFrom explicitly in your neon.ts.`,
-    );
+  for await (const branch of iterateBranches(api, projectId)) {
+    if (branch.default) return { id: branch.id, name: branch.name };
   }
-  return { id: def.id, name: def.name };
+  throw new Error(
+    `[neon launch] Project ${projectId} has no default branch — cannot resolve branchFrom. Set branchFrom explicitly in your neon.ts.`,
+  );
+}
+
+/**
+ * Iterate every branch in the project, following the cursor pagination
+ * cursor until exhausted. Optional `search` narrows server-side.
+ */
+async function* iterateBranches(
+  api: NeonApi,
+  projectId: string,
+  search?: string,
+): AsyncGenerator<Branch> {
+  let cursor: string | undefined;
+  while (true) {
+    const { data } = await withRetries(() =>
+      api.listProjectBranches({
+        projectId,
+        ...(search !== undefined ? { search } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+      }),
+    );
+    for (const b of data.branches as Branch[]) yield b;
+    const next = (data as { pagination?: { next?: string } }).pagination?.next;
+    if (!next) return;
+    cursor = next;
+  }
 }
 
 async function pollBranchReady(
@@ -130,7 +170,7 @@ async function pollBranchReady(
 ): Promise<Branch> {
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
-    const { data } = await retryOnLock(() =>
+    const { data } = await withRetries(() =>
       api.getProjectBranch(projectId, branchId),
     );
     if (data.branch.current_state === 'ready') return data.branch;
@@ -151,7 +191,7 @@ async function pollOpsTerminal(
   const remaining = new Set(operationIds);
   while (remaining.size > 0 && Date.now() < deadline) {
     for (const opId of [...remaining]) {
-      const { data } = await retryOnLock(() =>
+      const { data } = await withRetries(() =>
         api.getProjectOperation(projectId, opId),
       );
       const op = data.operation;
@@ -197,7 +237,7 @@ async function findEndpoint(
   projectId: string,
   branchId: string,
 ): Promise<Endpoint | undefined> {
-  const { data } = await retryOnLock(() =>
+  const { data } = await withRetries(() =>
     api.listProjectBranchEndpoints(projectId, branchId),
   );
   return data.endpoints.find(
@@ -257,7 +297,7 @@ async function reconcileCompute(
     },
   };
 
-  const { data } = await retryOnLock(() =>
+  const { data } = await withRetries(() =>
     api.updateProjectEndpoint(projectId, endpoint.id, body),
   );
   log.info(`[postgres:${branchName}] compute updated: ${drifts.join(', ')}`);
@@ -337,8 +377,8 @@ export async function provisionPostgres(opts: {
 
     let createResp;
     try {
-      createResp = await with5xxRetry(() =>
-        retryOnLock(() => api.createProjectBranch(projectId, createBody)),
+      createResp = await withRetries(() =>
+        api.createProjectBranch(projectId, createBody),
       );
     } catch (err) {
       // Concurrent-create race: another launch beat us to it. Fall back to
@@ -424,7 +464,7 @@ async function firstNonSystemRole(
   projectId: string,
   branchId: string,
 ): Promise<string> {
-  const { data } = await retryOnLock(() =>
+  const { data } = await withRetries(() =>
     api.listProjectBranchRoles(projectId, branchId),
   );
   // `protected: true` flags platform-managed roles (e.g. superuser). The
@@ -450,7 +490,7 @@ async function firstNonSystemDatabase(
   projectId: string,
   branchId: string,
 ): Promise<string | undefined> {
-  const { data } = await retryOnLock(() =>
+  const { data } = await withRetries(() =>
     api.listProjectBranchDatabases(projectId, branchId),
   );
   return data.databases[0]?.name;
@@ -471,7 +511,7 @@ export async function resolveConnectionString(opts: {
   role: string;
   pooled?: boolean;
 }): Promise<string> {
-  const { data } = await retryOnLock(() =>
+  const { data } = await withRetries(() =>
     opts.api.getConnectionUri({
       projectId: opts.projectId,
       branch_id: opts.branchId,

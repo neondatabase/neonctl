@@ -2,16 +2,13 @@
  * Ref<T> — opaque, lazy outputs the launcher resolves after a resource is
  * provisioned. Runtime + type contract in one place.
  *
- * The six behaviors this module must preserve:
+ * Behaviors this module must preserve (pinned in src/launch/refs.test.ts):
  *
  *   1. JSON.stringify(ref) → {"__ref":"<id>","__kind":"ref"[,"__opts":...]}
- *   2. `${ref}` THROWS with the doc-as-error message
- *   3. util.inspect(ref) → "Ref<string>(<id>)"  (Node honors inspect.custom)
+ *   2. `${ref}` throws with a corrective example as the error message
+ *   3. util.inspect(ref) → "Ref<string>(<id>)" via inspect.custom
  *   4. ref({ pooled: false }) → new ref tagged with the call's opts
  *   5. Object.assign({}, ref) preserves the marker keys
- *   6. structuredClone(ref) throws (known Proxy incompat — Bugzilla 1269327)
- *
- * Test coverage in src/launch/refs.test.ts.
  */
 import { inspect } from 'node:util';
 
@@ -118,9 +115,10 @@ export function makeRef<T = string>(id: string, opts?: unknown): Ref<T> {
 /**
  * Type guard: is `v` a Ref marker?
  *
- * Used by `walkAndResolve` to identify leaves that need substitution. Tests
- * the runtime `__kind === 'ref'` discriminator — the type-level brand isn't
- * observable at runtime; dispatch by string, never instanceof.
+ * Used by `runner.resolveEnv` to identify env-value leaves that need
+ * substitution. Tests the runtime `__kind === 'ref'` discriminator; the
+ * type-level brand isn't observable at runtime (dispatch by string, never
+ * `instanceof`).
  */
 export function isRef(v: unknown): v is RefMarker {
   // `v` may be a function — makeRef wraps a function in a Proxy so the

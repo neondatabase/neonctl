@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 
 import { makeRef, isRef } from './refs.js';
 
-describe('makeRef — six required Proxy behaviors', () => {
+describe('makeRef — required Proxy behaviors', () => {
   it('1. JSON.stringify produces the marker envelope', () => {
     const ref = makeRef('x');
     expect(JSON.stringify(ref)).toBe('{"__ref":"x","__kind":"ref"}');
@@ -53,11 +53,6 @@ describe('makeRef — six required Proxy behaviors', () => {
     const flat = Object.assign({}, ref) as Record<string, unknown>;
     expect(flat.__ref).toBe('x');
     expect(flat.__kind).toBe('ref');
-  });
-
-  it('6. structuredClone(ref) throws (Bugzilla 1269327 — Proxy incompat)', () => {
-    const ref = makeRef('x');
-    expect(() => structuredClone(ref)).toThrow();
   });
 });
 

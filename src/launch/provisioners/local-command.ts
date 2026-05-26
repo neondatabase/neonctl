@@ -130,26 +130,39 @@ function awaitOnExit(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(
-        new Error(
-          `local-command readiness: did not exit within ${budgetMs}ms (expected code ${expectedCode}). The process is wedged.`,
-        ),
-      );
-    }, budgetMs);
-    child.once('exit', (code) => {
+    const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (code === expectedCode) resolve();
-      else
+      fn();
+    };
+    const timer = setTimeout(() => {
+      settle(() => {
         reject(
           new Error(
-            `local-command exited with code ${code} (expected ${expectedCode}).`,
+            `local-command readiness: did not exit within ${budgetMs}ms (expected code ${expectedCode}). The process is wedged.`,
           ),
         );
+      });
+    }, budgetMs);
+    child.once('exit', (code) => {
+      settle(() => {
+        if (code === expectedCode) resolve();
+        else
+          reject(
+            new Error(
+              `local-command exited with code ${code} (expected ${expectedCode}).`,
+            ),
+          );
+      });
+    });
+    // Spawn-layer failure (ENOENT etc.) emits 'error' instead of (or in
+    // addition to) 'exit'. Without this listener readiness would hang
+    // the full budget waiting for an 'exit' that never fires.
+    child.once('error', (err: Error) => {
+      settle(() => {
+        reject(err);
+      });
     });
   });
 }
@@ -169,24 +182,39 @@ async function pollUntilReady(opts: {
   const deadline = Date.now() + opts.budget;
   let childExited = false;
   let exitCode: number | null = null;
+  let spawnError: Error | undefined;
   const onExit = (code: number | null) => {
     childExited = true;
     exitCode = code;
   };
+  const onError = (err: Error) => {
+    spawnError = err;
+    childExited = true;
+  };
   opts.child.once('exit', onExit);
+  opts.child.once('error', onError);
+  const checkChildState = () => {
+    if (spawnError) throw spawnError;
+    if (childExited) {
+      throw new Error(
+        `local-command exited (code ${exitCode}) before readiness fired. ${opts.describeFailure()}`,
+      );
+    }
+  };
   try {
     while (Date.now() < deadline) {
-      if (childExited) {
-        throw new Error(
-          `local-command exited (code ${exitCode}) before readiness fired. ${opts.describeFailure()}`,
-        );
-      }
+      checkChildState();
       if (await opts.predicate()) return;
+      // Re-check after the predicate's awaited window; otherwise we'd
+      // sleep on a child that died mid-probe and surface a misleading
+      // "did not start listening" timeout.
+      checkChildState();
       await sleep(opts.interval);
     }
     throw new Error(opts.describeFailure());
   } finally {
     opts.child.off('exit', onExit);
+    opts.child.off('error', onError);
   }
 }
 
@@ -296,15 +324,24 @@ export function startLocalCommand(opts: {
   // On Unix, `shell: true` makes the spawned process `sh -c <command>` —
   // a shell that doesn't forward signals to its child by default. If we
   // SIGTERM the shell, the actual dev server (the grandchild) keeps
-  // running. `detached: true` puts the shell in its OWN process group;
-  // we then kill the whole group via `process.kill(-pid, ...)`. Windows
-  // doesn't have process groups so we fall back to `child.kill` there.
+  // running. `detached: true` puts the shell in its OWN process group so
+  // we can `process.kill(-pid, ...)` to take down the whole group.
+  //
+  // BUT: combining `detached: true` with `stdio: 'inherit'` breaks
+  // interactive TTY input — the child loses its controlling TTY (becomes
+  // a session leader via setsid) and reads from fd 0 either get SIGTTIN
+  // or block. `next dev` / `vite` interactive shortcuts stop working.
+  // So: detached only when streams are piped (prefixed mode); inherit
+  // mode runs in the parent's process group, and we rely on the
+  // foreground TTY's natural SIGINT delivery on Ctrl-C plus child.kill
+  // for explicit teardown.
   const isWindows = process.platform === 'win32';
+  const detached = !isWindows && stdioMode !== 'inherit';
   const child = spawn(spec.command, {
     cwd,
     env,
     shell: true,
-    detached: !isWindows,
+    detached,
     stdio: stdioMode === 'inherit' ? 'inherit' : ['ignore', 'pipe', 'pipe'],
   });
 
@@ -375,15 +412,17 @@ export function startLocalCommand(opts: {
 
   const kill = (): Promise<void> => {
     if (child.killed || child.exitCode !== null) return Promise.resolve();
-    if (isWindows) {
-      // Windows: no process-group concept; child.kill('SIGINT') is roughly
-      // SIGKILL (nodejs/node#35172). Use SIGTERM for parity; the
-      // inherit-stdio mode in single-active stages routes Ctrl-C natively.
+    if (!detached) {
+      // Either Windows (no process groups) or inherit-mode (we declined to
+      // detach to keep the TTY behavior — the child shares our group, so
+      // the OS already delivers SIGINT on Ctrl-C and child.kill reaches
+      // the shell. Grandchildren may not get the signal in this mode;
+      // they're the price of `stdio: 'inherit'`).
       child.kill('SIGTERM');
       return Promise.resolve();
     }
-    // Unix: kill the whole process group (-pid). `detached: true` above
-    // put the shell in its own group, so the dev server / grandchildren
+    // Unix + detached: kill the whole process group (-pid). The shell was
+    // spawned as its own group leader, so the dev server / grandchildren
     // receive the signal too. ESRCH means the group already exited.
     try {
       if (child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');

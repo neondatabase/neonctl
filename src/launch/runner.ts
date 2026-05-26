@@ -10,6 +10,7 @@
 import { resolve as resolvePath } from 'node:path';
 
 import { log } from '../log.js';
+import { closeAnalytics } from '../analytics.js';
 import { getApiClient } from '../api.js';
 import {
   buildLaunchContext,
@@ -45,7 +46,6 @@ export type LaunchRunOptions = {
   configPath: string;
   branchFlag?: string;
   branchTimeoutSeconds: number;
-  yes: boolean;
   argv: Record<string, unknown>;
   recognizedFlags: ReadonlySet<string>;
 };
@@ -186,6 +186,28 @@ async function resolveEnv(
  * nodes whose deps are satisfied by previous stages. Within a stage, nodes
  * run in parallel.
  */
+/**
+ * Pick the stdio mode for a local-command node.
+ *
+ * 'inherit' passes the parent's TTY straight through — preserves Windows
+ * native SIGINT routing into child prompts, lets the user interact with
+ * `next dev` / `vite` shortcuts. But the child's stdout/stderr are null,
+ * so logMatch readiness can never see lines. Force 'prefixed' for those.
+ *
+ * Also force 'prefixed' if the stage runs anything in parallel — the user
+ * needs prefixed log lines to tell which process is talking.
+ */
+function pickStdioMode(
+  node: PlanNode,
+  stageSize: number,
+  localCmdCount: number,
+): StdioMode {
+  if (stageSize !== 1 || localCmdCount !== 1) return 'prefixed';
+  const spec = node.spec as { readiness?: { logMatch?: RegExp } };
+  if (spec.readiness && 'logMatch' in spec.readiness) return 'prefixed';
+  return 'inherit';
+}
+
 function groupStages(plan: Plan): PlanNode[][] {
   const stages: PlanNode[][] = [];
   const done = new Set<string>();
@@ -240,10 +262,16 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
 
   // 2. Resolve state values with precedence:
   //   process.env > .neon-launch.env > .neon middleware context
+  // `enrichFromContext` (src/context.ts) writes the resolved project id to
+  // argv.projectId (camelCase); yargs also mirrors any --project-id flag to
+  // both kebab- and camelCase. Read both so set-context users actually
+  // pick up the .neon value (the error message at line 255 promises this).
   const neonLaunchEnv = readNeonLaunchEnv(repoRoot);
   const neonContext: Record<string, string | undefined> = {
     NEON_PROJECT_ID:
-      (opts.argv['project-id'] as string | undefined) ?? undefined,
+      (opts.argv.projectId as string | undefined) ??
+      (opts.argv['project-id'] as string | undefined) ??
+      undefined,
   };
   const projectId = resolveStateValue(
     'NEON_PROJECT_ID',
@@ -297,7 +325,11 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     interrupted = true;
     log.info('[launch] SIGINT — stopping any running local commands.');
     for (const h of liveLocalCommands) void h.kill();
-    process.exit(ExitCode.SIGINT);
+    // Flush analytics before exit so the SIGINT event isn't dropped.
+    // Fire-and-forget: if flush hangs we still exit on the next tick.
+    void closeAnalytics().finally(() => {
+      process.exit(ExitCode.SIGINT);
+    });
   };
   process.on('SIGINT', onSigint);
 
@@ -305,13 +337,9 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     log.info(
       `[launch] stage ${idx + 1}/${stages.length}: ${stage.map((n) => n.name).join(', ')}`,
     );
-    // Decide stdio model: 'inherit' iff exactly one local-command in this
-    // stage AND no other resource types share it.
     const localCmdCount = stage.filter(
       (n) => n.resource.__kind === 'local-command',
     ).length;
-    const stdioMode: StdioMode =
-      localCmdCount === 1 && stage.length === 1 ? 'inherit' : 'prefixed';
 
     try {
       await Promise.all(
@@ -324,7 +352,11 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
             cwd,
             gitBranch: ctx.gitBranch,
             branchTimeoutSeconds: opts.branchTimeoutSeconds,
-            stdioMode,
+            // 'inherit' only when this is the sole local-command in a
+            // sole-occupant stage AND it doesn't read stdout via logMatch
+            // (inherit-mode child has stdout=null; logMatch would deadlock
+            // on its budget). All other cases use 'prefixed' streaming.
+            stdioMode: pickStdioMode(node, stage.length, localCmdCount),
             liveLocalCommands,
             neonLaunchEnv,
           }),
@@ -492,6 +524,11 @@ async function provisionLocalCommandNode(args: {
     await handle.ready;
   } catch (err) {
     await handle.kill();
+    // Splice the dead handle so the stage-level catch + later teardowns
+    // don't iterate over already-killed entries (idempotent today, but
+    // avoids a landmine if kill() ever grows side effects).
+    const idx = args.liveLocalCommands.indexOf(handle);
+    if (idx >= 0) args.liveLocalCommands.splice(idx, 1);
     throw err;
   }
   outputs.set(args.node.resource.__id, {
@@ -526,6 +563,7 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
       );
       for (const h of handles) void h.kill();
       await Promise.all(handles.map((h) => h.exited));
+      await closeAnalytics();
       process.exit(ExitCode.RESOURCE_FAILED);
     }
     // Successful exit; wait for siblings too.

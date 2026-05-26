@@ -229,29 +229,32 @@ export async function createDeployment(opts: {
       : undefined,
   };
 
-  // The client yields events. The iterator emits one of these terminal
-  // types and then `return`s:
-  //   - 'ready' / 'alias-assigned' → success
-  //   - 'error' / 'canceled' → failure with payload
-  //   - 'checks-v2-failed' → post-deploy checks failed; iterator ends
-  //     silently otherwise, which would surface as a generic "stream ended"
-  //     message masking the actual failure reason
-  // Non-terminal informational events: 'created', 'building', 'checks-running',
-  // 'checks-conclusion-failed' (latter does NOT end the stream — wait for
-  // the subsequent error / alias-assigned).
+  // The client iterator emits 'ready' BEFORE 'alias-assigned'. At 'ready'
+  // the deployment is live but `payload.url` is the immutable per-deploy
+  // <id>.vercel.app host and aliases haven't been wired — so returning
+  // there gives the wrong URL for prod deploys (the user expects the
+  // production domain). 'alias-assigned' is the actual terminal success.
+  // 'checks-v2-failed' is a terminal yield-and-return failure that would
+  // otherwise look like "stream ended" with no diagnostic.
+  let aliasedUrl: string | undefined;
   for await (const event of vercelCreateDeployment(
     clientOpts as Parameters<typeof vercelCreateDeployment>[0],
     deploymentOpts as Parameters<typeof vercelCreateDeployment>[1],
   )) {
     const payload = event.payload as {
       url?: string;
+      alias?: string[];
       readyState?: string;
       errorMessage?: string;
     };
     if (payload.url) url = `https://${payload.url}`;
     if (payload.readyState) status = payload.readyState;
-    if (event.type === 'ready' || event.type === 'alias-assigned') {
-      return { url: url ?? '', status: 'READY' };
+    if (event.type === 'alias-assigned') {
+      // Prefer the canonical alias (production domain or branch alias)
+      // when present; fall back to the per-deploy URL.
+      const first = payload.alias?.[0];
+      if (first) aliasedUrl = `https://${first}`;
+      return { url: aliasedUrl ?? url ?? '', status: 'READY' };
     }
     if (
       event.type === 'error' ||

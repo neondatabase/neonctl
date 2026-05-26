@@ -26,10 +26,11 @@ export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
  */
 export class LaunchError extends Error {
   readonly exitCode: ExitCode;
-  // Default to CONFIG_ERROR because plan-time invariant violations (the most
-  // common throw site) are config errors by definition. Pass an explicit
-  // code for the AUTH_MISSING / RESOURCE_FAILED branches.
-  constructor(message: string, exitCode: ExitCode = ExitCode.CONFIG_ERROR) {
+  // Explicit exit code is required: defaulting would silently mis-classify
+  // a future internal-bug throw as CONFIG_ERROR (telling the user "fix your
+  // config" when the launcher itself is wrong). Plain `throw new Error(...)`
+  // still falls through to RESOURCE_FAILED via the handler in commands/launch.ts.
+  constructor(message: string, exitCode: ExitCode) {
     super(message);
     this.name = 'LaunchError';
     this.exitCode = exitCode;

@@ -10,15 +10,13 @@
 import type yargs from 'yargs';
 
 import { log } from '../log.js';
-import { sendError } from '../analytics.js';
+import { closeAnalytics, sendError } from '../analytics.js';
 
 const RECOGNIZED_FLAGS = new Set([
   'config',
   'branch',
   'branch-timeout',
   'branchTimeout',
-  'yes',
-  'y',
   'output',
   // yargs-injected globals from src/index.ts (every global option + its
   // camelCase alias + the apiClient internal yargs hangs off argv):
@@ -27,6 +25,10 @@ const RECOGNIZED_FLAGS = new Set([
   'api-key',
   'apiKey',
   'apiClient',
+  'project-id',
+  'projectId',
+  'org-id',
+  'orgId',
   'config-dir',
   'configDir',
   'analytics',
@@ -65,20 +67,12 @@ export const builder = (argv: yargs.Argv) =>
         'Per-branch poll budget in seconds when waiting for Neon create ops',
       default: 300,
     })
-    .option('yes', {
-      alias: 'y',
-      type: 'boolean',
-      describe: 'Accept interactive prompts non-interactively (CI)',
-      default: false,
-    })
     .strict(false);
 
 type LaunchArgs = {
   config: string;
   branch?: string;
   'branch-timeout': number;
-  yes: boolean;
-  output?: string;
   [k: string]: unknown;
 };
 
@@ -103,7 +97,6 @@ export const handler = async (argv: LaunchArgs): Promise<void> => {
       configPath: argv.config,
       branchFlag: argv.branch,
       branchTimeoutSeconds: argv['branch-timeout'],
-      yes: argv.yes,
       argv: argv as Record<string, unknown>,
       recognizedFlags: RECOGNIZED_FLAGS,
     });
@@ -111,6 +104,9 @@ export const handler = async (argv: LaunchArgs): Promise<void> => {
     const error = err instanceof Error ? err : new Error(String(err));
     sendError(error, 'NEON_LAUNCH_FAILED');
     log.error(error.message);
+    // Flush Segment's buffered events before exit — process.exit would
+    // otherwise drop the most interesting error/failure analytics.
+    await closeAnalytics();
     // LaunchError carries the right exit code (CONFIG_ERROR for plan-time,
     // AUTH_MISSING for missing tokens, etc.); other errors fall through to
     // RESOURCE_FAILED. The SIGINT path exits 130 itself, never reaches here.

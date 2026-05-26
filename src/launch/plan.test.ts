@@ -131,6 +131,49 @@ describe('plan invariants', () => {
     const plan = await buildPlan(tmpPath, ctx);
     expect(plan.order).toEqual(['db', 'web']);
   });
+
+  it('nested stack rejected with actionable error pointing at inline workaround', async () => {
+    const inner = stack({
+      spec: () => {
+        const db = postgres({ spec: () => ({ name: 'a' }) });
+        return { db };
+      },
+    });
+    const root = stack({
+      // The TS-level `Resource<'stack', never>` change makes the nested
+      // pattern a type error too — but at runtime we still need the
+      // friendly throw for users who silenced the type check.
+      spec: () => ({ inner }) as never,
+    });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+      /Nested stacks are not supported in v1/,
+    );
+  });
+
+  it('dep not in tree throws with the resource name and the missing key', async () => {
+    const orphan = postgres({ spec: () => ({ name: 'orphan' }) });
+    const root = stack({
+      spec: () => {
+        const db = postgres({ spec: () => ({ name: 'main' }) });
+        const cmd = localCommand({
+          dependsOn: { orphan },
+          spec: ({ orphan }) => ({
+            command: 'echo hi',
+            env: { X: orphan.host },
+            readiness: { onExit: 0 },
+          }),
+        });
+        return { db, cmd };
+      },
+    });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+      /depends on 'orphan'.*not in the resolved tree/s,
+    );
+  });
 });
 
 // =============================================================================
