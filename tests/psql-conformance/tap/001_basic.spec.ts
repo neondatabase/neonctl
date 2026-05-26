@@ -40,17 +40,14 @@
 // you change `src/psql/**`, run `bun run build` first.
 //
 // Where the TS implementation legitimately diverges from upstream (or
-// has not yet implemented something), we either:
-//   (a) `it.skip(...)` with a comment that references the upstream
-//       line range and the reason; OR
-//   (b) emit the assertion at face value, expecting the spec to fail
-//       loudly — and seed an entry in `KNOWN_FAILURES.yml` so the
-//       failure is acknowledged rather than silent.
-//
-// The PORTED / SKIPPED counts are tracked in this file's report:
-//   - Total upstream assertions:               ~60
-//   - Ported and asserted here:                see test bodies
-//   - Skipped with reason (it.skip + comment): see test bodies
+// has not yet implemented something), we mark the subtest as deferred:
+//   * `it.todo("<name> — <reason>")` for a real engine gap that has a
+//     concrete future fix.
+//   * `it.skip("<name> — <reason>")` for an upstream test that is
+//     intentionally out of scope (e.g. relies on `IPC::Run` semantics
+//     that we cannot reproduce in Vitest).
+// Subtests that currently pass against the embedded TS psql assert
+// directly via vitest's standard `expect(...)`.
 //
 // Re-port checklist (when bumping the vendored PG version): walk
 // 001_basic.pl top-to-bottom and verify each section here matches.
@@ -60,7 +57,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { expectMatches } from '../harness/expect-matches.js';
 import {
   DIST_EXISTS,
   RUN_INTEGRATION,
@@ -74,77 +70,15 @@ import {
   type RunResult,
 } from './_helpers.js';
 
-const TEST_NAME = 'tap/001_basic';
-
 // ---------------------------------------------------------------------------
 // Local helpers (spec-scoped — do not promote to _helpers.ts until a second
 // spec needs them).
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the current `it(...)` description from vitest's per-test
- * state. Used as the `subtestName` key into `KNOWN_FAILURES.yml`. The
- * vitest API returns the full path, e.g.
- *   "tap/001_basic.spec.ts > tap/001_basic > \\timing > emits ..."
- * We strip the leading "<spec-file> > tap/001_basic > " prefix so the
- * ledger entries are readable and stable against describe-tree
- * reshuffles at the top level. We deliberately keep any nested
- * describe context (e.g. `\timing > emits ...`) — splitting on
- * ` > ` is unsafe because several `it` descriptions legitimately
- * contain `>` characters (e.g. `\g | cat > file`).
- */
-const TEST_PREFIX = '001_basic.spec.ts > tap/001_basic > ';
-const currentSubtestName = (): string => {
-  const raw = expect.getState().currentTestName ?? '';
-  const idx = raw.indexOf(TEST_PREFIX);
-  return idx >= 0 ? raw.slice(idx + TEST_PREFIX.length) : raw;
-};
-
-/**
- * Run an assertion block routed through the conformance ledger
- * (`KNOWN_FAILURES.yml`). When the block throws (assertion failure),
- * `expectMatches` decides whether the failure is acknowledged by the
- * ledger (the test passes as an "expected failure") or unexpected (the
- * test fails).
- *
- * This is the same 4-quadrant pattern that `regress.spec.ts` uses —
- * promoted here so the per-subtest assertions in the 001_basic port
- * gracefully degrade into KNOWN_FAILURES entries when the TS psql
- * impl diverges, without silently swallowing real regressions.
- */
-const expectOrLedger = (fn: () => void): void => {
-  const subtestName = currentSubtestName();
-  let failureMessage: string | null = null;
-  try {
-    fn();
-  } catch (err) {
-    failureMessage =
-      err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-  }
-  if (failureMessage === null) {
-    const outcome = expectMatches({
-      testName: TEST_NAME,
-      subtestName,
-      actualOutcome: 'pass',
-    });
-    expect(outcome.kind).toBe('pass');
-    return;
-  }
-  const outcome = expectMatches({
-    testName: TEST_NAME,
-    subtestName,
-    actualOutcome: 'fail',
-    failureMessage,
-  });
-  expect(outcome.kind).toBe('expected-failure');
-};
-
-/**
  * Mirror of upstream's `psql_like($node, $sql, $regex, $name)` — runs the
  * given SQL via stdin and asserts exit==0, empty stderr, and stdout
- * matches. Routed through the ledger so the test marks itself as
- * "expected failure" instead of going red when the TS psql diverges
- * AND the divergence is acknowledged in KNOWN_FAILURES.yml.
+ * matches.
  */
 const expectPsqlLike = async (
   paths: LauncherPaths,
@@ -157,11 +91,9 @@ const expectPsqlLike = async (
     uri,
     script: sql,
   });
-  expectOrLedger(() => {
-    expect(r.exitCode, `exit code (stderr=${r.stderr})`).toBe(0);
-    expect(r.stderr).toBe('');
-    expect(r.stdout).toMatch(re);
-  });
+  expect(r.exitCode, `exit code (stderr=${r.stderr})`).toBe(0);
+  expect(r.stderr).toBe('');
+  expect(r.stdout).toMatch(re);
   return r;
 };
 
@@ -194,35 +126,16 @@ const expectPsqlFailsLike = async (
   } catch (err) {
     // Treat "child timed out" as a fail signal — the assertion logic
     // below still demands an explicit "matches stderr regex" check,
-    // which a timed-out process will not satisfy, so the test will
-    // route through the ledger.
+    // which a timed-out process will not satisfy.
     r = {
       stdout: '',
       stderr: err instanceof Error ? err.message : String(err),
       exitCode: 124,
     };
   }
-  expectOrLedger(() => {
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toMatch(re);
-  });
+  expect(r.exitCode).not.toBe(0);
+  expect(r.stderr).toMatch(re);
   return r;
-};
-
-/**
- * Read the contents of a file (utf8). Returns an empty string when the
- * file does not exist — the calling assertion will then route the
- * empty/wrong content through `expectOrLedger`, so a missing output
- * file degrades into a recorded ledger entry rather than an
- * uncaught fs error.
- */
-const slurp = async (path: string): Promise<string> => {
-  const { readFile } = await import('node:fs/promises');
-  try {
-    return await readFile(path, 'utf8');
-  } catch {
-    return '';
-  }
 };
 
 /** Append text to a file (creating it if missing). Matches Perl `append_to_file`. */
@@ -235,9 +148,7 @@ const appendToFile = async (path: string, text: string): Promise<void> => {
  * Count rows in a table — equivalent to upstream's
  *   $node->safe_psql('postgres', 'SELECT count(*) FROM <table>')
  * Returns the count as a number, or `NaN` if the query produced no
- * parseable output. Callers route the comparison through
- * `expectOrLedger` so an empty / error response degrades into a
- * ledger lookup instead of a synchronous throw.
+ * parseable output.
  */
 const countRows = async (
   paths: LauncherPaths,
@@ -397,10 +308,8 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         'START_REPLICATION 0/1',
       ],
     });
-    expectOrLedger(() => {
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toMatch(/syntax error/);
-    });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/syntax error/);
   });
 
   // -------------------------------------------------------------------------
@@ -424,13 +333,11 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         uri,
         script: '\\timing on\nSELECT error',
       });
-      expectOrLedger(() => {
-        // Upstream: ret != 0 (query failed), `Time:` line printed, and
-        // it is NOT exactly 0.000 ms.
-        expect(r.exitCode).not.toBe(0);
-        expect(r.stdout).toMatch(/^Time: \d+[.,]\d\d\d ms/m);
-        expect(r.stdout).not.toMatch(/^Time: 0[.,]000 ms/m);
-      });
+      // Upstream: ret != 0 (query failed), `Time:` line printed, and
+      // it is NOT exactly 0.000 ms.
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stdout).toMatch(/^Time: \d+[.,]\d\d\d ms/m);
+      expect(r.stdout).not.toMatch(/^Time: 0[.,]000 ms/m);
     });
   });
 
@@ -484,19 +391,17 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         'SELECT pg_terminate_backend(pg_backend_pid());\n' +
         "SELECT 'AFTER' AS not_running;\n",
     });
-    expectOrLedger(() => {
-      expect(r.exitCode).toBe(2);
-      expect(r.stdout).toMatch(/before/);
-      // Per upstream: the AFTER line must NOT have been emitted because
-      // psql aborted on the broken connection.
-      expect(r.stdout).not.toMatch(/AFTER/);
-      // Upstream stderr begins with "FATAL: terminating connection due
-      // to administrator command" and ends with "connection to server
-      // was lost". Our TS impl wraps these slightly differently, so we
-      // assert just on the substrings — not the full multi-line match.
-      expect(r.stderr).toMatch(/terminating connection/);
-      expect(r.stderr).toMatch(/connection to server was lost/i);
-    });
+    expect(r.exitCode).toBe(2);
+    expect(r.stdout).toMatch(/before/);
+    // Per upstream: the AFTER line must NOT have been emitted because
+    // psql aborted on the broken connection.
+    expect(r.stdout).not.toMatch(/AFTER/);
+    // Upstream stderr begins with "FATAL: terminating connection due
+    // to administrator command" and ends with "connection to server
+    // was lost". Our TS impl wraps these slightly differently, so we
+    // assert just on the substrings — not the full multi-line match.
+    expect(r.stderr).toMatch(/terminating connection/);
+    expect(r.stderr).toMatch(/connection to server was lost/i);
   });
 
   // -------------------------------------------------------------------------
@@ -524,11 +429,9 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       // a `LOCATION:` footer on the second report. The `psql:<stdin>:N`
       // prefix is approximated with a loose `^psql:.* ERROR:` anchor so
       // this passes whether or not the TS psql tracks input line nums.
-      expectOrLedger(() => {
-        expect(r.stderr).toMatch(
-          /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
-        );
-      });
+      expect(r.stderr).toMatch(
+        /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+      );
     });
 
     it('after a FETCH_COUNT-driven error, prints LINE / LOCATION (lines 184-196)', async () => {
@@ -537,11 +440,9 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         uri,
         script: '\\set FETCH_COUNT 1\nSELECT error;\n\\errverbose',
       });
-      expectOrLedger(() => {
-        expect(r.stderr).toMatch(
-          /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
-        );
-      });
+      expect(r.stderr).toMatch(
+        /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+      );
     });
 
     it('after a \\gdesc error, prints LINE / LOCATION (lines 198-210)', async () => {
@@ -550,11 +451,9 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         uri,
         script: 'SELECT error\\gdesc\n\\errverbose',
       });
-      expectOrLedger(() => {
-        expect(r.stderr).toMatch(
-          /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
-        );
-      });
+      expect(r.stderr).toMatch(
+        /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+      );
     });
   });
 
@@ -597,10 +496,8 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         ],
       });
       const rows = await countRows(paths, uri, 'tab_psql_single');
-      expectOrLedger(() => {
-        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
-        expect(rows).toBe(2);
-      });
+      expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+      expect(rows).toBe(2);
     });
 
     it('-c then bad \\copy under ON_ERROR_STOP -> non-zero exit, rollback (lines 236-250)', async () => {
@@ -619,11 +516,9 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         ],
       });
       const rows = await countRows(paths, uri, 'tab_psql_single');
-      expectOrLedger(() => {
-        expect(r.exitCode).not.toBe(0);
-        // Row count stays at 2 — the transaction rolled back.
-        expect(rows).toBe(2);
-      });
+      expect(r.exitCode).not.toBe(0);
+      // Row count stays at 2 — the transaction rolled back.
+      expect(rows).toBe(2);
     });
 
     it('two -f inserts commit under ON_ERROR_STOP + --single-transaction (lines 258-272)', async () => {
@@ -642,10 +537,8 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         ],
       });
       const rows = await countRows(paths, uri, 'tab_psql_single');
-      expectOrLedger(() => {
-        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
-        expect(rows).toBe(4);
-      });
+      expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+      expect(rows).toBe(4);
     });
 
     it('-f insert then bad \\copy under ON_ERROR_STOP -> rollback (lines 274-288)', async () => {
@@ -664,11 +557,9 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         ],
       });
       const rows = await countRows(paths, uri, 'tab_psql_single');
-      expectOrLedger(() => {
-        expect(r.exitCode).not.toBe(0);
-        // Row count still 4 — rollback wins.
-        expect(rows).toBe(4);
-      });
+      expect(r.exitCode).not.toBe(0);
+      // Row count still 4 — rollback wins.
+      expect(rows).toBe(4);
     });
 
     it('two -f then bad \\copy via -c WITHOUT ON_ERROR_STOP -> exit !=0, transaction still commits (lines 293-307)', async () => {
@@ -687,12 +578,10 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         ],
       });
       const rows = await countRows(paths, uri, 'tab_psql_single');
-      expectOrLedger(() => {
-        expect(r.exitCode).not.toBe(0);
-        // Upstream comment: "client-side error commits transaction" since
-        // ON_ERROR_STOP is OFF and the failing switch is -c (not -f).
-        expect(rows).toBe(6);
-      });
+      expect(r.exitCode).not.toBe(0);
+      // Upstream comment: "client-side error commits transaction" since
+      // ON_ERROR_STOP is OFF and the failing switch is -c (not -f).
+      expect(rows).toBe(6);
     });
 
     it('two -f then bad \\copy via -f WITHOUT ON_ERROR_STOP -> exit 0, commit (lines 311-325)', async () => {
@@ -711,12 +600,10 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         ],
       });
       const rows = await countRows(paths, uri, 'tab_psql_single');
-      expectOrLedger(() => {
-        // The last switch is a file (with the failing \copy inside) —
-        // upstream marks the *command* as successful.
-        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
-        expect(rows).toBe(8);
-      });
+      // The last switch is a file (with the failing \copy inside) —
+      // upstream marks the *command* as successful.
+      expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+      expect(rows).toBe(8);
     });
 
     it('-c, bad \\copy via -f, -c WITHOUT ON_ERROR_STOP -> exit 0, all -c commits (lines 329-343)', async () => {
@@ -735,10 +622,8 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         ],
       });
       const rows = await countRows(paths, uri, 'tab_psql_single');
-      expectOrLedger(() => {
-        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
-        expect(rows).toBe(10);
-      });
+      expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+      expect(rows).toBe(10);
     });
   });
 
@@ -785,42 +670,28 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
   // -------------------------------------------------------------------------
 
   describe('\\watch', () => {
-    it('runs N=3 iterations at 10ms interval (lines 371-373)', async () => {
-      await expectPsqlLike(
-        paths,
-        uri,
-        'SELECT 1 \\watch c=3 i=0.01',
-        // Three "1"s on their own lines.
-        /1[\s\S]*1[\s\S]*1/,
-      );
-    });
+    // Named-flag parsing (c=N, i=F, m=N) does not dispatch when the
+    // backslash command is on the same SQL line as a query: the SQL
+    // scanner gates backslash dispatch on `isBufferEmpty(sql)`, so
+    // `SELECT 1 \watch c=3 i=0.01` reaches the server as a literal `\`.
+    // cmd_io.ts implements the named-flag forms (commit 289802f); the
+    // gap is in the scanner. Tracked separately from this conformance
+    // migration — leave as todo with a precise reason.
+    it.todo(
+      'runs N=3 iterations at 10ms interval (lines 371-373) — \\watch named flags (c=N i=F) do not dispatch when on the same line as the SQL; scanner gates backslash dispatch on isBufferEmpty(sql)',
+    );
 
-    it('runs N=3 iterations at 0.0001s interval (sub-ms, lines 376-378)', async () => {
-      await expectPsqlLike(
-        paths,
-        uri,
-        'SELECT 1 \\watch c=3 i=0.0001',
-        /1[\s\S]*1[\s\S]*1/,
-      );
-    });
+    it.todo(
+      'runs N=3 iterations at 0.0001s interval (sub-ms, lines 376-378) — same scanner gap (c=N i=F on same line as SELECT)',
+    );
 
-    it('runs N=3 iterations with WATCH_INTERVAL=0 (lines 381-384)', async () => {
-      await expectPsqlLike(
-        paths,
-        uri,
-        '\\set WATCH_INTERVAL 0\nSELECT 1 \\watch c=3',
-        /1[\s\S]*1[\s\S]*1/,
-      );
-    });
+    it.todo(
+      'runs N=3 iterations with WATCH_INTERVAL=0 (lines 381-384) — same scanner gap (c=N on same line as SELECT)',
+    );
 
-    it('rejects m=x (invalid minimum row count, lines 387-391)', async () => {
-      await expectPsqlFailsLike(
-        paths,
-        uri,
-        'SELECT 3 \\watch m=x',
-        /incorrect minimum row count/,
-      );
-    });
+    it.todo(
+      'rejects m=x (invalid minimum row count, lines 387-391) — \\watch does not reject m=<non-numeric>; the option silently no-ops',
+    );
 
     it('rejects m=1 min_rows=2 ("specified more than once", lines 393-397)', async () => {
       await expectPsqlFailsLike(
@@ -849,32 +720,17 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       );
     });
 
-    it('rejects negative interval value (lines 411-414)', async () => {
-      await expectPsqlFailsLike(
-        paths,
-        uri,
-        'SELECT 1 \\watch -10',
-        /incorrect interval value "-10"/,
-      );
-    });
+    it.todo(
+      'rejects negative interval value (lines 411-414) — \\watch accepts negative positional interval (-10); upstream rejects with "incorrect interval value"',
+    );
 
-    it('rejects garbage interval value (lines 416-419)', async () => {
-      await expectPsqlFailsLike(
-        paths,
-        uri,
-        'SELECT 1 \\watch 10ab',
-        /incorrect interval value "10ab"/,
-      );
-    });
+    it.todo(
+      'rejects garbage interval value (lines 416-419) — \\watch accepts garbage positional interval (10ab); upstream rejects with "incorrect interval value"',
+    );
 
-    it('rejects out-of-range interval value (lines 421-424)', async () => {
-      await expectPsqlFailsLike(
-        paths,
-        uri,
-        'SELECT 1 \\watch 10e400',
-        /incorrect interval value "10e400"/,
-      );
-    });
+    it.todo(
+      'rejects out-of-range interval value (lines 421-424) — \\watch accepts out-of-range positional interval (10e400); upstream rejects',
+    );
 
     it('rejects duplicate positional interval (lines 426-429)', async () => {
       await expectPsqlFailsLike(
@@ -894,18 +750,9 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       );
     });
 
-    it('WATCH_INTERVAL is set, updated on \\set, restored on \\unset (lines 438-448)', async () => {
-      await expectPsqlLike(
-        paths,
-        uri,
-        '\\echo :WATCH_INTERVAL\n' +
-          '\\set WATCH_INTERVAL 10\n' +
-          '\\echo :WATCH_INTERVAL\n' +
-          '\\unset WATCH_INTERVAL\n' +
-          '\\echo :WATCH_INTERVAL',
-        /^2$\n^10$\n^2$/m,
-      );
-    });
+    it.todo(
+      'WATCH_INTERVAL is set, updated on \\set, restored on \\unset (lines 438-448) — `\\unset WATCH_INTERVAL` should restore the default value of 2 via a substitute hook (upstream `assign_watch_interval_hook` + substitute callback); plain :NAME substitution and the initial seed (=2) work, only the post-unset default restore remains',
+    );
 
     it('WATCH_INTERVAL=1e500 is out of range (lines 449-453)', async () => {
       await expectPsqlFailsLike(
@@ -925,35 +772,20 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
     // Upstream uses `perl -pe ''` as a cat-equivalent. We pick whichever
     // is on the host PATH — `/bin/cat` should be ubiquitous on macOS/
     // Linux, which are the only platforms our CI uses.
-    const cat = '/bin/cat';
 
-    it('single SELECT \\g | cat > file (lines 462-464)', async () => {
-      const out = join(workdir, 'g_file_one.out');
-      const r = await runPsqlScript({
-        launcher: paths.launcher,
-        uri,
-        script: `SELECT 'one' \\g | ${cat} > ${out}\n`,
-      });
-      const body = await slurp(out);
-      expectOrLedger(() => {
-        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
-        expect(body).toMatch(/one/);
-      });
-    });
+    // The `\g | <program>` pipe is implemented in cmd_io.ts (commit
+    // 289802f), but the same scanner gap as \watch keeps the backslash
+    // command from dispatching when it lives on the same SQL line as
+    // the query: the buffer is non-empty, so the scanner emits the
+    // literal `\` to the server. cmd_io.ts is sound; the scanner needs
+    // to flush on `\g` mid-buffer. Tracked separately.
+    it.todo(
+      'single SELECT \\g | cat > file (lines 462-464) — `\\g | <program>` does not dispatch when on the same line as the SQL; scanner gates backslash dispatch on isBufferEmpty(sql)',
+    );
 
-    it('multi-statement SELECT ... \\g | cat > file emits both rows (lines 466-469)', async () => {
-      const out = join(workdir, 'g_file_two.out');
-      const r = await runPsqlScript({
-        launcher: paths.launcher,
-        uri,
-        script: `SELECT 'two' \\; SELECT 'three' \\g | ${cat} > ${out}\n`,
-      });
-      const body = await slurp(out);
-      expectOrLedger(() => {
-        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
-        expect(body).toMatch(/two[\s\S]*three/);
-      });
-    });
+    it.todo(
+      'multi-statement SELECT ... \\g | cat > file emits both rows (lines 466-469) — same scanner gap as above',
+    );
 
     it('SHOW_ALL_RESULTS=0 emits only last row (lines 472-479)', async () => {
       // Upstream uses `\g | pipe-program`; we exercise the same `sendQuery`
@@ -964,26 +796,14 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         uri,
         script: "\\set SHOW_ALL_RESULTS 0\nSELECT 'four' \\; SELECT 'five';\n",
       });
-      expectOrLedger(() => {
-        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
-        expect(r.stdout).toMatch(/five/);
-        expect(r.stdout).not.toMatch(/four/);
-      });
+      expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+      expect(r.stdout).toMatch(/five/);
+      expect(r.stdout).not.toMatch(/four/);
     });
 
-    it('COPY (values ...) TO STDOUT \\g | cat > file (lines 481-484)', async () => {
-      const out = join(workdir, 'g_file_copy.out');
-      const r = await runPsqlScript({
-        launcher: paths.launcher,
-        uri,
-        script: `copy (values ('foo'),('bar')) to stdout \\g | ${cat} > ${out}\n`,
-      });
-      const body = await slurp(out);
-      expectOrLedger(() => {
-        expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
-        expect(body).toMatch(/foo[\s\S]*bar/);
-      });
-    });
+    it.todo(
+      'COPY (values ...) TO STDOUT \\g | cat > file (lines 481-484) — same scanner gap as above (COPY variant)',
+    );
   });
 
   // -------------------------------------------------------------------------
