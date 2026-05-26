@@ -97,6 +97,18 @@ export type BackendMessage =
     }
   | { type: 'CopyData'; data: Buffer }
   | { type: 'CopyDone' }
+  /**
+   * Server response to a walsender command such as `START_REPLICATION` /
+   * `CREATE_REPLICATION_SLOT … LOGICAL`. The server transitions to a
+   * CopyBoth streaming phase (WAL records flowing from server, keepalive
+   * replies flowing from client). pg-protocol surfaces this as a bare
+   * marker (no payload fields decoded); the format / column-formats body
+   * is identical in shape to {@link CopyInResponse} / {@link CopyOutResponse}
+   * but is not currently parsed since this client does not implement
+   * streaming replication. The connection layer surfaces this as a clean
+   * syntax-error-like diagnostic instead of crashing the protocol parser.
+   */
+  | { type: 'CopyBothResponse' }
   | { type: 'NoData' }
   | { type: 'ParseComplete' }
   | { type: 'BindComplete' }
