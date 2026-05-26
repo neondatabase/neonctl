@@ -30,7 +30,7 @@ import {
 } from './provisioners/local-command.js';
 import { provisionVercelDeployment } from './provisioners/vercel-deployment.js';
 import { isRef } from './refs.js';
-import { ExitCode, vercelTokenMissingMessage } from './errors.js';
+import { ExitCode, LaunchError, vercelTokenMissingMessage } from './errors.js';
 import type {
   LocalCommandSpec,
   PostgresSpec,
@@ -252,11 +252,13 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     neonContext,
   );
   if (!projectId) {
-    throw new Error(
-      `[neon launch] NEON_PROJECT_ID is required.\n` +
-        `Set it in your environment, in .neon-launch.env, or pass --project-id. ` +
-        `Existing \`neon\` users: \`neon set-context\` (then commit \`.neon\`) ` +
-        `works too.`,
+    throw new LaunchError(
+      [
+        `[neon launch] NEON_PROJECT_ID is required.`,
+        `Set it in your environment, in .neon-launch.env, or pass --project-id.`,
+        `Existing \`neon\` users: \`neon set-context\` (then commit \`.neon\`) works too.`,
+      ].join('\n'),
+      ExitCode.CONFIG_ERROR,
     );
   }
 
@@ -273,8 +275,9 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     process.env.NEON_API_HOST ??
     undefined;
   if (!argvApiClient && !apiKey) {
-    throw new Error(
+    throw new LaunchError(
       `[neon launch] Neon auth required. Run \`neon auth\` (OAuth) or set NEON_API_KEY.`,
+      ExitCode.AUTH_MISSING,
     );
   }
   const api = argvApiClient ?? getApiClient({ apiKey, apiHost });
@@ -282,6 +285,21 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   // 3. Provision stage-by-stage.
   const stages = groupStages(plan);
   const liveLocalCommands: LocalCommandHandle[] = [];
+
+  // Register the SIGINT handler BEFORE provisioning starts. Without this,
+  // Ctrl-C during a slow branch-create or Vercel deploy lets Node's default
+  // SIGINT exit immediately, leaving any local-commands spawned in an
+  // earlier stage as orphans (compounded by the detached-shell process
+  // group on Unix). We kill them explicitly here, then exit 130.
+  let interrupted = false;
+  const onSigint = () => {
+    if (interrupted) return;
+    interrupted = true;
+    log.info('[launch] SIGINT — stopping any running local commands.');
+    for (const h of liveLocalCommands) void h.kill();
+    process.exit(ExitCode.SIGINT);
+  };
+  process.on('SIGINT', onSigint);
 
   for (const [idx, stage] of stages.entries()) {
     log.info(
@@ -295,22 +313,30 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     const stdioMode: StdioMode =
       localCmdCount === 1 && stage.length === 1 ? 'inherit' : 'prefixed';
 
-    await Promise.all(
-      stage.map((node) =>
-        provisionOne({
-          node,
-          api,
-          projectId,
-          repoRoot,
-          cwd,
-          gitBranch: ctx.gitBranch,
-          branchTimeoutSeconds: opts.branchTimeoutSeconds,
-          stdioMode,
-          liveLocalCommands,
-          neonLaunchEnv,
-        }),
-      ),
-    );
+    try {
+      await Promise.all(
+        stage.map((node) =>
+          provisionOne({
+            node,
+            api,
+            projectId,
+            repoRoot,
+            cwd,
+            gitBranch: ctx.gitBranch,
+            branchTimeoutSeconds: opts.branchTimeoutSeconds,
+            stdioMode,
+            liveLocalCommands,
+            neonLaunchEnv,
+          }),
+        ),
+      );
+    } catch (err) {
+      // Stage failure: tear down any local-commands that came up either in
+      // this stage or an earlier one. Without this they leak as orphan
+      // processes (compounded by detached shells holding ports).
+      await Promise.all(liveLocalCommands.map((h) => h.kill()));
+      throw err;
+    }
   }
 
   log.info('[launch] all resources ready.');
@@ -417,7 +443,8 @@ async function provisionVercelNode(args: {
 }): Promise<void> {
   const spec = args.node.spec as VercelDeploymentSpec;
   const token = process.env.VERCEL_TOKEN ?? '';
-  if (!token) throw new Error(vercelTokenMissingMessage());
+  if (!token)
+    throw new LaunchError(vercelTokenMissingMessage(), ExitCode.AUTH_MISSING);
   // Precedence: process.env > .neon-launch.env > spec.teamId.
   const teamId =
     process.env.VERCEL_TEAM_ID ??
@@ -456,14 +483,26 @@ async function provisionLocalCommandNode(args: {
     cwd: args.cwd,
     stdioMode: args.stdioMode,
   });
-  await handle.ready;
+  // Track BEFORE awaiting readiness so a stage-level catch can tear it
+  // down if a sibling fails; also kill ourselves if our own readiness
+  // throws (timeout, child exited with the wrong code, etc.) — otherwise
+  // the spawned shell + grandchildren leak.
+  args.liveLocalCommands.push(handle);
+  try {
+    await handle.ready;
+  } catch (err) {
+    await handle.kill();
+    throw err;
+  }
   outputs.set(args.node.resource.__id, {
     kind: 'static',
     values: {},
   });
-  // Track for foreground phase if the process is still running.
-  if (handle.child.exitCode === null && !handle.child.killed) {
-    args.liveLocalCommands.push(handle);
+  // If the command was a one-shot that already exited, drop it from the
+  // foreground-phase list so we don't try to SIGTERM a dead pid.
+  if (handle.child.exitCode !== null || handle.child.killed) {
+    const idx = args.liveLocalCommands.indexOf(handle);
+    if (idx >= 0) args.liveLocalCommands.splice(idx, 1);
   }
 }
 
@@ -476,21 +515,11 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
     `[launch] foreground: holding for ${handles.length} local-command(s). Ctrl-C to stop.`,
   );
 
-  let interrupted = false;
-  const onSigint = () => {
-    if (interrupted) return;
-    interrupted = true;
-    log.info('[launch] SIGINT — stopping local commands.');
-    for (const h of handles) void h.kill();
-  };
-  process.on('SIGINT', onSigint);
-
   try {
     // First-exit wins: if any local-command exits, tear down siblings.
+    // SIGINT is handled at runner entry; the handler kills children and
+    // process.exit(130)s, so the Promise.race never resolves on Ctrl-C.
     const firstExit = await Promise.race(handles.map((h) => h.exited));
-    if (interrupted) {
-      process.exit(ExitCode.SIGINT);
-    }
     if (firstExit.code !== 0) {
       log.error(
         `[launch] a local-command exited with code ${firstExit.code} — stopping siblings.`,
@@ -502,6 +531,6 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
     // Successful exit; wait for siblings too.
     await Promise.all(handles.map((h) => h.exited));
   } finally {
-    process.off('SIGINT', onSigint);
+    // Caller owns the SIGINT handler lifecycle (registered at runner entry).
   }
 }

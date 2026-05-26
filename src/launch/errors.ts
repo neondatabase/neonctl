@@ -18,6 +18,24 @@ export const ExitCode = {
 } as const;
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
 
+/**
+ * Error that carries a specific exit code so the CLI handler can surface
+ * it instead of always exiting 1. Use this for category errors the user
+ * can act on (CONFIG_ERROR for plan-time, AUTH_MISSING for missing
+ * tokens). Bare `throw new Error(...)` still resolves to RESOURCE_FAILED.
+ */
+export class LaunchError extends Error {
+  readonly exitCode: ExitCode;
+  // Default to CONFIG_ERROR because plan-time invariant violations (the most
+  // common throw site) are config errors by definition. Pass an explicit
+  // code for the AUTH_MISSING / RESOURCE_FAILED branches.
+  constructor(message: string, exitCode: ExitCode = ExitCode.CONFIG_ERROR) {
+    super(message);
+    this.name = 'LaunchError';
+    this.exitCode = exitCode;
+  }
+}
+
 // =============================================================================
 // 5.1 Duplicate identity at two record keys
 // =============================================================================

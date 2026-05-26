@@ -26,6 +26,8 @@ const DEFAULT_HTTP_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_HTTP_BUDGET_MS = 120_000;
 const DEFAULT_PORT_POLL_INTERVAL_MS = 500;
 const DEFAULT_PORT_BUDGET_MS = 60_000;
+const DEFAULT_LOG_MATCH_BUDGET_MS = 300_000;
+const DEFAULT_ON_EXIT_BUDGET_MS = 30 * 60 * 1_000; // 30 min — generous for migrations
 
 // =============================================================================
 // Types
@@ -121,9 +123,26 @@ async function probeHttp(
 // Readiness implementations
 // =============================================================================
 
-function awaitOnExit(child: ChildProcess, expectedCode: number): Promise<void> {
+function awaitOnExit(
+  child: ChildProcess,
+  expectedCode: number,
+  budgetMs: number,
+): Promise<void> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(
+        new Error(
+          `local-command readiness: did not exit within ${budgetMs}ms (expected code ${expectedCode}). The process is wedged.`,
+        ),
+      );
+    }, budgetMs);
     child.once('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code === expectedCode) resolve();
       else
         reject(
@@ -209,35 +228,42 @@ function awaitHttpGet(
 function awaitLogMatch(
   child: ChildProcess,
   regex: RegExp,
-  attachStreams: () => { stdout: string[]; stderr: string[] },
+  subscribe: (onLine: (line: string) => void) => () => void,
+  budgetMs: number,
 ): Promise<void> {
-  // We read from buffered streams. Caller (spawn wrapper below) already
-  // attached listeners that buffer; we poll the buffer.
   return new Promise((resolve, reject) => {
-    let resolved = false;
-    const onExit = (code: number | null) => {
-      if (resolved) return;
-      reject(
-        new Error(
-          `local-command exited (code ${code}) before logMatch ${regex} fired.`,
-        ),
-      );
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      unsubscribe();
+      fn();
     };
+    const onLine = (line: string) => {
+      if (regex.test(line)) finish(resolve);
+    };
+    const onExit = (code: number | null) => {
+      finish(() => {
+        reject(
+          new Error(
+            `local-command exited (code ${code}) before logMatch ${regex.toString()} fired.`,
+          ),
+        );
+      });
+    };
+    const timer = setTimeout(() => {
+      finish(() => {
+        reject(
+          new Error(
+            `local-command readiness: logMatch ${regex.toString()} did not match within ${budgetMs}ms.`,
+          ),
+        );
+      });
+    }, budgetMs);
     child.once('exit', onExit);
-
-    const tick = setInterval(() => {
-      if (resolved) return;
-      const { stdout, stderr } = attachStreams();
-      for (const line of stdout.concat(stderr)) {
-        if (regex.test(line)) {
-          resolved = true;
-          clearInterval(tick);
-          child.off('exit', onExit);
-          resolve();
-          return;
-        }
-      }
-    }, 200);
+    const unsubscribe = subscribe(onLine);
   });
 }
 
@@ -267,16 +293,34 @@ export function startLocalCommand(opts: {
 
   log.info(`[${resourceFqn}] spawning: ${spec.command}`);
 
+  // On Unix, `shell: true` makes the spawned process `sh -c <command>` —
+  // a shell that doesn't forward signals to its child by default. If we
+  // SIGTERM the shell, the actual dev server (the grandchild) keeps
+  // running. `detached: true` puts the shell in its OWN process group;
+  // we then kill the whole group via `process.kill(-pid, ...)`. Windows
+  // doesn't have process groups so we fall back to `child.kill` there.
+  const isWindows = process.platform === 'win32';
   const child = spawn(spec.command, {
     cwd,
     env,
     shell: true,
+    detached: !isWindows,
     stdio: stdioMode === 'inherit' ? 'inherit' : ['ignore', 'pipe', 'pipe'],
   });
 
-  // Capture stream buffers for logMatch readiness (no-op when stdio:inherit).
-  const stdoutBuf: string[] = [];
-  const stderrBuf: string[] = [];
+  // Subscribers receive each parsed line as it arrives. The streaming
+  // model avoids the prior approach's two failure modes: a buffer that
+  // grew unbounded for chatty processes, and a 200ms poll-interval that
+  // re-tested every prior line on each tick.
+  const lineSubscribers = new Set<(line: string) => void>();
+  const subscribeLines = (cb: (line: string) => void): (() => void) => {
+    lineSubscribers.add(cb);
+    return () => lineSubscribers.delete(cb);
+  };
+  const pumpLine = (line: string) => {
+    log.info(`[${resourceFqn}] ${line}`);
+    for (const cb of lineSubscribers) cb(line);
+  };
   if (stdioMode === 'prefixed' && child.stdout && child.stderr) {
     let stdoutTail = '';
     let stderrTail = '';
@@ -286,19 +330,13 @@ export function startLocalCommand(opts: {
       stdoutTail += chunk;
       const lines = stdoutTail.split('\n');
       stdoutTail = lines.pop() ?? '';
-      for (const line of lines) {
-        stdoutBuf.push(line);
-        log.info(`[${resourceFqn}] ${line}`);
-      }
+      for (const line of lines) pumpLine(line);
     });
     child.stderr.on('data', (chunk: string) => {
       stderrTail += chunk;
       const lines = stderrTail.split('\n');
       stderrTail = lines.pop() ?? '';
-      for (const line of lines) {
-        stderrBuf.push(line);
-        log.info(`[${resourceFqn}] ${line}`);
-      }
+      for (const line of lines) pumpLine(line);
     });
   }
 
@@ -332,18 +370,26 @@ export function startLocalCommand(opts: {
     // Plan-time invariant rejects undefined-readiness on a command with deps.
     ready = Promise.resolve();
   } else {
-    ready = buildReadiness(spec.readiness, child, () => ({
-      stdout: stdoutBuf,
-      stderr: stderrBuf,
-    }));
+    ready = buildReadiness(spec.readiness, child, subscribeLines);
   }
 
   const kill = (): Promise<void> => {
-    if (!child.killed) {
-      // Windows: child.kill('SIGINT') ≈ SIGKILL (nodejs/node#35172). We still
-      // emit SIGTERM uniformly; the inherit-stdio mode in single-active stages
-      // is the mitigation.
+    if (child.killed || child.exitCode !== null) return Promise.resolve();
+    if (isWindows) {
+      // Windows: no process-group concept; child.kill('SIGINT') is roughly
+      // SIGKILL (nodejs/node#35172). Use SIGTERM for parity; the
+      // inherit-stdio mode in single-active stages routes Ctrl-C natively.
       child.kill('SIGTERM');
+      return Promise.resolve();
+    }
+    // Unix: kill the whole process group (-pid). `detached: true` above
+    // put the shell in its own group, so the dev server / grandchildren
+    // receive the signal too. ESRCH means the group already exited.
+    try {
+      if (child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code !== 'ESRCH') throw err;
     }
     return Promise.resolve();
   };
@@ -354,10 +400,10 @@ export function startLocalCommand(opts: {
 function buildReadiness(
   readiness: LocalCommandReadiness,
   child: ChildProcess,
-  bufs: () => { stdout: string[]; stderr: string[] },
+  subscribeLines: (cb: (line: string) => void) => () => void,
 ): Promise<void> {
   if ('onExit' in readiness) {
-    return awaitOnExit(child, readiness.onExit);
+    return awaitOnExit(child, readiness.onExit, DEFAULT_ON_EXIT_BUDGET_MS);
   }
   if ('portListening' in readiness) {
     return awaitPortListening(
@@ -379,5 +425,10 @@ function buildReadiness(
       DEFAULT_HTTP_POLL_INTERVAL_MS,
     );
   }
-  return awaitLogMatch(child, readiness.logMatch, bufs);
+  return awaitLogMatch(
+    child,
+    readiness.logMatch,
+    subscribeLines,
+    DEFAULT_LOG_MATCH_BUDGET_MS,
+  );
 }

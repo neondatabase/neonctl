@@ -229,31 +229,46 @@ export async function createDeployment(opts: {
       : undefined,
   };
 
-  // The client yields events. Loop until we see 'ready' or an error event.
+  // The client yields events. The iterator emits one of these terminal
+  // types and then `return`s:
+  //   - 'ready' / 'alias-assigned' → success
+  //   - 'error' / 'canceled' → failure with payload
+  //   - 'checks-v2-failed' → post-deploy checks failed; iterator ends
+  //     silently otherwise, which would surface as a generic "stream ended"
+  //     message masking the actual failure reason
+  // Non-terminal informational events: 'created', 'building', 'checks-running',
+  // 'checks-conclusion-failed' (latter does NOT end the stream — wait for
+  // the subsequent error / alias-assigned).
   for await (const event of vercelCreateDeployment(
-    // @vercel/client's exported types are looser than our ctx — runtime
-    // accepts the extra fields and ignores them. Cast at the boundary.
     clientOpts as Parameters<typeof vercelCreateDeployment>[0],
     deploymentOpts as Parameters<typeof vercelCreateDeployment>[1],
   )) {
-    const payload = event.payload as { url?: string; readyState?: string };
+    const payload = event.payload as {
+      url?: string;
+      readyState?: string;
+      errorMessage?: string;
+    };
     if (payload.url) url = `https://${payload.url}`;
     if (payload.readyState) status = payload.readyState;
-    if (event.type === 'ready') {
+    if (event.type === 'ready' || event.type === 'alias-assigned') {
       return { url: url ?? '', status: 'READY' };
     }
-    if (event.type === 'error' || event.type === 'canceled') {
+    if (
+      event.type === 'error' ||
+      event.type === 'canceled' ||
+      event.type === 'checks-v2-failed'
+    ) {
       const msg =
         event.payload instanceof Error
           ? event.payload.message
-          : JSON.stringify(event.payload);
+          : (payload.errorMessage ?? JSON.stringify(event.payload));
       throw new Error(`[neon launch] Vercel deployment ${event.type}: ${msg}`);
     }
   }
 
-  // Loop exited without 'ready' — treat as failure.
+  // Iterator ended without a terminal event — surface what we last saw.
   throw new Error(
-    `[neon launch] Vercel deployment stream ended without 'ready' (last status: ${status ?? 'unknown'}).`,
+    `[neon launch] Vercel deployment stream ended without a terminal event (last status: ${status ?? 'unknown'}).`,
   );
 }
 

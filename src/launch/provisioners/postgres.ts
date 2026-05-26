@@ -39,6 +39,31 @@ const DEFAULT_BRANCH_TIMEOUT_S = 300;
 
 const TERMINAL_OP_STATUSES = new Set(['finished', 'skipped', 'cancelled']);
 
+// 5xx retry budget for the branch-create POST. `retryOnLock` covers 423
+// (resource locked) but not transient 5xx — exponential backoff with a
+// small cap is safer than letting a single Neon hiccup fail the launch.
+const FIVE_XX_RETRY_ATTEMPTS = 3;
+const FIVE_XX_BASE_DELAY_MS = 500;
+
+async function with5xxRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = isAxiosError(err) ? err.response?.status : undefined;
+      const transient = status !== undefined && status >= 500 && status < 600;
+      attempt += 1;
+      if (!transient || attempt >= FIVE_XX_RETRY_ATTEMPTS) throw err;
+      const delay = FIVE_XX_BASE_DELAY_MS * 2 ** (attempt - 1);
+      log.info(
+        `[postgres] retrying after ${status} (attempt ${attempt}/${FIVE_XX_RETRY_ATTEMPTS - 1}, ${delay}ms)`,
+      );
+      await sleep(delay);
+    }
+  }
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -129,12 +154,30 @@ async function pollOpsTerminal(
       const { data } = await retryOnLock(() =>
         api.getProjectOperation(projectId, opId),
       );
-      const status = data.operation.status;
-      if (TERMINAL_OP_STATUSES.has(status)) {
+      const op = data.operation;
+      if (TERMINAL_OP_STATUSES.has(op.status)) {
         remaining.delete(opId);
+        continue;
       }
-      // `failed` and `error` are both non-terminal — Neon retries them.
-      // We keep polling regardless.
+      // `failed`/`error` are non-terminal AS LONG AS Neon plans another
+      // retry — `retry_at` carries the next-attempt timestamp. When it's
+      // absent and the op has already failed at least once, the op is
+      // permanently failed; surface immediately with the server's error
+      // string instead of burning the full --branch-timeout budget.
+      if (
+        (op.status === 'failed' || op.status === 'error') &&
+        op.retry_at === undefined &&
+        op.failures_count > 0
+      ) {
+        throw new Error(
+          [
+            `[neon launch] Neon operation ${opId} (${op.action}) failed permanently after ${op.failures_count} attempt(s).`,
+            op.error ? `Error: ${op.error}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        );
+      }
     }
     if (remaining.size > 0) await sleep(DEFAULT_POLL_INTERVAL_MS);
   }
@@ -247,6 +290,17 @@ export async function provisionPostgres(opts: {
   let branch = await findBranchByName(api, projectId, spec.name);
 
   if (branch) {
+    // Archived branches will never reach 'ready' without an explicit
+    // restore. Polling would just burn the per-branch timeout.
+    if (branch.current_state === 'archived') {
+      throw new Error(
+        [
+          `[neon launch] Branch '${spec.name}' is archived.`,
+          `Restore it first: \`neon branches restore ${spec.name} --project-id ${projectId}\``,
+          `or rename it in your neon.ts so the launcher creates a fresh one.`,
+        ].join('\n'),
+      );
+    }
     // Reuse — poll if still in init/creating, otherwise attach immediately.
     if (branch.current_state !== 'ready') {
       log.info(
@@ -283,8 +337,8 @@ export async function provisionPostgres(opts: {
 
     let createResp;
     try {
-      createResp = await retryOnLock(() =>
-        api.createProjectBranch(projectId, createBody),
+      createResp = await with5xxRetry(() =>
+        retryOnLock(() => api.createProjectBranch(projectId, createBody)),
       );
     } catch (err) {
       // Concurrent-create race: another launch beat us to it. Fall back to

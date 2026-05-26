@@ -22,7 +22,12 @@ import type {
   LaunchContext,
   Resource,
 } from './config.js';
-import { LaunchError, dupKeyMessage, singletonMessage } from './errors.js';
+import {
+  ExitCode,
+  LaunchError,
+  dupKeyMessage,
+  singletonMessage,
+} from './errors.js';
 import { makeRef } from './refs.js';
 
 // =============================================================================
@@ -129,7 +134,7 @@ function walkTree(
     // Stacks return a record; leaves return a spec object.
     if (frame.resource.__kind === 'stack') {
       if (typeof spec !== 'object' || spec === null) {
-        throw new LaunchError(
+        throw new Error(
           `[neon launch] Stack '${fqn || 'root'}' spec did not return a record of resources (got ${typeof spec}).`,
         );
       }
@@ -139,7 +144,7 @@ function walkTree(
         spec as Record<string, unknown>,
       )) {
         if (!isInternalResource(value)) {
-          throw new LaunchError(
+          throw new Error(
             `[neon launch] Stack '${fqn || 'root'}' returned key '${key}' that is not a resource. ` +
               `Every value in a stack's returned record must be the result of a factory call.`,
           );
@@ -150,7 +155,7 @@ function walkTree(
         // check fire later with a misleading "did you forget to include
         // it?" message.
         if (value.__kind === 'stack') {
-          throw new LaunchError(
+          throw new Error(
             [
               `[neon launch] Nested stacks are not supported in v1.`,
               `Stack '${fqn || 'root'}' returns a nested stack at key '${key}'.`,
@@ -168,7 +173,7 @@ function walkTree(
         // names the offending stack rather than after the full walk.
         const prior = seenValues.get(value);
         if (prior !== undefined) {
-          throw new LaunchError(
+          throw new Error(
             dupKeyMessage({
               stackName: fqn || 'root',
               keyA: prior,
@@ -275,7 +280,7 @@ function enforceSingletonPostgres(registry: Map<string, PlanNode>): void {
     if (node.resource.__kind === 'postgres') postgresNodes.push(node);
   }
   if (postgresNodes.length !== 1) {
-    throw new LaunchError(
+    throw new Error(
       singletonMessage({
         count: postgresNodes.length,
         names: postgresNodes.map((n) => n.name),
@@ -289,7 +294,7 @@ function enforceDepsInTree(registry: Map<string, PlanNode>): void {
     for (const [depKey, depRes] of Object.entries(node.resource.__dependsOn)) {
       const found = findResourceFqn(depRes as InternalResource, registry);
       if (found === '') {
-        throw new LaunchError(
+        throw new Error(
           `[neon launch] Resource '${node.name}' depends on '${depKey}', ` +
             `but that resource is not in the resolved tree. ` +
             `Did you declare it but forget to include it in some stack's return record?`,
@@ -340,7 +345,7 @@ function topoOrder(registry: Map<string, PlanNode>): string[] {
     const remaining = [...inDegree.entries()]
       .filter(([, d]) => d > 0)
       .map(([k]) => k);
-    throw new LaunchError(
+    throw new Error(
       `[neon launch] Cycle detected in resource dependencies. ` +
         `Involved resources: ${remaining.join(', ')}.`,
     );
@@ -366,7 +371,7 @@ export async function buildPlan(
 ): Promise<Plan> {
   const absPath = resolvePath(process.cwd(), configPath);
   if (!existsSync(absPath)) {
-    throw new LaunchError(
+    throw new Error(
       [
         `[neon launch] Config file not found: ${absPath}`,
         '',
@@ -397,7 +402,7 @@ export async function buildPlan(
       typeof def === 'object' && def !== null
         ? ((def as { __kind?: string }).__kind ?? 'a plain object')
         : typeof def;
-    throw new LaunchError(
+    throw new Error(
       `[neon launch] ${configPath} must default-export a stack({...}) from 'neonctl/config'. Found: ${found}.`,
     );
   }

@@ -111,6 +111,11 @@ export const handler = async (argv: LaunchArgs): Promise<void> => {
     const error = err instanceof Error ? err : new Error(String(err));
     sendError(error, 'NEON_LAUNCH_FAILED');
     log.error(error.message);
-    process.exit(1);
+    // LaunchError carries the right exit code (CONFIG_ERROR for plan-time,
+    // AUTH_MISSING for missing tokens, etc.); other errors fall through to
+    // RESOURCE_FAILED. The SIGINT path exits 130 itself, never reaches here.
+    const exitCode =
+      (error as { exitCode?: number }).exitCode ?? /* RESOURCE_FAILED */ 1;
+    process.exit(exitCode);
   }
 };
