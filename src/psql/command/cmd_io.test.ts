@@ -579,8 +579,11 @@ describe('\\watch', () => {
 
   test('parses `min_rows=` as a synonym for `m=`', async () => {
     const conn = makeMockConn();
-    // Always return enough rows so the watch loop stops on iteration 1.
-    conn.reply = () => [rs(['n'], [[1], [2], [3]])];
+    // Return FEWER than min_rows tuples so the watch loop stops on
+    // iteration 1. Upstream's `min_rows` is a CONTINUE predicate: keep
+    // polling while result has >= min_rows rows; stop the moment it
+    // doesn't. With min_rows=2 and a 1-row result, 1 < 2 → stop.
+    conn.reply = () => [rs(['n'], [[1]])];
     const s = makeSettings(conn);
     const ctx = makeMockCtx('watch', 'min_rows=2 i=0.001', s, 'select 1');
     const r = await run(cmdWatch, ctx);
@@ -624,21 +627,26 @@ describe('\\watch', () => {
     expect(stderr()).toMatch(/minimum row count specified more than once/);
   });
 
-  test('`min_rows` keeps polling until threshold reached', async () => {
+  test('`min_rows` keeps polling while result has >= threshold rows', async () => {
     const conn = makeMockConn();
     let count = 0;
-    // First call returns 1 row; subsequent calls return 5 rows. With
-    // min_rows=3 the loop must poll twice.
+    // First two calls return 5 rows each (>= 3 → continue); the third
+    // returns 1 row (< 3 → stop). Upstream `min_rows` is a CONTINUE
+    // predicate: the loop keeps polling so long as the result has at
+    // least `min_rows` tuples, and breaks the moment a result comes
+    // back with fewer. See PG `common.c::ExecQueryAndProcessResults`,
+    // which flips `return_early` to true exactly when
+    // `PQntuples(result) < min_rows`.
     conn.reply = () => {
       count += 1;
-      if (count === 1) return [rs(['n'], [[1]])];
-      return [rs(['n'], [[1], [2], [3], [4], [5]])];
+      if (count <= 2) return [rs(['n'], [[1], [2], [3], [4], [5]])];
+      return [rs(['n'], [[1]])];
     };
     const s = makeSettings(conn);
     const ctx = makeMockCtx('watch', 'min_rows=3 i=0.001', s, 'select 1');
     const r = await run(cmdWatch, ctx);
     expect(r.status).toBe('reset-buf');
-    expect(count).toBe(2);
+    expect(count).toBe(3);
   });
 
   test('falls back to WATCH_INTERVAL when no explicit interval is given', async () => {

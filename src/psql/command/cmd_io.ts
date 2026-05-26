@@ -1186,9 +1186,16 @@ export const cmdWatch: BackslashCmdSpec = {
           return { status: 'error' };
         }
         // Stop if `c=` reached the configured iteration cap, OR if `m=`
-        // was set and the most-recent result satisfied the threshold.
+        // was set and the previous result returned FEWER than `min_rows`
+        // tuples. Upstream's `ExecQueryAndProcessResults` sets `return_early`
+        // exactly when `min_rows > 0 && PQntuples(result) < min_rows`, and
+        // `do_watch` breaks out of the loop on that signal — see PG source
+        // `src/bin/psql/common.c::ExecQueryAndProcessResults`. In other
+        // words `min_rows` is a CONTINUE predicate: keep polling while
+        // the result has at least `min_rows` rows; stop the moment it
+        // doesn't.
         if (iterSet && iter >= iterMax) break;
-        if (minRowsSet && lastRowCount >= minRows) break;
+        if (minRowsSet && lastRowCount < minRows) break;
         if (controller.signal.aborted) break;
         await sleepCancellable(intervalMs, controller.signal);
       }
