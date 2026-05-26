@@ -435,7 +435,16 @@ const dispatchCondCommand = async (
   const bctx = makeBackslashContext(ctx, cmdName, rawArgs, queryBuf);
   attachCondStack(bctx, ctx.cond);
   const result = await spec.run(bctx);
-  if (result.status === 'error' && ctx.settings.lastErrorResult?.message) {
+  // Only emit a fallback `psql: ERROR:  <msg>` line for commands that did
+  // NOT write their own diagnostic. The `errorWritten` flag distinguishes
+  // these: commands using cmd_io's `errResult` (and inline writers) set it
+  // to `true`; cond commands (which only stash `lastErrorResult.message`)
+  // leave it unset so the mainloop surfaces the message.
+  if (
+    result.status === 'error' &&
+    !result.errorWritten &&
+    ctx.settings.lastErrorResult?.message
+  ) {
     writeError(ctx, ctx.settings.lastErrorResult.message);
   }
   return { handled: true, result };
@@ -455,12 +464,26 @@ const dispatchRegisteredCommand = async (
   const spec = ctx.registry.lookup(cmdName);
   if (!spec) {
     writeError(ctx, `invalid command \\${cmdName}`);
-    return { status: 'error' };
+    // Treat the "invalid command" message as already-written so the next
+    // layer doesn't add a second one. (Other dispatch paths set
+    // `lastErrorResult.message`; this one does not, so the duplicate
+    // guard below would skip anyway — flag it explicitly for symmetry.)
+    return { status: 'error', errorWritten: true };
   }
   const bctx = makeBackslashContext(ctx, cmdName, rawArgs, queryBuf);
   attachCondStack(bctx, ctx.cond);
   const result = await spec.run(bctx);
-  if (result.status === 'error' && ctx.settings.lastErrorResult?.message) {
+  // Same contract as `dispatchCondCommand`: only fall back to the bare
+  // `psql: ERROR:  <msg>` shape when the command didn't already surface
+  // its own diagnostic. Without this guard, `\gdesc` Parse failures
+  // would emit a stray `psql: ERROR:  <msg>` line between the LINE/`^`
+  // block and the `\errverbose` re-render, breaking the strict ordering
+  // check in the conformance regex.
+  if (
+    result.status === 'error' &&
+    !result.errorWritten &&
+    ctx.settings.lastErrorResult?.message
+  ) {
     writeError(ctx, ctx.settings.lastErrorResult.message);
   }
   return result;
@@ -705,14 +728,17 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       }
 
       if (result.kind === 'backslash') {
-        const consumedChunk = working.slice(0, result.consumed);
-        queryBuf += consumedChunk;
+        // Fold buffered SQL accumulated before the backslash into queryBuf.
+        // `result.sql` carries the (possibly empty) text that preceded the
+        // backslash in this scan pass — empty when the backslash was at the
+        // top of the buffer, non-empty for shapes like
+        // `SELECT 1 \watch c=3` or `SELECT error\gdesc`. Buffer-consuming
+        // commands (\g, \gx, \gset, \gexec, \gdesc, \crosstabview, \watch,
+        // \bind) will read this through `BackslashContext.queryBuf` and
+        // return `reset-buf` to clear it; commands that don't care leave it
+        // intact for the next dispatch.
+        queryBuf += result.sql;
         working = working.slice(result.consumed);
-        // Drop the consumed slice from queryBuf — psql's behaviour is to
-        // suppress the "\cmd" text from query history when the buffer was
-        // empty before. Easiest representation here: rewind.
-        const cmdLen = '\\'.length + result.cmd.length + result.rest.length;
-        queryBuf = queryBuf.slice(0, queryBuf.length - cmdLen);
         const cmdName = result.cmd;
         // Cond commands run unconditionally; everything else respects
         // cond.isActive().
@@ -757,6 +783,18 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         }
         if (bres?.status === 'reset-buf') {
           queryBuf = bres.newBuf ?? '';
+          scanState = initialScanState();
+          stmtLineNumber = 1;
+        }
+        // Upstream `mainloop.c`: on PSQL_CMD_ERROR, the query buffer is
+        // reset and the scanner state is dropped. Mirrors `resetPQExpBuffer`
+        // + `psql_scan_reset`. Without this, a buffer-consuming command
+        // that fails (e.g. `SELECT 1 \watch 1 1` rejecting duplicate
+        // positional intervals) would leave `SELECT 1 ` in the buffer for
+        // the next prompt — and in notty mode the tail dispatch would
+        // execute it, masking the failure exit code.
+        if (bres?.status === 'error') {
+          queryBuf = '';
           scanState = initialScanState();
           stmtLineNumber = 1;
         }

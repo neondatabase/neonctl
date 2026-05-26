@@ -228,10 +228,15 @@ const corpus: CorpusCase[] = [
     expectedSplits: ['   \\dt'],
   },
   {
-    name: 'backslash inside SQL is part of the SQL, not a command',
+    name: 'backslash AFTER buffered SQL still dispatches as a command',
+    // Upstream `psqlscan.l` recognises the boundary regardless of buffer
+    // state; the mainloop is responsible for routing the buffered SQL into
+    // the command's `query_buf`. We mirror that contract: the scanner
+    // returns `kind: 'backslash'` with `sql` carrying the pre-backslash
+    // text so buffer-consuming commands (\watch, \g, \gx, \gdesc, …) can
+    // execute the buffered statement.
     input: 'SELECT 1 \\d',
-    // No `;` — the `\d` is part of the buffered SQL (literal backslash + d).
-    expectedFinalKind: 'eof',
+    expectedFinalKind: 'backslash',
   },
   {
     name: '\\; forces semicolon into buffer (no dispatch)',
@@ -535,6 +540,8 @@ describe('scanSql — result shapes', () => {
     if (r.kind !== 'backslash') return;
     expect(r.cmd).toBe('d+');
     expect(r.rest).toBe(' public.users');
+    // Top-of-buffer dispatch — no buffered SQL preceded the `\`.
+    expect(r.sql).toBe('');
   });
 
   test('semicolon hands back exactly the consumed prefix', () => {
@@ -616,6 +623,180 @@ describe('scanSql — result shapes', () => {
     // of the finer reasons, never to bare `'continue'`.
     const r = scanSql('SELECT 1');
     expect(r.kind).toBe('eof');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Backslash boundary after buffered SQL on the same line.
+//
+// Upstream `psqlscan.l` recognises the boundary regardless of buffer state;
+// the mainloop is responsible for forwarding the buffered SQL into the
+// command's `query_buf`. We mirror that contract: the scanner ALWAYS returns
+// `kind: 'backslash'` and `sql` carries the (possibly empty) text that
+// preceded the backslash in this scan pass.
+//
+// Buffer-consuming commands (`\watch`, `\g`, `\gx`, `\gset`, `\gexec`,
+// `\gdesc`, `\crosstabview`, `\bind`) will read this through
+// `BackslashContext.queryBuf` and run the buffered statement. Commands that
+// don't care (`\set`, `\echo`, `\!`, `\cd`, …) leave the buffer intact for
+// the next dispatch.
+// ---------------------------------------------------------------------------
+
+describe('scanSql — backslash after buffered SQL on same line', () => {
+  test('SELECT 1 \\watch — sql carries pre-backslash text', () => {
+    const r = scanSql('SELECT 1 \\watch');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1 ');
+    expect(r.cmd).toBe('watch');
+    expect(r.rest).toBe('');
+    expect(r.consumed).toBe('SELECT 1 \\watch'.length);
+  });
+
+  test('SELECT 1 \\watch c=3 i=0.01 — args land in rest', () => {
+    const r = scanSql('SELECT 1 \\watch c=3 i=0.01');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1 ');
+    expect(r.cmd).toBe('watch');
+    expect(r.rest).toBe(' c=3 i=0.01');
+  });
+
+  test('SELECT 1; \\watch — leading SQL (semicolon-terminated) lands in sql', () => {
+    const r = scanSql('SELECT 1; \\watch');
+    // Scanner returns at the first boundary; here that's the semicolon, not
+    // the backslash. The mainloop dispatches the SELECT, then resumes scanning
+    // and hits the backslash on the second pass with an empty buffer.
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT 1;');
+  });
+
+  test('SELECT 1 \\g — no args, no rest', () => {
+    const r = scanSql('SELECT 1 \\g');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1 ');
+    expect(r.cmd).toBe('g');
+    expect(r.rest).toBe('');
+  });
+
+  test('SELECT 1\\g — no whitespace between SQL and backslash', () => {
+    const r = scanSql('SELECT 1\\g');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1');
+    expect(r.cmd).toBe('g');
+    expect(r.rest).toBe('');
+  });
+
+  test('SELECT 1\\gx — \\gx attaches directly to SQL', () => {
+    const r = scanSql('SELECT 1\\gx');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1');
+    expect(r.cmd).toBe('gx');
+  });
+
+  test('SELECT error\\gdesc — direct attachment, no space', () => {
+    const r = scanSql('SELECT error\\gdesc');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT error');
+    expect(r.cmd).toBe('gdesc');
+  });
+
+  test('SELECT 1 \\crosstabview a b — args after a buffer-consuming command', () => {
+    const r = scanSql('SELECT 1 \\crosstabview a b');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1 ');
+    expect(r.cmd).toBe('crosstabview');
+    expect(r.rest).toBe(' a b');
+  });
+
+  test('SELECT 1 \\echo — non-buffer-consuming command still recognises boundary', () => {
+    // Scanner doesn't know which commands consume the buffer — that's the
+    // mainloop's job. It always returns the boundary; the dispatched command
+    // decides whether to read `ctx.queryBuf` or ignore it.
+    const r = scanSql('SELECT 1 \\echo hi');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1 ');
+    expect(r.cmd).toBe('echo');
+    expect(r.rest).toBe(' hi');
+  });
+
+  test('SELECT 1 \\set X Y — \\set leaves the buffer intact (mainloop concern)', () => {
+    const r = scanSql('SELECT 1 \\set X Y');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1 ');
+    expect(r.cmd).toBe('set');
+    expect(r.rest).toBe(' X Y');
+  });
+
+  test('rest stops at newline; trailing SQL after \\cmd survives in next chunk', () => {
+    const r = scanSql('SELECT 1 \\echo hi\nFROM t;');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('SELECT 1 ');
+    expect(r.cmd).toBe('echo');
+    expect(r.rest).toBe(' hi');
+    // Consumed up to the newline; the rest of the input (newline + FROM t;)
+    // is left for the next scan pass.
+    expect(r.consumed).toBe('SELECT 1 \\echo hi'.length);
+  });
+
+  test('multi-line SQL then backslash on next line', () => {
+    // First scan: `SELECT 1\n` — incomplete (no terminator).
+    const r1 = scanSql('SELECT 1\n');
+    expect(r1.kind).toBe('eof');
+    if (r1.kind !== 'eof') return;
+    expect(r1.sql).toBe('SELECT 1\n');
+
+    // Mainloop accumulates that, then the user types `\watch` on the next
+    // line. The scanner sees the new chunk with the state from before; the
+    // buffered SQL is in the mainloop's queryBuf (not the scanner's `sql`),
+    // so `r.sql` is empty here — the mainloop is responsible for prepending
+    // its accumulated queryBuf when forwarding into BackslashContext.
+    const r2 = scanSql('\\watch', r1.nextState);
+    expect(r2.kind).toBe('backslash');
+    if (r2.kind !== 'backslash') return;
+    expect(r2.sql).toBe('');
+    expect(r2.cmd).toBe('watch');
+  });
+
+  test('top-of-buffer dispatch leaves sql empty', () => {
+    const r = scanSql('\\echo hi');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('');
+    expect(r.cmd).toBe('echo');
+    expect(r.rest).toBe(' hi');
+  });
+
+  test('whitespace-only prefix still leaves sql holding the whitespace', () => {
+    // Upstream's mainloop treats whitespace-only buffer as empty for prompt
+    // purposes. The scanner doesn't care: whatever preceded the backslash is
+    // returned verbatim in `sql`. Buffer-consuming commands `.trim()` the
+    // buffer before deciding whether it's usable.
+    const r = scanSql('   \\dt');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.sql).toBe('   ');
+    expect(r.cmd).toBe('dt');
+  });
+
+  test('substituted :NAME in buffered SQL is in sql, not literal', () => {
+    const r = scanSql('SELECT :x \\watch', undefined, (n) =>
+      n === 'x' ? '42' : undefined,
+    );
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    // :x was expanded inside the buffered SQL.
+    expect(r.sql).toBe('SELECT 42 ');
+    expect(r.cmd).toBe('watch');
   });
 });
 

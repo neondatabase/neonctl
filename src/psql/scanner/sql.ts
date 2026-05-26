@@ -90,6 +90,18 @@ export type ScanResult =
       kind: 'backslash';
       cmd: string;
       rest: string;
+      /**
+       * SQL accumulated before the backslash. Empty when the backslash was at
+       * the top of the buffer (the legacy / common case). Non-empty when the
+       * backslash appears AFTER buffered SQL on the same line — e.g. the
+       * upstream `SELECT 1 \watch c=3` or `SELECT error\gdesc` shapes. The
+       * mainloop is responsible for forwarding this into the BackslashContext
+       * so buffer-consuming commands (`\g`, `\gx`, `\gset`, `\gexec`, `\gdesc`,
+       * `\crosstabview`, `\watch`, `\bind`) can read it and execute. Commands
+       * that don't care about the buffer (e.g. `\set`, `\echo`, `\!`) leave it
+       * intact for the next dispatch.
+       */
+      sql: string;
       consumed: number;
       nextState: ScanState;
     }
@@ -119,8 +131,6 @@ const isIdentStart = (c: string | undefined): boolean =>
 
 const isIdentCont = (c: string | undefined): boolean =>
   c !== undefined && IDENT_CONT_RE.test(c);
-
-const isWhitespaceOnly = (s: string): boolean => /^[\s]*$/.test(s);
 
 // ---------------------------------------------------------------------------
 // State cloning.
@@ -290,15 +300,6 @@ const skipLineComment = (input: string, i: number): number => {
   while (k < input.length && input[k] !== '\n' && input[k] !== '\r') k++;
   return k;
 };
-
-// ---------------------------------------------------------------------------
-// Determine whether the SQL buffer accumulated so far is "empty" for the
-// purpose of recognising a top-of-buffer backslash command. Upstream's
-// MainLoop() only treats `\` as a slash command when the SQL query buffer is
-// empty (modulo leading whitespace). We mirror that.
-// ---------------------------------------------------------------------------
-
-const isBufferEmpty = (sql: string): boolean => isWhitespaceOnly(sql);
 
 // ---------------------------------------------------------------------------
 // Compute the PROMPT2 status for an incomplete chunk. Matches upstream's
@@ -562,7 +563,17 @@ export const scanSql = (
       };
     }
 
-    // Backslash — only at top of buffer is a slash command.
+    // Backslash — always recognised as a backslash-command boundary at top
+    // level, regardless of whether the SQL buffer is empty.
+    //
+    // Upstream `psqlscan.l` recognises the boundary in the scanner; the
+    // mainloop decides whether the dispatched command CONSUMES the buffered
+    // SQL (`\g`, `\gx`, `\gset`, `\gexec`, `\gdesc`, `\crosstabview`,
+    // `\watch`, `\bind`) or leaves it intact (`\set`, `\echo`, `\!`, …). We
+    // mirror that split: the scanner ALWAYS returns `kind: 'backslash'` and
+    // hands back the buffered SQL alongside the command name + remaining
+    // args; the mainloop forwards it into `BackslashContext.queryBuf` and the
+    // command's `run()` is free to read or ignore it.
     if (c === '\\') {
       // Upstream special: `\;` and `\:` are forced into the query buffer (so a
       // user can write `SELECT 1\;` to suppress immediate dispatch). We honour
@@ -573,66 +584,59 @@ export const scanSql = (
         i += 2;
         continue;
       }
-      if (isBufferEmpty(sql)) {
-        // True backslash command. Lex `\cmd` followed by the rest of the line.
-        // The slash arg lexer (WP-05) handles arg splitting; we only need to
-        // peel off the command name and hand the remainder over.
-        i++; // consume the `\`
-        // Command name: contiguous non-whitespace, non-`\` chars. Upstream
-        // also breaks on `;` here? No — see the `xslashcmd` state: it accepts
-        // ASCII letters + a few specials. We match alnum + a small set of
-        // standalone-cmd punctuation (`?`, `!`, `+`, etc.) which covers
-        // `\?`, `\!`, `\d+`, etc.
-        let cmdEnd = i;
-        // Allow a single non-alnum punctuation char like `?` or `!` to be the
-        // whole command name (matches `\?` and `\!`). Otherwise accept any
-        // run of identifier chars + `+` (which is the trailing modifier on
-        // `\d+`, `\dt+` etc.).
-        const first = input[i];
-        if (first !== undefined && /[A-Za-z]/.test(first)) {
-          // Backslash command names are ASCII alnum + `_` + `+` (the trailing
-          // modifier on `\d+`/`\dt+`). Underscore is required for psql's
-          // multi-word commands: `\lo_import`, `\lo_export`, `\lo_list`,
-          // `\lo_unlink`, `\bind_named`, `\close_prepared`.
-          while (cmdEnd < input.length && /[A-Za-z0-9_+]/.test(input[cmdEnd])) {
-            cmdEnd++;
-          }
-        } else if (first !== undefined && /[?!|]/.test(first)) {
-          cmdEnd = i + 1;
-        } else {
-          // Empty or strange char: treat as a zero-length command and let the
-          // dispatcher report "unknown command".
-          cmdEnd = i;
+      // True backslash command. Lex `\cmd` followed by the rest of the line.
+      // The slash arg lexer (WP-05) handles arg splitting; we only need to
+      // peel off the command name and hand the remainder over.
+      i++; // consume the `\`
+      // Command name: contiguous non-whitespace, non-`\` chars. Upstream
+      // also breaks on `;` here? No — see the `xslashcmd` state: it accepts
+      // ASCII letters + a few specials. We match alnum + a small set of
+      // standalone-cmd punctuation (`?`, `!`, `+`, etc.) which covers
+      // `\?`, `\!`, `\d+`, etc.
+      let cmdEnd = i;
+      // Allow a single non-alnum punctuation char like `?` or `!` to be the
+      // whole command name (matches `\?` and `\!`). Otherwise accept any
+      // run of identifier chars + `+` (which is the trailing modifier on
+      // `\d+`, `\dt+` etc.).
+      const first = input[i];
+      if (first !== undefined && /[A-Za-z]/.test(first)) {
+        // Backslash command names are ASCII alnum + `_` + `+` (the trailing
+        // modifier on `\d+`/`\dt+`). Underscore is required for psql's
+        // multi-word commands: `\lo_import`, `\lo_export`, `\lo_list`,
+        // `\lo_unlink`, `\bind_named`, `\close_prepared`.
+        while (cmdEnd < input.length && /[A-Za-z0-9_+]/.test(input[cmdEnd])) {
+          cmdEnd++;
         }
-        const cmd = input.slice(i, cmdEnd);
-        // Rest of the line — everything up to a newline. Newlines terminate
-        // slash commands. The slash arg lexer (WP-05) parses the argument
-        // syntax; we just slice.
-        let restEnd = cmdEnd;
-        while (
-          restEnd < input.length &&
-          input[restEnd] !== '\n' &&
-          input[restEnd] !== '\r'
-        ) {
-          restEnd++;
-        }
-        const rest = input.slice(cmdEnd, restEnd);
-        // Note: we *don't* consume the newline; it's left for the next chunk
-        // so caller can see PROMPT1 reset cleanly.
-        return {
-          kind: 'backslash',
-          cmd,
-          rest,
-          consumed: restEnd,
-          nextState: cloneState(st),
-        };
+      } else if (first !== undefined && /[?!|]/.test(first)) {
+        cmdEnd = i + 1;
+      } else {
+        // Empty or strange char: treat as a zero-length command and let the
+        // dispatcher report "unknown command".
+        cmdEnd = i;
       }
-      // Buffered SQL present: the `\` is part of the SQL (e.g. inside a
-      // string we wouldn't reach here, but at top level with text in the
-      // buffer it's likely a typo — upstream just ECHOes it).
-      sql += '\\';
-      i++;
-      continue;
+      const cmd = input.slice(i, cmdEnd);
+      // Rest of the line — everything up to a newline. Newlines terminate
+      // slash commands. The slash arg lexer (WP-05) parses the argument
+      // syntax; we just slice.
+      let restEnd = cmdEnd;
+      while (
+        restEnd < input.length &&
+        input[restEnd] !== '\n' &&
+        input[restEnd] !== '\r'
+      ) {
+        restEnd++;
+      }
+      const rest = input.slice(cmdEnd, restEnd);
+      // Note: we *don't* consume the newline; it's left for the next chunk
+      // so caller can see PROMPT1 reset cleanly.
+      return {
+        kind: 'backslash',
+        cmd,
+        rest,
+        sql,
+        consumed: restEnd,
+        nextState: cloneState(st),
+      };
     }
 
     // Variable substitution (`:NAME`, `:'NAME'`, `:"NAME"`). Only fires at

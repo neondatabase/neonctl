@@ -301,6 +301,69 @@ describe('runMainLoop — backslash commands', () => {
     expect(code).toBe(EXIT_USER);
     expect(stderr.text()).toMatch(/invalid command \\nosuch/);
   });
+
+  // -------------------------------------------------------------------------
+  // Same-line backslash after buffered SQL.
+  //
+  // Upstream `psqlscan.l` recognises the backslash boundary regardless of
+  // buffer state, and `MainLoop()` forwards the accumulated buffer into the
+  // dispatched command's `query_buf`. Buffer-consuming commands (`\g`,
+  // `\gx`, `\gset`, `\gexec`, `\gdesc`, `\crosstabview`, `\watch`, `\bind`)
+  // read this through `ctx.queryBuf` and execute; commands that don't care
+  // (`\set`, `\echo`, `\!`, `\cd`, …) leave the buffer intact. These tests
+  // exercise the mainloop wiring that hands the pre-backslash SQL into
+  // BackslashContext.queryBuf.
+  // -------------------------------------------------------------------------
+
+  test('\\echo on same line as SQL: command runs, buffer survives for next ;', async () => {
+    const { ctx, db } = buildCtx({ lines: ['SELECT 1 \\echo hi', ';'] });
+    await runMainLoop(ctx);
+    // Echo command saw the rest-of-line args.
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('hi');
+    // Buffer was NOT consumed by \echo, so the `;` on the next line dispatches
+    // the buffered `SELECT 1`.
+    expect(db?.calls.length).toBe(1);
+    expect(db?.calls[0]).toMatch(/SELECT 1/);
+  });
+
+  test('buffer-consuming spec on same line: queryBuf reaches BackslashContext', async () => {
+    // Plug a small spec that records ctx.queryBuf so we can prove the
+    // pre-backslash SQL flowed through. Returning `reset-buf` matches the
+    // upstream contract for buffer-consuming commands.
+    const captured: string[] = [];
+    const captureSpec: BackslashCmdSpec = {
+      name: 'capture',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run(ctx) {
+        captured.push(ctx.queryBuf);
+        return { status: 'reset-buf', newBuf: '' };
+      },
+    };
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1 \\capture'],
+      registrySpecs: [captureSpec],
+    });
+    await runMainLoop(ctx);
+    expect(captured).toEqual(['SELECT 1 ']);
+    // The buffer was consumed (reset-buf), so no SQL was dispatched through
+    // the connection.
+    expect(db?.calls).toEqual([]);
+  });
+
+  test('buffer survives non-consuming command, then dispatches on next ;', async () => {
+    // \echo leaves the buffer intact. The trailing `;` on a later line then
+    // dispatches `SELECT 1 ` to the connection.
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1', '\\echo middle', '+ 2;'],
+    });
+    await runMainLoop(ctx);
+    // \echo fired with its args.
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('middle');
+    // The SELECT was assembled across the lines and dispatched as one query.
+    expect(db?.calls.length).toBe(1);
+    expect(db?.calls[0]).toMatch(/SELECT 1/);
+    expect(db?.calls[0]).toMatch(/\+ 2;/);
+  });
 });
 
 // ---------------------------------------------------------------------------
