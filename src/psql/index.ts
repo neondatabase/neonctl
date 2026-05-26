@@ -25,8 +25,11 @@ import { promises as fs } from 'node:fs';
  *
  * Argv shape mirrors the legacy native-psql call site:
  *   argv[0] = connection URI (postgresql://user:pw@host:port/db?sslmode=...)
- *   argv[1..] = forwarded psql args (currently passed through; honored by
- *               startup args parsing once WP-26 lands).
+ *             OR an empty string `''` when the caller provides the
+ *             connection target via libpq flags (-h/-p/-U/-d) and/or PG*
+ *             env. The downstream layered resolver picks those up just like
+ *             upstream psql does.
+ *   argv[1..] = forwarded psql args (parsed by `parseStartupArgs`).
  */
 export const runPsql = async (
   argv: string[],
@@ -37,10 +40,6 @@ export const runPsql = async (
   const stderr = stdio.stderr ?? process.stderr;
 
   const connectionUri = argv[0] ?? '';
-  if (!connectionUri) {
-    stderr.write('psql: error: no connection URI provided\n');
-    return EXIT_FAILURE;
-  }
 
   // Parse the URI as both:
   //   - a fully-defaulted ConnectOptions (legacy surface; preserves byte-exact
@@ -48,14 +47,20 @@ export const runPsql = async (
   //   - a Partial<ConnectOptions> with ONLY the fields the URI explicitly
   //     supplied, plus an extracted `service` name. The partial is what the
   //     new layered resolver consumes.
-  let uriPartial: Partial<ConnectOptions>;
+  //
+  // When `connectionUri` is empty (the standalone-psql shim case), we skip
+  // URI parsing entirely and rely on libpq flags + env to populate the
+  // ConnectOptions layers.
+  let uriPartial: Partial<ConnectOptions> = {};
   let uriService: string | undefined;
-  try {
-    uriPartial = parseConnectionUriPartial(connectionUri);
-    uriService = parseConnectionUriService(connectionUri);
-  } catch (err) {
-    stderr.write(`psql: error: ${(err as Error).message}\n`);
-    return EXIT_BADCONN;
+  if (connectionUri !== '') {
+    try {
+      uriPartial = parseConnectionUriPartial(connectionUri);
+      uriService = parseConnectionUriService(connectionUri);
+    } catch (err) {
+      stderr.write(`psql: error: ${(err as Error).message}\n`);
+      return EXIT_BADCONN;
+    }
   }
 
   // Parse psql args (argv[1..]). argv[0] is the connection URI consumed above.
