@@ -59,17 +59,31 @@ export async function setupPg(): Promise<PgConn> {
 
 /**
  * Synchronously read the connection info populated by setupPg().
- * Throws if setupPg() has not run yet.
+ *
+ * vitest's `globalSetup` runs in a separate process from each test worker;
+ * the in-process `cached` populated there is invisible here. globalSetup
+ * propagates the connection via `PGCONFORMANCE_PG_*` env vars, so when
+ * `cached` is null we hydrate from those. Only throw if neither the cache
+ * nor the env vars are populated.
  */
 export function getPgConn(): PgConn {
-  if (!cached) {
-    throw new Error(
-      'pg-fixture: getPgConn() called before setupPg(). Make sure ' +
-        'vitest.config.ts wires globalSetup to tests/psql-conformance/' +
-        'harness/global-setup.ts.',
-    );
+  if (cached) return cached;
+  const envHost = process.env.PGCONFORMANCE_PG_HOST;
+  if (envHost) {
+    cached = {
+      host: envHost,
+      port: Number(process.env.PGCONFORMANCE_PG_PORT ?? '5432'),
+      db: process.env.PGCONFORMANCE_PG_DB ?? 'postgres',
+      user: process.env.PGCONFORMANCE_PG_USER ?? 'postgres',
+      password: process.env.PGCONFORMANCE_PG_PASSWORD ?? 'postgres',
+    };
+    return cached;
   }
-  return cached;
+  throw new Error(
+    'pg-fixture: getPgConn() called before setupPg() and no ' +
+      'PGCONFORMANCE_PG_HOST env var is set. Make sure vitest.config.ts ' +
+      'wires globalSetup to tests/psql-conformance/harness/global-setup.ts.',
+  );
 }
 
 /**
