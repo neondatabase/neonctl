@@ -3,18 +3,18 @@
 //   2. shell out to $PSQL_BINARY (default `psql` on $PATH) with the
 //      vendored .sql piped on stdin
 //   3. normalize stdout and diff against the vendored .out file
-//   4. report through expectMatches(), which consults KNOWN_FAILURES.yml
+//   4. assert the diff is empty
 //
 // Day-1 invariant: with PSQL_BINARY pointing at the system psql, all
-// three test bodies must pass. That is how we know the harness is
-// faithful before we measure TS psql against it.
+// three test bodies must pass. Subtests that don't yet pass against the
+// TS implementation should be marked `it.todo("reason")` (engine gap)
+// or `it.skip("reason")` (out of scope) in their spec file.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { expectMatches } from './harness/expect-matches.js';
 import { normalize } from './harness/normalize.js';
 import { getPgConn } from './harness/pg-fixture.js';
 import { log } from './harness/util-log.js';
@@ -69,14 +69,7 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
 
     if (result.error) {
       // Couldn't even spawn psql.
-      const outcome = expectMatches({
-        testName: `regress/${name}`,
-        actualOutcome: 'fail',
-        failureMessage: `spawn error: ${result.error.message}`,
-      });
-      // expected-failure path: assertion did not throw, so we're done.
-      expect(outcome.kind).toBe('expected-failure');
-      return;
+      throw new Error(`spawn error: ${result.error.message}`);
     }
 
     const stdout = result.stdout ?? '';
@@ -84,11 +77,7 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
     const actual = normalize(stdout);
 
     if (actual === expected) {
-      const outcome = expectMatches({
-        testName: `regress/${name}`,
-        actualOutcome: 'pass',
-      });
-      expect(outcome.kind).toBe('pass');
+      expect(actual).toBe(expected);
       return;
     }
 
@@ -97,13 +86,7 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
       `regress/${name} output differs from vendored expected.\n` +
       `--- expected (normalized)\n+++ actual (normalized)\n${diff}\n` +
       (stderr ? `--- stderr ---\n${stderr}\n` : '');
-    const outcome = expectMatches({
-      testName: `regress/${name}`,
-      actualOutcome: 'fail',
-      failureMessage,
-    });
-    // Only path that reaches here without throwing is expected-failure.
-    expect(outcome.kind).toBe('expected-failure');
+    throw new Error(failureMessage);
   });
 });
 
