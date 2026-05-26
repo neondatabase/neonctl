@@ -89,7 +89,7 @@
 - test: tap/001_basic
   scope: subtest
   subtest: '\watch > WATCH_INTERVAL is set, updated on \set, restored on \unset (lines 438-448)'
-  reason: '`WATCH_INTERVAL` psql variable is not initialised to 2 by default and `\echo :WATCH_INTERVAL` does not substitute. Once :NAME substitution lands, the literal `:WATCH_INTERVAL` token will go away.'
+  reason: '`\unset WATCH_INTERVAL` should restore the default value of 2 via a substitute hook (upstream `assign_watch_interval_hook` + substitute callback). Plain :NAME substitution and the initial seed (=2) both work now; only the post-unset default restore remains.'
   owner: '@team-cli'
   added: 2026-05-25
 
