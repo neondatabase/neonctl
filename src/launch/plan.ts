@@ -6,7 +6,11 @@
  *   1. Dup-key (same resource value at two record keys)
  *   2. Singleton postgres (exactly one in the tree)
  *   3. Deps-in-tree (every dependsOn value is in the registry)
- *   4. No cycles
+ *   4. No cycles (Kahn topo-sort)
+ *   5. localCommand with dependents must define `readiness`
+ *
+ * Cycle detection runs before the readiness check so users in a cyclic
+ * graph see the more fundamental error first.
  *
  * The dep-edge match is by per-instance __id first (UUID assigned at
  * factory time; survives jiti double-module load), then === identity
@@ -461,12 +465,13 @@ export async function buildPlan(
     );
   }
 
-  // Plan-time invariants — singleton postgres + deps-in-tree + no cycles.
-  // Dup-key already enforced in the walk.
+  // Plan-time invariants — see the file header for the full list. Dup-key
+  // is already enforced during the walk; the rest run here in dependency
+  // order so the more fundamental failures surface first.
   enforceSingletonPostgres(registry);
   enforceDepsInTree(registry);
-  enforceLocalCommandReadiness(registry);
   const order = topoOrder(registry);
+  enforceLocalCommandReadiness(registry);
 
   return { registry, order, ctx };
 }

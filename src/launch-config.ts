@@ -18,6 +18,7 @@ export {
   type FlagValue,
   type PostgresSpec,
   type PostgresOutputs,
+  type ComputeSpec,
   type ConnectionStringCallable,
   type VercelDeploymentSpec,
   type VercelDeploymentOutputs,

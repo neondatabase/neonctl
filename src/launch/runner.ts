@@ -618,13 +618,14 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
     `[launch] foreground: holding for ${handles.length} local-command(s). Ctrl-C to stop.`,
   );
 
-  // First-failure wins: if any local-command exits with a non-zero code,
-  // tear down siblings and surface the failure. A clean exit (code 0)
-  // means that one command is done — we wait for the others to finish on
-  // their own rather than killing them. (`onExit:0` one-shots are
-  // already filtered out of `handles` before we get here, so a clean
-  // exit at this stage is rare but legal — e.g. a foreground worker
-  // that gracefully shuts down.)
+  // If the FIRST handle to exit failed, tear down siblings and surface
+  // the failure. If it exited cleanly, await the others — but we don't
+  // re-check their codes (so a sibling crashing AFTER a clean first-exit
+  // is silently swallowed). This is fine for v1 because typical configs
+  // have one long-running foreground command (a dev server) plus
+  // `onExit:0` one-shots that are filtered out of `handles` before we
+  // get here. Multi-long-running configs are out of v1 scope; revisit
+  // by racing the first NON-ZERO exit if that pattern lands.
   const firstExit = await Promise.race(handles.map((h) => h.exited));
 
   // Defer to the SIGINT handler ONLY when we have positive evidence the

@@ -10,11 +10,13 @@ The interesting file is [`neon.ts`](./neon.ts). It declares three resources:
 
 Two unknown CLI flags drive the topology:
 
-| Invocation              | What it provisions                                                   |
-| ----------------------- | -------------------------------------------------------------------- |
-| `neon launch`           | `db` → `migrate` → `dev`. Foreground until you Ctrl-C.               |
-| `neon launch --preview` | `db` → a Vercel **preview** deploy scoped to the current git branch. |
-| `neon launch --prod`    | `db` → a Vercel **production** deploy.                               |
+| Invocation              | What it provisions                                                               |
+| ----------------------- | -------------------------------------------------------------------------------- |
+| `neon launch`           | `db` → `migrate` → `dev`. Foreground until you Ctrl-C.                           |
+| `neon launch --preview` | `db` → `migrate` → a Vercel **preview** deploy scoped to the current git branch. |
+| `neon launch --prod`    | `db` → `migrate` → a Vercel **production** deploy.                               |
+
+`migrate` runs in every flow so the Neon branch is at the right schema before any code reads it (Vercel deploys against an unmigrated branch would crash on first request).
 
 Branch policy lives in your `neon.ts`, not in flags the CLI invents.
 
