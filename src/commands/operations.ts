@@ -37,7 +37,7 @@ export const handler = (args: yargs.Argv) => {
   return args;
 };
 
-export const list = async (props: ProjectScopeProps & { limit: number }) => {
+export const list = async (props: ProjectScopeProps & { limit?: number }) => {
   const { data } = await props.apiClient.listProjectOperations({
     projectId: props.projectId,
     limit: props.limit,
