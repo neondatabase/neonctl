@@ -30,9 +30,18 @@
  *
  * What's deliberately out of scope (with TODOs):
  *
- *  - `COPY … FROM STDIN` data-line handling. Upstream enters a special copy-data state
- *    in which `\.` on its own line ends the data block. The mainloop owns that;
- *    we'd just feed the data straight through. See `// TODO(WP-16)` below.
+ *  - `COPY … FROM STDIN` data-line handling. Upstream's `<xcopy>` state is
+ *    **mainloop-owned, not scanner-owned**: once libpq returns `PGRES_COPY_IN`
+ *    the mainloop bypasses the SQL scanner entirely and forwards raw lines to
+ *    `PQputCopyData` until it sees `\.` on a line by itself. Our mainloop has
+ *    that wiring stubbed as WP-16 (see `src/psql/core/mainloop.ts`, comment
+ *    near the top). The scanner state machine therefore has *nothing to do*
+ *    here — when the mainloop is in copy mode it never calls `scanSql` until
+ *    after `\.`. The contract is: `ScanState.promptStatus = 'copy'` is set by
+ *    the mainloop (not by the scanner) while copy mode is active; the scanner
+ *    only consumes it for PROMPT3 selection. See {@link computePromptStatus}.
+ *    No scanner API change is required for COPY support to land — only the
+ *    mainloop bypass logic.
  *  - Variable substitution `:var`, `:'var'`, `:"var"`. Upstream expands these inline
  *    via callbacks; we leave the colon-prefixed text in place and let the REPL
  *    expand on the assembled SQL string. The boundary detector doesn't need it.
@@ -638,10 +647,10 @@ export const scanSql = (input: string, state?: ScanState): ScanResult => {
     };
   }
 
-  // TODO(WP-16): if the most recently dispatched statement was a `COPY …
-  // FROM STDIN`, the mainloop will set promptStatus = 'copy' and feed raw
-  // lines through until `\.`. We don't model that here; it's a higher-level
-  // concern.
+  // COPY-data handling is a mainloop concern, not a scanner concern.
+  // After a `COPY ... FROM STDIN` statement libpq returns PGRES_COPY_IN; the
+  // mainloop bypasses the scanner and forwards raw lines until `\.`. See the
+  // file header for the contract.
   return {
     kind: 'eof',
     sql,
