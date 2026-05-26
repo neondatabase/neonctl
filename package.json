@@ -18,6 +18,18 @@
     "neonctl": "cli.js",
     "neon": "cli.js"
   },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./config": {
+      "types": "./launch-config.d.ts",
+      "default": "./launch-config.js"
+    },
+    "./package.json": "./package.json",
+    "./cli.js": "./cli.js"
+  },
   "devDependencies": {
     "@apidevtools/swagger-parser": "10.1.0",
     "@commitlint/cli": "17.8.1",
