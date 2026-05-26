@@ -396,6 +396,109 @@ describe('sendQuery — FETCH_COUNT', () => {
     await sendQuery(ctx, 'SELECT 1;');
     expect(db?.calls).toEqual(['SELECT 1;']);
   });
+
+  test('DECLARE failure: lastErrorResult.sqlText is the user query, position rebased into user-sql coords', async () => {
+    // The user typed `SELECT error;`. Our wrapper sends
+    // `DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT error`, which the
+    // server rejects with a position pointing into the DECLARE statement
+    // (at the `error` token — column 49 = 1-based offset of `error` inside
+    // `DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT error`). The
+    // catch path inside `runCursorLoop` must rebase that position back
+    // into the user's `SELECT error;` coordinates so `\errverbose` can
+    // render `LINE 1: SELECT error;` with the caret under `error`.
+    const declaredSql =
+      'DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT error';
+    // 1-based position of `e` (start of `error`) inside the DECLARE form.
+    const errorTokenPosInDeclare = declaredSql.indexOf('error') + 1;
+    const err = Object.assign(new Error('column "error" does not exist'), {
+      severity: 'ERROR',
+      code: '42703',
+      position: String(errorTokenPosInDeclare),
+    });
+    const canned = new Map<string, Canned>([[declaredSql, err]]);
+    const { ctx, stderr } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '1');
+      },
+    });
+    const stats = await sendQuery(ctx, 'SELECT error;');
+    expect(stats.hadError).toBe(true);
+
+    // sqlText must be the user's original SQL so the LINE re-print picks
+    // up `SELECT error;` and not the synthetic DECLARE form.
+    expect(ctx.settings.lastErrorResult?.sqlText).toBe('SELECT error;');
+    expect(ctx.settings.lastErrorResult?.message).toContain(
+      'column "error" does not exist',
+    );
+    // Position must have been rebased from the DECLARE coords into the
+    // user's `SELECT error;` coords — `error` starts at column 8.
+    expect(ctx.settings.lastErrorResult?.position).toBe('8');
+
+    // Default-verbosity rendering: severity line + LINE/caret. The caret
+    // sits exactly 7 spaces past the `LINE 1: ` prefix (column 8 - 1).
+    const text = stderr.text();
+    expect(text).toContain('LINE 1: SELECT error;');
+    expect(text).toMatch(/^ {8} {7}\^$/m);
+  });
+
+  test('DECLARE failure: position outside the user SQL is stripped so caret is not mis-pointed', async () => {
+    // If the server reports a position somewhere inside the DECLARE
+    // prefix (e.g. column 5 = `LARE` token — impossible in practice but
+    // pessimistic about server behaviour), rebasing produces a value <=
+    // 0. We must drop the field rather than render a caret that lands
+    // outside `userSql`.
+    const declaredSql = 'DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT x';
+    const err = Object.assign(new Error('parser confusion'), {
+      severity: 'ERROR',
+      code: '42601',
+      position: '5', // inside the DECLARE keyword
+    });
+    const canned = new Map<string, Canned>([[declaredSql, err]]);
+    const { ctx } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '1');
+      },
+    });
+    await sendQuery(ctx, 'SELECT x;');
+    expect(ctx.settings.lastErrorResult?.sqlText).toBe('SELECT x;');
+    expect(ctx.settings.lastErrorResult?.position).toBeUndefined();
+  });
+
+  test('FETCH_COUNT after a prior backslash line: sqlText trimmed and LINE counter starts at 1', async () => {
+    // Our mainloop carries a `\n` over from prior backslash-only lines
+    // (upstream's mainloop.c strips that; ours doesn't — yet). So the SQL
+    // passed in here looks like `\nSELECT error;`. We sent
+    // `DECLARE _psql_cursor NO SCROLL CURSOR FOR \nSELECT error` to the
+    // server; the position points at the `error` token inside the wrapper.
+    // After capture, `lastErrorResult.sqlText` must be the trimmed form
+    // (`SELECT error;`) so `\errverbose` renders `LINE 1: SELECT error;`
+    // — matching upstream where the blank line is invisible.
+    const declaredSql =
+      'DECLARE _psql_cursor NO SCROLL CURSOR FOR \nSELECT error';
+    const errorTokenPosInDeclare = declaredSql.indexOf('error') + 1;
+    const err = Object.assign(new Error('column "error" does not exist'), {
+      severity: 'ERROR',
+      code: '42703',
+      position: String(errorTokenPosInDeclare),
+    });
+    const canned = new Map<string, Canned>([[declaredSql.trim(), err]]);
+    const { ctx, stderr } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '1');
+      },
+    });
+    await sendQuery(ctx, '\nSELECT error;');
+
+    // Leading `\n` stripped; LINE 1 renders against `SELECT error;`.
+    expect(ctx.settings.lastErrorResult?.sqlText).toBe('SELECT error;');
+    expect(ctx.settings.lastErrorResult?.position).toBe('8');
+    const text = stderr.text();
+    expect(text).toContain('LINE 1: SELECT error;');
+    expect(text).not.toContain('LINE 2:');
+  });
 });
 
 // ---------------------------------------------------------------------------

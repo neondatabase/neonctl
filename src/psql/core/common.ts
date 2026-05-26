@@ -359,6 +359,55 @@ export const writeQueryError = (
 };
 
 /**
+ * Strip leading whitespace from a query and rebase a 1-based server position
+ * to match. Mirrors upstream psql/mainloop.c's behaviour: a line containing
+ * only a backslash command does not leave a `\n` in the query buffer, so the
+ * subsequent SQL statement starts at "line 1" of its own context rather than
+ * inheriting a blank line. Our mainloop doesn't perform that strip, so the
+ * captured `sqlText` sometimes has a leading `\n` (e.g. after `\set
+ * FETCH_COUNT 1\nSELECT error;`). Without this normalisation, `\errverbose`
+ * would render `LINE 2: SELECT error;` where upstream renders `LINE 1: …`.
+ *
+ * Returns the trimmed text and the rebased position. If the rebased
+ * position would land outside the trimmed text, it is dropped so the
+ * formatter skips the `LINE`/caret block instead of mis-pointing.
+ */
+const normaliseSqlAndPosition = (
+  sqlText: string,
+  position: string | undefined,
+): { sqlText: string; position: string | undefined } => {
+  let leading = 0;
+  while (leading < sqlText.length) {
+    const ch = sqlText.charCodeAt(leading);
+    // Match psql_scan's whitespace set: space, tab, CR, LF, form-feed.
+    if (
+      ch !== 0x20 &&
+      ch !== 0x09 &&
+      ch !== 0x0a &&
+      ch !== 0x0d &&
+      ch !== 0x0c
+    ) {
+      break;
+    }
+    leading++;
+  }
+  if (leading === 0) return { sqlText, position };
+
+  const trimmed = sqlText.slice(leading);
+  if (typeof position !== 'string') return { sqlText: trimmed, position };
+
+  const original = parseInt(position, 10);
+  if (!Number.isFinite(original) || original <= 0) {
+    return { sqlText: trimmed, position };
+  }
+  const rebased = original - leading;
+  if (rebased <= 0 || rebased > trimmed.length) {
+    return { sqlText: trimmed, position: undefined };
+  }
+  return { sqlText: trimmed, position: String(rebased) };
+};
+
+/**
  * Capture the full ErrorResponse-shaped payload from a thrown error.
  *
  * Our wire layer copies every named field of the server's ErrorResponse
@@ -369,7 +418,10 @@ export const writeQueryError = (
  * the `LINE N: …` re-print + `^` pointer and the `LOCATION:` footer.
  *
  * `sqlText` is the originating SQL text from the caller; required so the
- * `^` pointer can be positioned under the failing character.
+ * `^` pointer can be positioned under the failing character. Leading
+ * whitespace is stripped (and `position` is rebased) so the `LINE N`
+ * counter reflects offsets within the user's statement rather than any
+ * buffer noise carried over from prior backslash commands.
  */
 export const captureLastError = (
   settings: PsqlSettings,
@@ -379,6 +431,7 @@ export const captureLastError = (
   const fallbackMessage = err instanceof Error ? err.message : String(err);
   const e = (err ?? {}) as Partial<LastErrorResult> & { message?: string };
   const code = e.code;
+  const normalised = normaliseSqlAndPosition(sqlText, e.position);
   settings.lastErrorResult = {
     severity: e.severity,
     code,
@@ -387,7 +440,7 @@ export const captureLastError = (
     message: e.message ?? fallbackMessage,
     detail: e.detail,
     hint: e.hint,
-    position: e.position,
+    position: normalised.position,
     internalPosition: e.internalPosition,
     internalQuery: e.internalQuery,
     where: e.where,
@@ -399,7 +452,7 @@ export const captureLastError = (
     file: e.file,
     line: e.line,
     routine: e.routine,
-    sqlText,
+    sqlText: normalised.sqlText,
   };
   return settings.lastErrorResult.message ?? fallbackMessage;
 };
@@ -621,6 +674,64 @@ export const renderResultSet = (
 // COMMIT on the happy path / ROLLBACK on error.
 // ---------------------------------------------------------------------------
 
+/**
+ * Re-base a server-side `position` field so it points into the user's
+ * original SQL rather than the synthetic statement we actually sent.
+ *
+ * The FETCH_COUNT path sends `DECLARE _psql_cursor NO SCROLL CURSOR FOR
+ * <userSql>` for the DECLARE leg and `FETCH FORWARD N FROM _psql_cursor`
+ * for each fetch. Server error positions (`P` field) come back in the
+ * coordinates of whatever query we sent:
+ *
+ *   - DECLARE-time parser/planner errors carry a position into the DECLARE
+ *     statement. We subtract the length of the prefix (`DECLARE … FOR `)
+ *     so the caret lands under the failing token in `userSql`.
+ *
+ *   - FETCH-time runtime errors come from executing the cursor's underlying
+ *     query (which IS `userSql`). The server reports the position relative
+ *     to that underlying query, so it's already in `userSql` coordinates
+ *     and we leave it alone.
+ *
+ * If we can't rebase a DECLARE-coord position into `userSql` bounds, we
+ * strip it rather than render a caret pointing past end-of-line.
+ */
+const rebasePositionForCursor = (
+  err: unknown,
+  wrapper: string,
+  userSql: string,
+): void => {
+  if (!err || typeof err !== 'object') return;
+  const e = err as { position?: string };
+  if (typeof e.position !== 'string') return;
+  const original = parseInt(e.position, 10);
+  if (!Number.isFinite(original) || original <= 0) return;
+
+  // Find the user's SQL inside the wrapper. If the wrapper *contains* the
+  // user's SQL verbatim (the DECLARE case), the prefix length tells us how
+  // far to shift. The trailing `;` is stripped before wrapping, so we
+  // search for the stripped form.
+  const stripped = userSql.replace(/;\s*$/u, '');
+  const offset = wrapper.indexOf(stripped);
+  if (offset === -1) {
+    // FETCH-leg failures: the wrapper is `FETCH FORWARD …` and the server
+    // reports the position relative to the cursor's underlying query
+    // (i.e. `userSql`), not the FETCH text. Leave the position alone —
+    // assuming it's already in user-sql coordinates is the right call,
+    // and if it isn't, the LINE/caret renderer clamps gracefully.
+    return;
+  }
+
+  const rebased = original - offset;
+  if (rebased <= 0 || rebased > userSql.length) {
+    // Position points outside the user's SQL — likely the parser blamed
+    // something inside the wrapper. Drop the field so the formatter skips
+    // the `LINE`/caret block instead of mis-pointing.
+    delete e.position;
+    return;
+  }
+  e.position = String(rebased);
+};
+
 const runCursorLoop = async (
   ctx: REPLContext,
   sql: string,
@@ -645,6 +756,11 @@ const runCursorLoop = async (
   const rowsAffected = 0;
   let rowsPrinted = 0;
   let cursorOpen = false;
+  // Track which synthetic statement is currently running so the catch block
+  // can rebase the server-side `position` into the user's SQL coordinates
+  // before throwing. Without this, `\errverbose` renders `LINE 1: <user-sql>`
+  // with the caret pointing past end-of-line.
+  let currentWrapper = declared;
 
   try {
     await db.execSimple(declared);
@@ -658,6 +774,7 @@ const runCursorLoop = async (
     // print_cursor.c's `flags.start_table` flip.
     let first = true;
     while (true) {
+      currentWrapper = fetchSql;
       const sets = await db.execSimple(fetchSql);
       if (sets.length === 0) break;
       const rs = sets[sets.length - 1];
@@ -679,6 +796,14 @@ const runCursorLoop = async (
     }
     return { rowsAffected, rowsPrinted };
   } catch (err) {
+    // Rebase the server-reported `position` from the synthetic wrapper's
+    // coordinates into the user's SQL coordinates in place. Server error
+    // positions come back relative to whatever statement we sent (DECLARE
+    // `… FOR <user-sql>` or FETCH FORWARD `…`). Without this rewrite, the
+    // caller's `recordError(ctx, err, sql)` would stash a position that
+    // points past the end of `sql`, and `\errverbose` would render
+    // `LINE 1: <user-sql>` with the `^` caret in the wrong column.
+    rebasePositionForCursor(err, currentWrapper, sql);
     if (cursorOpen) {
       try {
         await db.execSimple(`CLOSE ${CURSOR_NAME}`);
