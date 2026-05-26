@@ -749,6 +749,11 @@ describe('\\watch', () => {
 // ---------------------------------------------------------------------------
 
 describe('WATCH_INTERVAL variable hook', () => {
+  test('is initialized to the upstream default "2"', () => {
+    const s = makeSettings();
+    expect(s.vars.get('WATCH_INTERVAL')).toBe('2');
+  });
+
   test('accepts a valid numeric value', () => {
     const s = makeSettings();
     expect(s.vars.set('WATCH_INTERVAL', '10')).toBe(true);
@@ -758,7 +763,8 @@ describe('WATCH_INTERVAL variable hook', () => {
   test('rejects 1e500 (overflows to Infinity)', () => {
     const s = makeSettings();
     expect(s.vars.set('WATCH_INTERVAL', '1e500')).toBe(false);
-    expect(s.vars.get('WATCH_INTERVAL')).toBeUndefined();
+    // Veto leaves the previous value (the documented default "2") intact.
+    expect(s.vars.get('WATCH_INTERVAL')).toBe('2');
     expect(stderr()).toMatch(/WATCH_INTERVAL "1e500" is out of range/);
   });
 
@@ -780,6 +786,9 @@ describe('WATCH_INTERVAL variable hook', () => {
     stderrChunks.length = 0;
     s.vars.unset('WATCH_INTERVAL');
     expect(stderr()).toBe('');
+    // After unset, the variable is gone from the store; `\watch` falls
+    // back to DEFAULT_WATCH_INTERVAL (2) at use time, mirroring upstream.
+    expect(s.vars.get('WATCH_INTERVAL')).toBeUndefined();
   });
 });
 

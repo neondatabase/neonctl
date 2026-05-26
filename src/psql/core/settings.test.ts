@@ -118,6 +118,16 @@ describe('defaultSettings', () => {
     defaultSettings(v);
     expect(v.get('ENCODING')).toBe('UTF8');
   });
+
+  test('seeds WATCH_INTERVAL to "2" by default (DEFAULT_WATCH_INTERVAL)', () => {
+    // Upstream initializes pset.watch_interval to 2 in startup.c so a
+    // bare `\watch` (no `i=`) polls every 2 seconds. Mirror that here so
+    // `\echo :WATCH_INTERVAL` and the watch loop both observe the
+    // documented default before the user touches it.
+    const v = createVarStore();
+    defaultSettings(v);
+    expect(v.get('WATCH_INTERVAL')).toBe('2');
+  });
 });
 
 describe('applyEnvOverrides', () => {

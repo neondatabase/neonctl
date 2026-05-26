@@ -206,6 +206,15 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
     }
     return true;
   });
+  // Upstream seeds WATCH_INTERVAL to "2" (DEFAULT_WATCH_INTERVAL, see
+  // settings.h) during pset initialization so `\echo :WATCH_INTERVAL`
+  // and `\watch` (without an explicit interval) both observe the
+  // documented default. After `\unset WATCH_INTERVAL`, upstream
+  // re-substitutes the same default via its substitute hook; we accept
+  // the simpler "set on init" model — `\unset` removes the value, but
+  // `\watch` itself falls back to DEFAULT_WATCH_INTERVAL when the
+  // variable is unset (see `resolveWatchIntervalDefault` in cmd_io.ts).
+  varStore.set('WATCH_INTERVAL', '2');
 
   // ON_ERROR_STOP assign hook. Upstream `assign_var_on_error_stop_hook` in
   // startup.c keeps `pset.on_error_stop` in lockstep with the variable so
