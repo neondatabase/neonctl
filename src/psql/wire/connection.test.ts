@@ -607,6 +607,51 @@ describe('PgConnection', () => {
     await conn.close();
   });
 
+  test('FATAL ErrorResponse before socket close is surfaced as the rejection reason', async () => {
+    // When the backend is killed mid-query (`pg_terminate_backend()`) the
+    // server delivers an ErrorResponse FATAL "terminating connection due to
+    // administrator command" and then closes the TCP socket *without*
+    // sending ReadyForQuery. Our wire layer must prefer the server-supplied
+    // error wording over the generic "Socket closed" fallback so the
+    // diagnostic carries the FATAL message upstream code can render.
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '18.0'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(
+          errorResponse({
+            S: 'FATAL',
+            V: 'FATAL',
+            C: '57P01',
+            M: 'terminating connection due to administrator command',
+          }),
+        );
+        // No ReadyForQuery — the server just tears down the connection.
+        client.end();
+      }
+    });
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'postgres',
+      ssl: 'disable',
+    });
+    await expect(
+      conn.execSimple('SELECT pg_terminate_backend(pg_backend_pid())'),
+    ).rejects.toMatchObject({
+      severity: 'FATAL',
+      code: '57P01',
+      message: 'terminating connection due to administrator command',
+    });
+    await conn.close();
+  });
+
   test('connects with cleartext auth, captures ParameterStatus + key', async () => {
     server = await startFakeServer((msg, client) => {
       if (msg.type === 'Startup') {

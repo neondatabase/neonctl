@@ -1800,7 +1800,17 @@ export class PgConnection implements Connection {
     if (this.pendingQuery) {
       const q = this.pendingQuery;
       this.pendingQuery = null;
-      q.reject(err);
+      // If the server delivered an ErrorResponse just before the socket
+      // closed (e.g. a FATAL "terminating connection due to administrator
+      // command" when the backend is killed mid-query), prefer that
+      // structured error over the generic "Socket closed" fallback so the
+      // diagnostic carries the server's wording. Mirrors libpq's behaviour
+      // where `PQexec` surfaces the FATAL message and `PQerrorMessage`
+      // returns the server-supplied text.
+      //
+      // `q.error` is initialised to `null` by `execSimple`; only a non-null
+      // value indicates a server-side ErrorResponse was actually captured.
+      q.reject(q.error != null ? asThrowable(q.error) : err);
     }
     if (this.extDriver) {
       const d = this.extDriver;
