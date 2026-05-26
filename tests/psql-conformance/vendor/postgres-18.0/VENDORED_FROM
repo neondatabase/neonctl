@@ -16,6 +16,7 @@ Files vendored at REL_18_0:
   src/bin/psql/t/001_basic.pl
   src/bin/psql/t/010_tab_completion.pl
   src/bin/psql/t/020_cancel.pl
+  src/interfaces/libpq/t/005_negotiate_encryption.pl
 
 License: PostgreSQL License (BSD-style). The PostgreSQL Global
 Development Group retains copyright. See:
