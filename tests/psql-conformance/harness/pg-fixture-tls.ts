@@ -1,31 +1,43 @@
 // Opt-in TLS-enabled Postgres fixture for the conformance harness.
 //
 // This is a sibling of `pg-fixture.ts` that boots a separate postgres
-// container with `ssl=on` and a self-signed server cert. It is used only
-// by tap/005_negotiate_encryption.spec.ts; the shared plaintext fixture
-// from `pg-fixture.ts` is unaffected.
+// container with `ssl=on` and a minted cert chain (root CA → server CA /
+// client CA → server/client leaf certs). It is consumed by both
+// `tap/001_ssltests.spec.ts` (which exercises the cert vault directly) and
+// `tap/005_negotiate_encryption.spec.ts` (which only cares about the
+// happy-path `host`/`hostssl`/`hostnossl` rules).
 //
 // Each call to `setupTlsPg()` boots a fresh container (no caching across
-// tests) because the negotiation tests need to toggle server SSL state by
-// reaching for a different fixture instance. `teardownTlsPg()` stops the
-// container and frees the tmp dir.
+// tests) because the negotiation / cert-switch tests need to toggle server
+// state by reaching for a different fixture instance. `teardownTlsPg()`
+// stops the container and frees the tmp dir.
 //
-// The fixture also lays down a custom `pg_hba.conf` so the suite can
-// exercise the upstream `hostssl` / `hostnossl` / `host` rules. Three
-// users are pre-created in `beforeAll`:
+// The fixture lays down a custom `pg_hba.conf` so the suite can exercise
+// the upstream `hostssl` / `hostnossl` / `host` rules plus the `cert`
+// authentication method (`clientcert=verify-full` / `verify-ca`). Five
+// users are pre-created in the init script:
 //
-//   - `testuser`  — `host all testuser ...` (default, plaintext or SSL)
-//   - `ssluser`   — `hostssl all ssluser ...` (TLS required)
-//   - `nossluser` — `hostnossl all nossluser ...` (TLS forbidden)
+//   - `testuser`   — `host all testuser ...` (default, plaintext or SSL)
+//   - `ssluser`    — `hostssl all ssluser ...` (TLS required)
+//   - `nossluser`  — `hostnossl all nossluser ...` (TLS forbidden)
+//   - `ssltestuser` / `anotheruser` — used by the cert-auth subtests; only
+//     reachable via a matching client certificate under the `cert` HBA
+//     rules.
 //
-// Self-signed cert generation: we shell out to `openssl req -x509` rather
-// than implement X.509 encoding in Node. The cert is RSA-2048, CN=localhost,
-// 30 day lifetime, no SAN — adequate for `sslmode=require` (which doesn't
-// check the chain) but NOT for `verify-ca` / `verify-full` (the cert is
-// untrusted and the hostname isn't in the SAN).
+// Cert chain generation: we shell out to `openssl` rather than implement
+// X.509 encoding in Node. The {@link CertVault} class owns the workflow:
+// mint a self-signed root CA, mint server / client intermediate CAs signed
+// by the root, then mint individual leaf certs with assorted CN / SAN
+// shapes. Accessors expose the absolute file paths to the spec.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -36,18 +48,29 @@ export type TlsPgConn = {
   port: number;
   db: string;
   /**
-   * Default `testuser` (host all all trust). Other usernames (`ssluser`,
-   * `nossluser`) are created at startup and have different HBA rules — use
-   * them by overriding `user` on the {@link PgConnection.connect} options.
+   * Default `testuser` (host all all trust). Other usernames
+   * (`ssluser`, `nossluser`, `ssltestuser`, `anotheruser`) are created at
+   * startup and have different HBA rules — use them by overriding `user`
+   * on the {@link PgConnection.connect} options.
    */
   user: string;
   password: string;
-  /** Path to the self-signed CA / server cert on the host filesystem. */
+  /**
+   * Path to the *active* server cert on the host filesystem (initially the
+   * CN-and-SAN variant). Preserved for backward compatibility with the 005
+   * spec which uses this as the self-signed root for `sslrootcert`.
+   */
   serverCertPath: string;
-  /** Path to the private key on the host filesystem. */
+  /** Path to the active server private key on the host filesystem. */
   serverKeyPath: string;
   /** Working directory used for cert generation; cleaned up on teardown. */
   workDir: string;
+  /**
+   * Full cert vault. Cert vault accessors expose the individual leaf
+   * certs minted by {@link CertVault}; the 001 spec drives the cert-shape
+   * subtests through this. Always present.
+   */
+  vault: CertVault;
 };
 
 type StoppableContainer = { stop(): Promise<unknown> };
@@ -57,9 +80,400 @@ let workDirRef: string | null = null;
 
 const PG_IMAGE_DEFAULT = 'postgres:18.0';
 
+// ---------------------------------------------------------------------------
+// CertVault — openssl-driven mint workflow for the upstream-style cert tree.
+//
+// Layout (paths returned by the accessors are absolute):
+//
+//   root_ca.crt                 self-signed Test CA Root
+//   server_ca.crt               signed by root_ca, "Test Server CA"
+//   client_ca.crt               signed by root_ca, "Test Client CA"
+//   root+server_ca.crt          root_ca || server_ca (PEM bundle the spec
+//                               passes as sslrootcert for verify-ca/full)
+//   root+client_ca.crt          root_ca || client_ca (server-side
+//                               ssl_ca_file for cert auth)
+//   server-cn-only.crt          CN=localhost (no SAN) — verify-full fails
+//   server-cn-and-san.crt       CN=localhost, SAN DNS:localhost +
+//                               DNS:127.0.0.1 + DNS:*.localhost (the
+//                               active default — used by 005)
+//   server-san-only.crt         no CN, SAN DNS:localhost
+//   server-ip-in-san.crt        SAN IP:127.0.0.1
+//   server-multi-name.crt       SAN DNS:dns1.localhost +
+//                               DNS:dns2.localhost +
+//                               DNS:*.wildcard.localhost
+//   client-ssltestuser.crt      CN=ssltestuser, signed by client_ca
+//   client-anotheruser.crt      CN=anotheruser, signed by client_ca
+//   client-ssltestuser-enc.key  same key as ssltestuser but encrypted
+//                               with passphrase "testpw" (PKCS#8 AES-256)
+//
+// The "switch server cert" workflow is handled by the spec via ALTER
+// SYSTEM + pg_reload_conf — see {@link CertVault.switchServerCert} which
+// returns the SQL fragment the spec must run.
+// ---------------------------------------------------------------------------
+
+/** Identifier for a server cert that the spec can mount onto the server. */
+export type ServerCertName =
+  | 'cn-only'
+  | 'cn-and-san'
+  | 'san-only'
+  | 'ip-in-san'
+  | 'multi-name';
+
+/** Identifier for a client cert the spec can pass via sslcert/sslkey. */
+export type ClientCertName = 'ssltestuser' | 'anotheruser';
+
 /**
- * Generate a self-signed RSA-2048 cert + key in `workDir`. Returns the
- * absolute paths to `server.crt` and `server.key`.
+ * Container-side paths the server reads its TLS material from. The init
+ * shell script preloads these as <PGDATA>/server.crt and <PGDATA>/server.key
+ * (and copies the client CA into PGDATA so `ssl_ca_file` can validate
+ * client certs). Switching cert at runtime is done by `ALTER SYSTEM SET
+ * ssl_cert_file = '<other.crt>'` + pg_reload_conf().
+ */
+const SERVER_CERT_TARGET_DIR = '/etc/postgresql-tls';
+
+/**
+ * In-container path the server reads to validate client certificates.
+ * Populated by `ssl_ca_file` in postgresql.conf. Generated by the init
+ * script from the host-side `root+client_ca.crt`.
+ */
+const CLIENT_CA_CONTAINER_PATH = '/etc/postgresql-tls/client-ca.crt';
+
+/**
+ * Manage the cert tree for the TLS fixture. One instance owns a tmp
+ * directory; calling {@link mint} writes the full cert tree there. The
+ * spec then reads files via the accessors (or by joining workDir/<name>).
+ */
+export class CertVault {
+  public readonly workDir: string;
+
+  private readonly serverCerts = new Map<
+    ServerCertName,
+    { cert: string; key: string }
+  >();
+  private readonly clientCerts = new Map<
+    ClientCertName,
+    { cert: string; key: string; encryptedKey?: string }
+  >();
+  private rootCaCertPath: string | null = null;
+  private serverCaCertPath: string | null = null;
+  private clientCaCertPath: string | null = null;
+  private bundleRootServerPath: string | null = null;
+  private bundleRootClientPath: string | null = null;
+
+  public constructor(workDir: string) {
+    this.workDir = workDir;
+  }
+
+  /** Mint every cert in the vault. Idempotent — calling twice overwrites. */
+  public mint(): void {
+    // 1. Root CA — self-signed.
+    const rootKey = this.path('root_ca.key');
+    const rootCert = this.path('root_ca.crt');
+    runOpenssl([
+      'req',
+      '-x509',
+      '-nodes',
+      '-newkey',
+      'rsa:2048',
+      '-keyout',
+      rootKey,
+      '-out',
+      rootCert,
+      '-days',
+      '30',
+      '-subj',
+      '/CN=Test CA Root',
+    ]);
+    this.rootCaCertPath = rootCert;
+
+    // 2. Server CA — signed by the root.
+    const serverCaCert = this.signCa('server_ca', 'Test Server CA');
+    this.serverCaCertPath = serverCaCert;
+
+    // 3. Client CA — signed by the root.
+    const clientCaCert = this.signCa('client_ca', 'Test Client CA');
+    this.clientCaCertPath = clientCaCert;
+
+    // 4. PEM bundles — `root+server_ca.crt` is what the client passes as
+    // `sslrootcert` for verify-ca/full; `root+client_ca.crt` is what the
+    // server reads via `ssl_ca_file` to validate incoming client certs.
+    this.bundleRootServerPath = this.path('root+server_ca.crt');
+    writeFileSync(
+      this.bundleRootServerPath,
+      readUtf8(rootCert) + '\n' + readUtf8(serverCaCert),
+    );
+    this.bundleRootClientPath = this.path('root+client_ca.crt');
+    writeFileSync(
+      this.bundleRootClientPath,
+      readUtf8(rootCert) + '\n' + readUtf8(clientCaCert),
+    );
+
+    // 5. Server leaf certs — signed by the server CA.
+    this.mintServerCert('cn-only', '/CN=localhost', []);
+    this.mintServerCert('cn-and-san', '/CN=localhost', [
+      'DNS:localhost',
+      'DNS:127.0.0.1',
+      'DNS:*.localhost',
+    ]);
+    this.mintServerCert('san-only', '/CN=server-with-no-cn', ['DNS:localhost']);
+    this.mintServerCert('ip-in-san', '/CN=server-ip', ['IP:127.0.0.1']);
+    this.mintServerCert('multi-name', '/CN=server-multi', [
+      'DNS:dns1.localhost',
+      'DNS:dns2.localhost',
+      'DNS:*.wildcard.localhost',
+    ]);
+
+    // 6. Client leaf certs — signed by the client CA.
+    this.mintClientCert('ssltestuser', '/CN=ssltestuser');
+    this.mintClientCert('anotheruser', '/CN=anotheruser');
+
+    // 7. Encrypted variant of ssltestuser's key. PKCS#8 AES-256, passphrase
+    // "testpw". We don't keep the unencrypted key path under a different
+    // name — the spec passes the *encrypted* key as sslkey + sslpassword
+    // to exercise the wire-layer passphrase path.
+    const userCert = this.clientCerts.get('ssltestuser');
+    if (!userCert) throw new Error('CertVault: ssltestuser was not minted');
+    const encryptedKey = this.path('client-ssltestuser-encrypted.key');
+    runOpenssl([
+      'pkcs8',
+      '-topk8',
+      '-in',
+      userCert.key,
+      '-out',
+      encryptedKey,
+      '-passout',
+      'pass:testpw',
+      '-v2',
+      'aes-256-cbc',
+    ]);
+    userCert.encryptedKey = encryptedKey;
+  }
+
+  // -------------------------------------------------------------------------
+  // Accessors
+  // -------------------------------------------------------------------------
+
+  public getRootCa(): string {
+    if (!this.rootCaCertPath) throw new Error('CertVault: not minted');
+    return this.rootCaCertPath;
+  }
+  public getServerCa(): string {
+    if (!this.serverCaCertPath) throw new Error('CertVault: not minted');
+    return this.serverCaCertPath;
+  }
+  public getClientCa(): string {
+    if (!this.clientCaCertPath) throw new Error('CertVault: not minted');
+    return this.clientCaCertPath;
+  }
+  /** PEM bundle of root_ca + server_ca — the spec's `sslrootcert`. */
+  public getRootServerBundle(): string {
+    if (!this.bundleRootServerPath) throw new Error('CertVault: not minted');
+    return this.bundleRootServerPath;
+  }
+  /** PEM bundle of root_ca + client_ca — the server's `ssl_ca_file`. */
+  public getRootClientBundle(): string {
+    if (!this.bundleRootClientPath) throw new Error('CertVault: not minted');
+    return this.bundleRootClientPath;
+  }
+  public getServerCert(name: ServerCertName): { cert: string; key: string } {
+    const entry = this.serverCerts.get(name);
+    if (!entry) throw new Error(`CertVault: server cert "${name}" not minted`);
+    return entry;
+  }
+  public getClientCert(name: ClientCertName): {
+    cert: string;
+    key: string;
+    /** Encrypted variant if minted (only for `ssltestuser`). */
+    encryptedKey?: string;
+  } {
+    const entry = this.clientCerts.get(name);
+    if (!entry) throw new Error(`CertVault: client cert "${name}" not minted`);
+    return entry;
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal helpers
+  // -------------------------------------------------------------------------
+
+  /** Resolve a filename relative to {@link workDir}. */
+  private path(name: string): string {
+    return join(this.workDir, name);
+  }
+
+  /**
+   * Mint a CA cert signed by the root: generate a CSR, then x509 -req
+   * against the root with the v3_ca extension so the cert is usable as a
+   * signer. Returns the absolute path to the produced cert.
+   */
+  private signCa(slug: string, cn: string): string {
+    const csr = this.path(`${slug}.csr`);
+    const key = this.path(`${slug}.key`);
+    const cert = this.path(`${slug}.crt`);
+    runOpenssl([
+      'req',
+      '-nodes',
+      '-newkey',
+      'rsa:2048',
+      '-keyout',
+      key,
+      '-out',
+      csr,
+      '-subj',
+      `/CN=${cn}`,
+    ]);
+    const ext = this.path(`${slug}.ext`);
+    writeFileSync(
+      ext,
+      [
+        'basicConstraints=critical,CA:TRUE,pathlen:0',
+        'keyUsage=critical,keyCertSign,cRLSign',
+        'subjectKeyIdentifier=hash',
+        'authorityKeyIdentifier=keyid,issuer',
+      ].join('\n') + '\n',
+    );
+    runOpenssl([
+      'x509',
+      '-req',
+      '-in',
+      csr,
+      '-CA',
+      this.getRootCa(),
+      '-CAkey',
+      this.path('root_ca.key'),
+      '-CAcreateserial',
+      '-out',
+      cert,
+      '-days',
+      '30',
+      '-extfile',
+      ext,
+    ]);
+    return cert;
+  }
+
+  /**
+   * Mint a server leaf cert signed by the server CA. `sanEntries` is a
+   * list of openssl-style entries like `'DNS:localhost'` /
+   * `'IP:127.0.0.1'`. Empty list means "no SAN extension".
+   */
+  private mintServerCert(
+    name: ServerCertName,
+    subj: string,
+    sanEntries: string[],
+  ): void {
+    const slug = `server-${name}`;
+    const key = this.path(`${slug}.key`);
+    const csr = this.path(`${slug}.csr`);
+    const cert = this.path(`${slug}.crt`);
+    runOpenssl([
+      'req',
+      '-nodes',
+      '-newkey',
+      'rsa:2048',
+      '-keyout',
+      key,
+      '-out',
+      csr,
+      '-subj',
+      subj,
+    ]);
+    const ext = this.path(`${slug}.ext`);
+    const extLines = [
+      'basicConstraints=CA:FALSE',
+      'keyUsage=critical,digitalSignature,keyEncipherment',
+      'extendedKeyUsage=serverAuth',
+      'subjectKeyIdentifier=hash',
+      'authorityKeyIdentifier=keyid,issuer',
+    ];
+    if (sanEntries.length > 0) {
+      extLines.push(`subjectAltName=${sanEntries.join(',')}`);
+    }
+    writeFileSync(ext, extLines.join('\n') + '\n');
+    if (!this.serverCaCertPath) throw new Error('CertVault: server CA missing');
+    runOpenssl([
+      'x509',
+      '-req',
+      '-in',
+      csr,
+      '-CA',
+      this.serverCaCertPath,
+      '-CAkey',
+      this.path('server_ca.key'),
+      '-CAcreateserial',
+      '-out',
+      cert,
+      '-days',
+      '30',
+      '-extfile',
+      ext,
+    ]);
+    this.serverCerts.set(name, { cert, key });
+  }
+
+  /** Mint a client leaf cert signed by the client CA. */
+  private mintClientCert(name: ClientCertName, subj: string): void {
+    const slug = `client-${name}`;
+    const key = this.path(`${slug}.key`);
+    const csr = this.path(`${slug}.csr`);
+    const cert = this.path(`${slug}.crt`);
+    runOpenssl([
+      'req',
+      '-nodes',
+      '-newkey',
+      'rsa:2048',
+      '-keyout',
+      key,
+      '-out',
+      csr,
+      '-subj',
+      subj,
+    ]);
+    const ext = this.path(`${slug}.ext`);
+    writeFileSync(
+      ext,
+      [
+        'basicConstraints=CA:FALSE',
+        'keyUsage=critical,digitalSignature,keyEncipherment',
+        'extendedKeyUsage=clientAuth',
+        'subjectKeyIdentifier=hash',
+        'authorityKeyIdentifier=keyid,issuer',
+      ].join('\n') + '\n',
+    );
+    if (!this.clientCaCertPath) throw new Error('CertVault: client CA missing');
+    runOpenssl([
+      'x509',
+      '-req',
+      '-in',
+      csr,
+      '-CA',
+      this.clientCaCertPath,
+      '-CAkey',
+      this.path('client_ca.key'),
+      '-CAcreateserial',
+      '-out',
+      cert,
+      '-days',
+      '30',
+      '-extfile',
+      ext,
+    ]);
+    this.clientCerts.set(name, { cert, key });
+  }
+}
+
+function runOpenssl(args: string[]): void {
+  execFileSync('openssl', args, { stdio: 'pipe' });
+}
+
+function readUtf8(path: string): string {
+  return readFileSync(path, 'utf8');
+}
+
+/**
+ * Generate a single self-signed RSA-2048 cert + key in `workDir`. Kept as
+ * a named export for backward compat with the original fixture API. The
+ * extended {@link CertVault} now generates a full chain in addition to
+ * this helper, but the export shape is unchanged.
  *
  * Uses the host's `openssl` CLI; throws if `openssl` is not on PATH. The
  * spec is expected to detect this up-front and `it.skip` the suite when
@@ -71,31 +485,21 @@ export function generateSelfSignedCert(workDir: string): {
 } {
   const keyPath = join(workDir, 'server.key');
   const certPath = join(workDir, 'server.crt');
-  // -nodes        : don't encrypt the key (postgres reads it at startup)
-  // -newkey rsa:2048: generate a new key, RSA-2048
-  // -keyout       : write key to file
-  // -out          : write self-signed cert to file
-  // -days 30      : 30-day lifetime is plenty for a test fixture
-  // -subj         : skip the interactive prompt; CN=localhost
-  execFileSync(
-    'openssl',
-    [
-      'req',
-      '-x509',
-      '-nodes',
-      '-newkey',
-      'rsa:2048',
-      '-keyout',
-      keyPath,
-      '-out',
-      certPath,
-      '-days',
-      '30',
-      '-subj',
-      '/CN=localhost',
-    ],
-    { stdio: 'pipe' },
-  );
+  runOpenssl([
+    'req',
+    '-x509',
+    '-nodes',
+    '-newkey',
+    'rsa:2048',
+    '-keyout',
+    keyPath,
+    '-out',
+    certPath,
+    '-days',
+    '30',
+    '-subj',
+    '/CN=localhost',
+  ]);
   return { certPath, keyPath };
 }
 
@@ -105,75 +509,76 @@ export function generateSelfSignedCert(workDir: string): {
  * initialised but BEFORE the server starts accepting client traffic — so
  * the `CREATE USER` + `pg_hba.conf` rewrite are applied before the first
  * test connection.
- *
- * The `pg_hba.conf` content mirrors the upstream 005 test's setup,
- * narrowed to the rules our portable subset exercises:
- *
- *   - `host  all  testuser  0.0.0.0/0  trust`     (any auth, plaintext OR ssl)
- *   - `hostssl  all  ssluser  0.0.0.0/0  trust`   (ssl only)
- *   - `hostnossl  all  nossluser  0.0.0.0/0  trust` (plaintext only)
- *
- * Plus a final `host all all ... trust` catch-all so the default `postgres`
- * superuser still works (the harness's setup queries use it). The order is
- * important — pg_hba.conf is evaluated top-down and the first match wins.
  */
 const INIT_SQL = `
--- Negotiation-encryption suite users. The pg_hba.conf rules below select
+-- Negotiation + cert-auth suite users. The pg_hba.conf rules below select
 -- between them based on the negotiated transport (host = any; hostssl =
--- TLS only; hostnossl = plaintext only).
+-- TLS only; hostnossl = plaintext only) and the cert HBA method.
 CREATE USER testuser;
 CREATE USER ssluser;
 CREATE USER nossluser;
+CREATE USER ssltestuser;
+CREATE USER anotheruser;
 `;
 
 /**
- * pg_hba.conf used by the negotiate-encryption suite. Order matters —
- * postgres scans the file top-down and uses the FIRST matching rule.
+ * pg_hba.conf used by the TLS suite. Order matters — postgres scans the
+ * file top-down and uses the FIRST matching rule.
  *
- *   - ssluser: only `hostssl` matches (plaintext rejected at the rule
- *     level with "no pg_hba.conf entry"). SSL connections accepted via
- *     trust.
- *   - nossluser: only `hostnossl` matches. SSL connections rejected.
- *   - testuser: `host` matches both encryptions.
- *   - The default superuser (`postgres` — name varies between docker
- *     images, but we use whatever testcontainers passed as
- *     POSTGRES_USER) keeps `local` + a `host all all` catch-all so the
- *     entrypoint's bootstrap continues to work AND so adminExec() can
- *     reach the cluster from the spec.
+ *   - ssluser:      only `hostssl` matches (plaintext rejected at the
+ *                   rule level with "no pg_hba.conf entry"). SSL trust.
+ *   - nossluser:    only `hostnossl` matches.
+ *   - ssltestuser:  `hostssl` with the `cert` method +
+ *                   `clientcert=verify-full` — the user's connection must
+ *                   present a client cert whose CN matches the username.
+ *   - anotheruser:  `hostssl` with `cert clientcert=verify-ca` — a valid
+ *                   client cert chain is required but the CN need not
+ *                   match. Used by the cert-CN-mismatch subtest.
+ *   - testuser:     `host` matches both encryptions (trust).
+ *   - The default superuser (`test` from POSTGRES_USER) keeps `local` +
+ *     a `host all all` catch-all so the entrypoint's bootstrap continues
+ *     to work AND so adminExec() can reach the cluster from the spec.
  *
  * IMPORTANT: the trailing `host all all 0.0.0.0/0 trust` rule MUST come
- * AFTER the user-specific `hostssl` / `hostnossl` rules, otherwise it
+ * AFTER the user-specific `hostssl` / `hostnossl` rules — otherwise it
  * would catch ssluser / nossluser before their narrower rules fire and
  * the suite would silently misreport pass/fail.
  */
 const HBA_CONF = `
-# negotiate_encryption.spec.ts HBA — see pg-fixture-tls.ts.
+# pg-fixture-tls.ts HBA — see harness/pg-fixture-tls.ts.
 # Order is significant: first matching rule wins.
-# TYPE         DATABASE  USER       ADDRESS         METHOD
-hostssl        all       ssluser    0.0.0.0/0       trust
-hostssl        all       ssluser    ::/0            trust
-hostnossl      all       nossluser  0.0.0.0/0       trust
-hostnossl      all       nossluser  ::/0            trust
-host           all       testuser   0.0.0.0/0       trust
-host           all       testuser   ::/0            trust
+# TYPE         DATABASE  USER         ADDRESS         METHOD
+hostssl        all       ssluser      0.0.0.0/0       trust
+hostssl        all       ssluser      ::/0            trust
+hostnossl      all       nossluser    0.0.0.0/0       trust
+hostnossl      all       nossluser    ::/0            trust
+# Cert-based authentication for the 001 spec. verify-full requires the
+# client cert's CN to equal the username; verify-ca only validates the
+# chain (the CN is unchecked).
+hostssl        all       ssltestuser  0.0.0.0/0       cert clientcert=verify-full
+hostssl        all       ssltestuser  ::/0            cert clientcert=verify-full
+hostssl        all       anotheruser  0.0.0.0/0       cert clientcert=verify-ca
+hostssl        all       anotheruser  ::/0            cert clientcert=verify-ca
+host           all       testuser     0.0.0.0/0       trust
+host           all       testuser     ::/0            trust
 # Default rules for the testcontainers superuser ("test" by default;
 # both md5 and trust are accepted so the entrypoint bootstrap and the
 # spec's adminExec helper both work).
-local          all       all                        trust
-host           all       test       0.0.0.0/0       trust
-host           all       test       ::/0            trust
+local          all       all                          trust
+host           all       test         0.0.0.0/0       trust
+host           all       test         ::/0            trust
 `;
 
-/** Server-side path that the init script copies the cert to. */
-const CERT_TARGET = '/etc/postgresql-tls/server.crt';
-/** Server-side path that the init script copies the key to. */
-const KEY_TARGET = '/etc/postgresql-tls/server.key';
+/** In-container target for the *initially active* server cert. */
+const ACTIVE_CERT_TARGET = '/etc/postgresql-tls/server.crt';
+/** In-container target for the *initially active* server key. */
+const ACTIVE_KEY_TARGET = '/etc/postgresql-tls/server.key';
 
 /**
- * Init script that rewrites pg_hba.conf with the negotiation-encryption
- * ruleset AND enables SSL via postgresql.conf (NOT via the postmaster
- * command line, which would prevent `ALTER SYSTEM SET ssl=off` from
- * taking effect at runtime).
+ * Init script that rewrites pg_hba.conf with the suite's ruleset AND
+ * enables SSL via postgresql.conf (NOT via the postmaster command line,
+ * which would prevent `ALTER SYSTEM SET ssl=off` from taking effect at
+ * runtime).
  *
  * Why a `.sh` init script and not `.sql`?
  *   - pg_hba.conf is a filesystem rewrite, not a SQL command.
@@ -182,15 +587,22 @@ const KEY_TARGET = '/etc/postgresql-tls/server.key';
  *     refuses to start with `permissions are too liberal`).
  *
  * The script:
- *   1. Copies the bind-mounted cert + key into the PGDATA dir so the
+ *   1. Copies every bind-mounted server cert + key into PGDATA so the
  *      file owner is the postgres user (avoids permission issues with
- *      bind-mounted host files owned by root).
- *   2. Sets restrictive perms on the key (0600).
- *   3. Appends `ssl=on` + `ssl_cert_file=` + `ssl_key_file=` to
- *      postgresql.conf so the setting is persistent but overridable by
- *      ALTER SYSTEM (which writes to postgresql.auto.conf, evaluated
- *      AFTER postgresql.conf).
- *   4. Rewrites pg_hba.conf with the suite's ruleset.
+ *      bind-mounted host files owned by root). Names mirror the host:
+ *        server-cn-only.crt   →  $PGDATA/server-cn-only.crt
+ *        server-cn-and-san.crt → $PGDATA/server-cn-and-san.crt
+ *        … and so on.
+ *      Also copies the active cert/key as `server.crt` / `server.key`,
+ *      which postgresql.conf points at by default. Switching at runtime
+ *      is done via `ALTER SYSTEM SET ssl_cert_file = '<alt.crt>'` +
+ *      pg_reload_conf().
+ *   2. Sets restrictive perms on every key (0600).
+ *   3. Copies the client-CA bundle into PGDATA so `ssl_ca_file` can
+ *      validate the certs presented by clients with the `cert` HBA method.
+ *   4. Appends `ssl=on` + `ssl_cert_file=` + `ssl_key_file=` +
+ *      `ssl_ca_file=` to postgresql.conf.
+ *   5. Rewrites pg_hba.conf with the suite's ruleset.
  *
  * The init script runs after `initdb` and BEFORE the server starts
  * accepting client connections, so all of this is in place by the time
@@ -199,22 +611,27 @@ const KEY_TARGET = '/etc/postgresql-tls/server.key';
 const HBA_INIT_SH = `#!/bin/sh
 set -eu
 
-# Move the cert + key out of /tmp into PGDATA where they will be owned
-# by the postgres user, then lock down the key permissions.
-cp "${CERT_TARGET}" "$PGDATA/server.crt"
-cp "${KEY_TARGET}" "$PGDATA/server.key"
-chown postgres:postgres "$PGDATA/server.crt" "$PGDATA/server.key" || true
-chmod 600 "$PGDATA/server.key"
-chmod 644 "$PGDATA/server.crt"
+# Copy every bind-mounted .crt / .key under ${SERVER_CERT_TARGET_DIR}
+# into PGDATA where they will be owned by the postgres user.
+for f in ${SERVER_CERT_TARGET_DIR}/*.crt; do
+  cp "$f" "$PGDATA/$(basename "$f")"
+done
+for f in ${SERVER_CERT_TARGET_DIR}/*.key; do
+  cp "$f" "$PGDATA/$(basename "$f")"
+done
+chown postgres:postgres "$PGDATA"/*.crt "$PGDATA"/*.key 2>/dev/null || true
+chmod 600 "$PGDATA"/*.key
+chmod 644 "$PGDATA"/*.crt
 
 # Enable SSL via postgresql.conf so it is the default but can be
 # overridden at runtime via ALTER SYSTEM (which writes to
 # postgresql.auto.conf, applied AFTER postgresql.conf).
 cat >> "$PGDATA/postgresql.conf" <<'__CONF_EOF__'
-# negotiate_encryption.spec.ts — TLS material loaded from PGDATA.
+# pg-fixture-tls.ts — TLS material loaded from PGDATA.
 ssl = on
 ssl_cert_file = 'server.crt'
 ssl_key_file = 'server.key'
+ssl_ca_file = 'client-ca.crt'
 __CONF_EOF__
 
 # Rewrite pg_hba.conf with the suite's narrow ruleset.
@@ -225,27 +642,30 @@ __HBA_EOF__
 
 /**
  * Boot a fresh postgres container with TLS enabled. Returns the connection
- * info plus the host-side cert paths so the test can validate them.
+ * info plus the host-side cert paths so the test can validate them. The
+ * fixture mints a real cert chain (root CA → server/client CA → leaves)
+ * and the spec can switch which server leaf cert is active at runtime via
+ * {@link switchServerCert} (which the fixture exposes for tests).
  */
 export async function setupTlsPg(): Promise<TlsPgConn> {
   const workDir = mkdtempSync(join(tmpdir(), 'psql-conformance-tls-'));
   workDirRef = workDir;
-  const { certPath, keyPath } = generateSelfSignedCert(workDir);
+
+  // Mint the cert vault.
+  const vault = new CertVault(workDir);
+  vault.mint();
+  // Active server cert = CN+SAN variant. It satisfies both `verify-ca`
+  // (chain) and `verify-full` (SAN DNS:localhost), and is also a SAN
+  // superset of the 005 spec's expectations (which only need a working
+  // server cert — it never reads the chain).
+  const active = vault.getServerCert('cn-and-san');
+
   const initSqlPath = join(workDir, 'init-users.sql');
   writeFileSync(initSqlPath, INIT_SQL, 'utf8');
   const initHbaPath = join(workDir, 'init-hba.sh');
   writeFileSync(initHbaPath, HBA_INIT_SH, { mode: 0o755 });
 
   // The testcontainers builder is fluent; every `with*` returns `this`.
-  // We type it as one record because the dynamic import below cannot
-  // give us the package's own (optional) types.
-  //
-  // We do NOT use the `withSSL` helper from @testcontainers/postgresql:
-  // it injects `-c ssl=on` on the postmaster command line, which
-  // overrides any later `ALTER SYSTEM SET ssl = 'off'` (command-line
-  // GUCs win over postgresql.auto.conf). We need to toggle ssl at
-  // runtime, so we mount the cert files and configure ssl in the data
-  // dir via the init shell script instead.
   type ContentToCopy = {
     content: string;
     target: string;
@@ -289,20 +709,27 @@ export async function setupTlsPg(): Promise<TlsPgConn> {
   }
   const image = process.env.PGCONFORMANCE_PG_IMAGE ?? PG_IMAGE_DEFAULT;
   log(`pg-fixture-tls: booting ${image} with TLS enabled...`);
-  const builder: Builder = new ctor(image).withCopyFilesToContainer([
-    // Cert + key copied into a staging location, world-readable so the
-    // entrypoint (which runs as the `postgres` user) can `cp` them into
-    // PGDATA. The cert + key are throwaway test material — they live in
-    // a tmp dir on the host, so loose perms here are not a security
-    // concern. The init script chmods the in-PGDATA copy back to 0600.
-    {
-      source: certPath,
-      target: CERT_TARGET,
+
+  // Bind-mount the full minted cert tree. Every leaf server cert + key,
+  // every CA bundle, plus the active cert/key under the `server.crt` /
+  // `server.key` filenames postgresql.conf will read. The init script
+  // copies these into PGDATA and chown's them to the postgres user.
+  const filesToCopy: { source: string; target: string; mode?: number }[] = [
+    // Active cert as `server.crt` / `server.key` (what postgresql.conf
+    // initially points at). Keeping backward-compat with the 005 spec's
+    // assumption that the fixture exposes ONE server.crt / server.key.
+    { source: active.cert, target: ACTIVE_CERT_TARGET, mode: 0o644 },
+    { source: active.key, target: ACTIVE_KEY_TARGET, mode: 0o644 },
+    // Every alternate server cert + key the spec might switch to.
+    ...allServerCertFiles(vault).map((p) => ({
+      source: p.host,
+      target: p.container,
       mode: 0o644,
-    },
+    })),
+    // Client CA bundle so the server can validate client certs.
     {
-      source: keyPath,
-      target: KEY_TARGET,
+      source: vault.getRootClientBundle(),
+      target: CLIENT_CA_CONTAINER_PATH,
       mode: 0o644,
     },
     // Init scripts run in alphabetical order — `01-users.sql` creates
@@ -318,7 +745,11 @@ export async function setupTlsPg(): Promise<TlsPgConn> {
       target: '/docker-entrypoint-initdb.d/02-hba.sh',
       mode: 0o755,
     },
-  ]);
+  ];
+
+  const builder: Builder = new ctor(image).withCopyFilesToContainer(
+    filesToCopy,
+  );
   const started = await builder.start();
   containerRef = started;
   const conn: TlsPgConn = {
@@ -327,12 +758,57 @@ export async function setupTlsPg(): Promise<TlsPgConn> {
     db: started.getDatabase(),
     user: started.getUsername(),
     password: started.getPassword(),
-    serverCertPath: certPath,
-    serverKeyPath: keyPath,
+    serverCertPath: active.cert,
+    serverKeyPath: active.key,
     workDir,
+    vault,
   };
   log(`pg-fixture-tls: ready at ${conn.host}:${conn.port} (db=${conn.db})`);
   return conn;
+}
+
+/**
+ * Enumerate every alternate server cert + key path. Used to build the
+ * testcontainers bind-mount list so the spec can `ALTER SYSTEM SET
+ * ssl_cert_file = 'server-<name>.crt'` at runtime without a container
+ * restart. The names mirror the host filenames; the init script copies
+ * each pair into PGDATA so the postgres user owns the files.
+ */
+function allServerCertFiles(
+  vault: CertVault,
+): { host: string; container: string }[] {
+  const names: ServerCertName[] = [
+    'cn-only',
+    'cn-and-san',
+    'san-only',
+    'ip-in-san',
+    'multi-name',
+  ];
+  const out: { host: string; container: string }[] = [];
+  for (const n of names) {
+    const c = vault.getServerCert(n);
+    out.push({
+      host: c.cert,
+      container: `${SERVER_CERT_TARGET_DIR}/server-${n}.crt`,
+    });
+    out.push({
+      host: c.key,
+      container: `${SERVER_CERT_TARGET_DIR}/server-${n}.key`,
+    });
+  }
+  return out;
+}
+
+/**
+ * SQL fragments to atomically switch the server's active cert/key. The
+ * spec is expected to wrap these in adminExec() + pg_reload_conf() — see
+ * the 001 spec for the helper.
+ */
+export function switchServerCertSql(name: ServerCertName): string[] {
+  return [
+    `ALTER SYSTEM SET ssl_cert_file = 'server-${name}.crt'`,
+    `ALTER SYSTEM SET ssl_key_file = 'server-${name}.key'`,
+  ];
 }
 
 /** Tear down the container and remove the temp dir. */
