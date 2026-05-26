@@ -122,9 +122,12 @@ export function makeRef<T = string>(id: string, opts?: unknown): Ref<T> {
  * observable at runtime (spec §11 #19: dispatch by string, never instanceof).
  */
 export function isRef(v: unknown): v is RefMarker {
+  // `v` may be a function — makeRef wraps a function in a Proxy so the
+  // callable form (`db.connectionString({ pooled: true })`) works. A plain
+  // `typeof === 'object'` check would skip the function-typed Refs.
+  if (v === null) return false;
+  if (typeof v !== 'object' && typeof v !== 'function') return false;
   return (
-    typeof v === 'object' &&
-    v !== null &&
     (v as RefMarker).__kind === 'ref' &&
     typeof (v as RefMarker).__ref === 'string'
   );
@@ -158,6 +161,9 @@ export function walkAndResolve(
   if (Array.isArray(value)) {
     return value.map((item) => walkAndResolve(item, table));
   }
+  // Skip function-typed values that aren't refs (e.g. callbacks) — recursing
+  // into a function's enumerable keys would return them as-is anyway and
+  // breaks the rebuild-as-plain-object contract.
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
