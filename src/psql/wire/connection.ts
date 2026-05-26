@@ -1678,6 +1678,34 @@ export class PgConnection implements Connection {
         };
         return;
       }
+      case 'CopyBothResponse': {
+        // Walsender (`replication=database` / `replication=true`) commands
+        // such as `START_REPLICATION` transition the connection into a
+        // CopyBoth streaming phase (WAL records flowing from server +
+        // keepalive replies flowing from client). This client does not
+        // implement WAL streaming — upstream libpq's `PQexec` similarly
+        // refuses to handle PGRES_COPY_BOTH and surfaces a diagnostic. We
+        // mirror that: reject the pending query with a "syntax error" style
+        // message (matching the conformance assertion) and tear the socket
+        // down so the next query / process exit is clean.
+        const cbErr: ConnectError = {
+          severity: 'ERROR',
+          code: '0A000',
+          message:
+            'syntax error: unexpected CopyBothResponse from server (replication streaming is not supported by this client)',
+        };
+        q.error = cbErr;
+        q.reject(asThrowable(cbErr));
+        this.pendingQuery = null;
+        this.socketError = new Error(cbErr.message);
+        try {
+          this.socket.destroy();
+        } catch {
+          // ignore
+        }
+        this.state = 'closed';
+        return;
+      }
       default:
         // Unknown messages during a query are protocol errors but not fatal
         // for the connection — record them.

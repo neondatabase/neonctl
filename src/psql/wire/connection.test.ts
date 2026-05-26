@@ -423,6 +423,21 @@ const copyOutResponse = (columnFormats: number[] = [0]): Buffer => {
   return backendMessage('H', buf);
 };
 
+const copyBothResponse = (columnFormats: number[] = [0]): Buffer => {
+  // Walsender START_REPLICATION response. Body layout matches CopyIn /
+  // CopyOutResponse — overall format byte + Int16 nCols + Int16 perCol.
+  // pg-protocol's parser ignores the body and emits a bare 'replicationStart'
+  // marker; the bytes are still well-formed so the parser advances cleanly
+  // past the message.
+  const buf = Buffer.alloc(1 + 2 + columnFormats.length * 2);
+  buf[0] = 0;
+  buf.writeUInt16BE(columnFormats.length, 1);
+  for (let i = 0; i < columnFormats.length; i++) {
+    buf.writeInt16BE(columnFormats[i], 3 + i * 2);
+  }
+  return backendMessage('W', buf);
+};
+
 const copyDataMsg = (data: Buffer | string): Buffer => {
   const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
   return backendMessage('d', buf);
@@ -550,6 +565,45 @@ describe('PgConnection', () => {
       code: '42601',
       message: 'syntax error',
     });
+    await conn.close();
+  });
+
+  test('CopyBothResponse during execSimple rejects with a syntax-error diagnostic', async () => {
+    // walsender `START_REPLICATION` succeeds at the protocol level — the
+    // server transitions to CopyBoth and starts streaming WAL records. Our
+    // simple-query client does NOT implement that streaming phase, so we
+    // surface a clean 0A000-style "syntax error: unexpected CopyBothResponse"
+    // diagnostic and tear the socket down. (Matches upstream psql's
+    // behaviour of refusing PGRES_COPY_BOTH and surfacing a diagnostic.)
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '18.0'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        // Don't follow with ReadyForQuery — CopyBoth keeps the connection
+        // in copy state until the client tears it down.
+        client.send(copyBothResponse([0]));
+      }
+    });
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'postgres',
+      ssl: 'disable',
+      replication: 'database',
+    });
+    await expect(
+      conn.execSimple('START_REPLICATION 0/1'),
+    ).rejects.toMatchObject({
+      severity: 'ERROR',
+      message: expect.stringMatching(/syntax error/) as unknown,
+    });
+    expect(conn.isClosed()).toBe(true);
     await conn.close();
   });
 

@@ -440,6 +440,15 @@ function adaptBackendMessage(raw: unknown): BackendMessage {
       return adaptCopyResponse('CopyInResponse', msg);
     case 'copyOutResponse':
       return adaptCopyResponse('CopyOutResponse', msg);
+    case 'replicationStart':
+      // pg-protocol emits a bare marker for the 'W' (CopyBothResponse) byte
+      // — its `Parser` recognises the message code but does not decode the
+      // payload (overall format + per-column format bytes). The body shape
+      // is identical to CopyInResponse / CopyOutResponse but we don't need
+      // those fields: the connection layer reacts to CopyBothResponse by
+      // raising a clean diagnostic because this client does not implement
+      // CopyBoth streaming.
+      return { type: 'CopyBothResponse' };
     case 'copyData':
       return { type: 'CopyData', data: Buffer.from(msg.chunk as Buffer) };
     case 'copyDone':

@@ -33,7 +33,6 @@ import {
   MessageParser,
   Parse,
   PasswordMessage,
-  ProtocolError,
   Query,
   SASLInitialResponse,
   SASLResponse,
@@ -421,14 +420,14 @@ describe('MessageParser', () => {
     expect(msg.oids).toEqual([23, 25]);
   });
 
-  test('throws ProtocolError on messages the adapter does not model', () => {
+  test('parses CopyBothResponse (W) as a bare marker', () => {
     // pg-protocol parses 'W' as a `replicationStart` message, which we
-    // don't model (we are not a replication client). The adapter throws
-    // ProtocolError so connection.ts can surface it on the socket error
-    // path.
+    // surface as `CopyBothResponse` so the connection state machine can
+    // recognise walsender / `START_REPLICATION` responses (without
+    // implementing streaming replication; the body's per-column format
+    // bytes are intentionally not decoded).
     const p = new MessageParser();
-    expect(() => p.feed(backendMessage('W', Buffer.alloc(0)))).toThrow(
-      ProtocolError,
-    );
+    const [msg] = p.feed(backendMessage('W', Buffer.alloc(0)));
+    expect(msg.type).toBe('CopyBothResponse');
   });
 });
