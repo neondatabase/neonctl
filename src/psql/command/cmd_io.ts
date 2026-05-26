@@ -102,6 +102,7 @@ import { unalignedPrinter } from '../print/unaligned.js';
 
 import { writeErr } from './shared.js';
 import { enqueue as enqueueInput } from './inputQueue.js';
+import { psqlErrorPrefix } from './cmd_meta.js';
 
 // ---------------------------------------------------------------------------
 // Query-output (queryFout) stash.
@@ -183,7 +184,11 @@ export const WATCH_TEST_CONTROLLER: { ref: AbortController | null } = {
 
 const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
   ctx.settings.lastErrorResult = { message };
-  writeErr(`\\${ctx.cmdName}: ${message}\n`);
+  // Upstream psql prefixes every diagnostic with the `psql:[<file>:<n>]:`
+  // tag that `pg_log_pre_callback` adds. Mirror that here so backslash
+  // command errors look like upstream when surfaced via `psql_fails_like`.
+  const prefix = psqlErrorPrefix(ctx.settings);
+  writeErr(`${prefix}\\${ctx.cmdName}: ${message}\n`);
   return { status: 'error' };
 };
 
@@ -808,7 +813,8 @@ export const cmdGexec: BackslashCmdSpec = {
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             ctx.settings.lastErrorResult = { message: msg };
-            writeErr(`\\${ctx.cmdName}: ${msg}\n`);
+            const prefix = psqlErrorPrefix(ctx.settings);
+            writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
             return { status: 'error' };
           }
         }
@@ -1175,7 +1181,8 @@ export const cmdWatch: BackslashCmdSpec = {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           ctx.settings.lastErrorResult = { message: msg };
-          writeErr(`\\${ctx.cmdName}: ${msg}\n`);
+          const prefix = psqlErrorPrefix(ctx.settings);
+          writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
           return { status: 'error' };
         }
         // Stop if `c=` reached the configured iteration cap, OR if `m=`
