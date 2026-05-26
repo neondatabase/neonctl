@@ -17,17 +17,16 @@
  *  - `<xq>`  standard single-quoted string                          → `Mode.SingleQuote`
  *  - `<xe>`  extended single-quoted string (`E'…'`)                 → `Mode.SingleQuote` + `escape=true`
  *  - `<xqs>` quote-stop (lookahead for continuation across newlines) → folded into the
- *            `SingleQuote` exit logic; we only honour continuation across the *same* chunk
+ *            `SingleQuote` exit logic via {@link tryQuoteContinue}: after the closing
+ *            `'` of a single-quoted string we look ahead through whitespace; if we
+ *            find a newline followed by another `'`, we re-enter the SingleQuote
+ *            state so the two pieces concatenate per SQL standard.
  *  - `<xd>`  double-quoted identifier                               → `Mode.DoubleQuote`
  *  - `<xdolq>` `$tag$…$tag$` dollar-quoted string                   → `Mode.DollarQuote`
  *  - `<xb>`, `<xh>`, `<xui>`, `<xus>` (bit / hex / unicode-quoted identifiers and strings)
  *            are folded into the standard single-/double-quoted paths because for
  *            statement-boundary purposes only the surrounding quote characters matter —
  *            no escapes inside them affect whether the closing quote is found.
- *  - The `<xqs>` `quotecontinue` lookahead (newline-separated string concatenation:
- *            `'foo'\n'bar'`) is **not** implemented in this WP. Two separate quoted
- *            strings will be lexed as two strings, which is correct for boundary
- *            detection — the in-between whitespace does not contain a semicolon.
  *
  * What's deliberately out of scope (with TODOs):
  *
@@ -226,6 +225,44 @@ const consumeXeEscape = (input: string, i: number): number => {
 };
 
 // ---------------------------------------------------------------------------
+// `<xqs>` quote-continuation lookahead. SQL standard: two single-quoted
+// strings separated only by whitespace that **contains at least one newline**
+// concatenate into a single logical literal (`'abc'\n'def'` == `'abcdef'`).
+// Whitespace without a newline is **not** a continuation — the strings stay
+// separate at the lexer level (and would be a syntax error in most contexts,
+// which is the parser's problem, not ours).
+//
+// Returns the index of the new opening `'` if a continuation is found, or
+// `null` otherwise. `i` is the position just past the closing `'` of the
+// previous string. We do not consume `--` line comments or `/* */` block
+// comments inside the gap; upstream's flex rules treat the gap as plain
+// whitespace per the lexical spec. We also avoid descending into block
+// comments because that would require recursive comment-depth tracking on
+// the lookahead path.
+// ---------------------------------------------------------------------------
+
+const tryQuoteContinue = (input: string, i: number): number | null => {
+  let k = i;
+  let sawNewline = false;
+  while (k < input.length) {
+    const c = input[k];
+    if (c === '\n' || c === '\r') {
+      sawNewline = true;
+      k++;
+      continue;
+    }
+    if (c === ' ' || c === '\t' || c === '\f' || c === '\v') {
+      k++;
+      continue;
+    }
+    break;
+  }
+  if (!sawNewline) return null;
+  if (input[k] !== "'") return null;
+  return k;
+};
+
+// ---------------------------------------------------------------------------
 // Recognise a `--` line comment at position `i`. Returns the index just past
 // the terminating newline (or end of input). Boundary semantics: the entire
 // span is part of the surrounding SQL.
@@ -344,6 +381,23 @@ export const scanSql = (input: string, state?: ScanState): ScanResult => {
         }
         sql += "'";
         i++;
+        // <xqs> quote-continuation: SQL standard merges two single-quoted
+        // strings separated by whitespace containing at least one newline.
+        // Look ahead; if we find one, re-enter the single-quote state at the
+        // new opening `'` and keep going as if nothing happened. The gap
+        // (whitespace + newline) is preserved verbatim in the SQL accumulator
+        // so the round-tripped text matches the input.
+        const cont = tryQuoteContinue(input, i);
+        if (cont !== null) {
+          sql += input.slice(i, cont + 1);
+          i = cont + 1;
+          // Re-derive escape-string status from the new opening `'` position;
+          // each piece picks its own prefix per the lexical spec, so
+          // `E'a'\n'b'` keeps escape mode off for the second piece while
+          // `E'a'\nE'b'` keeps it on.
+          st.inEscapeString = isExtendedStringStart(input, cont);
+          continue;
+        }
         st.inSingleQuote = false;
         st.inEscapeString = false;
         continue;

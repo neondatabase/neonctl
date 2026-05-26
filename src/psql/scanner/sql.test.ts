@@ -332,12 +332,31 @@ const corpus: CorpusCase[] = [
     expectedSplits: ['(SELECT $$ x; y $$);', ' SELECT 1;'],
   },
   {
-    name: 'string concatenation across lines is not folded but boundaries OK',
+    name: 'string concatenation across newline merges per SQL standard',
     input: "SELECT 'a'\n  'b';",
-    // We treat these as two distinct strings (no quotecontinue lookahead). The
-    // intervening whitespace contains no `;`, so this still resolves to one
-    // statement boundary.
+    // <xqs>: the two adjacent quoted strings separated by whitespace
+    // containing a newline merge into a single logical literal. From the
+    // splitter's POV this is still one statement.
     expectedSplits: ["SELECT 'a'\n  'b';"],
+  },
+  {
+    name: 'string concatenation without newline does NOT merge',
+    input: "SELECT 'a'   'b';",
+    // No newline in the gap — the standard requires at least one newline.
+    // Boundary detection is unaffected; still one statement.
+    expectedSplits: ["SELECT 'a'   'b';"],
+  },
+  {
+    name: 'string concatenation across three pieces',
+    input: "SELECT 'a'\n'b'\n'c';",
+    expectedSplits: ["SELECT 'a'\n'b'\n'c';"],
+  },
+  {
+    name: 'string concatenation across newline preserves semicolons in pieces',
+    input: "SELECT 'x;'\n  'y;'; SELECT 1;",
+    // The `;`s inside the strings must remain inside; after the closing
+    // quote of `'y;'` we hit the top-level `;`.
+    expectedSplits: ["SELECT 'x;'\n  'y;';", ' SELECT 1;'],
   },
   {
     name: 'double-dash inside string',
@@ -559,6 +578,72 @@ describe('scanSql — result shapes', () => {
     if (r.kind !== 'incomplete') return;
     expect(r.promptStatus).toBe('comment');
     expect(r.nextState.inBlockComment).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// <xqs> quote-continuation behavior — scanner-level state assertions.
+// ---------------------------------------------------------------------------
+
+describe('scanSql — <xqs> quote-continuation', () => {
+  test('merge across newline keeps single-quote state until final close', () => {
+    // After the closing `'` of `'a'` followed by `\n  '`, the scanner should
+    // re-enter single-quote state and only become "ready" after the final `'`.
+    const r1 = scanSql("SELECT 'a'\n  'b");
+    expect(r1.kind).toBe('incomplete');
+    if (r1.kind !== 'incomplete') return;
+    expect(r1.nextState.inSingleQuote).toBe(true);
+  });
+
+  test('no merge when whitespace lacks a newline', () => {
+    // `'a'   'b` — pure space gap, no newline → first string closes, second
+    // string is a new string. The scanner reports `inSingleQuote: true` for
+    // the second.
+    const r1 = scanSql("SELECT 'a'   'b");
+    expect(r1.kind).toBe('incomplete');
+    if (r1.kind !== 'incomplete') return;
+    expect(r1.nextState.inSingleQuote).toBe(true);
+  });
+
+  test('merge does not pick up a non-matching quote across newline', () => {
+    // After `'a'` and a newline, a non-`'` character is just whitespace
+    // followed by SQL; do not merge.
+    const r1 = scanSql("SELECT 'a'\n   x");
+    expect(r1.kind).toBe('eof');
+    if (r1.kind !== 'eof') return;
+    expect(r1.nextState.inSingleQuote).toBe(false);
+  });
+
+  test('E-prefix on each piece is re-derived independently', () => {
+    // `E'a\\n'\n  '\\n'` — the second piece has no `E` prefix, so the
+    // backslash should be a *literal* backslash, not an escape. After the
+    // join the closing `';` should still terminate cleanly.
+    const r = scanSql("SELECT E'a\\n'\n  '\\n';");
+    expect(r.kind).toBe('semicolon');
+  });
+
+  test('E-prefix preserved when both pieces use it', () => {
+    // `E'a\\n'\n  E'b\\n'` — both pieces are E-strings; the closing `'`
+    // after the escape still terminates each piece.
+    const r = scanSql("SELECT E'a\\n'\n  E'b\\n';");
+    expect(r.kind).toBe('semicolon');
+  });
+
+  test('chunked feeding: continuation across chunk boundary', () => {
+    const r1 = scanSql("SELECT 'a'");
+    // Closed cleanly with no continuation visible in this chunk; clean eof.
+    expect(r1.kind).toBe('eof');
+    if (r1.kind !== 'eof') return;
+    expect(r1.nextState.inSingleQuote).toBe(false);
+
+    // Caller appends the next chunk including the newline + opening quote.
+    // The scanner sees `\n  'b';` — there's no preceding `'` in *this* call,
+    // so the `'` looks like a fresh string. This is the expected limitation:
+    // continuation is detected only when both pieces are visible in one scan
+    // pass. Callers that buffer line-by-line and only feed completed
+    // statements upstream don't hit this — they see the whole text.
+    const r2 = scanSql("\n  'b';", r1.nextState);
+    expect(r2.kind).toBe('semicolon');
   });
 });
 
