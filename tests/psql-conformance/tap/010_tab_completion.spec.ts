@@ -9,38 +9,39 @@
 // for spawning the PTY, polling for prompts, and stripping ANSI/CSI
 // escapes lives in `../harness/pty-helpers.ts`.
 //
-// Why almost every check is `it.todo` today
-// -----------------------------------------
+// Coverage map
+// ------------
 //
-// Our embedded TS psql ships ~88 completion rules; upstream's
-// `tab-complete.in.c` carries thousands plus the entire readline
-// behaviour layer. Even cases that LOOK trivial (e.g. SEL<tab> →
-// SELECT) deviate in subtle ways:
+// The completion engine now handles (after the trailing-space + ILIKE +
+// COMP_KEYWORD_CASE + schema-aware completion work):
 //
-//   - Upstream readline appends a trailing space after a unique
-//     completion. Our `LineEditor` does not. So a pattern like
-//     `qr/SELECT /` (with the trailing space, exactly as the upstream
-//     TAP file writes it) fails against our impl even though the
-//     completion *engine* found the right candidate.
-//   - Upstream's "list candidates after second Tab" emits a multi-line
-//     listing block. Our listing path uses a different layout.
-//   - Lots of upstream subtests exercise advanced contexts (timezone
-//     names, COMP_KEYWORD_CASE, enum values, filename completion,
-//     SchemaQuery-derived keywords) that our 88-rule set doesn't
-//     reach yet.
+//   - Trailing space after a unique completion (mirrors readline's
+//     `rl_completion_append_character`).
+//   - Schema namespace dot-completion (`pub<tab>` → `public.`).
+//   - Case-folded catalog matching via ILIKE (`TAB<tab>` → `tab1`).
+//   - COMP_KEYWORD_CASE (lower / upper / preserve-lower / preserve-upper)
+//     wired into `settings.compCase` via a VarStore hook.
+//   - Quoted-identifier completion (`"my<tab>` → `"mytab*`,
+//     `"mi<tab>` → `"mixedName"`).
+//   - Multi-candidate listing on the second Tab (engine already did
+//     this — verified by the listing subtests).
 //
-// Rather than hand-pick the 1-2 cases that happen to pass byte-for-
-// byte under our impl today (and would break the moment we touch
-// completion), we mark every upstream `check_completion(...)` as
-// `it.todo(...)` with a comment naming the upstream subtest and its
-// vendored line number. The set of TODOs IS the port — it's the
-// running checklist of upstream coverage we owe.
+// What's still missing (and therefore still `it.todo`):
 //
-// One real `it()` body exercises the PTY harness end-to-end so a
-// maintainer can verify "the spawn / prompt / Tab pipeline actually
-// works" without reading the upstream file. It uses a no-completion
-// input (`blarg `) so the assertion is independent of our completion
-// rules — only the harness is on test.
+//   - Filename completion for `\lo_import` / `COPY FROM <path>` —
+//     would need a filesystem-driven completer rule that's not in
+//     our 88-rule set.
+//   - Enum-value completion inside `'X<tab>` — needs a string-literal
+//     context detector + `ALTER TYPE ... RENAME VALUE` rule.
+//   - Timezone name completion — would need `pg_timezone_names` rule.
+//   - Some SchemaQuery-derived keyword completions (DROP TYPE big →
+//     bigint), VersionedQuery, words_after_create, plpgsql GUCs.
+//   - Multi-line completion mid-statement (ANALYZE (\n\t\t).
+//   - Index name completion via ALTER TABLE ... DROP CONSTRAINT.
+//   - COPY ... WITH (DEFAULT) keyword in option-list context.
+//
+// Whatever still fails after this round stays as `it.todo` with a
+// reason in the comment.
 //
 // What's ported
 // -------------
@@ -55,7 +56,7 @@
 //     `enum1` type, the `some_publication` publication, and the
 //     `tab_comp_dir` directory full of dummy files.
 //   - The COMP_KEYWORD_CASE block (upstream lines 309-325) is unrolled
-//     into four `it.todo` cases.
+//     into four `it()` cases.
 //
 // Run condition
 // -------------
@@ -83,7 +84,7 @@
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_PROMPT_RE,
@@ -209,6 +210,64 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
     if (h) await kill(h, 2_000);
   });
 
+  // ----- check_completion helper -----------------------------------------
+  // Mirrors upstream's `check_completion($send, $pattern, $annotation)`
+  // from `010_tab_completion.pl`. Sends the keystrokes (including any
+  // embedded tabs), waits for the line to settle, and asserts the visible
+  // command line matches `pattern`. On failure the helper dumps the last
+  // 500 chars of cleaned output to make the diagnostic actionable.
+  //
+  // The settle delay is empirical — completion work is async (catalog
+  // queries run on each Tab), and we have no signal to know "completion
+  // finished" without parsing the prompt back. 700ms is enough for the
+  // local Postgres + the small fixture; raise it if CI flakes.
+  const SETTLE_MS = 700;
+  const checkCompletion = async (
+    send: string,
+    pattern: RegExp,
+  ): Promise<void> => {
+    h.clear();
+    sendKeys(h, send);
+    await new Promise<void>((r) => setTimeout(r, SETTLE_MS));
+    const buf = h.clean();
+    if (!pattern.test(buf)) {
+      throw new Error(
+        `checkCompletion: expected pattern ${pattern} to match.\n` +
+          `--- last 500 chars of clean output ---\n${buf.slice(-500)}`,
+      );
+    }
+    expect(buf).toMatch(pattern);
+  };
+
+  // Reset the prompt to a clean state between checks. Mirrors upstream's
+  // `clear_query()` (\r resets the in-flight query buffer) but falls back
+  // to Ctrl-U + Ctrl-C if `\r` would land us mid-quote.
+  const resetPrompt = async (): Promise<void> => {
+    // Ctrl-C cancels any partial line; Ctrl-U kills the buffer entirely.
+    sendKeys(h, '\x03');
+    sendKeys(h, '\x15');
+    h.clear();
+    await waitForOutput(h, DEFAULT_PROMPT_RE, 5_000);
+  };
+
+  // Send a `\set` (or any other) line and wait for the next prompt to
+  // appear, without checking any completion output. Used by the
+  // COMP_KEYWORD_CASE subtests so we can flip the setting between cases.
+  const sendCommand = async (cmd: string): Promise<void> => {
+    h.clear();
+    sendKeys(h, cmd + '\r');
+    await waitForOutput(h, DEFAULT_PROMPT_RE, 5_000);
+    h.clear();
+  };
+
+  // Reset state after every check so the next subtest starts on a clean
+  // prompt. Mirrors upstream's repeated `clear_query()` calls — we just
+  // do it unconditionally because every subtest in our port sends a
+  // complete keystroke sequence (no inter-test chaining).
+  afterEach(async () => {
+    await resetPrompt();
+  });
+
   // -------------------------------------------------------------------------
   // Harness smoke test — proves the PTY can spawn, reach a prompt,
   // accept keystrokes, and have those keystrokes flow back as echo. The
@@ -241,162 +300,285 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   // upstream into a `checkCompletion(h, send, pattern)` call.
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Subtests unlocked by the trailing-space + ILIKE + COMP_KEYWORD_CASE
+  // engine work. Each `it(...)` mirrors one `check_completion(...)` from
+  // the vendored upstream `.pl` (the line number annotation points to the
+  // exact source line).
+  // -------------------------------------------------------------------------
+
   // Basic command completion (line 129).
-  it.todo('complete SEL<tab> to SELECT (line 129) — qr/SELECT /');
+  it('complete SEL<tab> to SELECT (line 129)', async () => {
+    await checkCompletion('SEL\t', /SELECT /);
+  });
 
   // Case variation honored (line 134).
-  it.todo('complete sel<tab> to select (line 134) — qr/select /');
+  it('complete sel<tab> to select (line 134)', async () => {
+    await checkCompletion('sel\t', /select /);
+  });
 
   // Basic table name completion (line 137).
-  it.todo('complete t<tab> to tab1 in `select * from t<tab>` (line 137)');
+  it('complete t<tab> to tab1 in `select * from t<tab>` (line 137)', async () => {
+    await checkCompletion('select * from t\t', /\* from tab1 /);
+  });
 
   // Multiple table-name choices (lines 143-155).
-  it.todo('complete my<tab> to mytab (multiple choices, line 143)');
-  it.todo(
-    'offer multiple table choices on <tab><tab> — `mytab123 mytab246` listing (line 149)',
-  );
-  it.todo(
-    'finish one of multiple table choices — `2<tab>` → `246 ` (line 154)',
-  );
+  it('complete my<tab> to mytab (multiple choices, line 143)', async () => {
+    // Single tab inserts the common prefix `mytab` — readline may emit a
+    // bell first; upstream's pattern allows the `\a?` BEL escape.
+    await checkCompletion('select * from my\t', /select \* from my\a?tab/);
+  });
+
+  it('offer multiple table choices on <tab><tab> — `mytab123 mytab246` listing (line 149)', async () => {
+    // Sequence: send the initial `my\t` prefix, then a second `\t\t` so the
+    // candidate listing renders below the prompt.
+    h.clear();
+    sendKeys(h, 'select * from my\t\t\t');
+    await new Promise<void>((r) => setTimeout(r, 500));
+    const buf = h.clean();
+    expect(buf).toMatch(/mytab123\s+mytab246/);
+  });
 
   // Quoted names (lines 160-171).
-  it.todo('complete "my<tab> to "mytab (line 160)');
-  it.todo('offer multiple quoted table choices on <tab><tab> (line 165)');
-  it.todo(
-    'finish one of multiple quoted choices — `2<tab>` → `246" ` (line 170)',
-  );
+  it('complete "my<tab> to "mytab (line 160)', async () => {
+    await checkCompletion('select * from "my\t', /select \* from "my\a?tab/);
+  });
+
+  it('offer multiple quoted table choices on <tab><tab> (line 165)', async () => {
+    h.clear();
+    sendKeys(h, 'select * from "my\t\t\t');
+    await new Promise<void>((r) => setTimeout(r, 500));
+    const buf = h.clean();
+    expect(buf).toMatch(/"mytab123"\s+"mytab246"/);
+  });
 
   // Mixed-case names (line 176).
-  it.todo('complete a mixed-case name — "mi<tab> → "mixedName" (line 176)');
+  it('complete a mixed-case name — "mi<tab> → "mixedName" (line 176)', async () => {
+    await checkCompletion('select * from "mi\t', /"mixedName" /);
+  });
 
   // Case folding (line 184).
-  it.todo('automatically fold case — TAB<tab> → tab1 (line 184)');
+  it('automatically fold case — TAB<tab> → tab1 (line 184)', async () => {
+    await checkCompletion('select * from TAB\t', /tab1 /);
+  });
 
   // Case-sensitive backslash command replacement (line 191).
-  it.todo('complete \\DRD<tab> to \\drds (line 191)');
+  it('complete \\DRD<tab> to \\drds (line 191)', async () => {
+    await checkCompletion('\\DRD\t', /drds /);
+  });
 
   // Schema-qualified name (lines 196-206).
-  it.todo('complete schema when relevant — pub<tab> → public. (line 196)');
-  it.todo('complete schema-qualified name — tab<tab> → tab1  (line 199)');
-  it.todo(
-    'automatically fold case in schema-qualified name — PUBLIC.t<tab> (line 203)',
-  );
+  it('complete schema when relevant — pub<tab> → public. (line 196)', async () => {
+    // `pub<tab>` resolves to `public.` because the unqualified prefix
+    // matches a schema (no relations start with `pub`). The trailing dot
+    // is "in progress" — the editor must not append a space after it.
+    await checkCompletion('select * from pub\t', /public\./);
+  });
 
-  // Index name for referenced table (lines 211-228).
-  it.todo(
-    'complete index name for referenced table — `alter table tab1 drop constraint t<tab>` → tab1_pkey (line 211)',
-  );
-  it.todo(
-    'complete index name for referenced table, with downcasing — TAB1 (line 218)',
-  );
-  it.todo(
-    'complete index name for referenced table, with schema and quoting — public."tab1" (line 225)',
-  );
+  it('complete schema-qualified name — public.tab<tab> → public.tab1 (line 199)', async () => {
+    // Sent in one keystroke sequence so the schema-qualified completion
+    // fires on the user-typed `public.tab` rather than chaining on
+    // a previous test's state.
+    await checkCompletion('select * from public.tab\t', /public\.tab1 /);
+  });
 
-  // Qualified name from object reference (line 234).
-  it.todo(
-    'complete qualified name from object reference — `comment on constraint ... on public.<tab>` (line 234)',
-  );
-
-  // Filename completion (lines 242-277).
-  it.todo(
-    'filename completion with one possibility — \\lo_import tab_comp_dir/some<tab> (line 242)',
-  );
-  it.todo(
-    'filename completion with multiple possibilities — \\lo_import tab_comp_dir/af<tab> (line 250)',
-  );
-  it.todo(
-    'quoted filename completion with one possibility — COPY FROM tab_comp_dir/some<tab> (line 259)',
-  );
-  it.todo(
-    'quoted filename completion with multiple possibilities — COPY FROM tab_comp_dir/af<tab> (line 266)',
-  );
-  it.todo('offer multiple file choices on <tab><tab> (line 274)');
-
-  // Enum label completion (lines 284-295).
-  it.todo(
-    "offer multiple enum choices — ALTER TYPE enum1 RENAME VALUE 'ba<tab><tab> (line 284)",
-  );
-  it.todo(
-    "enum labels are case sensitive — ALTER TYPE enum1 RENAME VALUE 'B<tab> → BLACK (line 292)",
-  );
-
-  // Timezone name completion (lines 300-303).
-  it.todo(
-    "offer partial timezone name — SET timezone TO am<tab> → 'America/ (line 300)",
-  );
-  it.todo('complete partial timezone name — new_<tab> → New_York (line 303)');
+  it('automatically fold case in schema-qualified name — PUBLIC.t<tab> (line 203)', async () => {
+    await checkCompletion('select * from PUBLIC.t\t', /public\.tab1 /);
+  });
 
   // COMP_KEYWORD_CASE table (lines 309-325). Four cases unrolled.
+  // Each subtest flips the variable via `\set`, exercises the
+  // completion, and (via afterEach) resets the prompt for the next.
+  // Upstream sends three tabs (\t\t\t) so the cycle path lands on a
+  // concrete keyword — first tab inserts the common prefix, second lists
+  // the candidates, third cycles to the first concrete candidate (which
+  // is what the pattern matches).
+  it('COMP_KEYWORD_CASE=lower: `alter table tab1 rename CO<tab>` → column (line 309 case A)', async () => {
+    await sendCommand('\\set COMP_KEYWORD_CASE lower');
+    await checkCompletion('alter table tab1 rename CO\t\t\t', /column/);
+    // Reset to default after the test so the next subtest sees
+    // preserve-upper. afterEach handles prompt reset, but compCase
+    // persists in psql state — so unset explicitly here.
+    await sendCommand('\\set COMP_KEYWORD_CASE preserve-upper');
+  });
+
+  it('COMP_KEYWORD_CASE=upper: `alter table tab1 rename co<tab>` → COLUMN (line 309 case B)', async () => {
+    await sendCommand('\\set COMP_KEYWORD_CASE upper');
+    await checkCompletion('alter table tab1 rename co\t\t\t', /COLUMN/);
+    await sendCommand('\\set COMP_KEYWORD_CASE preserve-upper');
+  });
+
+  it('COMP_KEYWORD_CASE=preserve-lower: `alter table tab1 rename co<tab>` → column (line 309 case C)', async () => {
+    await sendCommand('\\set COMP_KEYWORD_CASE preserve-lower');
+    await checkCompletion('alter table tab1 rename co\t\t\t', /column/);
+    await sendCommand('\\set COMP_KEYWORD_CASE preserve-upper');
+  });
+
+  it('COMP_KEYWORD_CASE=preserve-upper: `alter table tab1 rename CO<tab>` → COLUMN (line 309 case D)', async () => {
+    // Default mode — no flip needed.
+    await checkCompletion('alter table tab1 rename CO\t\t\t', /COLUMN/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Subtests that still depend on rules/contexts our 88-rule engine
+  // doesn't implement yet. Left as `it.todo` with a precise reason so
+  // a follow-up agent can pick exactly the next gap.
+  // -------------------------------------------------------------------------
+
+  // The `mytab123` listing then `2<tab>` follow-up is testing cycle-and-
+  // commit semantics that depend on knowing the current cycle index from
+  // the previous tap. Our `CompletionState` does cycle, but the "type 2
+  // after the listing" path requires the in-progress buffer to become
+  // `mytab2` and then re-trigger as a single-candidate match — which
+  // works in isolation but is hard to express here without a chained
+  // session.
   it.todo(
-    'COMP_KEYWORD_CASE=lower: `alter table tab1 rename CO<tab>` → column (line 309 case A)',
+    'finish one of multiple table choices — `2<tab>` → `246 ` (line 154; needs chained session state)',
   );
   it.todo(
-    'COMP_KEYWORD_CASE=upper: `alter table tab1 rename co<tab>` → COLUMN (line 309 case B)',
+    'finish one of multiple quoted choices — `2<tab>` → `246" ` (line 170; needs chained session state)',
+  );
+
+  // Index name for referenced table (lines 211-228). Upstream's
+  // tab-complete.in.c parses `ALTER TABLE x DROP CONSTRAINT y` and offers
+  // index/constraint names of `x`; our engine has no constraint-name
+  // completion at all.
+  it.todo(
+    'complete index name for referenced table — `alter table tab1 drop constraint t<tab>` → tab1_pkey (line 211; needs ALTER TABLE … DROP CONSTRAINT rule)',
   );
   it.todo(
-    'COMP_KEYWORD_CASE=preserve-lower: `alter table tab1 rename co<tab>` → column (line 309 case C)',
+    'complete index name for referenced table, with downcasing — TAB1 (line 218; same gap)',
   );
   it.todo(
-    'COMP_KEYWORD_CASE=preserve-upper: `alter table tab1 rename CO<tab>` → COLUMN (line 309 case D)',
+    'complete index name for referenced table, with schema and quoting — public."tab1" (line 225; same gap)',
+  );
+
+  // Qualified name from object reference (line 234) — multi-line tab
+  // completion that uses the COMMENT ON CONSTRAINT context to resolve
+  // the schema/object the user references. Not in our 88 rules.
+  it.todo(
+    'complete qualified name from object reference — `comment on constraint ... on public.<tab>` (line 234; needs COMMENT ON CONSTRAINT rule + multi-line context)',
+  );
+
+  // Filename completion (lines 242-277). Our completer has no
+  // filesystem-aware rule for `\lo_import` / `COPY FROM <path>` — we'd
+  // need to plumb a filename completer into the line editor.
+  it.todo(
+    'filename completion with one possibility — \\lo_import tab_comp_dir/some<tab> (line 242; needs filename completer)',
+  );
+  it.todo(
+    'filename completion with multiple possibilities — \\lo_import tab_comp_dir/af<tab> (line 250; needs filename completer)',
+  );
+  it.todo(
+    'quoted filename completion with one possibility — COPY FROM tab_comp_dir/some<tab> (line 259; needs filename completer)',
+  );
+  it.todo(
+    'quoted filename completion with multiple possibilities — COPY FROM tab_comp_dir/af<tab> (line 266; needs filename completer)',
+  );
+  it.todo(
+    'offer multiple file choices on <tab><tab> (line 274; needs filename completer)',
+  );
+
+  // Enum label completion (lines 284-295). Needs the `ALTER TYPE ...
+  // RENAME VALUE 'X<tab>` rule + a string-literal context detector
+  // (so that the `'` quote opens a value completer rather than running
+  // the SQL keyword rules).
+  it.todo(
+    "offer multiple enum choices — ALTER TYPE enum1 RENAME VALUE 'ba<tab><tab> (line 284; needs ALTER TYPE … RENAME VALUE + enum rule)",
+  );
+  it.todo(
+    "enum labels are case sensitive — ALTER TYPE enum1 RENAME VALUE 'B<tab> → BLACK (line 292; same gap)",
+  );
+
+  // Timezone name completion (lines 300-303). Would need a
+  // `pg_timezone_names` query-driven rule.
+  it.todo(
+    "offer partial timezone name — SET timezone TO am<tab> → 'America/ (line 300; needs pg_timezone_names rule)",
+  );
+  it.todo(
+    'complete partial timezone name — new_<tab> → New_York (line 303; needs pg_timezone_names rule)',
   );
 
   // SchemaQuery keyword + create_command_generator (lines 328-339).
+  // The DROP TYPE → bigint case wants type-name completion to include
+  // built-in scalar keywords; CREATE TY → TYPE needs a CREATE multi-word
+  // generator. Both rules are missing.
   it.todo(
-    'offer keyword from SchemaQuery — DROP TYPE big<tab> → DROP TYPE bigint (line 328)',
+    'offer keyword from SchemaQuery — DROP TYPE big<tab> → DROP TYPE bigint (line 328; needs DROP TYPE → builtin-types rule)',
   );
   it.todo(
-    'check create_command_generator — CREATE TY<tab> → CREATE TYPE (line 336)',
-  );
-
-  // words_after_create (line 344).
-  it.todo(
-    'check words_after_create — CREATE TABLE mytab<tab><tab> → mytab123 + mytab246 (line 344)',
+    'check create_command_generator — CREATE TY<tab> → CREATE TYPE (line 336; needs CREATE multi-word completion)',
   );
 
-  // VersionedQuery (line 352).
+  // words_after_create (line 344). CREATE TABLE name suggestion uses the
+  // table list as a hint set; our rule returns no candidates for
+  // CREATE TABLE.
   it.todo(
-    'check VersionedQuery — DROP PUBLIC<tab>...<tab><tab> → DROP PUBLICATION some_publication (line 352)',
+    'check words_after_create — CREATE TABLE mytab<tab><tab> → mytab123 + mytab246 (line 344; needs words_after_create rule)',
   );
 
-  // Multi-line completion / ANALYZE ( (line 360).
+  // VersionedQuery (line 352). Two-step completion DROP PUBLIC<tab> →
+  // DROP PUBLICATION, then publication name. We have the publication
+  // name rule but not the first-step "DROP PUBLIC" keyword detection.
   it.todo(
-    'check ANALYZE (VERBOSE ... — multi-line completion of `analyze (` (line 360)',
+    'check VersionedQuery — DROP PUBLIC<tab>...<tab><tab> → DROP PUBLICATION some_publication (line 352; needs DROP keyword first-tab + VersionedQuery rule)',
   );
 
-  // GUC completion (lines 366-387).
+  // Multi-line completion / ANALYZE ( (line 360). Tab completion mid-
+  // statement after an `(` on its own line — our tokenizer treats
+  // unclosed `(` differently than upstream's multi-statement parser.
   it.todo(
-    'complete a GUC name — set interval<tab><tab> → intervalstyle TO (line 366)',
-  );
-  it.todo('complete a GUC enum value — iso<tab> → iso_8601 (line 370)');
-  it.todo(
-    'load plpgsql extension — `DO $$begin end$$ LANGUAGE plpgsql;` (line 376)',
-  );
-  it.todo(
-    'complete prefix of a GUC name — set plpg<tab> → plpgsql. (line 380)',
-  );
-  it.todo(
-    'complete a qualified GUC name — var<tab><tab> → variable_conflict TO (line 382)',
-  );
-  it.todo(
-    'complete a qualified GUC enum value — USE_C<tab> → use_column (line 386)',
+    'check ANALYZE (VERBOSE ... — multi-line completion of `analyze (` (line 360; needs ANALYZE-option rule + multi-line context)',
   );
 
-  // psql variable completion (lines 392-410).
+  // GUC completion (lines 366-387). We support unqualified GUC names
+  // via `Query_for_list_of_set_vars`; the failing cases are around
+  // qualified GUCs (`plpgsql.variable_conflict`) and value completion
+  // (`iso<tab>` → `iso_8601`), neither of which has a rule today.
   it.todo(
-    'complete a psql variable name — \\set VERB<tab> → VERBOSITY (line 392)',
+    'complete a GUC name — set interval<tab><tab> → intervalstyle TO (line 366; works but listing format differs)',
   );
-  it.todo('complete a psql variable value — def<tab> → default (line 394)');
   it.todo(
-    'complete interpolated psql variable name — \\echo :VERB<tab> → :VERBOSITY (line 398)',
+    'complete a GUC enum value — iso<tab> → iso_8601 (line 370; needs GUC-value completion)',
   );
   it.todo(
-    'complete a psql variable test — \\echo :{?VERB<tab> → :{?VERBOSITY} (line 406)',
+    'load plpgsql extension — `DO $$begin end$$ LANGUAGE plpgsql;` (line 376; setup-only, not a completion check)',
+  );
+  it.todo(
+    'complete prefix of a GUC name — set plpg<tab> → plpgsql. (line 380; needs qualified-GUC rule)',
+  );
+  it.todo(
+    'complete a qualified GUC name — var<tab><tab> → variable_conflict TO (line 382; needs qualified-GUC rule)',
+  );
+  it.todo(
+    'complete a qualified GUC enum value — USE_C<tab> → use_column (line 386; needs qualified-GUC value rule)',
   );
 
-  // COPY FROM WITH (DEFAULT) (line 419).
+  // psql variable completion (lines 392-410). `\set VERB<tab>` works
+  // via our SPECIAL_VARIABLES list (VERBOSITY is in there), and
+  // `def<tab>` works because `\set <var> def<tab>` triggers the value
+  // completion. But `\echo :VERB<tab>` needs the interpolated-variable
+  // rule (we have basic `:` expansion but the interpolation context
+  // around `\echo` doesn't trigger it correctly today), and `:{?VERB<tab>`
+  // needs a separate test-form rule.
   it.todo(
-    'COPY FROM with DEFAULT completion — `COPY foo FROM stdin WITH ( DEF<tab>)` → DEFAULT (line 419)',
+    'complete a psql variable name — \\set VERB<tab> → VERBOSITY (line 392; works but rule produces trailing space mismatch)',
+  );
+  it.todo(
+    'complete a psql variable value — def<tab> → default (line 394; needs follow-on test design)',
+  );
+  it.todo(
+    'complete interpolated psql variable name — \\echo :VERB<tab> → :VERBOSITY (line 398; needs `:`-interpolation context)',
+  );
+  it.todo(
+    'complete a psql variable test — \\echo :{?VERB<tab> → :{?VERBOSITY} (line 406; needs `:{?…}` syntax support)',
+  );
+
+  // COPY FROM WITH (DEFAULT) (line 419). Needs a COPY-options rule that
+  // recognises the `WITH (…)` option list; our COPY rule stops at the
+  // `FROM/TO` direction selector.
+  it.todo(
+    'COPY FROM with DEFAULT completion — `COPY foo FROM stdin WITH ( DEF<tab>)` → DEFAULT (line 419; needs COPY ... WITH option rule)',
   );
 });
 
