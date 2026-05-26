@@ -344,9 +344,19 @@ const expandEscape = (
 
 /**
  * Expand `%R`. PROMPT1 reflects the connection / cond-stack / singleline
- * state. PROMPT2 reflects the scanner's promptStatus. PROMPT3 is the COPY
- * indicator and is delegated to the PROMPT2 mapping (upstream falls into
- * the `default` branch and emits nothing — we do the same).
+ * state. PROMPT2 reflects the scanner's promptStatus — upstream renders a
+ * mnemonic character for *why* the parser is still hanging on for more
+ * input:
+ *
+ *   - `-` plain continuation (default)
+ *   - `'` inside a single-quoted string
+ *   - `"` inside a double-quoted identifier
+ *   - `$` inside a dollar-quoted block
+ *   - `*` inside a block comment
+ *   - `(` inside unmatched parens
+ *
+ * PROMPT3 is the COPY indicator; upstream falls into the `default` branch
+ * and emits nothing — we do the same.
  */
 const expandR = (ctx: PromptContext): string => {
   const { promptStatus, cond, settings } = ctx;
@@ -359,6 +369,12 @@ const expandR = (ctx: PromptContext): string => {
     }
     case 'continue':
       return '-';
+    case 'continue-quote':
+      return "'";
+    case 'continue-dquote':
+      return '"';
+    case 'continue-dollar':
+      return '$';
     case 'comment':
       return '*';
     case 'paren':

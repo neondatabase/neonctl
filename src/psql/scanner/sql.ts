@@ -294,26 +294,22 @@ const skipLineComment = (input: string, i: number): number => {
 const isBufferEmpty = (sql: string): boolean => isWhitespaceOnly(sql);
 
 // ---------------------------------------------------------------------------
-// Compute the PROMPT2 status for an incomplete chunk. We map the upstream
-// finer-grained `promptStatus_t` (which distinguishes single-quote,
-// double-quote, dollar-quote and comment) down to the four-value enum exposed
-// by `ScanState.promptStatus`:
+// Compute the PROMPT2 status for an incomplete chunk. Matches upstream's
+// `promptStatus_t`: the *reason* we need more input drives the `%R` rendering
+// under PROMPT2 (single-quote → `'`, double-quote → `"`, dollar-quote → `$`,
+// block comment → `*`, paren → `(`, otherwise → `-`).
 //
-//   - `'comment'` when inside a /* … */ comment
-//   - `'paren'`  when inside unmatched parens (and no other state takes precedence)
-//   - `'continue'` otherwise (covers quote/dquote/dollar and "just need more lines")
-//
-// TODO(WP-04-followup): expose the finer-grained status so PROMPT2 can render
-// `'`, `"`, `$`, `*` etc. directly. The infrastructure is here (the boolean
-// state fields tell us exactly which kind of incomplete we have); only the
-// PromptStatus enum needs widening, which is a WP-00 type change.
+// Precedence mirrors upstream `psql_scan_get_prompt`: block comment first
+// (because `/*` can wrap anything else), then quoted-state checks, then
+// paren depth. Plain "buffer's not empty but no special state" falls through
+// to `'continue'`.
 // ---------------------------------------------------------------------------
 
 const computePromptStatus = (state: ScanState): PromptStatus => {
   if (state.inBlockComment > 0) return 'comment';
-  if (state.inSingleQuote || state.inDoubleQuote || state.dollarTag !== null) {
-    return 'continue';
-  }
+  if (state.inSingleQuote) return 'continue-quote';
+  if (state.inDoubleQuote) return 'continue-dquote';
+  if (state.dollarTag !== null) return 'continue-dollar';
   if (state.parenDepth > 0) return 'paren';
   return 'continue';
 };

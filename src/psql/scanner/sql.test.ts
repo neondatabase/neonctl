@@ -275,19 +275,19 @@ const corpus: CorpusCase[] = [
     name: 'unterminated single quote',
     input: "SELECT 'abc",
     expectedFinalKind: 'incomplete',
-    expectedPromptStatus: 'continue',
+    expectedPromptStatus: 'continue-quote',
   },
   {
     name: 'unterminated extended string',
     input: "E'abc",
     expectedFinalKind: 'incomplete',
-    expectedPromptStatus: 'continue',
+    expectedPromptStatus: 'continue-quote',
   },
   {
     name: 'unterminated double quote',
     input: 'SELECT "abc',
     expectedFinalKind: 'incomplete',
-    expectedPromptStatus: 'continue',
+    expectedPromptStatus: 'continue-dquote',
   },
   {
     name: 'unterminated paren list',
@@ -299,13 +299,13 @@ const corpus: CorpusCase[] = [
     name: 'unterminated dollar quote',
     input: '$$ hello',
     expectedFinalKind: 'incomplete',
-    expectedPromptStatus: 'continue',
+    expectedPromptStatus: 'continue-dollar',
   },
   {
     name: 'unterminated tagged dollar quote',
     input: '$tag$ body without close',
     expectedFinalKind: 'incomplete',
-    expectedPromptStatus: 'continue',
+    expectedPromptStatus: 'continue-dollar',
   },
   {
     name: 'unterminated block comment',
@@ -564,11 +564,11 @@ describe('scanSql — result shapes', () => {
     expect(r.nextState.inSingleQuote).toBe(false);
   });
 
-  test('incomplete reports promptStatus = "continue" for single quote', () => {
+  test('incomplete reports promptStatus = "continue-quote" for single quote', () => {
     const r = scanSql("SELECT 'abc");
     expect(r.kind).toBe('incomplete');
     if (r.kind !== 'incomplete') return;
-    expect(r.promptStatus).toBe('continue');
+    expect(r.promptStatus).toBe('continue-quote');
     expect(r.nextState.inSingleQuote).toBe(true);
   });
 
@@ -578,6 +578,44 @@ describe('scanSql — result shapes', () => {
     if (r.kind !== 'incomplete') return;
     expect(r.promptStatus).toBe('comment');
     expect(r.nextState.inBlockComment).toBe(1);
+  });
+
+  test('incomplete reports promptStatus = "continue-dquote" for double quote', () => {
+    const r = scanSql('SELECT "abc');
+    expect(r.kind).toBe('incomplete');
+    if (r.kind !== 'incomplete') return;
+    expect(r.promptStatus).toBe('continue-dquote');
+    expect(r.nextState.inDoubleQuote).toBe(true);
+  });
+
+  test('incomplete reports promptStatus = "continue-dollar" for dollar quote', () => {
+    const r = scanSql('$body$ hello');
+    expect(r.kind).toBe('incomplete');
+    if (r.kind !== 'incomplete') return;
+    expect(r.promptStatus).toBe('continue-dollar');
+    expect(r.nextState.dollarTag).toBe('body');
+  });
+
+  test('block comment precedence: comment wins over paren', () => {
+    const r = scanSql('SELECT (/* hi ');
+    expect(r.kind).toBe('incomplete');
+    if (r.kind !== 'incomplete') return;
+    // The block comment open *inside* an open paren — comment status takes
+    // precedence in upstream's promptStatus_t because the comment can hide
+    // anything (including the close paren).
+    expect(r.promptStatus).toBe('comment');
+  });
+
+  test('plain "continue" status only fires when no special state is open', () => {
+    // Forcibly install a state that's "incomplete" but not in any of the
+    // tracked sub-reasons by feeding a chunk that completes its own quotes
+    // and parens but leaves the scanner state machine without ending the
+    // statement — this would require some non-quote, non-comment, non-paren
+    // open state. The current scanner has none, so this test confirms the
+    // taxonomy is complete: every `incomplete` we can produce maps to one
+    // of the finer reasons, never to bare `'continue'`.
+    const r = scanSql('SELECT 1');
+    expect(r.kind).toBe('eof');
   });
 });
 

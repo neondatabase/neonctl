@@ -227,6 +227,21 @@ describe('renderPrompt — %R session state', () => {
     expect(renderPrompt('%R', ctx)).toBe('-');
   });
 
+  test('PROMPT2 continue-quote → "\'"', () => {
+    const ctx = makeCtx({ promptStatus: 'continue-quote' });
+    expect(renderPrompt('%R', ctx)).toBe("'");
+  });
+
+  test("PROMPT2 continue-dquote → '\"'", () => {
+    const ctx = makeCtx({ promptStatus: 'continue-dquote' });
+    expect(renderPrompt('%R', ctx)).toBe('"');
+  });
+
+  test('PROMPT2 continue-dollar → "$"', () => {
+    const ctx = makeCtx({ promptStatus: 'continue-dollar' });
+    expect(renderPrompt('%R', ctx)).toBe('$');
+  });
+
   test('PROMPT2 comment → "*"', () => {
     const ctx = makeCtx({ promptStatus: 'comment' });
     expect(renderPrompt('%R', ctx)).toBe('*');
