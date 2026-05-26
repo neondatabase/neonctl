@@ -1,10 +1,10 @@
 /**
  * `neon launch` — provision the stack exported from `neon.ts`.
  *
- * Yargs wires the recognized flags (spec §2.1). Unknown flags fall through
- * to `ctx.flags` for the user's stack `spec` to read (`.strict(false)`).
+ * Yargs wires the recognized flags. Unknown flags fall through to
+ * `ctx.flags` for the user's stack `spec` to read (`.strict(false)`).
  *
- * The actual launcher runtime lives in `src/launch/runner.ts` (Phase 6).
+ * The actual launcher runtime lives in `src/launch/runner.ts`.
  * This file only handles the CLI surface + the Node 22 guard.
  */
 import type yargs from 'yargs';
@@ -83,8 +83,8 @@ type LaunchArgs = {
 };
 
 export const handler = async (argv: LaunchArgs): Promise<void> => {
-  // Node 22+ guard — spec §7. `jiti`, the runner, and several deps require
-  // Node 22. Other neonctl commands keep advertising `>=18` (engines.node).
+  // Node 22+ guard. `jiti`, the runner, and several deps require Node 22.
+  // Other neonctl commands keep advertising `>=18` (engines.node).
   const major = Number(process.versions.node.split('.')[0]);
   if (Number.isFinite(major) && major < 22) {
     log.error(
@@ -97,7 +97,7 @@ export const handler = async (argv: LaunchArgs): Promise<void> => {
 
   try {
     // Lazy-import the runner. Keeps Node-18 callers of OTHER neonctl
-    // commands safe — Phase 1.2 + spec §11 #41.
+    // commands safe.
     const { runLaunch } = await import('../launch/runner.js');
     await runLaunch({
       configPath: argv.config,

@@ -1,12 +1,12 @@
 /**
- * Local-command provisioner — spec §3.2 step 5 (local-command path) + §3.6.
+ * Local-command provisioner.
  *
  * Spawns a child process with merged env. Honors:
  *   - stdio model: pass-through (`inherit`) when only one local-command is
- *     active in the stage (Windows SIGINT mitigation, spec §11 #21); prefixed
- *     streaming when multiple share a stage.
- *   - Readiness probes: onExit / portListening (dual-stack 127.0.0.1 + ::1,
- *     spec §11 #22) / httpGet (per-attempt timeout, overall budget) / logMatch.
+ *     active in the stage (Windows SIGINT mitigation); prefixed streaming
+ *     when multiple share a stage.
+ *   - Readiness probes: onExit / portListening (dual-stack 127.0.0.1 + ::1) /
+ *     httpGet (per-attempt timeout, overall budget) / logMatch.
  *   - Post-ready crash → caller (runner) decides whether to tear down siblings.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -54,7 +54,7 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Dual-stack TCP probe — connects to BOTH 127.0.0.1 AND ::1 if `host` is
- * `localhost` or undefined (spec §11 #22). Resolves true if either accepts.
+ * `localhost` or undefined. Resolves true if either accepts.
  */
 async function probePort(port: number, host?: string): Promise<boolean> {
   const hosts =
@@ -328,7 +328,7 @@ export function startLocalCommand(opts: {
 
   let ready: Promise<void>;
   if (spec.readiness === undefined) {
-    // No dependents → immediately consider ready (per spec §11 #8 + §3.6).
+    // No dependents → immediately consider ready.
     // Plan-time invariant rejects undefined-readiness on a command with deps.
     ready = Promise.resolve();
   } else {
@@ -342,7 +342,7 @@ export function startLocalCommand(opts: {
     if (!child.killed) {
       // Windows: child.kill('SIGINT') ≈ SIGKILL (nodejs/node#35172). We still
       // emit SIGTERM uniformly; the inherit-stdio mode in single-active stages
-      // is the mitigation (spec §11 #21).
+      // is the mitigation.
       child.kill('SIGTERM');
     }
     return Promise.resolve();

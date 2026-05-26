@@ -2,16 +2,15 @@
  * Plan phase — load `neon.ts`, walk the resource tree, build the registry
  * and dep graph, run plan-time invariants.
  *
- * Spec §3.2 steps 3–4. Plan-time invariants run in this order; first
- * failure stops the launch (§3.2 step 4 / §5):
- *   1. Dup-key (same resource value at two record keys)        → §5.1
- *   2. Singleton postgres (exactly one in the tree)            → §5.2
- *   3. Deps-in-tree (every dependsOn value is in the registry) → §5.3
- *   4. No cycles                                               → §5.3
+ * Plan-time invariants run in this order; first failure stops the launch:
+ *   1. Dup-key (same resource value at two record keys)
+ *   2. Singleton postgres (exactly one in the tree)
+ *   3. Deps-in-tree (every dependsOn value is in the registry)
+ *   4. No cycles
  *
  * The dep-edge match is by per-instance __id first (UUID assigned at
  * factory time; survives jiti double-module load), then === identity
- * (hedge against UUID failure). Never structural equality (spec §11 #20).
+ * (hedge against UUID failure). Never structural equality.
  */
 import { resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -104,7 +103,7 @@ function walkTree(
 
   // The root stack has localKey ''; we synthesize an FQN of 'root' for
   // logs but exclude it from the registry (its children are what we
-  // provision). Mirrors spec §9 NDJSON naming.
+  // provision).
   const queue: Frame[] = [
     {
       resource: root,
@@ -143,6 +142,26 @@ function walkTree(
           throw new Error(
             `[neon launch] Stack '${fqn || 'root'}' returned key '${key}' that is not a resource. ` +
               `Every value in a stack's returned record must be the result of a factory call.`,
+          );
+        }
+        // Nested stacks aren't supported in v1 — the registry only holds
+        // leaves, and the runner has no resolver for stack outputs. Throw
+        // early with a clear pointer instead of letting the deps-in-tree
+        // check fire later with a misleading "did you forget to include
+        // it?" message.
+        if (value.__kind === 'stack') {
+          throw new Error(
+            [
+              `[neon launch] Nested stacks are not supported in v1.`,
+              `Stack '${fqn || 'root'}' returns a nested stack at key '${key}'.`,
+              '',
+              `Inline the nested stack's children into the parent's returned record:`,
+              `  return { db, web, ...nested.spec() };  // hand-roll for now`,
+              '',
+              `Or factor the children into a plain function that returns the same record:`,
+              `  const buildData = () => ({ primary: postgres({...}) });`,
+              `  return { ...buildData(), web };`,
+            ].join('\n'),
           );
         }
         // Dup-key invariant — checked HERE per stack so the error template
@@ -383,7 +402,7 @@ export async function buildPlan(
     );
   }
 
-  // Walk the tree. Dup-key check fires during the walk per spec §3.2 step 4.
+  // Walk the tree. Dup-key check fires during the walk.
   const registry = walkTree(def, ctx);
 
   // Now resolve dep FQNs lazily — the walker recorded them eagerly but

@@ -11,8 +11,7 @@ const bundle = await rollup({
   input: 'dist/cli.js',
   // Keep `jiti` external so its dynamic require of `../dist/babel.cjs`
   // resolves at runtime against node_modules/jiti/ inside the pkg snapshot,
-  // not against the rollup-flattened bundle dir. See impl-plan Phase 0.1
-  // remediation (spec §11 #42).
+  // not against the rollup-flattened bundle dir.
   external: ['jiti'],
   plugins: [
     nodeResolve({

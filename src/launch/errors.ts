@@ -1,13 +1,12 @@
 /**
  * User-facing error message templates for plan-time and runtime failures.
  *
- * Spec §5 templates are reproduced here verbatim (the throw message IS the
- * docs — spec §11 #18). Each template takes a context object so the
+ * The throw message IS the docs. Each template takes a context object so the
  * launcher can fill in the specifics.
  */
 
 // =============================================================================
-// Exit codes (spec §9)
+// Exit codes
 // =============================================================================
 
 export const ExitCode = {
@@ -72,7 +71,7 @@ export function dupKeyMessage(opts: {
 
 /**
  * Fires when the resolved tree contains 0 or >1 resources with __kind === 'postgres'.
- * Dup-key check (§5.1) runs FIRST — if the same postgres value appears at
+ * The dup-key check runs FIRST — if the same postgres value appears at
  * two record keys, the user sees the dup-key error, not this one.
  */
 export function singletonMessage(opts: {
@@ -87,7 +86,7 @@ export function singletonMessage(opts: {
       `Add a \`postgres({...})\` to your stack and return it.`,
       '',
       `Multi-postgres support is tied to how Neon projects map to a Postgres endpoint;`,
-      `we may relax this if the platform shape changes (spec §1, §10).`,
+      `we may relax this if the platform shape changes.`,
     ].join('\n');
   }
   return [

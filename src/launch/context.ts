@@ -1,7 +1,7 @@
 /**
  * Build the `LaunchContext` (`{ gitBranch, flags, processEnv }`) the launcher
  * threads through every spec callback. Also exposes helpers for the
- * state-file precedence chain (spec §3.3 + §11 #39).
+ * state-file precedence chain.
  *
  * Precedence for keys that may appear in both `process.env` and
  * `.neon-launch.env`:
@@ -39,9 +39,8 @@ export function readNeonLaunchEnv(repoRoot: string): Record<string, string> {
 }
 
 /**
- * Atomically write `.neon-launch.env` (temp + rename). Per impl-plan Phase 7.1
- * step 5 / spec §4.1. Merges with existing values — caller passes only the
- * keys they want to set/update.
+ * Atomically write `.neon-launch.env` (temp + rename). Merges with existing
+ * values — caller passes only the keys they want to set/update.
  */
 export function writeNeonLaunchEnv(
   repoRoot: string,
@@ -57,7 +56,7 @@ export function writeNeonLaunchEnv(
 }
 
 /**
- * Resolve a state value with the §11 #39 precedence chain.
+ * Resolve a state value with the documented precedence chain.
  *
  * `neonContext` is the third tier — the existing `enrichFromContext`
  * middleware reads `.neon` and sets values on the yargs context; the
@@ -79,7 +78,7 @@ export function resolveStateValue(
 }
 
 /**
- * Resolve the git branch with the spec §3.2 step 2 precedence chain:
+ * Resolve the git branch with the following precedence chain:
  *
  *   --branch <name>            (CLI flag, passed in)
  *   $GITHUB_HEAD_REF           (GH Actions pull_request events run detached)

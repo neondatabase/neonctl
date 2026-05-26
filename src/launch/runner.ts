@@ -1,8 +1,6 @@
 /**
  * Runner — load plan → provision in topo order → foreground phase.
  *
- * Spec §3.2 step 6, §3.6, §9.
- *
  * Per-stage execution: nodes with no remaining unsatisfied dependencies run
  * in parallel. After a stage settles (all ready), the runner advances to
  * the next stage. Once everything is ready, we hold the parent process
@@ -32,11 +30,7 @@ import {
 } from './provisioners/local-command.js';
 import { provisionVercelDeployment } from './provisioners/vercel-deployment.js';
 import { isRef } from './refs.js';
-import {
-  ExitCode,
-  vercelTokenMissingMessage,
-  type ExitCode as ExitCodeT,
-} from './errors.js';
+import { ExitCode, vercelTokenMissingMessage } from './errors.js';
 import type {
   LocalCommandSpec,
   PostgresSpec,
@@ -54,10 +48,6 @@ export type LaunchRunOptions = {
   yes: boolean;
   argv: Record<string, unknown>;
   recognizedFlags: ReadonlySet<string>;
-};
-
-export type LaunchRunResult = {
-  exitCode: ExitCodeT;
 };
 
 // =============================================================================
@@ -248,7 +238,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     `[launch] plan: ${plan.registry.size} resources — ${[...plan.registry.values()].map((n) => `${n.name}(${n.resource.__kind})`).join(', ')}`,
   );
 
-  // 2. Resolve state values with spec §3.3 precedence:
+  // 2. Resolve state values with precedence:
   //   process.env > .neon-launch.env > .neon middleware context
   const neonLaunchEnv = readNeonLaunchEnv(repoRoot);
   const neonContext: Record<string, string | undefined> = {
@@ -298,7 +288,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
       `[launch] stage ${idx + 1}/${stages.length}: ${stage.map((n) => n.name).join(', ')}`,
     );
     // Decide stdio model: 'inherit' iff exactly one local-command in this
-    // stage AND no other resource types share it (spec §3.6 + §11 #21).
+    // stage AND no other resource types share it.
     const localCmdCount = stage.filter(
       (n) => n.resource.__kind === 'local-command',
     ).length;
@@ -410,8 +400,8 @@ async function provisionPostgresNode(args: {
     branchId: result.branch.id,
     endpointId: result.endpoint.id,
     host: result.endpoint.host,
-    role: (result.refTable.get('role') as string) ?? '',
-    database: (result.refTable.get('database') as string) ?? '',
+    role: result.role,
+    database: result.database,
     uriCache: new Map(),
   });
   log.info(`[postgres:${args.node.name}] ready — host=${result.endpoint.host}`);
@@ -428,7 +418,7 @@ async function provisionVercelNode(args: {
   const spec = args.node.spec as VercelDeploymentSpec;
   const token = process.env.VERCEL_TOKEN ?? '';
   if (!token) throw new Error(vercelTokenMissingMessage());
-  // Spec §3.3 precedence: process.env > .neon-launch.env > spec.teamId.
+  // Precedence: process.env > .neon-launch.env > spec.teamId.
   const teamId =
     process.env.VERCEL_TEAM_ID ??
     args.neonLaunchEnv.VERCEL_TEAM_ID ??

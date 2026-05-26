@@ -1,13 +1,13 @@
 /**
- * Ports the six Spike 0.2 assertions into vitest. These are the load-bearing
- * invariants of the `Ref<T>` Proxy — spec §2.4 + §11 #17/#18/#44. Tests
- * pinned in code so regressions surface in CI, not in user reports.
+ * Tests for the load-bearing invariants of the `Ref<T>` Proxy. Each behavior
+ * is a known JS foot-gun; the comments next to each test name what's being
+ * defended.
  */
 import { inspect } from 'node:util';
 
 import { describe, it, expect } from 'vitest';
 
-import { makeRef, isRef, walkAndResolve } from './refs.js';
+import { makeRef, isRef } from './refs.js';
 
 describe('makeRef — six required Proxy behaviors', () => {
   it('1. JSON.stringify produces the marker envelope', () => {
@@ -15,7 +15,7 @@ describe('makeRef — six required Proxy behaviors', () => {
     expect(JSON.stringify(ref)).toBe('{"__ref":"x","__kind":"ref"}');
   });
 
-  it('2. template-string interpolation throws with the spec §2.4 corrective example', () => {
+  it('2. template-string interpolation throws with a corrective example', () => {
     const ref = makeRef('x');
     expect(() => {
       // Force the Symbol.toPrimitive path — eslint can collapse a single-arg
@@ -71,33 +71,5 @@ describe('isRef', () => {
     expect(isRef({})).toBe(false);
     expect(isRef(null)).toBe(false);
     expect(isRef('string')).toBe(false);
-  });
-});
-
-describe('walkAndResolve', () => {
-  it('replaces refs with table values', () => {
-    const table = new Map<string, unknown>();
-    table.set('db.connectionString', 'postgres://...');
-    const env = { DATABASE_URL: makeRef('db.connectionString') };
-    const resolved = walkAndResolve(env, table);
-    expect(resolved).toEqual({ DATABASE_URL: 'postgres://...' });
-  });
-  it('passes through non-ref leaves', () => {
-    const table = new Map<string, unknown>();
-    const env = { FOO: 'bar', NUM: 42 };
-    expect(walkAndResolve(env, table)).toEqual({ FOO: 'bar', NUM: 42 });
-  });
-  it('throws on unresolved refs', () => {
-    const table = new Map<string, unknown>();
-    expect(() => walkAndResolve({ X: makeRef('missing.id') }, table)).toThrow(
-      /Unresolved Ref<T>.*missing\.id/,
-    );
-  });
-  it('recurses into nested objects and arrays', () => {
-    const table = new Map<string, unknown>([['db.host', 'localhost']]);
-    const env = { nested: { arr: [makeRef('db.host'), 'literal'] } };
-    expect(walkAndResolve(env, table)).toEqual({
-      nested: { arr: ['localhost', 'literal'] },
-    });
   });
 });

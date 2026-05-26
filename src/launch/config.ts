@@ -5,9 +5,6 @@
  * `neon.ts`; the four `postgres / vercelDeployment / localCommand / stack`
  * factories build the resource tree the launcher provisions.
  *
- * Spec §2.3 is the authoritative type contract. This file IS the contract;
- * if you change a type here, update the spec first.
- *
  * Design invariants — DO NOT REVERSE these in review (every one was
  * rejected at design time after multiple rounds of review):
  *   #1  No CLI-side mode detection. Policy lives in the user's stack spec.
@@ -23,8 +20,6 @@
  *       — TypeScript narrows via value identity.
  *   #7  No polymorphic specs (object OR function). Every spec is
  *       `(deps, ctx) => SpecObject`. Uniform shape, one mental model.
- *
- * Spec §11 pitfalls #1–#7. Spec §1 non-goals.
  */
 import type { Ref } from './refs.js';
 
@@ -35,15 +30,14 @@ import type { Ref } from './refs.js';
 /**
  * CLI flag values that fall through to `ctx.flags`. Yargs' default coercion
  * gives us booleans for bare `--preview`, strings for `--key=value`, arrays
- * for repeated keys, numbers for numeric strings. See impl-plan Phase 3.1
- * for the extraction rule.
+ * for repeated keys, numbers for numeric strings.
  */
 export type FlagValue = string | string[] | number | boolean;
 
 /**
  * Second argument every `spec` function receives. The launcher resolves
- * `gitBranch` once (precedence chain in spec §3.2 step 2 / impl-plan Phase 3.4)
- * and propagates the same value into every spec callback in the tree.
+ * `gitBranch` once and propagates the same value into every spec callback
+ * in the tree.
  */
 export type LaunchContext = {
   gitBranch: string;
@@ -57,9 +51,9 @@ export type LaunchContext = {
 
 /**
  * Every factory returns a Resource. `Kind` is the runtime discriminator the
- * launcher switches on (spec §11 #19 — dispatch by string, never instanceof).
- * `Outputs` is a phantom type used only for `dependsOn` narrowing — it isn't
- * populated at construction time.
+ * launcher switches on (dispatch by string, never instanceof). `Outputs` is
+ * a phantom type used only for `dependsOn` narrowing — it isn't populated
+ * at construction time.
  */
 export type Resource<Kind extends string = string, Outputs = unknown> = {
   readonly __kind: Kind;
@@ -67,8 +61,8 @@ export type Resource<Kind extends string = string, Outputs = unknown> = {
 };
 
 /**
- * `dependsOn` is a record of Resource values (spec §11 #6). String arrays
- * forced self-referential TS types or runtime-only validation — value records
+ * `dependsOn` is a record of Resource values. String arrays forced
+ * self-referential TS types or runtime-only validation — value records
  * give full narrowing for free.
  */
 export type DepsRecord = Record<string, Resource>;
@@ -84,7 +78,7 @@ export type Resolved<D extends DepsRecord> = {
 };
 
 /**
- * Spec function signature — uniform across every resource kind (spec §11 #7).
+ * Spec function signature — uniform across every resource kind.
  * Trailing unused args may be omitted: `() => ({...})` and `(_, { gitBranch }) =>`
  * are both valid shorthands.
  */
@@ -102,8 +96,7 @@ export type ComputeSpec = {
   maxCu?: number;
   /**
    * `0` (or omitted) → project default; `-1` → never suspend; positive →
-   * literal seconds. See spec §2.2.3 and impl-plan Phase 5.1 step 7 for
-   * how the launcher reconciles drift against project defaults.
+   * literal seconds. The launcher reconciles drift against project defaults.
    */
   suspendTimeoutSeconds?: number;
 };
@@ -113,7 +106,7 @@ export type PostgresSpec = {
   /**
    * Parent branch name to fork from when `name` doesn't exist. Omitted →
    * the project's default branch (resolved via `listProjectBranches` looking
-   * for `default: true`). Spec §2.2.2.
+   * for `default: true`).
    */
   branchFrom?: string;
   compute?: ComputeSpec;
@@ -123,7 +116,7 @@ export type PostgresSpec = {
  * `connectionString` is both a Ref<string> (no-args property access) AND
  * callable with opts (`db.connectionString({ pooled: false })`). Each call
  * produces a new Ref tagged with the opts; the launcher re-issues
- * `GET /projects/{id}/connection_uri` per opts-tuple (spec §2.4, §3.2 step 5).
+ * `GET /projects/{id}/connection_uri` per opts-tuple.
  */
 export type ConnectionStringCallable = (opts?: {
   pooled?: boolean;
@@ -149,18 +142,18 @@ export type VercelDeploymentSpec = {
   teamId?: string;
   /**
    * Team slug. Resolved to `teamId` via `GET /v2/teams/{slug}` once; persist
-   * the resolved id (spec §3.3 last paragraph).
+   * the resolved id.
    */
   team?: string;
   /**
    * `true` → production deploy + `target: ['production']` env vars (no
    * `gitBranch` scoping). `false`/omitted → preview deploy + `target: ['preview']`
-   * env vars scoped to `ctx.gitBranch` (spec §11 #31, #33).
+   * env vars scoped to `ctx.gitBranch`.
    */
   production?: boolean;
   /**
    * Env vars to upsert. `Ref<string>` values resolve at provision time;
-   * plain strings pass through. Spec §2.3 + §3.2 step 5.
+   * plain strings pass through.
    */
   env: Record<string, string | Ref<string>>;
 };
@@ -174,7 +167,7 @@ export type VercelDeploymentOutputs = {
 // =============================================================================
 
 /**
- * Readiness signals — required when this command has dependents (spec §11 #8).
+ * Readiness signals — required when this command has dependents.
  * One-shot commands (`onExit`) and long-running commands with no dependents
  * may omit it.
  */
@@ -210,13 +203,16 @@ export type LocalCommandOutputs = {
 // =============================================================================
 
 /**
- * What the launcher actually sees on a resource. The four public output-type
+ * What the launcher actually sees on a resource. The two public output-type
  * narrowing properties (`__kind`, `__outputs`) plus three runtime carriers
  * (`__id`, `__dependsOn`, `__spec`).
  *
- * Per-instance `__id` (UUID) is the primary dep-edge match key — it survives
- * the "two copies of the factory code in play" failure mode (spec §11 #19 +
- * impl-plan Phase 2.5) better than `===` identity alone.
+ * Per-instance `__id` is the primary dep-edge match key — it survives the
+ * "two copies of the factory code in play" failure mode (the user's repo
+ * may have one copy via `bun install`; the global `neon` binary embeds
+ * another) better than `===` identity alone.
+ *
+ * Internal to the launcher; not re-exported from `neonctl/config`.
  */
 export type InternalResource<
   Kind extends string = string,
@@ -256,7 +252,7 @@ function buildResource<Kind extends string, Outputs, D extends DepsRecord>(
 
 /**
  * Declares a Neon Postgres branch. Exactly one `postgres(...)` per launch
- * tree (plan-time invariant — spec §3.2 step 4 + §5.2).
+ * tree (plan-time invariant).
  *
  * @example
  * ```ts
@@ -305,7 +301,7 @@ export function vercelDeployment<
 
 /**
  * Spawns a local command — dev server, migration, seed, anything. Required
- * `readiness` if dependents exist (spec §11 #8).
+ * `readiness` if dependents exist.
  *
  * @example
  * ```ts
@@ -333,11 +329,15 @@ export function localCommand<
 
 /**
  * A stack groups child resources into a record. The top-level export of
- * `neon.ts` is a `stack({ spec })`; stacks can also be nested as deps of
- * other resources to compose larger graphs (spec §2.2 Pattern E).
+ * `neon.ts` MUST be a `stack({ spec })`.
  *
  * Stack outputs = the record of its children's outputs. TypeScript picks
  * this up automatically from the spec's return type.
+ *
+ * In v1 a stack must be the ROOT — nested stacks (a stack inside another
+ * stack's returned record, or a stack passed via `dependsOn`) are not
+ * supported. Use leaf resources directly. Nested stacks may be added later
+ * once the runtime can flatten them into the plan registry.
  *
  * @example
  * ```ts
@@ -370,4 +370,4 @@ export function stack<
 // Re-exports from refs.ts so consumers see them via `neonctl/config`
 // =============================================================================
 
-export { makeRef, type Ref } from './refs.js';
+export type { Ref } from './refs.js';

@@ -1,5 +1,5 @@
 /**
- * Plan-time invariant tests — every error template in §5 must fire from a
+ * Plan-time invariant tests — every error template must fire from a
  * realistic config shape. Catches the most common ways users break the
  * stack/record/dep contract.
  */

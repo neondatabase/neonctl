@@ -37,9 +37,12 @@ export default stack({
     });
 
     // `--prod` / `--preview` are unknown flags as far as yargs is concerned;
-    // they fall through to `ctx.flags` for us to read.
-    const prod = flags.prod === true;
-    const preview = flags.preview === true;
+    // they fall through to `ctx.flags`. yargs hands us `true` for the bare
+    // `--prod` form and `'true'` for `--prod=true`; accept both so callers
+    // don't have to memorize the convention.
+    const truthy = (v: unknown) => v === true || v === 'true';
+    const prod = truthy(flags.prod);
+    const preview = truthy(flags.preview);
 
     if (prod || preview) {
       const web = vercelDeployment({

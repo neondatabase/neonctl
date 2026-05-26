@@ -1,6 +1,5 @@
 /**
- * Postgres provisioner — spec §3.2 step 5 (postgres path) + §3.4 (compute
- * reconcile) + §2.2.2 (branching semantics).
+ * Postgres provisioner.
  *
  * Flow:
  *   1. Resolve branchFrom (explicit, or project's default branch).
@@ -8,12 +7,12 @@
  *   3. If not found → POST /projects/{id}/branches with the endpoint, poll
  *      ops (terminal: finished/skipped/cancelled; non-terminal: failed,
  *      error, running, scheduling, cancelling — Neon retries both failed
- *      AND error per the OperationStatus enum, spec §11 #24).
+ *      AND error per the OperationStatus enum).
  *   4. Reconcile compute via PATCH /projects/{id}/endpoints/{endpoint_id}
- *      with `{ endpoint: { ... } }` wrapper (spec §3.4).
+ *      with `{ endpoint: { ... } }` wrapper.
  *   5. Build the connection-URI cache keyed on (branchId, endpointId,
  *      database, role, pooled) so multiple Ref opts-tuples each get their
- *      own resolved URI (spec §3.2 step 5 final bullet).
+ *      own resolved URI.
  */
 import {
   EndpointType,
@@ -26,7 +25,7 @@ import { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../../api.js';
 import { log } from '../../log.js';
-import type { PostgresOutputs, PostgresSpec } from '../config.js';
+import type { PostgresSpec } from '../config.js';
 import { branchQuotaMessage } from '../errors.js';
 
 // =============================================================================
@@ -49,17 +48,9 @@ export type PostgresProvisionResult = {
   branch: Branch;
   /** The read_write endpoint on the branch. */
   endpoint: Endpoint;
-  /**
-   * Outputs to satisfy the resource's Ref<T> markers. Each `connectionString`
-   * variant (with different `pooled`/`role`/`database` opts) is resolved on
-   * demand via `resolveConnectionUri` and cached.
-   */
-  outputs: PostgresOutputs;
-  /**
-   * Caller passes the per-resource ref-id map (from the plan registry); we
-   * populate it with resolved values keyed on the launcher's __ref strings.
-   */
-  refTable: Map<string, unknown>;
+  /** Stable string outputs the runner seeds its resolver with. */
+  role: string;
+  database: string;
 };
 
 // =============================================================================
@@ -143,7 +134,7 @@ async function pollOpsTerminal(
         remaining.delete(opId);
       }
       // `failed` and `error` are both non-terminal — Neon retries them.
-      // We keep polling regardless. See spec §11 #24.
+      // We keep polling regardless.
     }
     if (remaining.size > 0) await sleep(DEFAULT_POLL_INTERVAL_MS);
   }
@@ -181,10 +172,10 @@ async function reconcileCompute(
   const compute = spec.compute ?? {};
   const wantMin = compute.minCu ?? DEFAULT_MIN_CU;
   const wantMax = compute.maxCu ?? DEFAULT_MAX_CU;
-  // Spec §2.2.3 sentinels: omitted / 0 → project default; -1 → never suspend;
-  // positive integer → that many seconds. The project default is opaque
-  // here, so we treat omitted-and-0 identically (don't drive drift, don't
-  // write the field). -1 and positive values compare directly.
+  // Suspend-timeout sentinels: omitted / 0 → project default; -1 → never
+  // suspend; positive integer → that many seconds. The project default is
+  // opaque here, so we treat omitted-and-0 identically (don't drive drift,
+  // don't write the field). -1 and positive values compare directly.
   const wantSuspendRaw = compute.suspendTimeoutSeconds;
   const useProjectDefault =
     wantSuspendRaw === undefined || wantSuspendRaw === 0;
@@ -274,8 +265,8 @@ export async function provisionPostgres(opts: {
       `[postgres:${resourceFqn}] creating branch '${spec.name}' forked from '${parent.name}' (${parent.id}).`,
     );
 
-    // Spec §2.2.3: omitted OR 0 → project default → omit the field. -1 or
-    // positive integer → pass through verbatim.
+    // Suspend-timeout: omitted OR 0 → project default → omit the field.
+    // -1 or positive integer → pass through verbatim.
     const sus = spec.compute?.suspendTimeoutSeconds;
     const sendSuspend = sus !== undefined && sus !== 0;
     const createBody: Parameters<Api<unknown>['createProjectBranch']>[1] = {
@@ -297,7 +288,7 @@ export async function provisionPostgres(opts: {
       );
     } catch (err) {
       // Concurrent-create race: another launch beat us to it. Fall back to
-      // listing + attaching if the branch now exists. Spec §3.2 step 5.
+      // listing + attaching if the branch now exists.
       if (
         isAxiosError(err) &&
         err.response &&
@@ -352,7 +343,7 @@ export async function provisionPostgres(opts: {
   let endpoint = await findEndpoint(api, projectId, branch.id);
   if (!endpoint) {
     throw new Error(
-      `[neon launch] Branch ${branch.id} has no read_write endpoint. The launcher requires endpoints to be present at branch-create time; see spec §3.2 step 5.`,
+      `[neon launch] Branch ${branch.id} has no read_write endpoint. The launcher requires endpoints to be present at branch-create time.`,
     );
   }
   endpoint = await reconcileCompute(
@@ -363,55 +354,41 @@ export async function provisionPostgres(opts: {
     branch.name,
   );
 
-  // Build outputs. The ref-table is filled lazily — the runner walks env
-  // records and re-resolves connection_uri for each opts-tuple via
-  // `resolveConnectionString` below.
-  const refTable = new Map<string, unknown>();
-  // Plain string outputs we know up-front:
-  const host = endpoint.host;
-  const role = (await firstNonSystemRole(api, projectId, branch.id)) ?? '';
-  const database =
-    (await firstNonSystemDatabase(api, projectId, branch.id)) ?? '';
+  const role = await firstNonSystemRole(api, projectId, branch.id);
+  const database = await firstNonSystemDatabase(api, projectId, branch.id);
+  if (!database) {
+    throw new Error(
+      `[neon launch] Branch ${branch.id} has no database. Create one via \`neon databases create\` or pick a branch that has one.`,
+    );
+  }
 
-  return {
-    branch,
-    endpoint,
-    outputs: {
-      // These four are markers — the runner resolves them via refTable below.
-      // Provided here for type compliance; the runner doesn't read them
-      // directly. See src/launch/refs.ts walkAndResolve.
-      connectionString: '' as unknown as PostgresOutputs['connectionString'],
-      host: '' as unknown as PostgresOutputs['host'],
-      database: '' as unknown as PostgresOutputs['database'],
-      role: '' as unknown as PostgresOutputs['role'],
-    },
-    refTable: await populateRefTable(
-      api,
-      projectId,
-      branch.id,
-      endpoint.id,
-      host,
-      role,
-      database,
-      refTable,
-    ),
-  };
+  return { branch, endpoint, role, database };
 }
 
 async function firstNonSystemRole(
   api: NeonApi,
   projectId: string,
   branchId: string,
-): Promise<string | undefined> {
+): Promise<string> {
   const { data } = await retryOnLock(() =>
     api.listProjectBranchRoles(projectId, branchId),
   );
   // `protected: true` flags platform-managed roles (e.g. superuser). The
-  // launcher wants the first user-owned role for the connection string —
-  // otherwise app code authenticates as the system role and may hit
-  // unexpected ACLs.
+  // launcher wants a user-owned role for the connection string; falling
+  // back to the system role would silently grant app code privileges it
+  // shouldn't have.
   const userRole = data.roles.find((r: Role) => !r.protected);
-  return userRole?.name ?? data.roles[0]?.name;
+  if (!userRole) {
+    throw new Error(
+      [
+        `[neon launch] Branch ${branchId} has no user-owned role.`,
+        `All roles on this branch are protected (system-managed).`,
+        '',
+        `Create a role via \`neon roles create --name <name>\` or via the Neon console, then re-run.`,
+      ].join('\n'),
+    );
+  }
+  return userRole.name;
 }
 
 async function firstNonSystemDatabase(
@@ -423,38 +400,6 @@ async function firstNonSystemDatabase(
     api.listProjectBranchDatabases(projectId, branchId),
   );
   return data.databases[0]?.name;
-}
-
-async function populateRefTable(
-  api: NeonApi,
-  projectId: string,
-  branchId: string,
-  endpointId: string,
-  host: string,
-  role: string,
-  database: string,
-  table: Map<string, unknown>,
-): Promise<Map<string, unknown>> {
-  // host/role/database are stable across opts variants — populate immediately.
-  // connectionString is opts-dependent — the runner will call
-  // `resolveConnectionString` on demand for each opts-tuple it encounters.
-  // For now, also pre-populate the no-opts connectionString.
-  const { data } = await retryOnLock(() =>
-    api.getConnectionUri({
-      projectId,
-      branch_id: branchId,
-      endpoint_id: endpointId,
-      database_name: database,
-      role_name: role,
-    }),
-  );
-  // Keys here are placeholders; the runner injects the real __ref ids
-  // from the plan registry when building each child's env.
-  table.set('connectionString', data.uri);
-  table.set('host', host);
-  table.set('role', role);
-  table.set('database', database);
-  return table;
 }
 
 /**
