@@ -15,7 +15,7 @@ import type { PsqlSettings } from '../types/settings.js';
 
 import { createVarStore } from './variables.js';
 import { defaultSettings } from './settings.js';
-import { runMainLoop, EXIT_SUCCESS, EXIT_USER } from './mainloop.js';
+import { runMainLoop, EXIT_SUCCESS, EXIT_USER, __testing } from './mainloop.js';
 import { createCondStack } from '../command/cmd_cond.js';
 
 // ---------------------------------------------------------------------------
@@ -591,5 +591,52 @@ describe('runMainLoop — NotificationResponse', () => {
     expect(stdout.text()).toMatch(
       /Asynchronous notification "foo" with payload "bar" received from server process with PID 7\./,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VI_MODE — the psql variable that controls the LineEditor editing mode.
+// We exercise the small parsing helpers directly here; the editor-side
+// integration (setMode applied at next prompt) is covered by the LineEditor
+// unit tests.
+// ---------------------------------------------------------------------------
+
+describe('mainloop — VI_MODE helpers', () => {
+  test('parseBoolVar accepts the upstream on/off spellings', () => {
+    expect(__testing.parseBoolVar('on')).toBe(true);
+    expect(__testing.parseBoolVar('ON')).toBe(true);
+    expect(__testing.parseBoolVar('true')).toBe(true);
+    expect(__testing.parseBoolVar('yes')).toBe(true);
+    expect(__testing.parseBoolVar('1')).toBe(true);
+    expect(__testing.parseBoolVar('')).toBe(true);
+    expect(__testing.parseBoolVar('off')).toBe(false);
+    expect(__testing.parseBoolVar('false')).toBe(false);
+    expect(__testing.parseBoolVar('no')).toBe(false);
+    expect(__testing.parseBoolVar('0')).toBe(false);
+  });
+
+  test('parseBoolVar returns null for unrecognised input', () => {
+    expect(__testing.parseBoolVar('banana')).toBeNull();
+    expect(__testing.parseBoolVar('2')).toBeNull();
+    expect(__testing.parseBoolVar('vi')).toBeNull();
+  });
+
+  test('viModeOption defaults to emacs when unset', () => {
+    expect(__testing.viModeOption(undefined)).toBe('emacs');
+  });
+
+  test('viModeOption translates truthy values to vi', () => {
+    expect(__testing.viModeOption('on')).toBe('vi');
+    expect(__testing.viModeOption('1')).toBe('vi');
+    expect(__testing.viModeOption('yes')).toBe('vi');
+  });
+
+  test('viModeOption translates falsy values to emacs', () => {
+    expect(__testing.viModeOption('off')).toBe('emacs');
+    expect(__testing.viModeOption('0')).toBe('emacs');
+    // Unrecognised input falls back to emacs — same as upstream's `set
+    // editing-mode unknown` (silently ignored). The hook itself emits the
+    // diagnostic before reaching this translator.
+    expect(__testing.viModeOption('banana')).toBe('emacs');
   });
 });

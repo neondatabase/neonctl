@@ -150,6 +150,29 @@ const makeStreamLineReader = (
   };
 };
 
+/**
+ * Parse a psql VI_MODE-style boolean. Mirrors `ParseVariableBool` for the
+ * common spellings: `on` / `true` / `yes` / `1` are truthy; `off` / `false` /
+ * `no` / `0` are falsy; everything else returns `null` so the caller can
+ * surface the upstream "invalid value" diagnostic.
+ */
+const parseBoolVar = (raw: string): boolean | null => {
+  const v = raw.toLowerCase().trim();
+  if (v === '' || v === 'on' || v === 'true' || v === 'yes' || v === '1') {
+    return true;
+  }
+  if (v === 'off' || v === 'false' || v === 'no' || v === '0') {
+    return false;
+  }
+  return null;
+};
+
+/** Translate a psql VI_MODE var value into the LineEditor mode. */
+const viModeOption = (raw: string | undefined): 'emacs' | 'vi' => {
+  if (raw === undefined) return 'emacs';
+  return parseBoolVar(raw) === true ? 'vi' : 'emacs';
+};
+
 const makeEditorLineReader = async (ctx: REPLContext): Promise<LineReader> => {
   const env = process.env;
   const histPath = defaultHistoryPath(env);
@@ -164,11 +187,36 @@ const makeEditorLineReader = async (ctx: REPLContext): Promise<LineReader> => {
     // Missing or unreadable history file — start fresh.
     history = [];
   }
+  // VI_MODE: upstream readline's `set editing-mode {emacs|vi}`. We read once
+  // here for the initial mode, and below we install a VarStore hook so a
+  // subsequent `\set VI_MODE on` switches the editor at the next prompt.
+  const initialMode = viModeOption(ctx.settings.vars.get('VI_MODE'));
   const editor = new LineEditor({
     stdin: ctx.stdin as NodeJS.ReadStream,
     stdout: ctx.stdout,
     history,
     completer: psqlCompleter({ settings: ctx.settings }),
+    mode: initialMode,
+  });
+  // Hook: validate the value, reject unrecognised input with psql's
+  // `\set: VI_MODE: invalid value "X"; valid values: on, off` diagnostic,
+  // and on success forward to `editor.setMode` (which defers the switch to
+  // the next readLine boundary). Replay on registration is fine — the hook
+  // is idempotent for a no-op `null`/unchanged value.
+  ctx.settings.vars.addHook('VI_MODE', (newValue) => {
+    if (newValue === null) {
+      editor.setMode('emacs');
+      return true;
+    }
+    const parsed = parseBoolVar(newValue);
+    if (parsed === null) {
+      ctx.stderr.write(
+        `\\set: VI_MODE: invalid value "${newValue}"; valid values: on, off\n`,
+      );
+      return false;
+    }
+    editor.setMode(parsed ? 'vi' : 'emacs');
+    return true;
   });
   return {
     readLine: async (prompt: string): Promise<string | null> => {
@@ -864,3 +912,13 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
 // CondStack instances without dipping into the types/ module. Keeps the public
 // surface of mainloop self-contained for WP-12 consumers.
 export type { IfState };
+
+/**
+ * Test-only surface. Exposes the small VI_MODE helpers so the matching unit
+ * tests can exercise the parse / translate logic without engaging the
+ * raw-mode LineEditor. Treated as private — callers should not rely on it.
+ */
+export const __testing = {
+  parseBoolVar,
+  viModeOption,
+};

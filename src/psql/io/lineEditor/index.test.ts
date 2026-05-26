@@ -469,3 +469,72 @@ describe('LineEditor vi mode option', () => {
     }
   });
 });
+
+describe('LineEditor.setMode', () => {
+  it('defers an emacs → vi switch to the next readLine boundary', async () => {
+    const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
+    const editor = new LineEditor({
+      stdin,
+      stdout,
+      mode: 'emacs',
+      bracketedPaste: false,
+      escTimeoutMs: 0,
+    });
+    expect(editor.getMode()).toBe('emacs');
+    // First readLine runs entirely in emacs even though we flip mid-line.
+    // The mode change must take effect only at the NEXT readLine boundary.
+    const p1 = editor.readLine('> ');
+    stdin.feed('abcd');
+    await new Promise((r) => setImmediate(r));
+    editor.setMode('vi');
+    // Editor's effective mode must not change yet — we're mid-line.
+    expect(editor.getMode()).toBe('emacs');
+    stdin.feed('\r');
+    await new Promise((r) => setImmediate(r));
+    const r1 = await p1;
+    expect(r1).toBe('abcd');
+    expect(editor.getMode()).toBe('emacs');
+
+    // Second readLine: the queued switch takes effect; Esc enters vi normal.
+    const p2 = editor.readLine('> ');
+    expect(editor.getMode()).toBe('vi');
+    stdin.feed('xy');
+    await new Promise((r) => setImmediate(r));
+    stdin.feed('\x1b');
+    await new Promise((r) => setImmediate(r));
+    // In vi normal: x deletes char at cursor.
+    stdin.feed('x\r');
+    const r2 = await p2;
+    expect(r2).toBe('x');
+    editor.close();
+  });
+
+  it('defers a vi → emacs switch to the next readLine boundary', async () => {
+    const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
+    const editor = new LineEditor({
+      stdin,
+      stdout,
+      mode: 'vi',
+      bracketedPaste: false,
+      escTimeoutMs: 0,
+    });
+    expect(editor.getMode()).toBe('vi');
+    editor.setMode('emacs');
+    // Still vi until the next readLine starts.
+    expect(editor.getMode()).toBe('vi');
+    const p = editor.readLine('> ');
+    expect(editor.getMode()).toBe('emacs');
+    // In emacs, Ctrl-A jumps to home (it's a vi normal-mode key 'a' but a
+    // distinct binding in emacs — we use it to prove emacs dispatch is
+    // active). Without the mode switch, vi insert-mode would just ignore
+    // the Ctrl combo.
+    stdin.feed('hi');
+    await new Promise((r) => setImmediate(r));
+    stdin.feed('\x01z\r'); // Ctrl-A then 'z' inserts 'z' at column 0
+    const r = await p;
+    expect(r).toBe('zhi');
+    editor.close();
+  });
+});

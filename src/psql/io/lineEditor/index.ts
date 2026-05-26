@@ -116,7 +116,14 @@ export class LineEditor {
   private readonly stdout: NodeJS.WritableStream;
   private readonly bracketedPaste: boolean;
   private readonly completer?: Completer;
-  private readonly mode: 'emacs' | 'vi';
+  private mode: 'emacs' | 'vi';
+  /**
+   * Pending mode change requested via `setMode()`. Applied at the next
+   * `readLine()` boundary so an in-flight line keeps its current dispatch
+   * (mirrors upstream readline's "next prompt" semantics for `set
+   * editing-mode`).
+   */
+  private pendingMode: 'emacs' | 'vi' | null = null;
 
   private state: EditorState;
   private decoder: Vt100Decoder;
@@ -183,15 +190,28 @@ export class LineEditor {
         new Error('LineEditor.readLine called re-entrantly'),
       );
     }
+    // Apply any pending setMode() request at this readLine boundary so an
+    // in-flight line keeps its prior dispatch.
+    if (this.pendingMode !== null) {
+      this.mode = this.pendingMode;
+      this.pendingMode = null;
+    }
     return new Promise<ReadLineResult>((resolve, reject) => {
       // Fresh buffer for the new prompt.
       this.state.buffer = new LineBuffer();
       this.state.historyIndex = -1;
       this.state.liveSnapshot = null;
-      // Vi: every new readLine starts in insert mode (per upstream readline).
+      // Switch state.mode to match the editor mode: vi → start in 'insert',
+      // emacs → 'emacs'. This must happen on every readLine so a mid-session
+      // VI_MODE flip is observed (the state machine has its own per-line
+      // mode field that needs to be reset).
       if (this.mode === 'vi') {
         this.state.mode = 'insert';
         this.state.viPending = null;
+      } else {
+        this.state.mode = 'emacs';
+        this.state.viPending = null;
+        this.state.exBuffer = '';
       }
       this.completion.reset();
       this.active = {
@@ -259,6 +279,21 @@ export class LineEditor {
   /** Cleanup raw mode and restore TTY. Idempotent. */
   close(): void {
     this.exitRaw();
+  }
+
+  /**
+   * Request a switch between vi and emacs editing modes. The change takes
+   * effect at the NEXT `readLine()` boundary, not retroactively on the line
+   * currently being edited — matching upstream readline's `set editing-mode`
+   * semantics. Calling this with the currently-active mode is a no-op.
+   */
+  setMode(mode: 'emacs' | 'vi'): void {
+    this.pendingMode = mode;
+  }
+
+  /** Read the editor's currently effective mode. Exposed for tests. */
+  getMode(): 'emacs' | 'vi' {
+    return this.mode;
   }
 
   /** Push a line into the in-memory history. */
