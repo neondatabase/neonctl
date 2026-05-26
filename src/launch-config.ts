@@ -23,7 +23,6 @@ export {
   type VercelDeploymentOutputs,
   type LocalCommandSpec,
   type LocalCommandReadiness,
-  type LocalCommandOutputs,
 } from './launch/config.js';
 
 // Intentionally NOT re-exported:

@@ -28,9 +28,13 @@ import type { Ref } from './refs.js';
 // =============================================================================
 
 /**
- * CLI flag values that fall through to `ctx.flags`. Yargs' default coercion
- * gives us booleans for bare `--preview`, strings for `--key=value`, arrays
- * for repeated keys, numbers for numeric strings.
+ * CLI flag values that fall through to `ctx.flags`.
+ *
+ * The parser hands the launcher booleans for bare `--preview`, strings
+ * for `--key=value`, arrays for repeated keys, and numbers for numeric
+ * strings. The launcher additionally normalizes the literal strings
+ * `'true'` and `'false'` to booleans, so `--prod` (bare) and
+ * `--prod=true` are indistinguishable on `ctx.flags`.
  */
 export type FlagValue = string | string[] | number | boolean;
 
@@ -172,8 +176,16 @@ export type VercelDeploymentOutputs = {
  * may omit it.
  */
 export type LocalCommandReadiness =
-  | { onExit: number }
-  | { portListening: number; host?: string }
+  | {
+      /** Expected exit code; readiness fires when the child exits with this code. */
+      onExit: number;
+    }
+  | {
+      /** TCP port to probe on localhost; readiness fires when the port accepts a connection. */
+      portListening: number;
+      /** Host to probe. Defaults to localhost (probes both 127.0.0.1 and ::1). */
+      host?: string;
+    }
   | {
       httpGet: {
         url: string;
@@ -183,7 +195,10 @@ export type LocalCommandReadiness =
         timeoutMs?: number;
       };
     }
-  | { logMatch: RegExp };
+  | {
+      /** Regex matched against each line of the child's stdout/stderr. */
+      logMatch: RegExp;
+    };
 
 export type LocalCommandSpec = {
   command: string;
@@ -195,10 +210,10 @@ export type LocalCommandSpec = {
 
 /**
  * Local commands don't expose outputs in v1. Use `readiness: { onExit: 0 }`
- * as a gate to sequence dependents — the command's exit code itself is
- * not available as a Ref. (Reserved as a non-empty object so the
- * Resource<'local-command', LocalCommandOutputs> generic narrows
- * symmetrically with the other resource kinds.)
+ * to gate dependents — the command's exit code itself is not available
+ * as a Ref. The type is an empty object (vs. `never`, which `stack` uses)
+ * so `Resource<'local-command', LocalCommandOutputs>` stays
+ * object-shaped, matching the other resource kinds for consistency.
  */
 export type LocalCommandOutputs = Record<string, never>;
 

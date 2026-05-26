@@ -67,6 +67,9 @@ export default stack({
       }),
     });
     const dev = localCommand({
+      // `migrate` appears in dependsOn purely for ordering — its outputs
+      // aren't read (local commands have no outputs in v1). The launcher
+      // waits for migrate's onExit readiness before starting dev.
       dependsOn: { db, migrate },
       spec: ({ db }) => ({
         command: 'npm run dev',

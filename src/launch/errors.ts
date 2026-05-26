@@ -185,9 +185,11 @@ export function cycleDetectedMessage(opts: { involved: string[] }): string {
     `[neon launch] Cycle detected in resource dependencies.`,
     `Involved resources: ${opts.involved.join(', ')}.`,
     '',
-    `One resource depends on another (transitively) that depends back on it.`,
-    `Inspect the \`dependsOn:\` blocks on those resources and break the loop`,
-    `by inverting an edge, or by lifting shared init into a leaf both`,
-    `dependents can attach to.`,
+    `One of these resources depends on another that (directly or through`,
+    `other resources) depends back on it. Look at the \`dependsOn:\``,
+    `blocks on the resources above and remove one of the entries that`,
+    `closes the loop. If both resources genuinely need each other,`,
+    `extract the shared part into a third resource and let both depend`,
+    `on that one instead.`,
   ].join('\n');
 }
