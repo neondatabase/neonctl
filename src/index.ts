@@ -49,6 +49,8 @@ const NO_SUBCOMMANDS_VERBS = [
 
   'init',
 
+  'launch',
+
   // aliases
 ];
 

@@ -8,6 +8,7 @@ export type ErrorCode =
   | 'CREDENTIALS_DELETE_FAILED'
   | 'NPX_NOT_FOUND'
   | 'NEON_INIT_FAILED'
+  | 'NEON_LAUNCH_FAILED'
   | 'UNKNOWN_ERROR';
 
 const ERROR_MATCHERS = [
