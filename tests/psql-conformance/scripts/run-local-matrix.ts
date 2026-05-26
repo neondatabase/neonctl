@@ -3,8 +3,9 @@
  *
  * Iterates a list of postgres major versions (Neon's support range: 14-18),
  * boots a separate testcontainer for each, runs the conformance suite
- * against `dist/cli.js` (the embedded TS psql), and prints a summary table
- * comparing pass / fail / skipped counts per version.
+ * against `dist/psql/cli.js` (the standalone embedded-psql shim), and
+ * prints a summary table comparing pass / fail / skipped counts per
+ * version.
  *
  * Mirrors `.github/workflows/psql-conformance.yml`'s matrix without
  * requiring GitHub Actions. Useful for:
@@ -122,7 +123,7 @@ const parseArgs = (argv: string[]): Args => {
 };
 
 const ensureBuild = (skipBuild: boolean): void => {
-  const distEntry = join(process.cwd(), 'dist', 'cli.js');
+  const distEntry = join(process.cwd(), 'dist', 'psql', 'cli.js');
   if (skipBuild) {
     if (!existsSync(distEntry)) {
       process.stderr.write(
@@ -203,7 +204,7 @@ const runConformance = (
     db: string;
   },
 ): PerVersionResult => {
-  const psqlBinary = join(process.cwd(), 'dist', 'cli.js');
+  const psqlBinary = join(process.cwd(), 'dist', 'psql', 'cli.js');
   const tmpReport = mkdtempSync(join(tmpdir(), `psql-conf-${pg}-`));
   const reportFile = join(tmpReport, 'report.json');
 
