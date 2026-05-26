@@ -1,0 +1,135 @@
+/**
+ * User-facing error message templates for plan-time and runtime failures.
+ *
+ * Spec §5 templates are reproduced here verbatim (the throw message IS the
+ * docs — spec §11 #18). Each template takes a context object so the
+ * launcher can fill in the specifics.
+ */
+
+// =============================================================================
+// Exit codes (spec §9)
+// =============================================================================
+
+export const ExitCode = {
+  SUCCESS: 0,
+  RESOURCE_FAILED: 1,
+  CONFIG_ERROR: 2,
+  AUTH_MISSING: 3,
+  SIGINT: 130,
+} as const;
+export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
+
+// =============================================================================
+// 5.1 Duplicate identity at two record keys
+// =============================================================================
+
+/**
+ * Fires when a stack's returned record has the SAME resource value (by
+ * `__id`/`===` identity) at two different keys. Almost always a typo.
+ *
+ * The helper example shows `localCommand` because users hit this most
+ * often on commands (workers, seeders). For `postgres` the singleton
+ * check fires separately; for the rare "two genuine instances" case the
+ * helper pattern is the right corrective.
+ */
+export function dupKeyMessage(opts: {
+  stackName: string;
+  keyA: string;
+  keyB: string;
+  kind: string;
+}): string {
+  return [
+    `[neon launch] Stack '${opts.stackName}' returns the same resource at two keys: '${opts.keyA}' and '${opts.keyB}'.`,
+    `Both record entries point to the same \`${opts.kind}(...)\` value.`,
+    '',
+    `Each key in a stack's record provisions one resource. Two keys → one value is`,
+    `almost always a typo — either rename one of the consts and declare them`,
+    `separately, or remove the duplicate key.`,
+    '',
+    `If you actually want two independent instances with similar specs, wrap the`,
+    `constructor in a helper that returns a fresh resource on each call:`,
+    '',
+    `  const makeSeed = (table: string) => localCommand({`,
+    `    spec: ({ db }) => ({`,
+    `      command: \`npm run seed:\${table}\`,`,
+    `      env: { DATABASE_URL: db.connectionString },`,
+    `      readiness: { onExit: 0 },          // one-shot — exits when done`,
+    `    }),`,
+    `    dependsOn: { db },`,
+    `  });`,
+    '',
+    `  return {`,
+    `    db,`,
+    `    ${opts.keyA}:    makeSeed('${opts.keyA}'),`,
+    `    ${opts.keyB}: makeSeed('${opts.keyB}'),`,
+    `  };`,
+  ].join('\n');
+}
+
+// =============================================================================
+// 5.2 Postgres singleton constraint
+// =============================================================================
+
+/**
+ * Fires when the resolved tree contains 0 or >1 resources with __kind === 'postgres'.
+ * Dup-key check (§5.1) runs FIRST — if the same postgres value appears at
+ * two record keys, the user sees the dup-key error, not this one.
+ */
+export function singletonMessage(opts: {
+  count: number;
+  names: string[];
+}): string {
+  if (opts.count === 0) {
+    return [
+      `[neon launch] Found 0 postgres resources in the launch tree; expected exactly 1.`,
+      '',
+      `v1 of \`neon launch\` provisions exactly one Neon Postgres branch per launch.`,
+      `Add a \`postgres({...})\` to your stack and return it.`,
+      '',
+      `Multi-postgres support is tied to how Neon projects map to a Postgres endpoint;`,
+      `we may relax this if the platform shape changes (spec §1, §10).`,
+    ].join('\n');
+  }
+  return [
+    `[neon launch] Found ${opts.count} postgres resources in the launch tree; expected exactly 1.`,
+    `Found at: ${opts.names.join(', ')}`,
+    '',
+    `Pick one; either remove the extra(s) or move them behind a flag your \`spec\``,
+    `reads from \`ctx\`. v1 caps at one postgres per launch.`,
+  ].join('\n');
+}
+
+// =============================================================================
+// 5.3 Branch quota exceeded
+// =============================================================================
+
+export function branchQuotaMessage(opts: {
+  projectId: string;
+  limit?: number;
+}): string {
+  return [
+    `[neon launch] Branch limit reached for project ${opts.projectId}.`,
+    opts.limit
+      ? `Your Neon plan caps at ${opts.limit} branches per project; you're at the limit.`
+      : `Your Neon plan's branch cap has been reached.`,
+    '',
+    `Delete unused branches:`,
+    `  neon branches list --project-id ${opts.projectId}`,
+    `  neon branches delete <branch_name>`,
+    '',
+    `Or upgrade the project: https://console.neon.tech/app/projects/${opts.projectId}/settings`,
+    '',
+    `(Free tier caps at 10 — see https://neon.com/docs/introduction/plans)`,
+  ].join('\n');
+}
+
+// =============================================================================
+// Vercel token missing
+// =============================================================================
+
+export function vercelTokenMissingMessage(): string {
+  return [
+    `[neon launch] VERCEL_TOKEN is required when a vercelDeployment is in scope.`,
+    `Create one at https://vercel.com/account/tokens and re-run.`,
+  ].join('\n');
+}
