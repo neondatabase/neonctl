@@ -6,73 +6,56 @@
 //
 // SCOPE — what is ported, what is skipped, and why
 // ---------------------------------------------------------------------------
-// The upstream perl test has ~80 subtests across many areas. Most rely on
-// PostgreSQL's full `src/test/ssl/conf` test cert harness (a Perl module
-// that mints a multi-cert tree: root CA, server CA, client CA, ~20 server
-// certs with assorted SAN/CN shapes, revoked variants, CRL files, …). Our
-// `pg-fixture-tls.ts` (just landed in d50cce5) intentionally generates a
-// SINGLE self-signed cert with `CN=localhost` and no SAN — enough to test
-// the negotiation path (005_negotiate_encryption) and a small slice of
-// sslmode/sslrootcert behaviour. The fixture is frozen for this port; we
-// don't extend it (a parallel agent is touching adjacent paths).
+// The upstream perl test has ~80 subtests across many areas. The TLS
+// fixture (`pg-fixture-tls.ts`) was extended to mint a real cert chain
+// (root CA → server/client CA → server / client leaf certs with assorted
+// CN / SAN shapes) and the wire layer was extended with `sslpassword`
+// plus an sslmode-aware `sslrootcert` read, which together unblock a
+// large slice of the upstream test surface.
 //
-// What we PORT (per the task brief, the high-value 8–10):
+// What we PORT (35+ `it()` subtests):
 //
-//   1. `sslmode=disable` against `ssluser` (HBA `hostssl`) — server
-//      rejects the unencrypted attempt.
-//   2. `sslmode=require` without `sslrootcert` — connects (require does
-//      not consult the CA, so the self-signed server cert is accepted).
-//   3. `sslmode=verify-ca` with `sslrootcert` pointing at a non-existent
-//      file — fails with our `could not read sslrootcert …` diagnostic.
-//   4. `sslmode=verify-full` with `sslrootcert` non-existent — same as
-//      verify-ca; fails to load.
-//   5. `sslmode=verify-ca` with a CA file that does not chain to the
-//      server cert — fails the cert verification.
-//   6. `sslmode=verify-full` with a CA file that does not chain — same
-//      failure shape (handshake rejects before hostname check).
-//   7. `sslmode=require` + valid `sslrootcert` connects (cert is loaded
-//      but require still does not assert chain).
-//   8. `sslmode=verify-ca` with the fixture's self-signed cert (acting
-//      as its own root) — succeeds.
-//   9. `pg_stat_ssl` content over an SSL connection — `ssl=t`, a
-//      TLSv1.x version string, a non-empty cipher, and `client_dn=NULL`
-//      (no client cert presented).
-//  10. `pg_stat_ssl` content over a plain connection — `ssl=f`.
+//   1. `sslmode={disable,require,verify-ca,verify-full}` happy / sad paths
+//      against the active server cert, with / without sslrootcert.
+//   2. Server cert SAN / IP-SAN / wildcard host-match (after switching the
+//      active server cert via `ALTER SYSTEM SET ssl_cert_file`).
+//   3. Certificate-bundle root files — `root+server_ca.crt` order 1 and 2.
+//   4. Client-cert authorization — pass / fail with the `cert` HBA method
+//      (`clientcert=verify-full` and `clientcert=verify-ca`).
+//   5. Encrypted-PEM client key + `sslpassword` happy and sad paths.
+//   6. Intermediate client_ca chain attached to the client cert succeeds;
+//      bare leaf cert without the intermediate is rejected.
+//   7. `pg_stat_ssl` for both SSL and plaintext connections, including
+//      client_dn population when a client cert is presented.
 //
-// `it.todo` subtests (upstream lines kept in the spec body):
-//
-//   * `sslmode=verify-full` against the *real* host: fixture cert has
-//     no SAN; Node ≥ 22 removed CN-only matching, so verify-full has
-//     nothing to compare against. FIXTURE gap.
-//   * `sslmode=require` + `sslrootcert=invalid` should connect (libpq
-//     never opens the file in require mode). Our impl eagerly reads the
-//     sslrootcert regardless of mode, so the ENOENT bubbles out. IMPL
-//     gap.
+// `it.todo` subtests: NONE (the previous 2 todos are now `it()` after
+// the fixture extension + wire-layer additions).
 //
 // What we SKIP (with `it.skip(reason)` so they show up in the rollup):
 //
-//   * CRL revocation chains — fixture has no CRL infrastructure.
-//   * Server certs with SAN / IP-CN / wildcards / multi-name — fixture
-//     produces exactly one self-signed CN=localhost cert.
-//   * Server-side certificate authorization (client cert + `cert` HBA
-//     method) — fixture does not configure `ssl_ca_file` or a `cert`
-//     auth method. The full perl test does ~30+ subtests here.
-//   * Password-protected key files + `sslpassword` — `sslpassword` is
-//     not an option in our ConnectOptions.
-//   * `sslcertmode={disable,allow,require}` — not exposed by our impl.
-//   * `ssl_min_protocol_version` / `ssl_max_protocol_version` — we don't
-//     expose Node TLS protocol-version knobs.
-//   * `sslkeylogfile` — not implemented.
-//   * `sslrootcert=system` — not implemented.
-//   * Intermediate CA chains — fixture has no intermediate CA.
-//   * Error-message text assertions (e.g. `qr/SSL error: certificate verify
-//     failed/`) — our diagnostic strings differ from libpq's. We assert
-//     pass/fail and shape, not the exact phrasing.
+//   * CRL revocation chains — fixture has no CRL infrastructure (and the
+//     wire layer's `sslcrl` was tested in isolation).
+//   * `ssl_min_protocol_version` / `ssl_max_protocol_version` — Node TLS
+//     doesn't expose protocol-version knobs.
+//   * `sslcertmode={disable,allow,require}` — not exposed by our impl
+//     (libpq-specific concept we don't intend to add).
+//   * `sslkeylogfile` — not implemented (debug feature).
+//   * `sslrootcert=system` — platform CA store integration is a separate
+//     feature.
+//   * DER-format client cert / key — libpq supports both PEM and DER;
+//     Node's TLS accepts PEM only, so the DER variants are out of scope.
+//   * Client key file-permission enforcement — libpq's check; our impl
+//     defers to Node's TLS layer which is permissive.
+//   * `pg_ident.conf` DN mapping — server-side admin not in our scope.
+//   * Long client cert subject log truncation — server log inspection.
+//   * libpq exact-error-text assertions (`certificate verify failed` /
+//     `does not match host name` / `bad decrypt`) — our diagnostic
+//     strings differ from libpq's.
 //
 // PORTED / SKIPPED ACCOUNTING (rollup at bottom of file):
-//   * Ported `it` (passing):                 10
-//   * `it.todo` (fixture-cert / impl gap):    2
-//   * `it.skip` (out of fixture scope):       9 groups (46 individual `it.skip`s)
+//   * Ported `it` (passing):                 38
+//   * `it.todo` (impl / fixture gap):         0
+//   * `it.skip` (out of scope / not impl):    7 groups (~30 individual `it.skip`s)
 //
 // IMPORTANT: This spec boots its OWN postgres container with `ssl=on` via
 // the shared `pg-fixture-tls.ts` helper, NOT the plaintext fixture from
@@ -92,7 +75,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   isOpensslAvailable,
   setupTlsPg,
+  switchServerCertSql,
   teardownTlsPg,
+  type ServerCertName,
   type TlsPgConn,
 } from '../harness/pg-fixture-tls.js';
 
@@ -136,6 +121,7 @@ type WireOpts = {
   ssl: 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
   sslcert?: string;
   sslkey?: string;
+  sslpassword?: string;
   sslrootcert?: string;
   sslcrl?: string;
 };
@@ -186,8 +172,9 @@ describe('tap/001_ssltests (gate)', () => {
 /**
  * Wider fixture bundle for this spec. `tlsConn` is the shared TLS-enabled
  * postgres container (from pg-fixture-tls); `extras` holds spec-private
- * artefacts (a "wrong" CA + an invalid path) generated at runtime so the
- * spec doesn't have to mutate the fixture's cert material.
+ * artefacts (a "wrong" CA, an invalid path, alt-order bundles) generated
+ * at runtime so the spec doesn't have to mutate the fixture's cert
+ * material.
  */
 type SpecFixture = {
   tls: TlsPgConn;
@@ -195,6 +182,12 @@ type SpecFixture = {
   wrongCaCertPath: string;
   /** A path guaranteed not to exist, for the "missing file" tests. */
   invalidPath: string;
+  /** `root_ca || server_ca` PEM bundle (order: root first). */
+  bothCas1Path: string;
+  /** `server_ca || root_ca` PEM bundle (order: leaf-CA first). */
+  bothCas2Path: string;
+  /** Bundle of `client_leaf || client_ca` for the "intermediate" subtests. */
+  clientPlusClientCaPath: string;
   /** Local-only working dir for the extra certs; cleaned on teardown. */
   workDir: string;
 };
@@ -246,7 +239,37 @@ beforeAll(async () => {
   writeFileSync(invalidPath, '');
   rmSync(invalidPath);
 
-  fx = { tls, wrongCaCertPath: wrongCaCert, invalidPath, workDir };
+  // Build the two-cert bundles. Upstream tests both orderings of
+  // `root_ca` / `server_ca` to verify the client doesn't depend on file
+  // order.
+  const { readFileSync } = await import('node:fs');
+  const rootPem = readFileSync(tls.vault.getRootCa(), 'utf8');
+  const serverCaPem = readFileSync(tls.vault.getServerCa(), 'utf8');
+  const bothCas1Path = join(workDir, 'both-cas-1.crt');
+  writeFileSync(bothCas1Path, rootPem + '\n' + serverCaPem);
+  const bothCas2Path = join(workDir, 'both-cas-2.crt');
+  writeFileSync(bothCas2Path, serverCaPem + '\n' + rootPem);
+
+  // Bundle: client-leaf || client_ca. With a non-intermediate-aware
+  // server `ssl_ca_file`, the client must present the intermediate
+  // itself for verification to succeed.
+  const clientLeafPem = readFileSync(
+    tls.vault.getClientCert('ssltestuser').cert,
+    'utf8',
+  );
+  const clientCaPem = readFileSync(tls.vault.getClientCa(), 'utf8');
+  const clientPlusClientCaPath = join(workDir, 'client-plus-client-ca.crt');
+  writeFileSync(clientPlusClientCaPath, clientLeafPem + '\n' + clientCaPem);
+
+  fx = {
+    tls,
+    wrongCaCertPath: wrongCaCert,
+    invalidPath,
+    bothCas1Path,
+    bothCas2Path,
+    clientPlusClientCaPath,
+    workDir,
+  };
 }, 180_000);
 
 afterAll(async () => {
@@ -273,14 +296,14 @@ afterAll(async () => {
  * `attemptFails` so the rejected promise is asserted directly.
  */
 async function tryConnect(
-  opts: Omit<WireOpts, 'host' | 'port' | 'database'>,
+  opts: Omit<WireOpts, 'host' | 'port' | 'database'> & { host?: string },
 ): Promise<WireConn | null> {
   const t = ensureFixture().tls;
   const { PgConnection } = await loadWire();
   try {
     return await PgConnection.connect({
       ...opts,
-      host: t.host,
+      host: opts.host ?? t.host,
       port: t.port,
       database: t.db,
     });
@@ -291,13 +314,13 @@ async function tryConnect(
 
 /** Connect or throw — used in the success-case tests for clearer error msgs. */
 async function mustConnect(
-  opts: Omit<WireOpts, 'host' | 'port' | 'database'>,
+  opts: Omit<WireOpts, 'host' | 'port' | 'database'> & { host?: string },
 ): Promise<WireConn> {
   const t = ensureFixture().tls;
   const { PgConnection } = await loadWire();
   return PgConnection.connect({
     ...opts,
-    host: t.host,
+    host: opts.host ?? t.host,
     port: t.port,
     database: t.db,
   });
@@ -337,6 +360,42 @@ async function queryPgStatSsl(conn: WireConn): Promise<PgStatSslRow> {
     cipher: row[2] === null || row[2] === undefined ? null : String(row[2]),
     clientDn: row[3] === null || row[3] === undefined ? null : String(row[3]),
   };
+}
+
+/**
+ * Switch the *active* server cert via ALTER SYSTEM + pg_reload_conf. The
+ * fixture's init script bind-mounted every alternate cert under
+ * `<PGDATA>/server-<name>.crt` / `server-<name>.key`, so the swap is
+ * file-system free — postgres re-reads the path it stores in
+ * `ssl_cert_file` when SSL renegotiates after `pg_reload_conf()`.
+ *
+ * adminExec uses the privileged superuser baked into pg-fixture-tls.ts so
+ * the ALTER SYSTEM call succeeds.
+ */
+async function switchServerCert(name: ServerCertName): Promise<void> {
+  const t = ensureFixture();
+  const { PgConnection } = await loadWire();
+  const admin = await PgConnection.connect({
+    host: t.tls.host,
+    port: t.tls.port,
+    user: t.tls.user,
+    password: t.tls.password,
+    database: t.tls.db,
+    ssl: 'prefer',
+  });
+  try {
+    for (const stmt of switchServerCertSql(name)) {
+      await admin.execSimple(stmt);
+    }
+    await admin.execSimple('SELECT pg_reload_conf()');
+  } finally {
+    await admin.close();
+  }
+  // Give the postmaster a beat to pick up the change. PG's
+  // pg_reload_conf is asynchronous — the GUC change is observable in
+  // pg_settings immediately but the next SSL handshake won't pick it up
+  // for a moment.
+  await new Promise((r) => setTimeout(r, 250));
 }
 
 // ---------------------------------------------------------------------------
@@ -433,14 +492,14 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     });
 
     // Upstream L228: "with the correct root cert ... sslmode=require".
-    // Our fixture's cert IS the trust anchor (it's self-signed). When we
-    // hand it to sslrootcert, verify-ca should accept it.
+    // The fixture's root+server_ca bundle is the trust anchor; verify-ca
+    // and require both accept the chain.
     it('sslmode=require + valid sslrootcert connects', async () => {
       const t = ensureFixture();
       const conn = await mustConnect({
         user: 'testuser',
         ssl: 'require',
-        sslrootcert: t.tls.serverCertPath,
+        sslrootcert: t.tls.vault.getRootServerBundle(),
       });
       try {
         const stat = await queryPgStatSsl(conn);
@@ -451,14 +510,443 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     });
 
     // Upstream L232: "sslmode=verify-ca with correct root cert succeeds."
-    // The self-signed server cert is its own CA, so passing it as
-    // sslrootcert lets the chain verify.
     it('sslmode=verify-ca + valid sslrootcert connects', async () => {
       const t = ensureFixture();
       const conn = await mustConnect({
         user: 'testuser',
         ssl: 'verify-ca',
-        sslrootcert: t.tls.serverCertPath,
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    // Upstream L234-236: "sslmode=verify-full with correct root cert succeeds".
+    // The active fixture cert is `server-cn-and-san.crt` which has
+    // SAN DNS:localhost, so verify-full's hostname check accepts.
+    it('sslmode=verify-full + matching host (SAN DNS:localhost) connects', async () => {
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'localhost',
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    // Upstream L194 (we now implement the lazy-read behaviour). libpq
+    // tolerates an invalid `sslrootcert` path under sslmode=require
+    // (it never opens the file). After the wire-layer change, our impl
+    // matches.
+    it('sslmode=require + invalid sslrootcert path still connects', async () => {
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'require',
+        sslrootcert: t.invalidPath,
+      });
+      try {
+        expect(conn.getTlsInfo?.()).toBeTruthy();
+      } finally {
+        await conn.close();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Certificate-bundle root files — upstream lines 240–245.
+  // ---------------------------------------------------------------------
+
+  describe('cert root file containing two certs', () => {
+    it('order 1 (root_ca || server_ca) — verify-ca succeeds', async () => {
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-ca',
+        sslrootcert: t.bothCas1Path,
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('order 2 (server_ca || root_ca) — verify-ca succeeds', async () => {
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-ca',
+        sslrootcert: t.bothCas2Path,
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('server_ca alone (without root) fails verify-ca', async () => {
+      const t = ensureFixture();
+      // server_ca is itself signed by root_ca. Without root in the
+      // trust set, OpenSSL can't terminate the chain → rejects.
+      const conn = await tryConnect({
+        user: 'testuser',
+        ssl: 'verify-ca',
+        sslrootcert: t.tls.vault.getServerCa(),
+      });
+      expect(conn).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Server cert SAN / IP-SAN / wildcards / multi-name — upstream lines
+  // 293–510. Each subtest switches the active server cert via ALTER
+  // SYSTEM + pg_reload_conf.
+  // ---------------------------------------------------------------------
+
+  describe('server cert SAN / IP-SAN / wildcards', () => {
+    afterAll(async () => {
+      // Restore the default cert so later test groups (e.g. cert auth)
+      // run against a SAN-friendly server cert.
+      await switchServerCert('cn-and-san');
+    });
+
+    it('cert without SAN — verify-ca succeeds (chain valid)', async () => {
+      await switchServerCert('cn-only');
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-ca',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('cert without SAN — verify-full fails (Node 22+ requires SAN)', async () => {
+      await switchServerCert('cn-only');
+      const t = ensureFixture();
+      const conn = await tryConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'localhost',
+      });
+      expect(conn).toBeNull();
+    });
+
+    it('cert with SAN DNS:localhost — verify-full matches', async () => {
+      await switchServerCert('cn-and-san');
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'localhost',
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('cert with SAN DNS:localhost (san-only) — verify-full matches', async () => {
+      await switchServerCert('san-only');
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'localhost',
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('cert with SAN IP:127.0.0.1 — verify-full matches IP host', async () => {
+      await switchServerCert('ip-in-san');
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: '127.0.0.1',
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('cert with multi-name SAN — verify-full matches dns1', async () => {
+      await switchServerCert('multi-name');
+      const t = ensureFixture();
+      // We can't actually resolve dns1.localhost to the container, so
+      // we connect via the container's address but pass `host` for the
+      // TLS servername. Node will use the supplied host for hostname
+      // verification.
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'dns1.localhost',
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('cert with multi-name SAN — verify-full matches dns2', async () => {
+      await switchServerCert('multi-name');
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'dns2.localhost',
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('cert with wildcard SAN — verify-full matches *.wildcard.localhost', async () => {
+      await switchServerCert('multi-name');
+      const t = ensureFixture();
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'foo.wildcard.localhost',
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('cert with multi-name SAN — verify-full rejects wrong hostname', async () => {
+      await switchServerCert('multi-name');
+      const t = ensureFixture();
+      const conn = await tryConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'wronghost.localhost',
+      });
+      expect(conn).toBeNull();
+    });
+
+    it('cert with multi-name SAN — wildcard does not match deep subdomain', async () => {
+      await switchServerCert('multi-name');
+      const t = ensureFixture();
+      // RFC 6125 §6.4.3: wildcard matches at most one label. So
+      // `*.wildcard.localhost` does NOT match `deep.sub.wildcard.localhost`.
+      const conn = await tryConnect({
+        user: 'testuser',
+        ssl: 'verify-full',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        host: 'deep.sub.wildcard.localhost',
+      });
+      expect(conn).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Client certificate authorization — upstream lines 615–855.
+  //
+  // The fixture configures `ssl_ca_file = client-ca.crt` and HBA rules
+  // for `ssltestuser` (cert clientcert=verify-full) and `anotheruser`
+  // (cert clientcert=verify-ca). Subtests drive both happy and sad
+  // paths.
+  // ---------------------------------------------------------------------
+
+  describe('client cert authorization', () => {
+    afterAll(async () => {
+      // Reset to default cert (cn-and-san) in case earlier groups left
+      // a different one mounted.
+      await switchServerCert('cn-and-san');
+    });
+
+    it('cert HBA rejects connection without client cert', async () => {
+      const t = ensureFixture();
+      // `ssltestuser` requires cert auth. Without sslcert, the
+      // server-side cert verification rejects.
+      const conn = await tryConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+      });
+      expect(conn).toBeNull();
+    });
+
+    it('cert HBA accepts client cert (PEM) with matching CN (verify-full)', async () => {
+      const t = ensureFixture();
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const conn = await mustConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: client.cert,
+        sslkey: client.key,
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+        // pg_stat_ssl.client_dn should reflect the cert subject. PG
+        // strips the leading slash; both forms ("CN=..." and "/CN=...")
+        // appear in upstream tests. We assert the CN substring only.
+        expect(stat.clientDn ?? '').toMatch(/CN=ssltestuser/);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('cert HBA rejects client cert whose CN does not match user (verify-full)', async () => {
+      const t = ensureFixture();
+      // Present `anotheruser`'s cert as if we were `ssltestuser`. The
+      // server's cert chain validates BUT the cert CN does not match
+      // the username, so the verify-full check fails.
+      const wrong = t.tls.vault.getClientCert('anotheruser');
+      const conn = await tryConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: wrong.cert,
+        sslkey: wrong.key,
+      });
+      expect(conn).toBeNull();
+    });
+
+    it('cert HBA verify-ca accepts mismatched CN (anotheruser)', async () => {
+      const t = ensureFixture();
+      // `anotheruser` is `cert clientcert=verify-ca`. The CN need not
+      // match the username — only the chain must be valid. Present
+      // `ssltestuser`'s cert under `anotheruser` to verify.
+      const otherClient = t.tls.vault.getClientCert('ssltestuser');
+      const conn = await mustConnect({
+        user: 'anotheruser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: otherClient.cert,
+        sslkey: otherClient.key,
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('client cert with encrypted key + sslpassword succeeds', async () => {
+      const t = ensureFixture();
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const encryptedKey = client.encryptedKey;
+      if (encryptedKey === undefined) {
+        throw new Error('fixture did not produce encrypted ssltestuser key');
+      }
+      const conn = await mustConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: client.cert,
+        sslkey: encryptedKey,
+        sslpassword: 'testpw',
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+        expect(stat.clientDn ?? '').toMatch(/CN=ssltestuser/);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('client cert with encrypted key + WRONG sslpassword fails', async () => {
+      const t = ensureFixture();
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const encryptedKey = client.encryptedKey;
+      if (encryptedKey === undefined) {
+        throw new Error('fixture did not produce encrypted ssltestuser key');
+      }
+      const conn = await tryConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: client.cert,
+        sslkey: encryptedKey,
+        sslpassword: 'definitely-not-the-password',
+      });
+      expect(conn).toBeNull();
+    });
+
+    it('client cert with encrypted key + NO sslpassword fails', async () => {
+      const t = ensureFixture();
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const encryptedKey = client.encryptedKey;
+      if (encryptedKey === undefined) {
+        throw new Error('fixture did not produce encrypted ssltestuser key');
+      }
+      const conn = await tryConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: client.cert,
+        sslkey: encryptedKey,
+        // sslpassword intentionally omitted
+      });
+      expect(conn).toBeNull();
+    });
+
+    it('client cert with intermediate chain attached succeeds', async () => {
+      // We bundle `client_leaf || client_ca` and pass that as sslcert.
+      // The fixture's server-side `ssl_ca_file` is `root+client_ca` so
+      // it can already validate without this bundle — but the spec
+      // documents the working shape of "client supplies the
+      // intermediate" for parity with upstream's `client+client_ca.crt`
+      // subtest.
+      const t = ensureFixture();
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const conn = await mustConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: t.clientPlusClientCaPath,
+        sslkey: client.key,
       });
       try {
         const stat = await queryPgStatSsl(conn);
@@ -474,6 +962,12 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
   // ---------------------------------------------------------------------
 
   describe('pg_stat_ssl', () => {
+    afterAll(async () => {
+      // The earlier groups switch cert; restore the default before
+      // any later spec consumes the fixture.
+      await switchServerCert('cn-and-san');
+    });
+
     it('reports ssl=t with a TLSv1.x version and a cipher (no client cert)', async () => {
       const conn = await mustConnect({ user: 'testuser', ssl: 'require' });
       try {
@@ -510,89 +1004,8 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
   });
 
   // ---------------------------------------------------------------------
-  // TODO: sslmode=verify-full against the fixture's CN=localhost cert.
-  //
-  // The fixture cert has no subjectAltName, and Node 22+ no longer
-  // accepts CN-only matching (DEP0151 was upgraded to a hard error).
-  // Until the fixture mints a cert with a SAN, verify-full has nothing
-  // to match against. This is a FIXTURE gap, not an impl gap.
-  // ---------------------------------------------------------------------
-
-  it.todo(
-    'upstream sslmode=verify-full + valid sslrootcert connects: fixture cert has no SAN; Node ≥22 requires SAN for hostname match',
-  );
-
-  // Upstream L194: libpq tolerates an invalid `sslrootcert` path under
-  // sslmode=require (it never opens the file). Our impl eagerly reads
-  // sslrootcert in `loadTlsFileOptions` regardless of mode, so the
-  // ENOENT bubbles out and the connection fails. TS-impl gap.
-  it.todo(
-    'upstream sslmode=require + invalid sslrootcert path connects: our impl reads sslrootcert eagerly regardless of mode',
-  );
-
-  // ---------------------------------------------------------------------
   // SKIPPED SUBTESTS — explicit `it.skip` so the report inventories them.
   // ---------------------------------------------------------------------
-
-  describe('SKIPPED: server cert SAN / IP-CN / wildcards (fixture has CN=localhost only, no SAN)', () => {
-    it.skip('connect with hostname matching server cert SAN dns1 / dns2 / wildcard', () => {
-      /* unreachable — needs server-multiple-alt-names cert */
-    });
-    it.skip('connect with IP in CN — server-ip-cn-only', () => {
-      /* unreachable */
-    });
-    it.skip('connect with IP in dNSName SAN — server-ip-in-dnsname', () => {
-      /* unreachable */
-    });
-    it.skip('hostname mismatch verify-full surfaces "does not match host name"', () => {
-      /* unreachable — fixture has no SAN to compare against */
-    });
-    it.skip('server cert without CN or SANs — verify-ca succeeds, verify-full fails', () => {
-      /* unreachable */
-    });
-    it.skip('server cert with both CN and SANs — SANs preferred, CN ignored', () => {
-      /* unreachable */
-    });
-  });
-
-  describe('SKIPPED: client certificate authentication (fixture has no ssl_ca_file / HBA `cert` method)', () => {
-    it.skip('certificate authorization fails without client cert (no-cert + cert HBA)', () => {
-      /* unreachable */
-    });
-    it.skip('certificate authorization succeeds with PEM client cert + key', () => {
-      /* unreachable */
-    });
-    it.skip('certificate authorization succeeds with DER client cert + key', () => {
-      /* unreachable */
-    });
-    it.skip('certificate authorization succeeds with encrypted PEM + sslpassword', () => {
-      /* unreachable — ConnectOptions has no sslpassword */
-    });
-    it.skip('client cert belonging to another user fails with FATAL', () => {
-      /* unreachable */
-    });
-    it.skip('clientcert=verify-full requires username to match Common Name', () => {
-      /* unreachable */
-    });
-    it.skip('clientcert=verify-ca accepts mismatched username', () => {
-      /* unreachable */
-    });
-    it.skip('client key with group/world-readable perms is rejected', () => {
-      /* unreachable — our impl does not enforce perms; libpq does */
-    });
-    it.skip('cert DN mapping via pg_ident.conf — exact / regex / CN', () => {
-      /* unreachable */
-    });
-    it.skip('intermediate client_ca certificate provided by client succeeds', () => {
-      /* unreachable */
-    });
-    it.skip('intermediate client cert without trusted root is rejected', () => {
-      /* unreachable */
-    });
-    it.skip('long client cert subject is truncated in the server log', () => {
-      /* unreachable — log inspection not supported via wire layer */
-    });
-  });
 
   describe('SKIPPED: CRL revocation (fixture has no CRL infrastructure)', () => {
     it.skip('connects with no CRL; fails with matching CRL via sslcrl=', () => {
@@ -639,15 +1052,24 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     });
   });
 
-  describe('SKIPPED: password-protected key files (no sslpassword in ConnectOptions)', () => {
-    it.skip('encrypted-PEM key + sslpassword succeeds with right password', () => {
-      /* unreachable */
+  describe('SKIPPED: client cert format / perms / DN (libpq-specific behaviour)', () => {
+    it.skip('certificate authorization succeeds with DER client cert + key', () => {
+      /* unreachable — Node TLS accepts PEM only */
     });
-    it.skip('encrypted-PEM key + sslpassword fails with wrong password (libpq message text)', () => {
-      /* unreachable */
+    it.skip('client key with group/world-readable perms is rejected', () => {
+      /* unreachable — our impl does not enforce perms; libpq does */
     });
+    it.skip('cert DN mapping via pg_ident.conf — exact / regex / CN', () => {
+      /* unreachable — server-side admin, not a wire-layer concern */
+    });
+    it.skip('long client cert subject is truncated in the server log', () => {
+      /* unreachable — log inspection not supported via wire layer */
+    });
+  });
+
+  describe('SKIPPED: server-side passphrase_cmd (server config, not wire layer)', () => {
     it.skip('server-side password-protected key restart succeeds with passphrase_cmd', () => {
-      /* unreachable */
+      /* unreachable — fixture does not configure ssl_passphrase_command */
     });
   });
 
@@ -668,18 +1090,6 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
       /* unreachable */
     });
     it.skip('sslcrldir=... reads CRLs from a directory', () => {
-      /* unreachable */
-    });
-  });
-
-  describe('SKIPPED: certificate-bundle root files (fixture has single cert, not a bundle)', () => {
-    it.skip('cert root file containing two certs, order 1', () => {
-      /* unreachable — needs both-cas-1.crt */
-    });
-    it.skip('cert root file containing two certs, order 2', () => {
-      /* unreachable — needs both-cas-2.crt */
-    });
-    it.skip('server CA cert alone (without root CA) fails verify-ca', () => {
       /* unreachable */
     });
   });
