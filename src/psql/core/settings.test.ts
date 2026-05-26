@@ -128,6 +128,245 @@ describe('defaultSettings', () => {
     defaultSettings(v);
     expect(v.get('WATCH_INTERVAL')).toBe('2');
   });
+
+  test('seeds AUTOCOMMIT to "on" by default', () => {
+    const v = createVarStore();
+    defaultSettings(v);
+    expect(v.get('AUTOCOMMIT')).toBe('on');
+  });
+});
+
+describe('defaultSettings — special-variable hooks', () => {
+  describe('AUTOCOMMIT', () => {
+    test('rejects non-boolean with upstream wording', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('AUTOCOMMIT', 'foo');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error: 'unrecognized value "foo" for "AUTOCOMMIT": Boolean expected',
+      });
+      // Veto leaves the prior value intact.
+      expect(v.get('AUTOCOMMIT')).toBe('on');
+    });
+
+    test('accepts boolean spellings', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.set('AUTOCOMMIT', 'off')).toBe(true);
+      expect(v.get('AUTOCOMMIT')).toBe('off');
+      expect(v.set('AUTOCOMMIT', 'true')).toBe(true);
+      expect(v.set('AUTOCOMMIT', 'no')).toBe(true);
+    });
+
+    test('empty value substitutes to "on" (bool_substitute_hook parity)', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      v.set('AUTOCOMMIT', 'off');
+      expect(v.set('AUTOCOMMIT', '')).toBe(true);
+      expect(v.get('AUTOCOMMIT')).toBe('on');
+    });
+  });
+
+  describe('FETCH_COUNT', () => {
+    test('rejects non-integer with upstream wording', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('FETCH_COUNT', 'foo');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error: 'invalid value "foo" for "FETCH_COUNT": integer expected',
+      });
+    });
+
+    test('accepts integer and updates settings.fetchCount', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      expect(v.set('FETCH_COUNT', '42')).toBe(true);
+      expect(s.fetchCount).toBe(42);
+    });
+
+    test('empty value resets fetchCount to 0', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('FETCH_COUNT', '10');
+      expect(s.fetchCount).toBe(10);
+      v.set('FETCH_COUNT', '');
+      expect(s.fetchCount).toBe(0);
+    });
+  });
+
+  describe('ON_ERROR_ROLLBACK', () => {
+    test('rejects unknown value with upstream multi-line wording', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('ON_ERROR_ROLLBACK', 'foo');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error:
+          'unrecognized value "foo" for "ON_ERROR_ROLLBACK"\nAvailable values are: on, off, interactive.',
+      });
+    });
+
+    test('accepts on/off/interactive', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('ON_ERROR_ROLLBACK', 'on');
+      expect(s.onErrorRollback).toBe('on');
+      v.set('ON_ERROR_ROLLBACK', 'off');
+      expect(s.onErrorRollback).toBe('off');
+      v.set('ON_ERROR_ROLLBACK', 'interactive');
+      expect(s.onErrorRollback).toBe('interactive');
+    });
+
+    test('empty value substitutes to "on" (regress/psql line 15-16)', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.set('ON_ERROR_ROLLBACK', '')).toBe(true);
+      expect(v.get('ON_ERROR_ROLLBACK')).toBe('on');
+    });
+  });
+
+  describe('VERBOSITY', () => {
+    test('rejects unknown value', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('VERBOSITY', 'foo');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error:
+          'unrecognized value "foo" for "VERBOSITY"\nAvailable values are: default, verbose, terse, sqlstate.',
+      });
+    });
+
+    test('accepts canonical spellings and reflects on settings.verbosity', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('VERBOSITY', 'verbose');
+      expect(s.verbosity).toBe('verbose');
+      v.set('VERBOSITY', 'TERSE');
+      expect(s.verbosity).toBe('terse');
+    });
+  });
+
+  describe('ECHO', () => {
+    test('rejects unknown value', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('ECHO', 'sometimes');
+      expect(typeof r === 'object' && !r.ok && r.reason === 'hook-veto').toBe(
+        true,
+      );
+    });
+
+    test('accepts canonical spellings', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('ECHO', 'queries');
+      expect(s.echo).toBe('queries');
+      v.set('ECHO', 'all');
+      expect(s.echo).toBe('all');
+    });
+  });
+
+  describe('ECHO_HIDDEN', () => {
+    test('rejects unknown value with three-element list', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('ECHO_HIDDEN', 'maybe');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error:
+          'unrecognized value "maybe" for "ECHO_HIDDEN"\nAvailable values are: on, off, noexec.',
+      });
+    });
+
+    test('accepts noexec', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('ECHO_HIDDEN', 'noexec');
+      expect(s.echoHidden).toBe('noexec');
+    });
+  });
+
+  describe('SHOW_CONTEXT', () => {
+    test('accepts canonical spellings', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('SHOW_CONTEXT', 'always');
+      expect(s.showContext).toBe('always');
+    });
+    test('rejects unknown value', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('SHOW_CONTEXT', 'foo');
+      expect(typeof r === 'object' && !r.ok).toBe(true);
+    });
+  });
+
+  describe('HISTCONTROL', () => {
+    test('accepts canonical spellings', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('HISTCONTROL', 'ignoredups');
+      expect(s.histControl).toBe('ignoredups');
+    });
+    test('rejects unknown value', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('HISTCONTROL', 'foo');
+      expect(typeof r === 'object' && !r.ok).toBe(true);
+    });
+  });
+
+  describe('SHOW_ALL_RESULTS', () => {
+    test('rejects non-boolean', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('SHOW_ALL_RESULTS', 'foo');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error:
+          'unrecognized value "foo" for "SHOW_ALL_RESULTS": Boolean expected',
+      });
+    });
+  });
+
+  describe('ON_ERROR_STOP', () => {
+    test('rejects non-boolean', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('ON_ERROR_STOP', 'foo');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error: 'unrecognized value "foo" for "ON_ERROR_STOP": Boolean expected',
+      });
+    });
+
+    test('accepts boolean and reflects on settings.onErrorStop', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('ON_ERROR_STOP', 'on');
+      expect(s.onErrorStop).toBe(true);
+      v.set('ON_ERROR_STOP', 'off');
+      expect(s.onErrorStop).toBe(false);
+    });
+
+    test('empty value substitutes to "on"', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('ON_ERROR_STOP', '');
+      expect(v.get('ON_ERROR_STOP')).toBe('on');
+      expect(s.onErrorStop).toBe(true);
+    });
+  });
 });
 
 describe('applyEnvOverrides', () => {

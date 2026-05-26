@@ -33,7 +33,7 @@
  *    Instead we surface PSQLRC verbatim under the `PSQLRC` psql variable.
  */
 
-import type { VarStore } from '../types/variables.js';
+import type { VarHookResult, VarStore } from '../types/variables.js';
 import type {
   PsqlSettings,
   CompCase,
@@ -216,60 +216,299 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
   // variable is unset (see `resolveWatchIntervalDefault` in cmd_io.ts).
   varStore.set('WATCH_INTERVAL', '2');
 
-  // ON_ERROR_STOP assign hook. Upstream `assign_var_on_error_stop_hook` in
-  // startup.c keeps `pset.on_error_stop` in lockstep with the variable so
-  // both `--on-error-stop` (which flips the flag directly) and
-  // `--set ON_ERROR_STOP=1` (which only writes the variable) take effect.
-  // Accepts the same value set as `ParseVariableBool`: on/off, true/false,
-  // yes/no, 1/0, or empty (treated as on, matching upstream).
-  varStore.addHook('ON_ERROR_STOP', (newValue) => {
+  // ON_ERROR_STOP assign hook. Upstream `bool_substitute_hook` /
+  // `on_error_stop_assign_hook` (startup.c) keep `pset.on_error_stop` in
+  // lockstep with the variable so both `--on-error-stop` (which flips the
+  // flag directly) and `--set ON_ERROR_STOP=1` (which only writes the
+  // variable) take effect. Empty value → "on" (substitute), non-boolean →
+  // reject with upstream's wording.
+  varStore.addHook(
+    'ON_ERROR_STOP',
+    makeBoolHook('ON_ERROR_STOP', (parsed) => {
+      settings.onErrorStop = parsed;
+    }),
+  );
+
+  // AUTOCOMMIT assign hook — upstream `bool_substitute_hook` +
+  // `autocommit_assign_hook`. Empty value → "on", non-boolean → reject
+  // with `unrecognized value "<value>" for "AUTOCOMMIT": Boolean expected`.
+  varStore.addHook('AUTOCOMMIT', makeBoolHook('AUTOCOMMIT'));
+  // Seed AUTOCOMMIT to "on" (upstream default; pset.autocommit = true).
+  varStore.set('AUTOCOMMIT', 'on');
+
+  // FETCH_COUNT assign hook — upstream `fetch_count_assign_hook`. Empty /
+  // missing → 0 (the upstream "off" sentinel). Non-integer → reject with
+  // `invalid value "<value>" for "FETCH_COUNT": integer expected`. Stores
+  // the parsed value on `settings.fetchCount` so the SendQuery cursor
+  // path can read it without re-parsing.
+  varStore.addHook('FETCH_COUNT', (newValue) => {
     if (newValue === null) {
-      settings.onErrorStop = false;
+      settings.fetchCount = 0;
       return true;
     }
-    const parsed = parseOnOffBool(newValue);
-    settings.onErrorStop = parsed ?? false;
+    if (newValue === '') {
+      settings.fetchCount = 0;
+      return true;
+    }
+    const n = parseIntOrNull(newValue);
+    if (n === null) {
+      return `invalid value "${newValue}" for "FETCH_COUNT": integer expected`;
+    }
+    settings.fetchCount = Math.max(0, n);
     return true;
   });
+
+  // ON_ERROR_ROLLBACK assign hook — upstream `on_error_rollback_substitute_hook`
+  // (empty → "on") + `on_error_rollback_assign_hook`. Tri-state: on, off,
+  // interactive. Non-matching values get the multi-line diagnostic
+  // `unrecognized value "<value>" for "ON_ERROR_ROLLBACK"\nAvailable values
+  // are: on, off, interactive.`.
+  varStore.addHook(
+    'ON_ERROR_ROLLBACK',
+    makeOnErrorRollbackHook((parsed) => {
+      settings.onErrorRollback = parsed;
+    }),
+  );
+
+  // VERBOSITY — upstream `verbosity_substitute_hook` (empty → "default")
+  // + `verbosity_assign_hook`. Accepts default | verbose | terse | sqlstate.
+  varStore.addHook(
+    'VERBOSITY',
+    makeEnumHook<VerbosityLevel>(
+      'VERBOSITY',
+      ['default', 'verbose', 'terse', 'sqlstate'],
+      'default',
+      (parsed) => {
+        settings.verbosity = parsed;
+      },
+    ),
+  );
+
+  // SHOW_CONTEXT — upstream `show_context_substitute_hook` (empty → "errors")
+  // + `show_context_assign_hook`. Accepts never | errors | always.
+  varStore.addHook(
+    'SHOW_CONTEXT',
+    makeEnumHook<ShowContext>(
+      'SHOW_CONTEXT',
+      ['never', 'errors', 'always'],
+      'errors',
+      (parsed) => {
+        settings.showContext = parsed;
+      },
+    ),
+  );
+
+  // ECHO — upstream `echo_substitute_hook` (empty → "none") +
+  // `echo_assign_hook`. Accepts none | errors | queries | all.
+  varStore.addHook(
+    'ECHO',
+    makeEnumHook<EchoMode>(
+      'ECHO',
+      ['none', 'errors', 'queries', 'all'],
+      'none',
+      (parsed) => {
+        settings.echo = parsed;
+      },
+    ),
+  );
+
+  // ECHO_HIDDEN — upstream `bool_substitute_hook` +
+  // `echo_hidden_assign_hook`. Tri-state: on / off / noexec. Empty → "on".
+  varStore.addHook(
+    'ECHO_HIDDEN',
+    makeEchoHiddenHook((parsed) => {
+      settings.echoHidden = parsed;
+    }),
+  );
 
   // COMP_KEYWORD_CASE assign hook. Upstream `assign_var_comp_keyword_case_hook`
   // (in startup.c) reflects the spelling into `pset.comp_case`; the completer
   // then consults that on every Tab to decide whether to upper/lower/preserve
-  // candidate casing. Accepts the four canonical spellings; anything else is
-  // silently ignored, matching upstream's "unsupported value" diagnostic
-  // behaviour (we omit the warning for brevity).
-  varStore.addHook('COMP_KEYWORD_CASE', (newValue) => {
-    if (newValue === null) {
-      settings.compCase = DEFAULT_COMP_CASE;
-      return true;
-    }
-    const parsed = parseCompCase(newValue);
-    if (parsed === null) return false;
-    settings.compCase = parsed;
-    return true;
-  });
+  // candidate casing. Accepts the four canonical spellings; the upstream
+  // diagnostic wording is `unrecognized value "<value>" for
+  // "COMP_KEYWORD_CASE"\nAvailable values are: lower, upper, preserve-lower,
+  // preserve-upper.`.
+  varStore.addHook(
+    'COMP_KEYWORD_CASE',
+    makeEnumHook<CompCase>(
+      'COMP_KEYWORD_CASE',
+      ['lower', 'upper', 'preserve-lower', 'preserve-upper'],
+      DEFAULT_COMP_CASE,
+      (parsed) => {
+        settings.compCase = parsed;
+      },
+    ),
+  );
+
+  // HISTCONTROL — upstream `histcontrol_substitute_hook` (empty → "none") +
+  // `histcontrol_assign_hook`. Accepts ignorespace | ignoredups | ignoreboth
+  // | none.
+  varStore.addHook(
+    'HISTCONTROL',
+    makeEnumHook<HistControl>(
+      'HISTCONTROL',
+      ['none', 'ignorespace', 'ignoredups', 'ignoreboth'],
+      'none',
+      (parsed) => {
+        settings.histControl = parsed;
+      },
+    ),
+  );
+
+  // SHOW_ALL_RESULTS — upstream `bool_substitute_hook` +
+  // `show_all_results_assign_hook`. Strict boolean; empty → "on".
+  varStore.addHook('SHOW_ALL_RESULTS', makeBoolHook('SHOW_ALL_RESULTS'));
 
   return settings;
 };
 
 /**
- * Parse the COMP_KEYWORD_CASE spelling. Mirrors upstream's recognised values:
- * `lower`, `upper`, `preserve-lower`, `preserve-upper`. Case-insensitive on
- * the input — psql treats `LOWER` and `lower` as equivalent.
+ * Build a strict-boolean hook with upstream's `bool_substitute_hook` +
+ * `bool_assign_hook` semantics:
+ *
+ *   - empty / null → substitute "on"
+ *   - on/off/true/false/yes/no/1/0 (case-insensitive) → accepted
+ *   - anything else → reject with `unrecognized value "<value>" for
+ *     "<name>": Boolean expected`
+ *
+ * The optional `apply` callback receives the parsed boolean so callers can
+ * keep a derived `PsqlSettings` field in sync (e.g. `settings.onErrorStop`).
  */
-const parseCompCase = (raw: string): CompCase | null => {
-  switch (raw.toLowerCase().trim()) {
-    case 'lower':
-      return 'lower';
-    case 'upper':
-      return 'upper';
-    case 'preserve-lower':
-      return 'preserve-lower';
-    case 'preserve-upper':
-      return 'preserve-upper';
-    default:
-      return null;
-  }
+const makeBoolHook = (
+  name: string,
+  apply?: (parsed: boolean) => void,
+): ((newValue: string | null) => VarHookResult) => {
+  return (newValue) => {
+    if (newValue === null) {
+      apply?.(false);
+      return true;
+    }
+    if (newValue === '') {
+      // Substitute the empty-set form (`\set NAME`) to the upstream
+      // default "on". The substituted value lands in the store and on
+      // any future read through `vars.get(NAME)`.
+      apply?.(true);
+      return { substitute: 'on' };
+    }
+    const parsed = parseOnOffBool(newValue);
+    if (parsed === null) {
+      return `unrecognized value "${newValue}" for "${name}": Boolean expected`;
+    }
+    apply?.(parsed);
+    return true;
+  };
+};
+
+/**
+ * Build an enum-style hook with upstream's substitute / assign pair:
+ *
+ *   - empty / null → substitute the supplied `defaultValue`
+ *   - exact-match (case-insensitive) against `allowed` → accepted
+ *   - anything else → reject with `unrecognized value "<value>" for
+ *     "<name>"\nAvailable values are: a, b, c.`
+ *
+ * `apply` is invoked with the canonical lowercase spelling whenever the
+ * variable is set (including the default-on-empty path).
+ */
+const makeEnumHook = <T extends string>(
+  name: string,
+  allowed: readonly T[],
+  defaultValue: T,
+  apply?: (parsed: T) => void,
+): ((newValue: string | null) => VarHookResult) => {
+  const list = allowed.join(', ');
+  return (newValue) => {
+    if (newValue === null) {
+      apply?.(defaultValue);
+      return true;
+    }
+    if (newValue === '') {
+      apply?.(defaultValue);
+      return { substitute: defaultValue };
+    }
+    const lower = newValue.toLowerCase();
+    const match = allowed.find((a) => a.toLowerCase() === lower);
+    if (match === undefined) {
+      return `unrecognized value "${newValue}" for "${name}"\nAvailable values are: ${list}.`;
+    }
+    apply?.(match);
+    return true;
+  };
+};
+
+/**
+ * `ON_ERROR_ROLLBACK` is upstream's only tri-state boolean — `on` / `off` /
+ * `interactive`. Empty / null → substitute "on" (matches
+ * `on_error_rollback_substitute_hook`). Other values get the multi-line
+ * diagnostic upstream emits from `on_error_rollback_assign_hook`.
+ */
+const makeOnErrorRollbackHook = (
+  apply: (parsed: OnErrorRollback) => void,
+): ((newValue: string | null) => VarHookResult) => {
+  return (newValue) => {
+    if (newValue === null) {
+      apply('off');
+      return true;
+    }
+    if (newValue === '') {
+      apply('on');
+      return { substitute: 'on' };
+    }
+    const lower = newValue.toLowerCase();
+    if (lower === 'on' || lower === 'off' || lower === 'interactive') {
+      apply(lower);
+      return true;
+    }
+    return `unrecognized value "${newValue}" for "ON_ERROR_ROLLBACK"\nAvailable values are: on, off, interactive.`;
+  };
+};
+
+/**
+ * ECHO_HIDDEN tri-state: `on` / `off` / `noexec`. Empty → "on" via
+ * upstream's `bool_substitute_hook` (which only knows about boolean
+ * keywords; `noexec` is matched in `echo_hidden_assign_hook`). Anything
+ * else gets the upstream "unrecognized value" line with the three-element
+ * list.
+ */
+const makeEchoHiddenHook = (
+  apply: (parsed: EchoHidden) => void,
+): ((newValue: string | null) => VarHookResult) => {
+  return (newValue) => {
+    if (newValue === null) {
+      apply('off');
+      return true;
+    }
+    if (newValue === '') {
+      apply('on');
+      return { substitute: 'on' };
+    }
+    const lower = newValue.toLowerCase();
+    if (lower === 'noexec') {
+      apply('noexec');
+      return true;
+    }
+    const parsed = parseOnOffBool(newValue);
+    if (parsed === null) {
+      return `unrecognized value "${newValue}" for "ECHO_HIDDEN"\nAvailable values are: on, off, noexec.`;
+    }
+    apply(parsed ? 'on' : 'off');
+    return true;
+  };
+};
+
+/**
+ * Parse a non-empty string as a base-10 signed integer. Returns `null` on
+ * any junk (mirrors `ParseVariableNum` semantics but without the radix-0
+ * extensions — FETCH_COUNT is decimal-only in upstream's eyes).
+ */
+const parseIntOrNull = (raw: string): number | null => {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  if (!/^[+-]?\d+$/.test(trimmed)) return null;
+  const n = parseInt(trimmed, 10);
+  if (!Number.isFinite(n)) return null;
+  if (n < -0x80000000 || n > 0x7fffffff) return null;
+  return n;
 };
 
 /**

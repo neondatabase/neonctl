@@ -264,6 +264,37 @@ describe('\\set', () => {
     expect(r.status).toBe('error');
     expect(stderr()).toBe('psql: invalid variable name: "invalid/name"\n');
   });
+
+  test('AUTOCOMMIT non-boolean errors with upstream wording', async () => {
+    const settings = defaultSettings(createVarStore());
+    const ctx = makeMockCtx('set', 'AUTOCOMMIT foo', settings);
+    const r = await run(cmdSet, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toBe(
+      'psql: unrecognized value "foo" for "AUTOCOMMIT": Boolean expected\n',
+    );
+  });
+
+  test('FETCH_COUNT non-integer errors with upstream wording', async () => {
+    const settings = defaultSettings(createVarStore());
+    const ctx = makeMockCtx('set', 'FETCH_COUNT foo', settings);
+    const r = await run(cmdSet, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toBe(
+      'psql: invalid value "foo" for "FETCH_COUNT": integer expected\n',
+    );
+  });
+
+  test('ON_ERROR_ROLLBACK invalid value errors with upstream multi-line wording', async () => {
+    const settings = defaultSettings(createVarStore());
+    const ctx = makeMockCtx('set', 'ON_ERROR_ROLLBACK foo', settings);
+    const r = await run(cmdSet, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toBe(
+      'psql: unrecognized value "foo" for "ON_ERROR_ROLLBACK"\n' +
+        'Available values are: on, off, interactive.\n',
+    );
+  });
 });
 
 describe('\\unset', () => {
