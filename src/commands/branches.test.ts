@@ -121,6 +121,63 @@ describe('branches', () => {
     ]);
   });
 
+  test('create with parent name at timestamp', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_name_at_timestamp',
+      '--parent',
+      'main@2021-01-01T00:00:00.000Z',
+    ]);
+  });
+
+  test('create with parent name at lsn', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_name_at_lsn',
+      '--parent',
+      'main@0/123ABC',
+    ]);
+  });
+
+  test('create with parent id at timestamp', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'branches',
+      'create',
+      '--project-id',
+      'test',
+      '--name',
+      'test_branch_id_at_timestamp',
+      '--parent',
+      'br-main-branch-123456@2021-01-01T00:00:00.000Z',
+    ]);
+  });
+
+  test('create with unknown parent at timestamp fails', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'branches',
+        'create',
+        '--project-id',
+        'test',
+        '--name',
+        'any',
+        '--parent',
+        'nonexistent@2021-01-01T00:00:00.000Z',
+      ],
+      { code: 1, stderr: 'ERROR: Branch nonexistent not found' },
+    );
+  });
+
   test('create with suspend timeout', async ({ testCliCommand }) => {
     await testCliCommand([
       'branches',
