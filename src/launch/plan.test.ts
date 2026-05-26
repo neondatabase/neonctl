@@ -174,6 +174,53 @@ describe('plan invariants', () => {
       /depends on 'orphan'.*not in the resolved tree/s,
     );
   });
+
+  it('localCommand with dependents but no readiness is rejected at plan time', async () => {
+    const root = stack({
+      spec: () => {
+        const db = postgres({ spec: () => ({ name: 'main' }) });
+        const migrate = localCommand({
+          // intentionally no readiness — should trigger the new invariant
+          spec: () => ({ command: 'npm run db:migrate' }),
+        });
+        const dev = localCommand({
+          dependsOn: { db, migrate },
+          spec: ({ db }) => ({
+            command: 'npm run dev',
+            env: { DATABASE_URL: db.connectionString },
+            readiness: { httpGet: { url: 'http://localhost:3000' } },
+          }),
+        });
+        return { db, migrate, dev };
+      },
+    });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+      /localCommand 'migrate' has dependents but no `readiness`/,
+    );
+  });
+
+  it('localCommand without dependents may omit readiness', async () => {
+    const root = stack({
+      spec: () => {
+        const db = postgres({ spec: () => ({ name: 'main' }) });
+        const dev = localCommand({
+          dependsOn: { db },
+          spec: ({ db }) => ({
+            command: 'npm run dev',
+            env: { DATABASE_URL: db.connectionString },
+            // no readiness — but nothing depends on `dev`, so OK
+          }),
+        });
+        return { db, dev };
+      },
+    });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    const plan = await buildPlan(tmpPath, ctx);
+    expect(plan.order).toEqual(['db', 'dev']);
+  });
 });
 
 // =============================================================================

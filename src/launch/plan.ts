@@ -305,6 +305,46 @@ function enforceDepsInTree(registry: Map<string, PlanNode>): void {
   }
 }
 
+/**
+ * A `localCommand` whose process never signals readiness has no defined
+ * "done" point — dependents would start as soon as its child spawns and
+ * race the work it was supposed to do (migrations vs. dev server). The
+ * factory's `readiness` field is optional because not every command has
+ * dependents; here we enforce that it's required when other resources
+ * depend on this command.
+ */
+function enforceLocalCommandReadiness(registry: Map<string, PlanNode>): void {
+  const dependedOn = new Set<string>();
+  for (const node of registry.values()) {
+    for (const fqn of node.deps) {
+      if (fqn !== '') dependedOn.add(fqn);
+    }
+  }
+  for (const node of registry.values()) {
+    if (node.resource.__kind !== 'local-command') continue;
+    if (!dependedOn.has(node.name)) continue;
+    const spec = node.spec as { readiness?: unknown };
+    if (spec.readiness === undefined) {
+      throw new LaunchError(
+        [
+          `[neon launch] localCommand '${node.name}' has dependents but no \`readiness\`.`,
+          '',
+          `Other resources depend on this command, so the launcher needs to`,
+          `know when it has finished doing its work. Add a readiness signal:`,
+          '',
+          `  readiness: { onExit: 0 }          // one-shot — fires when the`,
+          `                                     // process exits with code 0`,
+          `  readiness: { portListening: 3000 } // long-running — fires when`,
+          `                                     // the process opens the port`,
+          `  readiness: { httpGet: { url: '...' } }`,
+          `  readiness: { logMatch: /ready/ }`,
+        ].join('\n'),
+        ExitCode.CONFIG_ERROR,
+      );
+    }
+  }
+}
+
 function topoOrder(registry: Map<string, PlanNode>): string[] {
   // Standard Kahn's algorithm. Edges: node → its dependents.
   const inDegree = new Map<string, number>();
@@ -425,6 +465,7 @@ export async function buildPlan(
   // Dup-key already enforced in the walk.
   enforceSingletonPostgres(registry);
   enforceDepsInTree(registry);
+  enforceLocalCommandReadiness(registry);
   const order = topoOrder(registry);
 
   return { registry, order, ctx };

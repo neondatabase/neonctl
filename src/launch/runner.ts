@@ -618,11 +618,13 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
     `[launch] foreground: holding for ${handles.length} local-command(s). Ctrl-C to stop.`,
   );
 
-  // First-exit wins: if any local-command exits, tear down siblings.
-  // In inherit-stdio mode the parent + child share the TTY foreground
-  // group, so Ctrl-C delivers SIGINT to BOTH — the runner-entry handler
-  // races us to exit. Defer to it instead of emitting a misleading
-  // "exited with code null" error log.
+  // First-failure wins: if any local-command exits with a non-zero code,
+  // tear down siblings and surface the failure. A clean exit (code 0)
+  // means that one command is done — we wait for the others to finish on
+  // their own rather than killing them. (`onExit:0` one-shots are
+  // already filtered out of `handles` before we get here, so a clean
+  // exit at this stage is rare but legal — e.g. a foreground worker
+  // that gracefully shuts down.)
   const firstExit = await Promise.race(handles.map((h) => h.exited));
 
   // Defer to the SIGINT handler ONLY when we have positive evidence the
