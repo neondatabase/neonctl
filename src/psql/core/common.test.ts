@@ -664,12 +664,15 @@ describe('psqlExec', () => {
 // touched the configured output stream:
 //
 //   - `popt.pager = 'off'`         → printer writes to `stdout`.
-//   - `popt.pager = 'always'` on a non-TTY stream → still writes to stdout
-//     (the pager skips because of the TTY guard).
+//   - `popt.pager = 'on'` on a non-TTY stream → printer writes to `stdout`
+//     (auto-mode pager skips because of the TTY guard).
 //   - `\o FILE` redirect → output never reaches stdout, regardless of pager.
 //
 // The "spawn an actual pager" path is exercised by `print/pager.test.ts`
-// against the real PAGER=cat plumbing.
+// against the real PAGER=cat plumbing. NOTE: we intentionally do NOT test
+// `pager: 'always'` here because it is now a force-on override that bypasses
+// the TTY guard and would actually spawn a pager subprocess (verified in
+// the integration spec tests/psql-conformance/tap/030_pager.spec.ts).
 // ---------------------------------------------------------------------------
 
 describe('sendQuery — pager wiring', () => {
@@ -683,14 +686,14 @@ describe('sendQuery — pager wiring', () => {
     expect(stdout.text()).toContain('?column?');
   });
 
-  test("pager: 'always' on a non-TTY stream falls back to stdout (no pager spawn)", async () => {
+  test("pager: 'on' (auto) on a non-TTY stream falls back to stdout (no pager spawn)", async () => {
     const { ctx, stdout } = buildCtxWithBuffers({
       settingsOverride: (s) => {
-        s.popt.topt.pager = 'always';
+        s.popt.topt.pager = 'on';
       },
     });
-    // The buffer isn't a TTY; shouldPage should bail and the printer should
-    // write directly to it.
+    // The buffer isn't a TTY; shouldPage should bail under auto mode and the
+    // printer should write directly to it.
     await sendQuery(ctx, 'SELECT 1;');
     expect(stdout.text()).toContain('?column?');
   });

@@ -115,13 +115,15 @@ export const isPagerNeeded = (opts: OpenPagerOpts): boolean => {
 // and want to decide whether to route it through a pager, without needing to
 // pre-render to count lines.
 //
-// Decision logic:
+// Decision logic (matches `isPagerNeeded` ordering):
 //   - `popt.pager === 'off'`           → never page
 //   - explicit `\o FILE` redirect      → never page (caller passes
 //                                         `redirectedOutput: true`)
-//   - target stream is not a TTY       → never page
-//   - `popt.pager === 'always'`        → always page (when a pager cmd is
-//                                         configured)
+//   - resolved pager cmd is empty      → never page
+//   - `popt.pager === 'always'`        → always page (force-on, even when
+//                                         the target stream is not a TTY —
+//                                         the user explicitly asked for it)
+//   - target stream is not a TTY       → never page (auto mode only)
 //   - `popt.pager === 'on'` (default)  → page when estimated rendered lines
 //                                         exceed `terminalHeight ⨯
 //                                         pagerMinLines` threshold. We
@@ -164,17 +166,18 @@ export type ShouldPageOpts = {
 /**
  * Decide whether a result of `rowCount` rows by `colCount` columns should be
  * routed through the pager when written to `output`.
+ *
+ * NOTE on `pager === 'always'`: the TTY check is INTENTIONALLY skipped in
+ * this case. Upstream's `\pset pager always` is a user-explicit "force the
+ * pager on" override; honouring it on a pipe matches the integration test
+ * harness contract (see `tests/psql-conformance/tap/030_pager.spec.ts`) where
+ * the child process has no controlling TTY but the spec still requires the
+ * configured PAGER to be invoked. For `pager === 'on'` (auto mode) we keep
+ * the TTY guard so non-interactive runs don't spuriously spawn `less`.
  */
 export const shouldPage = (opts: ShouldPageOpts): boolean => {
   if (opts.pager === 'off') return false;
   if (opts.redirectedOutput) return false;
-
-  // TTY check: explicit override wins, else inspect the stream's own isTTY.
-  const isTty =
-    opts.isTty !== undefined
-      ? opts.isTty
-      : Boolean((opts.output as NodeJS.WriteStream).isTTY);
-  if (!isTty) return false;
 
   // Rough heuristic for "lines" — header (3) + rows + footer (1). Matches
   // upstream `IsPagerNeeded` which counts rendered table lines.
@@ -182,6 +185,17 @@ export const shouldPage = (opts: ShouldPageOpts): boolean => {
   const FOOTER_LINES = 1;
   const estimatedLines =
     HEADER_LINES + Math.max(0, opts.rowCount) + FOOTER_LINES;
+
+  // TTY check: explicit override wins, else inspect the stream's own isTTY.
+  const isTty =
+    opts.isTty !== undefined
+      ? opts.isTty
+      : Boolean((opts.output as NodeJS.WriteStream).isTTY);
+
+  // `pager === 'always'` bypasses the TTY guard — see the docstring above.
+  // The remaining gates (resolved cmd, redirected output, off) are enforced
+  // inside `isPagerNeeded`.
+  if (opts.pager !== 'always' && !isTty) return false;
 
   return isPagerNeeded({
     pager: opts.pager,

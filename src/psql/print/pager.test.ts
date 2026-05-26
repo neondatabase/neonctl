@@ -377,10 +377,30 @@ describe('shouldPage', () => {
     ).toBe(false);
   });
 
-  test("pager 'always' on a non-TTY output never pages", () => {
+  test("pager 'always' on a non-TTY output STILL pages (force-on)", () => {
+    // `\pset pager always` is an explicit user override that bypasses the
+    // TTY guard. Matches the integration spec in
+    // tests/psql-conformance/tap/030_pager.spec.ts, where the child has no
+    // controlling TTY but the PAGER probe must still be invoked.
     expect(
       shouldPage({
         pager: 'always',
+        pagerMinLines: 0,
+        rowCount: 10_000,
+        colCount: 5,
+        output: pipeStream(),
+        redirectedOutput: false,
+        pagerCmd: 'cat',
+      }),
+    ).toBe(true);
+  });
+
+  test("pager 'on' (auto) on a non-TTY output never pages", () => {
+    // Auto mode keeps the TTY guard — non-interactive runs (pipes,
+    // redirects) must not spuriously spawn `less`.
+    expect(
+      shouldPage({
+        pager: 'on',
         pagerMinLines: 0,
         rowCount: 10_000,
         colCount: 5,
