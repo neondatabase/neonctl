@@ -42,22 +42,9 @@ export default stack({
     const prod = flags.prod === true;
     const preview = flags.preview === true;
 
-    if (prod || preview) {
-      const web = vercelDeployment({
-        dependsOn: { db },
-        spec: ({ db }) => ({
-          project: 'neon-launch-vercel-demo',
-          production: prod,
-          env: {
-            DATABASE_URL: db.connectionString({ pooled: true }),
-          },
-        }),
-      });
-      return { db, web };
-    }
-
-    // Local dev — run drizzle migrations against the per-branch Neon
-    // branch, then start `next dev` with the same connection string.
+    // Apply schema migrations to the per-branch Neon branch BEFORE
+    // anything that serves traffic. `onExit: 0` makes the launcher wait
+    // for `db:migrate` to finish before starting dependents.
     const migrate = localCommand({
       dependsOn: { db },
       spec: ({ db }) => ({
@@ -66,10 +53,28 @@ export default stack({
         readiness: { onExit: 0 },
       }),
     });
+
+    if (prod || preview) {
+      const web = vercelDeployment({
+        // `migrate` listed for ordering: Vercel must deploy against an
+        // already-migrated branch or the running app would hit an
+        // unmigrated schema on first request.
+        dependsOn: { db, migrate },
+        spec: ({ db }) => ({
+          project: 'neon-launch-vercel-demo',
+          production: prod,
+          env: {
+            DATABASE_URL: db.connectionString({ pooled: true }),
+          },
+        }),
+      });
+      return { db, migrate, web };
+    }
+
+    // Local dev — run `next dev` with the migrated branch's connection.
     const dev = localCommand({
-      // `migrate` appears in dependsOn purely for ordering — its outputs
-      // aren't read (local commands have no outputs in v1). The launcher
-      // waits for migrate's onExit readiness before starting dev.
+      // Same ordering trick as the Vercel path: migrate must finish
+      // before dev starts so the dev server boots against a ready DB.
       dependsOn: { db, migrate },
       spec: ({ db }) => ({
         command: 'npm run dev',
