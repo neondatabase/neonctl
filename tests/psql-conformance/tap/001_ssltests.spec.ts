@@ -13,7 +13,7 @@
 // plus an sslmode-aware `sslrootcert` read, which together unblock a
 // large slice of the upstream test surface.
 //
-// What we PORT (35+ `it()` subtests):
+// What we PORT (32 active `it()` subtests + 1 gate `it()`):
 //
 //   1. `sslmode={disable,require,verify-ca,verify-full}` happy / sad paths
 //      against the active server cert, with / without sslrootcert.
@@ -52,10 +52,11 @@
 //     `does not match host name` / `bad decrypt`) — our diagnostic
 //     strings differ from libpq's.
 //
-// PORTED / SKIPPED ACCOUNTING (rollup at bottom of file):
-//   * Ported `it` (passing):                 38
-//   * `it.todo` (impl / fixture gap):         0
-//   * `it.skip` (out of scope / not impl):    7 groups (~30 individual `it.skip`s)
+// PORTED / SKIPPED ACCOUNTING (vitest reports for this file):
+//   * Ported `it` (passing):                32 (+ 1 gate `it()`)
+//   * `it.todo` (impl / fixture gap):        0
+//   * `it.skip` (out of scope / not impl):  27 individual `it.skip`s
+//                                           across 7 SKIPPED groups
 //
 // IMPORTANT: This spec boots its OWN postgres container with `ssl=on` via
 // the shared `pg-fixture-tls.ts` helper, NOT the plaintext fixture from
