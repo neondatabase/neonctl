@@ -220,8 +220,15 @@ export const cmdParse: BackslashCmdSpec = {
     if (name === null) {
       return errResult(ctx, 'missing required argument');
     }
-    const sql = ctx.queryBuf.trim();
-    if (sql.length === 0) {
+    // Upstream `exec_command_parse` passes the query buffer verbatim to
+    // `PQsendPrepare`, with no trim — the server then stores the bytes
+    // exactly in `pg_prepared_statements.statement`. Trimming here would
+    // strip trailing whitespace that the conformance corpus (and any
+    // `LINE 1:` ErrorResponse echo) expects to round-trip byte-for-byte.
+    // The empty-buffer guard still uses a trimmed view so a whitespace-
+    // only buffer reports `no query buffer` like upstream does.
+    const sql = ctx.queryBuf;
+    if (sql.trim().length === 0) {
       return errResult(ctx, 'no query buffer');
     }
     if (!ctx.settings.db) {

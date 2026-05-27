@@ -548,24 +548,47 @@ export const applyPset = (
 };
 
 /**
+ * Wrap a string value in single quotes, escaping embedded newlines and
+ * single quotes. Mirrors upstream `pset_quoted_string` in
+ * `src/bin/psql/command.c` — used by the bulk-view formatter so the
+ * emitted line can be fed back into `\pset NAME VALUE`.
+ */
+const psetQuotedString = (str: string): string => {
+  let out = "'";
+  for (const ch of str) {
+    if (ch === '\n') out += '\\n';
+    else if (ch === "'") out += "\\'";
+    else out += ch;
+  }
+  out += "'";
+  return out;
+};
+
+/**
  * Print the full current `\pset` state, one option per line, to stdout.
- * Used when `\pset` is invoked with no arguments.
+ * Used when `\pset` is invoked with no arguments. String-valued settings
+ * are single-quoted (matching upstream `pset_value_string`); `tableattr`
+ * and `title` are unquoted-empty when unset.
  */
 const printAllPset = (topt: PrintTableOpts): void => {
   writeOut(`border                   ${topt.border}\n`);
   writeOut(`columns                  ${topt.columns}\n`);
-  writeOut(`csv_fieldsep             "${topt.csvFieldSep}"\n`);
+  writeOut(`csv_fieldsep             ${psetQuotedString(topt.csvFieldSep)}\n`);
   writeOut(`expanded                 ${topt.expanded}\n`);
-  writeOut(`fieldsep                 "${topt.fieldSep}"\n`);
+  writeOut(`fieldsep                 ${psetQuotedString(topt.fieldSep)}\n`);
   writeOut(`format                   ${topt.format}\n`);
   writeOut(`linestyle                ${topt.unicodeBorderLineStyle}\n`);
-  writeOut(`null                     "${topt.nullPrint}"\n`);
+  writeOut(`null                     ${psetQuotedString(topt.nullPrint)}\n`);
   writeOut(`numericlocale            ${topt.numericLocale ? 'on' : 'off'}\n`);
   writeOut(`pager                    ${topt.pager}\n`);
   writeOut(`pager_min_lines          ${topt.pagerMinLines}\n`);
-  writeOut(`recordsep                "${topt.recordSep}"\n`);
-  writeOut(`tableattr                ${topt.tableAttr ?? ''}\n`);
-  writeOut(`title                    ${topt.title ?? ''}\n`);
+  writeOut(`recordsep                ${psetQuotedString(topt.recordSep)}\n`);
+  writeOut(
+    `tableattr                ${topt.tableAttr === null ? '' : psetQuotedString(topt.tableAttr)}\n`,
+  );
+  writeOut(
+    `title                    ${topt.title === null ? '' : psetQuotedString(topt.title)}\n`,
+  );
   writeOut(`tuples_only              ${topt.tuplesOnly ? 'on' : 'off'}\n`);
 };
 

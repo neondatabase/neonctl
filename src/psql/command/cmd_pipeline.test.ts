@@ -281,6 +281,35 @@ describe('\\parse / \\close_prepared', () => {
     expect(stderr()).toMatch(/no query buffer/);
   });
 
+  test('\\parse with a whitespace-only buffer fails', async () => {
+    // The empty-buffer guard uses a trimmed view so an all-whitespace
+    // buffer reports `no query buffer` (matching upstream's check that
+    // there's actually something to prepare) — but the SQL handed to
+    // the server is NOT trimmed, see the next test.
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('parse', 'stm', s, '   \n\t');
+    const r = await run(cmdParse, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/no query buffer/);
+  });
+
+  test('\\parse preserves trailing whitespace when sending SQL to prepare', async () => {
+    // Upstream `exec_command_parse` passes the query buffer to
+    // PQsendPrepare verbatim. The server then stores the bytes in
+    // `pg_prepared_statements.statement` exactly — and echoes them in
+    // any later `LINE 1:` ErrorResponse. Trimming here breaks both.
+    // Regression for the `SELECT 2 \parse stmt1` case in the psql
+    // conformance regress script.
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('parse', 'stmt1', s, 'SELECT 2 ');
+    const r = await run(cmdParse, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(conn.prepared).toContain('stmt1::SELECT 2 ');
+    expect(s.lastQuery).toBe('SELECT 2 ');
+  });
+
   test('\\parse sets settings.lastQuery so a later \\g can re-run the SQL', async () => {
     // After a successful \parse, upstream populates pset.last_query
     // with the prepared SQL. This lets a subsequent \g (e.g. after a

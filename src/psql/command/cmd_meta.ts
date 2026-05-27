@@ -497,6 +497,20 @@ const skipLeadingPrelude = (sqlText: string): number => {
  * 1-based relative to a trimmed buffer; without the same skip here we'd
  * count newlines that vanilla never sent.
  *
+ * Trailing-whitespace fix-up: callers in `cmd_io.ts` strip a `\g`-style
+ * buffer's trailing whitespace before handing the SQL to `db.execSimple`
+ * / `db.query`, so the server's `position` is relative to the trimmed
+ * SQL while `sqlText` (used for the LINE echo) still carries the
+ * trailing space(s). When `position` lands on trailing whitespace of
+ * the LINE we picked — i.e., past `lineText.trimEnd().length` — that's
+ * the "syntax error at end of input" case: vanilla sends the trailing
+ * whitespace verbatim and the server reports a position one past the
+ * full LINE length. Snap the caret to the end of `lineText` so our
+ * output matches vanilla's `^` column. PostgreSQL's scanner never
+ * emits positions pointing AT whitespace tokens (they're not lexed as
+ * tokens), so the only realistic source of an "in trailing
+ * whitespace" position is this trim-on-send delta.
+ *
  * Exported so the per-statement error renderer in `core/common.ts` can
  * share the helper with `\errverbose`.
  */
@@ -530,7 +544,13 @@ export const renderLineAndCaret = (
   // Column inside the picked line (0-based) where the `^` goes. Tabs
   // upstream are expanded to a fixed width; we approximate with a
   // single space so the pointer at least lands in the right ballpark.
-  const col = idx - lineStart;
+  let col = idx - lineStart;
+  // Snap past trailing whitespace when the position lands inside it —
+  // see the function header for the rationale (trim-on-send delta).
+  const lineTrimEndLen = lineText.replace(/[ \t\f\v]+$/u, '').length;
+  if (col >= lineTrimEndLen && col < lineText.length) {
+    col = lineText.length;
+  }
   const caretIndent = ' '.repeat(Math.max(0, col));
   const prefix = `LINE ${String(lineNumber)}: `;
   return {

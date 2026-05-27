@@ -790,6 +790,26 @@ describe('\\gexec', () => {
     // Only the first derived row was attempted.
     expect(conn.history).toEqual(['select stmt', 'fail one']);
   });
+
+  test('updates settings.lastQuery so a follow-on `\\g` re-runs the meta query', async () => {
+    // Mirrors upstream `exec_command_gexec`'s PSQL_CMD_SEND path which bumps
+    // `pset.last_query` to the meta query before dispatch. Without this, a
+    // subsequent `\g` with an empty queryBuf falls back to a stale value
+    // (typically the previous failing `TABLE bububu;`-style statement),
+    // which is exactly the cascade that broke regress/psql lines 355+.
+    const conn = makeMockConn();
+    let phase = 0;
+    conn.reply = () => {
+      phase += 1;
+      if (phase === 1) return [rs(['stmt'], [['select 1 as one']])];
+      return [rs([], [], 'SELECT 1')];
+    };
+    const s = makeSettings(conn);
+    expect(s.lastQuery).toBe('');
+    const ctx = makeMockCtx('gexec', '', s, 'select stmt from t');
+    await run(cmdGexec, ctx);
+    expect(s.lastQuery).toBe('select stmt from t');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1422,5 +1442,34 @@ describe('\\gdesc', () => {
     const r = await run(cmdGdesc, ctx);
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/not implemented/);
+  });
+
+  test('updates settings.lastQuery so a follow-on `\\g` re-runs the SELECT', async () => {
+    // Mirrors the regress/psql sequence:
+    //   SELECT 1 AS x, 'Hello', 2 AS y, true AS "dirty\name"
+    //   \gdesc
+    //   \g            -- must re-execute the SELECT
+    // Without `lastQuery = sql` before dispatch, the subsequent `\g` saw an
+    // empty queryBuf + stale `lastQuery` (typically the previous failing
+    // statement) and the cascade rippled through the rest of psql.sql.
+    const conn = mockGdescConn(
+      [
+        {
+          name: 'x',
+          tableID: 0,
+          columnID: 0,
+          dataTypeID: 23,
+          dataTypeSize: 4,
+          dataTypeModifier: -1,
+          format: 0,
+        },
+      ],
+      ['integer'],
+    );
+    const s = makeSettings(conn);
+    expect(s.lastQuery).toBe('');
+    const ctx = makeMockCtx('gdesc', '', s, 'select 5 as x');
+    await run(cmdGdesc, ctx);
+    expect(s.lastQuery).toBe('select 5 as x');
   });
 });

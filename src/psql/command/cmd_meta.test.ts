@@ -588,6 +588,120 @@ describe('formatErrorReport', () => {
     );
     expect(lines).toContain('LINE 3: WHERE foo;');
   });
+
+  test('caret snaps past trailing whitespace when position lands in it', () => {
+    // `cmd_io.ts` `\g`/`\gdesc`/etc strip trailing whitespace from the
+    // buffer before sending, so the server's "syntax error at end of
+    // input" position is relative to the trimmed SQL while sqlText still
+    // carries the trailing space. Vanilla psql sends the trailing space
+    // verbatim and the server reports position = full_len + 1, so the
+    // caret sits one column past the last visible char. We re-create
+    // that column by snapping past the trailing whitespace whenever
+    // position would otherwise land inside it.
+    const sqlText = 'SELECT 1 + '; // 11 chars including trailing space
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'syntax error at end of input',
+        // 11 == trimmed length + 1; idx would naively land on the space.
+        position: '11',
+        sqlText,
+      },
+      'default',
+      'errors',
+    );
+    // Vanilla shape: `LINE 1: SELECT 1 + \n                   ^`
+    // 'LINE 1: ' = 8 chars, sqlText length = 11, so caret column = 19.
+    expect(lines).toContain('LINE 1: SELECT 1 + ');
+    const caret = lines.find((l) => /^\s+\^$/.test(l));
+    expect(caret).toBeDefined();
+    expect(caret).toBe(`${' '.repeat(19)}^`);
+  });
+
+  test('caret snaps past multiple trailing spaces (still at end-of-line)', () => {
+    // Same trim-on-send delta but with three trailing spaces — caret
+    // should still land one column past the last space, matching vanilla.
+    const sqlText = 'SELECT 1 +   '; // 13 chars including 3 trailing spaces
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'syntax error at end of input',
+        position: '13', // trimmed length + 1 = 10 + 1 = 11 — but server's
+        // actual report is 11 here. The snap should still push the caret
+        // to the end of the unstripped lineText.
+        sqlText,
+      },
+      'default',
+      'errors',
+    );
+    const caret = lines.find((l) => /^\s+\^$/.test(l));
+    expect(caret).toBeDefined();
+    // 'LINE 1: ' = 8, sqlText length = 13 -> caret at column 21.
+    expect(caret).toBe(`${' '.repeat(21)}^`);
+  });
+
+  test('multi-line trailing whitespace on the error line snaps to end-of-line', () => {
+    // sqlText carries `+ \n` on line 2; server sends position relative
+    // to the trimmed buffer (`SELECT 1\n+`). Trim-snap pushes the caret
+    // past the trailing space so the column matches vanilla.
+    const sqlText = 'SELECT 1\n+ \n';
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'syntax error at end of input',
+        // 11 == trimmed length + 1 for "SELECT 1\n+" (10 chars).
+        position: '11',
+        sqlText,
+      },
+      'default',
+      'errors',
+    );
+    expect(lines).toContain('LINE 2: + ');
+    const caret = lines.find((l) => /^\s+\^$/.test(l));
+    expect(caret).toBeDefined();
+    // 'LINE 2: ' = 8, line 2 length = 2 ("+ ") -> caret at column 10.
+    expect(caret).toBe(`${' '.repeat(10)}^`);
+  });
+
+  test('caret on whitespace-free SQL still works (in-token errors unaffected)', () => {
+    // Sanity: when the SQL has no trailing whitespace, the trim-snap is
+    // a no-op and the standard column math still produces the right
+    // caret. Position 8 points at `f` of `foo`.
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'column "foo" does not exist',
+        position: '8',
+        sqlText: 'SELECT foo',
+      },
+      'default',
+      'errors',
+    );
+    expect(lines).toContain('LINE 1: SELECT foo');
+    const caret = lines.find((l) => /^\s+\^$/.test(l));
+    expect(caret).toBe(`${' '.repeat(15)}^`);
+  });
+
+  test('caret on trailing-space line points at mid-line token, not end (no false snap)', () => {
+    // Same sqlText with trailing space, but position points INSIDE a
+    // token (not at end-of-input). The snap heuristic must not fire.
+    // Position 8 -> `f` of `foo`, which is at column 7 within the
+    // unstripped lineText.
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'column "foo" does not exist',
+        position: '8',
+        sqlText: 'SELECT foo ', // trailing space
+      },
+      'default',
+      'errors',
+    );
+    expect(lines).toContain('LINE 1: SELECT foo ');
+    const caret = lines.find((l) => /^\s+\^$/.test(l));
+    // 'LINE 1: ' = 8 + col 7 = 15.
+    expect(caret).toBe(`${' '.repeat(15)}^`);
+  });
 });
 
 describe('\\!', () => {

@@ -1240,6 +1240,16 @@ export const cmdGdesc: BackslashCmdSpec = {
     if (!ctx.settings.db) {
       return errResult(ctx, 'no connection to the server');
     }
+    // Track for a subsequent `\g` re-run with empty buffer. Upstream
+    // `exec_command_gdesc` updates `pset.last_query` to the dispatched SQL
+    // before sending, so a follow-on `\g` (with the buffer reset because
+    // `\gdesc` dispatches via PSQL_CMD_SEND) re-executes this same statement
+    // and prints the result table. Without this, the regress sequence
+    //   SELECT 1 AS x, ... \gdesc
+    //   \g
+    // would silently drop the `\g` (empty buffer + stale lastQuery), and
+    // any later `TABLE bububu;` failure would taint `\g`'s re-run output.
+    ctx.settings.lastQuery = sql;
     let fields: FieldDescription[];
     try {
       const stmt = await ctx.settings.db.prepare('', sql);
@@ -1328,6 +1338,11 @@ export const cmdGexec: BackslashCmdSpec = {
     if (!ctx.settings.db) {
       return errResult(ctx, 'no connection to the server');
     }
+
+    // Track the outer (meta) query for a subsequent `\g` re-run with an empty
+    // buffer. Upstream `exec_command_gexec` runs through PSQL_CMD_SEND, which
+    // bumps `pset.last_query` before dispatch.
+    ctx.settings.lastQuery = sql;
 
     let firstPass: ResultSet[];
     try {
