@@ -476,6 +476,21 @@ describe('isCopyBinaryFormat', () => {
   test('a quoted "binary" literal does not false-trigger', () => {
     expect(isCopyBinaryFormat('t', "DELIMITER 'binary'")).toBe(false);
   });
+
+  test('an E-string "binary" payload does not false-trigger', () => {
+    // The stripCopyOptionsStrings helper must collapse E'…' too so that
+    // a delimiter literal containing the word "binary" can't masquerade
+    // as a BINARY format opt.
+    expect(isCopyBinaryFormat('t', "DELIMITER E'\\tbinary'")).toBe(false);
+  });
+
+  test('"WITH (FORMAT \'binary\')" with quoted FORMAT value', () => {
+    // Mirror the FORMAT-with-quotes accept in isCopyTextFormat — the
+    // binary detection must agree on the same canonicalisation.
+    expect(isCopyBinaryFormat('t', "WITH (FORMAT 'binary')")).toBe(true);
+    expect(isCopyBinaryFormat('t', "WITH (FORMAT 'csv')")).toBe(false);
+    expect(isCopyBinaryFormat('t', "WITH (FORMAT 'text')")).toBe(false);
+  });
 });
 
 describe('doCopy BINARY round-trip', () => {
@@ -661,6 +676,25 @@ describe('isCopyTextFormat', () => {
 
   test('options with HEADER only stay text', () => {
     expect(isCopyTextFormat('WITH (HEADER true)')).toBe(true);
+  });
+
+  test('E-string delimiter does not false-trigger (variant 5)', () => {
+    // `DELIMITER E'\\t'` — the escape-string form must not look like
+    // "binary" / "csv" / "format" to the keyword scan. Specifically,
+    // the original strip regex didn't handle `E'…'`; this guards the
+    // updated stripCopyOptionsStrings helper.
+    expect(isCopyTextFormat("DELIMITER E'\\t'")).toBe(true);
+    // Even pathological E-string payloads that mention "binary":
+    expect(isCopyTextFormat("DELIMITER E'\\tbinary'")).toBe(true);
+  });
+
+  test('"with (format \'csv\')" — quoted FORMAT value detected', () => {
+    // PG 17 introduces option values as quoted literals in the
+    // parenthesised options form; the FORMAT detection must accept
+    // both `format csv` and `format 'csv'`.
+    expect(isCopyTextFormat("with (format 'csv')")).toBe(false);
+    expect(isCopyTextFormat("with (format 'text')")).toBe(true);
+    expect(isCopyTextFormat("with (format 'binary')")).toBe(false);
   });
 });
 

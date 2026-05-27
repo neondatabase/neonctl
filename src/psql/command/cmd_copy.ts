@@ -408,6 +408,22 @@ const buildCopySql = (opts: ParsedCopy): string => {
 };
 
 /**
+ * Strip single-quoted SQL string literals from a fragment so a keyword scan
+ * over the result can't false-trigger on a payload character. Handles both
+ * the standard `'…''…'` form (doubled-quote escape) and the escape-string
+ * `E'…\…'` form (backslash-escape). Each match collapses to `''` so token
+ * boundaries around the literal are preserved.
+ *
+ * This is lenient on the `E` prefix recognition: we don't enforce that the
+ * `E` is unescaped (e.g. we'd also strip `xE'…'`). False-positive stripping
+ * is safe — we only ever miss a `csv` / `binary` / `format` mention that was
+ * intended as a data payload, which is exactly the case we want to skip.
+ */
+const stripCopyOptionsStrings = (s: string): string => {
+  return s.replace(/E'(?:\\.|[^'])*'|'(?:''|[^'])*'/g, "''");
+};
+
+/**
  * Detect whether the COPY uses the (default) text format. Upstream psql only
  * honours the `\.` end-of-data marker for text-format COPY; csv/binary treat
  * the bytes as data.
@@ -415,22 +431,30 @@ const buildCopySql = (opts: ParsedCopy): string => {
  * The check is a coarse keyword scan of the options string: if any of `csv`,
  * `binary`, or `format <something>` appears (case-insensitive), we assume the
  * user has explicitly selected a non-text format and disable EOF-marker
- * handling. Quoted literals are stripped first so a column-named "binary"
+ * handling. Quoted literals (including `E'…'` escape strings) are stripped
+ * first so a column-named "binary" or a `DELIMITER E'\\tbinary'` payload
  * doesn't false-trigger.
+ *
+ * The `FORMAT` value itself may be optionally single-quoted in the new
+ * parenthesised-options syntax (e.g. `WITH (FORMAT 'csv')`); we accept either
+ * a bareword or a `'…'` literal there to match upstream's option grammar.
  */
 export const isCopyTextFormat = (afterToFrom: string | null): boolean => {
   if (afterToFrom === null) return true;
-  // Strip single-quoted strings so `DELIMITER 'binary'` doesn't false-trigger.
-  const stripped = afterToFrom.replace(/'(?:''|[^'])*'/g, "''");
+  // Strip quoted literals so `DELIMITER 'binary'` and `DELIMITER E'\\tcsv'`
+  // don't false-trigger the format-detection regexes below.
+  const stripped = stripCopyOptionsStrings(afterToFrom);
   if (/\bcsv\b/i.test(stripped)) return false;
   if (/\bbinary\b/i.test(stripped)) return false;
   // The newer WITH (FORMAT <fmt>) form — if `format` appears followed by a
   // non-text token, assume non-text. We don't try to parse the value because
   // anything other than `text` is non-default; treat any FORMAT mention as
   // "user said something explicit" and only allow the marker for `format text`.
-  const m = /\bformat\s+([A-Za-z_]+)/i.exec(stripped);
+  // Match against the ORIGINAL string for the value extraction since the
+  // stripped form will have collapsed quoted values to `''`.
+  const m = /\bformat\s+(?:'([A-Za-z_]+)'|([A-Za-z_]+))/i.exec(afterToFrom);
   if (m) {
-    return m[1].toLowerCase() === 'text';
+    return (m[1] ?? m[2]).toLowerCase() === 'text';
   }
   return true;
 };
@@ -441,9 +465,9 @@ export const isCopyTextFormat = (afterToFrom: string | null): boolean => {
  * the BINARY-signature byte-for-byte transparency check (we don't want to
  * touch text/csv streams).
  *
- * Matches `WITH BINARY`, `WITH (FORMAT binary)`, the legacy psql `BINARY t
- * FROM …` keyword (which the parser folds into `beforeToFrom`), and
- * mixed-case variants.
+ * Matches `WITH BINARY`, `WITH (FORMAT binary)` (with or without quotes around
+ * the value), the legacy psql `BINARY t FROM …` keyword (which the parser
+ * folds into `beforeToFrom`), and mixed-case variants.
  */
 export const isCopyBinaryFormat = (
   beforeToFrom: string,
@@ -453,17 +477,19 @@ export const isCopyBinaryFormat = (
   // which our parser preserves as the leading token of `beforeToFrom`.
   if (/^\s*binary\b/i.test(beforeToFrom)) return true;
   if (afterToFrom === null) return false;
-  // Strip single-quoted strings so a column-named `binary` doesn't trigger.
-  const stripped = afterToFrom.replace(/'(?:''|[^'])*'/g, "''");
+  // Strip quoted literals (including `E'…'` escape strings) so a column-named
+  // `binary` or a payload literal doesn't trigger.
+  const stripped = stripCopyOptionsStrings(afterToFrom);
   // Plain `WITH BINARY` (or the bare options token).
   if (/(^|\W)binary(\W|$)/i.test(stripped)) {
     // But only when it isn't part of a `format binary` form (already covered
     // by the regex below — keep both paths so `WITH BINARY` alone still wins).
     return true;
   }
-  const m = /\bformat\s+([A-Za-z_]+)/i.exec(stripped);
+  // FORMAT value may be optionally single-quoted in WITH (FORMAT 'binary').
+  const m = /\bformat\s+(?:'([A-Za-z_]+)'|([A-Za-z_]+))/i.exec(afterToFrom);
   if (m) {
-    return m[1].toLowerCase() === 'binary';
+    return (m[1] ?? m[2]).toLowerCase() === 'binary';
   }
   return false;
 };
