@@ -344,11 +344,14 @@ export const executeInputString = async (
     }
 
     if (r.kind === 'backslash') {
-      const consumedChunk = working.slice(0, r.consumed);
-      queryBuf += consumedChunk;
+      // Use `r.sql` — the scanner's substituted/processed text that
+      // *preceded* the backslash boundary. The raw consumed slice would
+      // also include the backslash command itself and any separators
+      // (like the `\\` end-of-args marker), which we don't want in the
+      // query buffer. `r.sql` excludes both. Mirrors the mainloop's
+      // `queryBuf += result.sql` path.
+      queryBuf += r.sql;
       working = working.slice(r.consumed);
-      const cmdLen = '\\'.length + r.cmd.length + r.rest.length;
-      queryBuf = queryBuf.slice(0, queryBuf.length - cmdLen);
       const cmdName = r.cmd;
       // Skip cond-commands inside rc — they require the full mainloop state
       // machine to be useful; we treat them as no-ops here. Other commands
@@ -373,6 +376,14 @@ export const executeInputString = async (
         return { hadError, stoppedOnError, connectionLost };
       if (res.status === 'reset-buf') {
         queryBuf = res.newBuf ?? '';
+        scanState = initialScanState();
+      }
+      // Mirror upstream `mainloop.c`: a backslash command that errored
+      // drops the query buffer and resets the scanner. Without this the
+      // residue would re-execute via the tail-dispatch at EOF (or get
+      // glued onto the next dispatched statement), masking the failure.
+      if (res.status === 'error') {
+        queryBuf = '';
         scanState = initialScanState();
       }
       hadError = res.status === 'error';

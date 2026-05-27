@@ -327,4 +327,48 @@ describe('executeInputString', () => {
     await executeInputString('   \n\n', ctx);
     expect(conn?.calls).toEqual([]);
   });
+
+  test('queryBuf uses scanner-substituted text, not raw chunk (drops `\\;`)', async () => {
+    // Regression: the scanner translates `\;` (forced-semicolon) into a
+    // literal `;` in its `sql` field. The old buffer-build path used
+    // `working.slice(0, r.consumed)` (which preserves `\;` verbatim) and
+    // then trimmed the cmd portion off the end — so the literal `\` ended
+    // up in the executed SQL. The fix folds `r.sql` directly into queryBuf.
+    const { ctx } = buildCtx();
+    let observedBuf: string | null = null;
+    const probe: BackslashCmdSpec = {
+      name: 'parsebuf',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run(bctx) {
+        observedBuf = bctx.queryBuf;
+        return { status: 'reset-buf', newBuf: '' };
+      },
+    };
+    ctx.registry.register(probe);
+    await executeInputString('SELECT 1\\; SELECT 2 \\parsebuf\n', ctx);
+    // The leading `\` of `\;` MUST NOT appear in the buffer the slash
+    // command sees — only the bare `;`. Mirrors upstream `\;` semantics.
+    expect(observedBuf).toBe('SELECT 1; SELECT 2 ');
+  });
+
+  test('buffer is reset after a backslash-command error (no tail re-run)', async () => {
+    // Regression: the mainloop resets queryBuf when a slash command errors
+    // so the residue doesn't re-execute at EOF via the tail-dispatch path.
+    // psqlrc's executeInputString must do the same; otherwise a failing
+    // `\bind \g` on chained SQL would emit the server error AND then run
+    // the SQL via simple-Query as the file ends.
+    const { ctx, conn } = buildCtx();
+    const failer: BackslashCmdSpec = {
+      name: 'boom',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run() {
+        return { status: 'error', errorWritten: true };
+      },
+    };
+    ctx.registry.register(failer);
+    // No trailing `;` — without the error-reset, the tail dispatch would
+    // execute "SELECT trailing" via execSimple after `\boom` failed.
+    await executeInputString('SELECT trailing \\boom\n', ctx);
+    expect(conn?.calls).toEqual([]);
+  });
 });

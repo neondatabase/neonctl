@@ -801,6 +801,103 @@ describe('scanSql — backslash after buffered SQL on same line', () => {
 });
 
 // ---------------------------------------------------------------------------
+// `\\` "flush and continue" separator inside slash-command args.
+//
+// Upstream `psqlscanslash.l` <xslasharg> rule treats `\\` (two consecutive
+// backslashes) as a token that terminates the current command's argument list
+// AND is itself consumed. The next iteration starts at the position
+// immediately after the `\\` pair. Without this, our scanner surfaces the
+// second `\` as a fresh empty-name backslash command and the dispatcher logs
+// "invalid command \", which is wrong for shapes like
+// `\gset pref \\ \echo foo` (regress/psql:244).
+// ---------------------------------------------------------------------------
+
+describe('scanSql — `\\\\` separator inside slash args', () => {
+  test('\\gset pref01_ \\\\ \\echo — first scan consumes through the `\\\\`', () => {
+    const input = 'select 1 \\gset pref01_ \\\\ \\echo done';
+    const r = scanSql(input);
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('gset');
+    expect(r.rest).toBe(' pref01_ ');
+    // The buffered SQL preceding `\gset` is `select 1 ` — no `\\` in it.
+    expect(r.sql).toBe('select 1 ');
+    // consumed jumps past the `\\` so the next pass starts at ` \echo done`.
+    const after = input.slice(r.consumed);
+    expect(after.startsWith(' \\echo')).toBe(true);
+  });
+
+  test('\\echo a \\\\ \\echo b — both echoes dispatch on the same line', () => {
+    const input = '\\echo a \\\\ \\echo b';
+    let buf = input;
+    let state: ScanState | undefined;
+    const cmds: { cmd: string; rest: string }[] = [];
+    let safety = 0;
+    while (buf.length > 0 && safety++ < 10) {
+      const r = scanSql(buf, state);
+      if (r.kind === 'backslash') {
+        cmds.push({ cmd: r.cmd, rest: r.rest });
+        buf = buf.slice(r.consumed);
+        state = r.nextState;
+        continue;
+      }
+      break;
+    }
+    expect(cmds).toEqual([
+      { cmd: 'echo', rest: ' a ' },
+      { cmd: 'echo', rest: ' b' },
+    ]);
+  });
+
+  test('\\copy is whole-line so a later `\\\\` is just argument text', () => {
+    // `\copy` is OT_WHOLE_LINE in upstream; our scanner doesn't model the
+    // arg-mode here (that's the slash-arg scanner's job), but the boundary
+    // rule still consumes the `\\` pair when present. The interpretation of
+    // the `\\` inside `\copy`'s argv is the slash-arg scanner's concern; for
+    // statement-boundary purposes we just verify that the dispatcher sees a
+    // single `\copy` command with the entire pre-`\\` payload in `rest` and
+    // the next command starts after the `\\`.
+    const input = "\\copy foo from '/tmp/x' \\\\ \\echo done";
+    const r = scanSql(input);
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('copy');
+    expect(r.rest).toBe(" foo from '/tmp/x' ");
+    const after = input.slice(r.consumed);
+    expect(after).toBe(' \\echo done');
+  });
+
+  test('a lone `\\` after args is NOT consumed (regular next-cmd boundary)', () => {
+    // Sanity guard: only TWO consecutive backslashes are the separator. A
+    // single `\` continues to be the start of the next slash command.
+    const input = '\\echo a \\echo b';
+    const r = scanSql(input);
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('echo');
+    expect(r.rest).toBe(' a ');
+    // The lone `\` of the second `\echo` is NOT consumed by the first scan.
+    const after = input.slice(r.consumed);
+    expect(after).toBe('\\echo b');
+  });
+
+  test('`\\\\` inside a single-quoted arg is NOT a separator', () => {
+    // Inside a `'…'` quoted arg the slash-arg lexer treats `\\` as an
+    // escape sequence (a literal `\`). The boundary rule must not trip
+    // on it. We exit the quote first, then see `b`, then `\` which is the
+    // next slash-cmd boundary.
+    const input = "\\echo 'a \\\\ b' \\next";
+    const r = scanSql(input);
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('echo');
+    expect(r.rest).toBe(" 'a \\\\ b' ");
+    const after = input.slice(r.consumed);
+    expect(after).toBe('\\next');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // <xqs> quote-continuation behavior — scanner-level state assertions.
 // ---------------------------------------------------------------------------
 

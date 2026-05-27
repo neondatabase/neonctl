@@ -621,10 +621,23 @@ export const scanSql = (
       // STARTS a new slash command and terminates the previous one's
       // arg list. We track minimal quote state (single, double, back) so
       // backslashes inside arg quotes don't trigger the boundary.
+      //
+      // Upstream special: `\\` (two consecutive backslashes) is the
+      // "flush-and-continue" separator. It terminates the current command's
+      // args AND is itself consumed silently — the next iteration's input
+      // starts immediately after the `\\` pair. Without this, our scanner
+      // would surface the second `\` as a fresh empty-name backslash command
+      // (and the dispatcher would log "invalid command \"), spuriously
+      // doubling diagnostics for shapes like `\gset pref \\ \echo foo`.
+      // See psqlscanslash.l <xslasharg> rule for the upstream equivalent.
       let restEnd = cmdEnd;
       let inSingle = false;
       let inDouble = false;
       let inBack = false;
+      // Set true when we exit the loop via the `\\` separator branch. In that
+      // case `consumed` skips both backslashes so the next scan doesn't see
+      // the trailing `\` as a fresh empty-name backslash command.
+      let sawDoubleBackslashSeparator = false;
       while (
         restEnd < input.length &&
         input[restEnd] !== '\n' &&
@@ -643,7 +656,17 @@ export const scanSql = (
         } else if (inBack) {
           if (ch === '`') inBack = false;
         } else {
-          if (ch === '\\') break; // next slash-cmd boundary
+          if (ch === '\\') {
+            // `\\` = "flush and continue" separator: end this command's
+            // args HERE, but consume both backslashes so the next scan
+            // resumes immediately after the pair. A lone `\` is a regular
+            // next-slash-cmd boundary; we stop at it without consuming so
+            // the next iteration picks it up.
+            if (input[restEnd + 1] === '\\') {
+              sawDoubleBackslashSeparator = true;
+            }
+            break;
+          }
           if (ch === "'") inSingle = true;
           else if (ch === '"') inDouble = true;
           else if (ch === '`') inBack = true;
@@ -651,6 +674,7 @@ export const scanSql = (
         restEnd++;
       }
       const rest = input.slice(cmdEnd, restEnd);
+      const consumed = sawDoubleBackslashSeparator ? restEnd + 2 : restEnd;
       // Note: we *don't* consume the newline; it's left for the next chunk
       // so caller can see PROMPT1 reset cleanly.
       return {
@@ -658,7 +682,7 @@ export const scanSql = (
         cmd,
         rest,
         sql,
-        consumed: restEnd,
+        consumed,
         nextState: cloneState(st),
       };
     }
