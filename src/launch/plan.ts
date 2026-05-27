@@ -179,10 +179,7 @@ function walkTree(
               `[neon launch] Nested stacks are not supported in v1.`,
               `Stack '${fqn || 'root'}' returns a nested stack at key '${key}'.`,
               '',
-              `Inline the nested stack's children into the parent's returned record:`,
-              `  return { db, web, ...nested.spec() };  // hand-roll for now`,
-              '',
-              `Or factor the children into a plain function that returns the same record:`,
+              `Factor the children into a plain function that returns the same record, and spread it:`,
               `  const buildData = () => ({ primary: postgres({...}) });`,
               `  return { ...buildData(), web };`,
             ].join('\n'),
@@ -477,8 +474,14 @@ export async function buildPlan(
         '',
         `  export default stack({`,
         `    spec: (_, { gitBranch }) => {`,
+        `      if (!gitBranch) {`,
+        `        throw new Error('neon launch: no git branch detected. Pass --branch <name> or run inside a git repo.');`,
+        `      }`,
         `      const db = postgres({`,
-        `        spec: () => ({ name: gitBranch || 'main' }),`,
+        // Slugify so 'feat/foo' doesn't become an illegal Neon branch
+        // name. NEVER \`gitBranch || 'main'\` — an empty gitBranch
+        // would silently target the project's default branch (prod).
+        `        spec: () => ({ name: gitBranch.toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 60) }),`,
         `      });`,
         `      return { db };`,
         `    },`,

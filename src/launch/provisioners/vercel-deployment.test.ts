@@ -25,6 +25,7 @@ vi.mock('@vercel/client', () => ({
 }));
 
 import {
+  buildDeploymentOpts,
   createDeployment,
   isTeamCacheStale,
   parseRetryAfter,
@@ -61,6 +62,80 @@ describe('wrapTeam', () => {
   });
 });
 
+describe('buildDeploymentOpts — gitMetadata independence (R18 fix, pinned by R19)', () => {
+  // Both commitRef and commitSha are independently optional in the
+  // Vercel GitMetadata type. The R18 fix sent each whichever was
+  // present, but shipped without a test — the R19 test-honesty
+  // reviewer caught this. These four cases form the truth table for
+  // (gitBranch present?) × (commitSha present?).
+
+  it('both gitBranch + commitSha → both fields in gitMetadata', () => {
+    const opts = buildDeploymentOpts({
+      projectName: 'demo',
+      production: false,
+      gitBranch: 'feat/x',
+      commitSha: 'deadbeef',
+    });
+    expect(opts.gitMetadata).toEqual({
+      commitRef: 'feat/x',
+      commitSha: 'deadbeef',
+    });
+  });
+
+  it('gitBranch only, NO commitSha → commitRef sent without commitSha', () => {
+    // Falsifier (the R19 regression): reverting to
+    // `commitSha ? {commitRef, commitSha} : undefined` would drop the
+    // whole gitMetadata here, losing the branch label on the Vercel
+    // deploy.
+    const opts = buildDeploymentOpts({
+      projectName: 'demo',
+      production: false,
+      gitBranch: 'hotfix-123',
+      commitSha: undefined,
+    });
+    expect(opts.gitMetadata).toEqual({ commitRef: 'hotfix-123' });
+  });
+
+  it('commitSha only, no gitBranch → commitSha sent without commitRef', () => {
+    const opts = buildDeploymentOpts({
+      projectName: 'demo',
+      production: false,
+      gitBranch: '',
+      commitSha: 'deadbeef',
+    });
+    expect(opts.gitMetadata).toEqual({ commitSha: 'deadbeef' });
+  });
+
+  it('neither → gitMetadata undefined (do not send empty object)', () => {
+    const opts = buildDeploymentOpts({
+      projectName: 'demo',
+      production: false,
+      gitBranch: '',
+      commitSha: undefined,
+    });
+    expect(opts.gitMetadata).toBeUndefined();
+  });
+
+  it('production=true sets target, false sets undefined', () => {
+    expect(
+      buildDeploymentOpts({
+        projectName: 'd',
+        production: true,
+        gitBranch: '',
+        commitSha: undefined,
+      }).target,
+    ).toBe('production');
+    expect(
+      buildDeploymentOpts({
+        projectName: 'd',
+        production: false,
+        gitBranch: '',
+        commitSha: undefined,
+      }).target,
+    ).toBeUndefined();
+  });
+});
+
 describe('isTeamCacheStale — R17 widening', () => {
   // R17 widened the condition from `!!cachedSlug && cachedSlug !== specTeam`
   // to `!!specTeam && cachedSlug !== specTeam`. Each row pins one
@@ -75,6 +150,9 @@ describe('isTeamCacheStale — R17 widening', () => {
     // Falsifier: reverting to `!!cachedSlug && …` makes this false and
     // the CI-only-VERCEL_TEAM_ID case skips re-resolution → cross-team deploy.
     expect(isTeamCacheStale('team-b', undefined)).toBe(true);
+    // Empty-string cachedSlug (theoretically possible if a future
+    // refactor returns '' for absent keys) should ALSO be treated as stale.
+    expect(isTeamCacheStale('team-b', '')).toBe(true);
   });
 
   it('spec.team set, cached slug matches → not stale (fast path)', () => {

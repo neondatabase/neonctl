@@ -31,9 +31,9 @@ import {
 import { provisionVercelDeployment } from './provisioners/vercel-deployment.js';
 import { isRef } from './refs.js';
 import {
+  endLatchForInvocation,
   ExitCode,
   LaunchError,
-  resetCliShutdownInFlight,
   setCliShutdownInFlight,
   vercelTokenMissingMessage,
 } from './errors.js';
@@ -569,15 +569,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     process.off('SIGINT', onSigint);
     process.off('SIGTERM', onSigterm);
     process.off('SIGHUP', onSighup);
-    // Reset the CLI shutdown latch ONLY when this invocation didn't
-    // initiate the shutdown. Resetting unconditionally here defeats
-    // the latch's purpose: the rejected promise from our killed
-    // children reaches commands/launch.ts BEFORE the signal handler
-    // exits the process, and the CLI catch reads `isCliShutdownInFlight()`
-    // — if we've already reset it, the catch races the handler with
-    // its own closeAnalytics+process.exit and the wrong exit code wins.
-    // Library mode still gets a clean reset on normal completion.
-    if (!runtime.shuttingDown.value) resetCliShutdownInFlight();
+    endLatchForInvocation({ shuttingDown: runtime.shuttingDown.value });
   }
 }
 
@@ -841,17 +833,27 @@ export async function provisionLocalCommandNode(args: {
   liveLocalCommands: LocalCommandHandle[];
 }): Promise<void> {
   const spec = args.node.spec as LocalCommandSpec;
-  // Spawn-after-signal race: if SIGINT arrived while we were waiting
-  // on dependencies, the shutdown handler already iterated
-  // liveLocalCommands and walked away. Spawning now would leak the
-  // child — gracefulShutdown won't see it. Refuse to spawn instead.
+  // Spawn-after-signal race — TWO check points. SIGINT can arrive at
+  // any await; the shutdown handler snapshots liveLocalCommands once
+  // and walks away, so a child spawned AFTER that snapshot leaks.
+  // (1) Before we burn any work resolving env refs.
   if (args.runtime.shuttingDown.value) {
     throw new LaunchError(
       `local-command '${args.node.name}': shutdown in flight; refusing to spawn`,
       ExitCode.SIGINT,
     );
   }
+  // (2) After `resolveEnv` (which `await`s on ref resolution — every
+  // `db.connectionString` in the spec yields here, opening a race
+  // window of network-latency duration). Pinned by a test that flips
+  // the flag DURING the await; the prior R18 fix missed this.
   const resolvedEnv = await resolveEnv(args.runtime, spec.env);
+  if (args.runtime.shuttingDown.value) {
+    throw new LaunchError(
+      `local-command '${args.node.name}': shutdown in flight; refusing to spawn`,
+      ExitCode.SIGINT,
+    );
+  }
   const handle = startLocalCommand({
     resourceFqn: args.node.name,
     spec,
@@ -864,6 +866,20 @@ export async function provisionLocalCommandNode(args: {
   // throws (timeout, child exited with the wrong code, etc.) — otherwise
   // the spawned shell + grandchildren leak.
   args.liveLocalCommands.push(handle);
+  // (3) Final race: signal arrived BETWEEN push and the handler's
+  // snapshot. Re-check + tear down ourselves to plug the window. The
+  // handler is synchronous up to its first await (the 100ms polling
+  // sleep), so this check + bounded teardown still completes before
+  // the handler's process.exit.
+  if (args.runtime.shuttingDown.value) {
+    await gracefulShutdown([handle]);
+    const idx2 = args.liveLocalCommands.indexOf(handle);
+    if (idx2 >= 0) args.liveLocalCommands.splice(idx2, 1);
+    throw new LaunchError(
+      `local-command '${args.node.name}': shutdown in flight; tore down newly-spawned child`,
+      ExitCode.SIGINT,
+    );
+  }
   try {
     await handle.ready;
   } catch (err) {

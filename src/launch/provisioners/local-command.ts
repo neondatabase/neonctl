@@ -123,6 +123,20 @@ async function probeHttp(
 // Readiness implementations
 // =============================================================================
 
+/**
+ * `awaitOnExit` timeout message — extracted so a test can pin the FQN
+ * inclusion without spawning a wedged subprocess and waiting 30 minutes.
+ * R18 added the FQN to the exit-code branch; the timeout branch was
+ * missed and shipped without a test until R19 surfaced both gaps.
+ */
+export function onExitTimeoutMessage(
+  resourceFqn: string,
+  budgetMs: number,
+  expectedCode: number,
+): string {
+  return `local-command '${resourceFqn}' readiness: did not exit within ${budgetMs}ms (expected code ${expectedCode}). The process is wedged.`;
+}
+
 function awaitOnExit(
   child: ChildProcess,
   expectedCode: number,
@@ -161,9 +175,7 @@ function awaitOnExit(
     const timer = setTimeout(() => {
       settle(() => {
         reject(
-          new Error(
-            `local-command readiness: did not exit within ${budgetMs}ms (expected code ${expectedCode}). The process is wedged.`,
-          ),
+          new Error(onExitTimeoutMessage(resourceFqn, budgetMs, expectedCode)),
         );
       });
     }, budgetMs);

@@ -12,6 +12,7 @@ import {
   branchQuotaMessage,
   cycleDetectedMessage,
   dupKeyMessage,
+  endLatchForInvocation,
   isCliShutdownInFlight,
   resetCliShutdownInFlight,
   setCliShutdownInFlight,
@@ -114,28 +115,26 @@ describe('error templates', () => {
   });
 });
 
-describe('cliShutdownInFlight latch lifecycle', () => {
-  // The latch must remain SET while the signal handler's
-  // closeAnalytics+process.exit chain is mid-flight, so the CLI catch
-  // in commands/launch.ts reads `true` and parks (deferring exit to
-  // the handler) instead of racing with its own
-  // closeAnalytics+process.exit. R16 introduced an unconditional
-  // `resetCliShutdownInFlight()` in runLaunch's finally — which runs
-  // BEFORE the CLI catch reads the latch, defeating the latch's
-  // purpose. Two reviewers in R18 caught it independently.
+describe('endLatchForInvocation — end-of-invocation latch policy', () => {
+  // R18 reintroduced a regression where the runner's finally
+  // unconditionally reset the latch, defeating its purpose: the CLI
+  // catch in commands/launch.ts would read `false` and race the
+  // signal handler with its own closeAnalytics+process.exit chain,
+  // and the wrong exit code would win.
   //
-  // Fix: the runner's finally only resets the latch when THIS
-  // invocation didn't itself initiate the shutdown. Modeled here as a
-  // helper so the contract is testable without spinning up the full
-  // runner.
-  function maybeResetForInvocation(opts: { shuttingDown: boolean }): void {
-    if (!opts.shuttingDown) resetCliShutdownInFlight();
-  }
+  // The test calls the SAME exported helper that production calls
+  // (see runner.ts: `endLatchForInvocation({shuttingDown: …})` in
+  // the finally block). Falsifier check: change runner.ts's finally
+  // back to an unconditional `resetCliShutdownInFlight()` and the
+  // production code stops importing `endLatchForInvocation` — these
+  // tests catch via a different module path either way, because they
+  // test the exported helper itself. To pin "the runner uses this
+  // helper", the test below also asserts the runner module imports it.
 
-  it('latch is preserved when this invocation initiated the shutdown', () => {
+  it('latch is PRESERVED when invocation initiated the shutdown', () => {
     setCliShutdownInFlight();
     expect(isCliShutdownInFlight()).toBe(true);
-    maybeResetForInvocation({ shuttingDown: true });
+    endLatchForInvocation({ shuttingDown: true });
     expect(isCliShutdownInFlight()).toBe(true);
     // Cleanup so test order doesn't pollute siblings.
     resetCliShutdownInFlight();
@@ -146,7 +145,22 @@ describe('cliShutdownInFlight latch lifecycle', () => {
     // latch so a subsequent runLaunch in the same process doesn't see
     // a stale flag.
     setCliShutdownInFlight();
-    maybeResetForInvocation({ shuttingDown: false });
+    endLatchForInvocation({ shuttingDown: false });
     expect(isCliShutdownInFlight()).toBe(false);
+  });
+
+  it('the runner uses endLatchForInvocation (no shadow copy)', async () => {
+    // Falsifier: replacing the call site in runner.ts's finally with
+    // an inline `if (!shuttingDown) resetCliShutdownInFlight()` would
+    // make this assertion fail. The reverse-regression we're guarding
+    // against — the R18 performative-test footgun — would also fail
+    // because the helper would no longer be in the runner's import
+    // list.
+    const runnerSrc = await import('node:fs').then((fs) =>
+      fs.readFileSync(new URL('./runner.ts', import.meta.url).pathname, 'utf8'),
+    );
+    expect(runnerSrc).toMatch(
+      /endLatchForInvocation\(\{\s*shuttingDown:\s*runtime\.shuttingDown\.value\s*\}\)/,
+    );
   });
 });

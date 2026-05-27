@@ -71,7 +71,7 @@ Prerequisites:
 Then, from the scaffolded `neon-launch-demo` directory (the cwd where you ran `cp neon.ts .` above) — NOT from the original `examples/neon-launch-vercel` checkout, whose `file:../../dist` path only resolves inside the neonctl repo:
 
 ```bash
-npm install                    # picks up neonctl from `file:../../dist` (local build output)
+npm install                    # resolves the `neonctl` devDep you wired above
 
 export NEON_API_KEY=...        # https://console.neon.tech/app/settings/api-keys
 export NEON_PROJECT_ID=...     # from your Neon project settings
@@ -117,4 +117,4 @@ jobs:
 
 `neonctl` must be a `devDependency` in your repo so `npx neonctl` resolves under `node_modules/.bin`. If it isn't, swap `npx neonctl` for `npx neonctl@latest` (slower per-job cold start, but no install required).
 
-The detached-HEAD `pull_request` checkout requires `--branch "${{ github.head_ref }}"`; the launcher reads the branch from there.
+GitHub's `pull_request` checkout leaves you in detached HEAD, but `actions/checkout` also sets `GITHUB_HEAD_REF`, which `resolveGitBranch` reads in precedence before falling back to `git rev-parse`. Passing `--branch "${{ github.head_ref }}"` is a belt-and-suspenders that also lets you slugify or pin a custom name; without it, the GH-set env var is used.

@@ -39,6 +39,23 @@ export function resetCliShutdownInFlight(): void {
   cliShutdownInFlight = false;
 }
 
+/**
+ * End-of-invocation latch policy: reset ONLY when this invocation
+ * didn't itself initiate the shutdown. Resetting unconditionally
+ * defeats the latch's purpose — the rejected promise from killed
+ * children reaches commands/launch.ts BEFORE the signal handler's
+ * exit chain completes, and the CLI catch reads the latch to decide
+ * whether to park (handler wins the exit code) or run its own
+ * teardown. Library-mode normal-completion still gets a clean reset.
+ *
+ * Lives here (not inlined in runner.ts) so the test can call this
+ * exact function against the module-scoped `cliShutdownInFlight`
+ * latch instead of a re-implementation that mirrors its shape.
+ */
+export function endLatchForInvocation(opts: { shuttingDown: boolean }): void {
+  if (!opts.shuttingDown) resetCliShutdownInFlight();
+}
+
 export const ExitCode = {
   SUCCESS: 0,
   RESOURCE_FAILED: 1,

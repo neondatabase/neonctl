@@ -15,7 +15,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { ExitCode } from '../errors.js';
 
-import { pollOpsTerminal, provisionPostgres } from './postgres.js';
+import {
+  archivedBranchMessage,
+  pollOpsTerminal,
+  provisionPostgres,
+} from './postgres.js';
 
 // src/pkg.ts reads package.json relative to itself; in vitest the file
 // doesn't sit next to the .ts source, so stub it.
@@ -151,36 +155,68 @@ describe('provisionPostgres — archived branch', () => {
     expect(api.createProjectBranch).not.toHaveBeenCalled();
   });
 
-  it('does NOT suggest `neon branches restore` (that command requires a <source> positional and is for PITR, not archive recovery)', async () => {
+  it('archivedBranchMessage rejects every variant of the unrunnable CLI form (helper-level)', () => {
     // Falsifier: the prior message named `neon branches restore <name>
-    // --project-id <id>` — a command that yargs rejects because
-    // restore's usage is `<target-id|name> <source>[@(timestamp|lsn)]`.
-    // Pinning this so a future "helpful" rewrite doesn't reintroduce
-    // the non-runnable command.
+    // --project-id <id>` — yargs rejects because restore's usage is
+    // `<target-id|name> <source>[@(timestamp|lsn)]` (see
+    // src/commands/branches.ts). A "helpful" rewrite to `neon branch
+    // restore` (singular) or `npx neonctl branches restore` is also
+    // wrong — same missing positional. Match the CLASS, not the
+    // literal prior text.
+    const msg = archivedBranchMessage('main', 'prj_1');
+    expect(msg).not.toMatch(/branch(es)? restore/i);
+    expect(msg).not.toMatch(/neonctl\s+branch(es)?\s+restore/i);
+    // Positive content the user CAN act on.
+    expect(msg).toMatch(/console\.neon\.tech.*prj_1/);
+    expect(msg).toMatch(/rename it/);
+  });
+
+  it('archivedBranchMessage no longer claims auto-restore-on-access', () => {
+    // The launcher's pre-check uses findBranchByName (a list call),
+    // which does NOT trigger Neon's auto-restore-on-access (only
+    // psql/connection-string access does). The earlier R18 fix said
+    // "Archived branches auto-restore when first accessed" — telling
+    // the user to re-run, which doesn't unwedge anything.
+    const msg = archivedBranchMessage('main', 'prj_1');
+    expect(msg).not.toMatch(/auto-restore/i);
+  });
+
+  it('race-fallback archived path uses the SAME message helper (no drift)', async () => {
+    // Falsifier: a future edit that copy-pastes a fresh inline message
+    // into the 409/422 race-fallback path (the bug R19 caught). Pin
+    // by checking the race path produces the helper's output.
+    // Sequence: find-by-name(feat-x) → empty + parent. resolve-default
+    // → parent. POST 409. re-list-by-name(feat-x) → archived.
+    const ARCHIVED_NEW: Branch = {
+      id: 'br_archived_new',
+      name: 'feat-x',
+      current_state: 'archived',
+      default: false,
+    };
     const api = makeApi({
       listings: [
-        [
-          {
-            id: 'br_archived',
-            name: 'main',
-            current_state: 'archived',
-            default: true,
-          },
-        ],
+        [PARENT_BRANCH],
+        [PARENT_BRANCH],
+        [PARENT_BRANCH, ARCHIVED_NEW],
       ],
+      createReject: axiosErr(409, 'branch with name already exists'),
     });
     await expect(
       provisionPostgres({
         api: api as any,
         projectId: 'prj_1',
-        spec: { name: 'main' },
+        spec: { name: 'feat-x' },
         resourceFqn: 'db',
       }),
     ).rejects.toThrow(
       expect.objectContaining({
-        message: expect.not.stringMatching(/neon branches restore/),
+        message: expect.stringMatching(/console\.neon\.tech.*prj_1/),
+        exitCode: ExitCode.CONFIG_ERROR,
       }),
     );
+    // Confirm the race actually triggered (3 list calls) — otherwise
+    // the test would pass via the first-time-found path.
+    expect(api.listProjectBranches).toHaveBeenCalledTimes(3);
   });
 });
 

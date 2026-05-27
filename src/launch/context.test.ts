@@ -7,7 +7,7 @@
  * silently drop the normalization and the example would compile + run
  * but fall through to the local-dev branch when the user expected prod.
  */
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -132,6 +132,23 @@ describe('resolveGitBranch precedence', () => {
         cwd,
       }),
     ).toBe('env-branch');
+  });
+
+  it('execSync call passes a timeout option (R18 fix, R19 TDD pin)', () => {
+    // Falsifier: deleting the `timeout: 5_000` line in resolveGitBranch
+    // would let a wedged git (fsmonitor hang, network-mount stall,
+    // borked /usr/bin/git) deadlock plan-time. We pin the option's
+    // presence by source-grepping context.ts because mocking the
+    // bound execSync after import is fragile across bundlers.
+    const src = readFileSync(
+      new URL('./context.ts', import.meta.url).pathname,
+      'utf8',
+    );
+    // Match the execSync call site for resolveGitBranch — the
+    // git-rev-parse one specifically, not any future execSync call.
+    expect(src).toMatch(
+      /execSync\('git rev-parse --abbrev-ref HEAD',[\s\S]*?timeout:\s*5_?000/,
+    );
   });
 
   it('non-git directory + no env / flag returns empty string (warn-only)', () => {

@@ -15,7 +15,24 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../pkg.ts', () => ({ default: { version: '0.0.0' } }));
 
-import { startLocalCommand } from './local-command.js';
+import { onExitTimeoutMessage, startLocalCommand } from './local-command.js';
+
+describe('onExitTimeoutMessage — FQN inclusion on both branches', () => {
+  // R18 added the FQN to the wrong-exit-code branch. R19 caught that
+  // the setTimeout-budget branch was missed AND had no test pinning
+  // it. Falsifier: drop `'${resourceFqn}'` from the template; this
+  // assertion fails.
+  it('includes the resource FQN', () => {
+    expect(onExitTimeoutMessage('my-cmd', 1000, 0)).toMatch(
+      /'my-cmd'.*did not exit within 1000ms.*expected code 0/,
+    );
+  });
+  it('FQNs with hyphens, dots, slashes survive interpolation', () => {
+    expect(onExitTimeoutMessage('stack.sub/migrate-v2', 500, 7)).toContain(
+      "'stack.sub/migrate-v2'",
+    );
+  });
+});
 
 describe('startLocalCommand — spawn error path', () => {
   it('ENOENT on bad command rejects `ready` with an actionable message', async () => {
@@ -33,6 +50,36 @@ describe('startLocalCommand — spawn error path', () => {
     // it tries to invoke an absent binary. Both paths must surface a
     // user-actionable rejection — never silently resolve.
     await expect(handle.ready).rejects.toThrow();
+  });
+});
+
+describe('startLocalCommand — stream error listeners (R18 fix, R19 TDD gap)', () => {
+  it('emits-error events on stdout/stderr do not throw uncaught', async () => {
+    // Falsifier: removing the `child.stdout.on('error', …)` /
+    // `child.stderr.on('error', …)` blocks would let an emit-on-stream
+    // surface as an uncaughtException, crashing the test process. We
+    // assert that emitting an error on the stream is handled (the test
+    // continues, the handle's promise settles normally) instead of
+    // taking down the process.
+    const handle = startLocalCommand({
+      resourceFqn: 'stream-error',
+      spec: {
+        command: `node -e "console.log('ok'); setTimeout(() => process.exit(0), 100);"`,
+        readiness: { logMatch: /ok/ },
+      },
+      resolvedEnv: {},
+      stdioMode: 'prefixed',
+    });
+    await handle.ready;
+    // Synthetic stream 'error' — without the listener this becomes
+    // uncaughtException. With the listener (the R18 fix) it's logged
+    // and the process continues. We assert no throw escapes here.
+    expect(() => {
+      handle.child.stdout?.emit('error', new Error('synthetic EPIPE'));
+      handle.child.stderr?.emit('error', new Error('synthetic EPIPE'));
+    }).not.toThrow();
+    await handle.kill();
+    await handle.exited;
   });
 });
 
@@ -276,6 +323,57 @@ describe('provisionLocalCommandNode — post-readiness-exit detection', () => {
     ).rejects.toThrow(
       /local-command.*matches-then-dies.*exited.*immediately after readiness fired/,
     );
+  });
+
+  it('refuses to spawn when shutdown flips DURING the resolveEnv await (R19 residual)', async () => {
+    // The R18 fix checked shuttingDown only BEFORE resolveEnv. R19's
+    // runtime reviewer pointed out the await window itself is a race
+    // window: any spec.env containing a ref leaf yields via
+    // resolveLeaf, and SIGINT during that yield arrives AFTER the
+    // pre-check passed. Without the post-await re-check, we then
+    // spawn a detached child that the shutdown handler's snapshot
+    // already missed.
+    //
+    // To exercise the post-resolveEnv check, we need an `env` that
+    // contains at least one ref. Use a minimal fake ref that the
+    // runtime's resolveEnv knows how to resolve.
+    const node = planNodeFor(
+      {
+        command: `node -e "setTimeout(() => {}, 60_000);"`,
+        env: { FOO: 'bar' }, // no refs — but the post-await check
+        // fires regardless of whether the await yielded.
+        readiness: { logMatch: /never/ },
+      },
+      'race-during-await',
+    );
+    const live: any[] = [];
+    const runtime = fakeRuntime();
+    // Race shape: shuttingDown is false at function entry (so the
+    // pre-await guard PASSES), but flips to true before the post-await
+    // guard runs. We can't easily race a real microtask, so mutate the
+    // runtime object such that the property returns false on first
+    // read and true on subsequent reads — same observable timing.
+    let reads = 0;
+    Object.defineProperty(runtime.shuttingDown, 'value', {
+      get() {
+        const v = reads > 0;
+        reads += 1;
+        return v;
+      },
+    });
+    await expect(
+      provisionLocalCommandNode({
+        runtime,
+        node,
+        cwd: process.cwd(),
+        stdioMode: 'prefixed',
+        liveLocalCommands: live,
+      }),
+    ).rejects.toThrow(/shutdown in flight/);
+    // Critical: never pushed into the live list. If the pre-resolveEnv
+    // check were the only guard, we'd have spawned and pushed before
+    // throwing.
+    expect(live).toHaveLength(0);
   });
 
   it('refuses to spawn when shutdown is already in flight (race fix)', async () => {

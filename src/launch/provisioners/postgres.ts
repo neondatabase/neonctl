@@ -275,6 +275,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Single source of truth for the archived-branch error message — used
+ * by both the first-time-found path and the concurrent-create
+ * race-fallback path. Earlier versions duplicated the message and the
+ * race path still pointed at `\`neon branches restore <name> --project-id <id>\``
+ * after the first path was fixed. The duplicate ALSO suggested an
+ * invalid CLI form (`neon branches restore` requires `<source>` as
+ * the second positional per src/commands/branches.ts; it's PITR-style
+ * restore, not unarchive). Centralizing here so a future "helpful
+ * rewrite" can't introduce the same drift again.
+ *
+ * Honesty note: the prior version said "Archived branches auto-restore
+ * when first accessed" — TRUE for psql/connection-string access, but
+ * the launcher's pre-check uses `findBranchByName` (a list call), which
+ * does NOT trigger auto-restore. So re-running won't unwedge.
+ */
+export function archivedBranchMessage(
+  branchName: string,
+  projectId: string,
+): string {
+  return [
+    `[neon launch] Branch '${branchName}' is archived.`,
+    `Unarchive via the console at https://console.neon.tech/app/projects/${projectId}/branches,`,
+    `then re-run \`neon launch\`. Or rename it in your neon.ts so the launcher creates a fresh branch.`,
+  ].join('\n');
+}
+
 async function findEndpoint(
   api: NeonApi,
   projectId: string,
@@ -377,12 +404,7 @@ export async function provisionPostgres(opts: {
     // restore. Polling would just burn the per-branch timeout.
     if (branch.current_state === 'archived') {
       throw new LaunchError(
-        [
-          `[neon launch] Branch '${spec.name}' is archived.`,
-          `Archived branches auto-restore when first accessed; if you'd rather skip the wait,`,
-          `restore via the console at https://console.neon.tech/app/projects/${projectId}/branches`,
-          `or rename it in your neon.ts so the launcher creates a fresh one.`,
-        ].join('\n'),
+        archivedBranchMessage(spec.name, projectId),
         ExitCode.CONFIG_ERROR,
       );
     }
@@ -466,11 +488,7 @@ export async function provisionPostgres(opts: {
           // and burn the full `branchTimeoutSeconds` budget.
           if (existing.current_state === 'archived') {
             throw new LaunchError(
-              [
-                `[neon launch] Branch '${spec.name}' is archived.`,
-                `Restore it first: \`neon branches restore ${spec.name} --project-id ${projectId}\``,
-                `or rename it in your neon.ts so the launcher creates a fresh one.`,
-              ].join('\n'),
+              archivedBranchMessage(spec.name, projectId),
               ExitCode.CONFIG_ERROR,
             );
           }

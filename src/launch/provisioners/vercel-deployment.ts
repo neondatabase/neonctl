@@ -80,6 +80,47 @@ export function wrapTeam(path: string, ctx: VercelClientCtx): string {
 }
 
 /**
+ * Build the `deploymentOpts` bag passed to `@vercel/client.createDeployment`.
+ *
+ * Both `commitRef` and `commitSha` are independently optional in the
+ * Vercel `GitMetadata` type (verified at
+ * `node_modules/@vercel/client/dist/types.d.ts:152` against the
+ * `@vercel/client` version this PR pins; both are typed
+ * `string | undefined`). So we send whichever we have rather than
+ * dropping the whole `gitMetadata` when one is missing — that lets the
+ * dashboard at least label the branch when the SHA is unavailable
+ * (explicit `--branch` flag inside a non-git cwd; a shallow clone with
+ * no HEAD ref; CI environments that pre-set GITHUB_HEAD_REF without
+ * checking out the SHA).
+ *
+ * Falsifier: revert to `commitSha ? {commitRef, commitSha} : undefined`
+ * — then a `--branch=hotfix-123` run inside a non-git working dir
+ * loses the branch label on the Vercel deploy. Test below pins this.
+ */
+export function buildDeploymentOpts(opts: {
+  projectName: string;
+  production: boolean;
+  gitBranch: string;
+  commitSha: string | undefined;
+}): {
+  name: string;
+  target: 'production' | undefined;
+  gitMetadata: { commitRef?: string; commitSha?: string } | undefined;
+} {
+  return {
+    name: opts.projectName,
+    target: opts.production ? 'production' : undefined,
+    gitMetadata:
+      opts.gitBranch || opts.commitSha
+        ? {
+            ...(opts.gitBranch ? { commitRef: opts.gitBranch } : {}),
+            ...(opts.commitSha ? { commitSha: opts.commitSha } : {}),
+          }
+        : undefined,
+  };
+}
+
+/**
  * Is the cached VERCEL_TEAM_ID stale given the current `spec.team`?
  *
  * Stale when the user has a slug-based binding (`spec.team` set) and
@@ -400,22 +441,12 @@ export async function createDeployment(opts: {
   // deployment to an existing project by name. Passing the id would 4xx or
   // create a new project named after the id. Resolved via `resolveProject`
   // upstream.
-  const deploymentOpts = {
-    name: opts.projectName,
-    target: opts.production ? 'production' : undefined,
-    // Both commitRef and commitSha are independently optional in the
-    // Vercel GitMetadata type (node_modules/@vercel/client/dist/types.d.ts:152).
-    // Send whichever we have so the dashboard at least labels the branch
-    // when the SHA is unavailable (e.g. an explicit --branch flag inside
-    // a non-git working directory, or a shallow clone with no HEAD ref).
-    gitMetadata:
-      opts.gitBranch || commitSha
-        ? {
-            ...(opts.gitBranch ? { commitRef: opts.gitBranch } : {}),
-            ...(commitSha ? { commitSha } : {}),
-          }
-        : undefined,
-  };
+  const deploymentOpts = buildDeploymentOpts({
+    projectName: opts.projectName,
+    production: opts.production,
+    gitBranch: opts.gitBranch,
+    commitSha,
+  });
 
   // Terminal-event handling:
   //   - PREVIEW success: 'ready' resolves with the per-deploy URL (the
@@ -676,18 +707,29 @@ export async function provisionVercelDeployment(opts: {
 
   // 3. Persist resolved ids/names so the next run can skip the lookup.
   // VERCEL_TEAM_SLUG is recorded so the next run can detect a
-  // spec.team change and invalidate the stale VERCEL_TEAM_ID. When the
-  // user pivots from `spec.team` to `spec.teamId` (no slug), we MUST
-  // clear the stale slug — otherwise a future flip back to `spec.team`
-  // would match the cached slug and reuse a teamId that belongs to a
-  // different team. Falsifier: drop the `: null` branch and the
-  // VERCEL_TEAM_SLUG/VERCEL_TEAM_ID pairing aliases across runs.
+  // spec.team change and invalidate the stale VERCEL_TEAM_ID. Two
+  // pivot scenarios require clearing cached state:
+  //
+  //   (a) `spec.team` → `spec.teamId` (no slug): clear VERCEL_TEAM_SLUG
+  //       so a flip back to `spec.team` doesn't reuse a stale slug→id
+  //       pairing.
+  //   (b) `spec.team` (or `spec.teamId`) → neither (personal-account
+  //       deploy): clear BOTH cached values. Otherwise the next run
+  //       reads VERCEL_TEAM_ID from .neon-launch.env (precedence in
+  //       runner.ts:807 puts it after process.env but before nothing),
+  //       and silently deploys to the prior team instead of the
+  //       personal account the user intended.
+  //
+  // Falsifier: drop either `: null` branch and watch cross-team aliasing
+  // return. Pinned by context.test.ts (delete sentinel) + the
+  // vercel-deployment tests below.
+  const wantsTeam = !!opts.spec.team || !!opts.spec.teamId;
   const persist: Record<string, string | null> = {
     VERCEL_PROJECT_ID: project.id,
     VERCEL_PROJECT_NAME: project.name,
     VERCEL_TEAM_SLUG: opts.spec.team ?? null,
+    VERCEL_TEAM_ID: wantsTeam && teamId ? teamId : null,
   };
-  if (teamId) persist.VERCEL_TEAM_ID = teamId;
   await writeNeonLaunchEnv(opts.repoRoot, persist);
 
   // 4. Env-var upsert.
