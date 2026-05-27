@@ -600,11 +600,13 @@ describe('sendQuery — errors', () => {
     expect(text).toMatch(/^\s+\^$/m);
     expect(text).toContain('DETAIL:  parse failed');
     expect(text).toContain('HINT:  check spelling');
-    // The leading severity line carries the upstream `psql: ` diagnostic
-    // prefix that `pg_log_pre_callback` prepends. Subsequent layers
-    // (LINE / caret / DETAIL / HINT / LOCATION) stay unprefixed to match
-    // libpq's `PQresultErrorMessage` output shape.
-    expect(text).toMatch(/^psql: ERROR: {2}syntax error at or near "FOO"$/m);
+    // No `psql:` diagnostic prefix when reading from stdin (the default
+    // `curCmdSource` in the mock). Upstream `psql_log_pre_callback` only
+    // emits `psql:<file>:<line>: ` when `cur_cmd_source == QUERY_FROM_FILE`
+    // (i.e. `-f FILE` / `\i FILE`); the regress harness drives via stdin
+    // pipe so the expected `.out` shape is the bare `ERROR:` line.
+    expect(text).toMatch(/^ERROR: {2}syntax error at or near "FOO"$/m);
+    expect(text).not.toMatch(/^psql:/m);
   });
 
   test('verbose verbosity exposes the SQLSTATE on the severity line', async () => {

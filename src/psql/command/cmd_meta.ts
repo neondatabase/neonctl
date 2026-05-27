@@ -384,25 +384,29 @@ export const cmdSetenv: BackslashCmdSpec = {
 
 /**
  * Build the `psql:` diagnostic prefix that upstream `pg_log_pre_callback`
- * prepends to every error line:
+ * prepends to error lines, but ONLY when reading from a script file. Mirrors:
  *
- *   - When no `inputfile` is active (interactive REPL, stdin script): `psql: `.
- *   - When an `inputfile` is set (running under `\i`, `-f FILE`, or psqlrc):
- *     `psql:<inputfile>:<lineno>: ` — pinning the line is best-effort and the
- *     caller may pass `undefined` to suppress it.
+ *   if (cur_cmd_source == QUERY_FROM_FILE)
+ *       fprintf(stderr, "psql:%s:%d: ", cur_cmd_filename, cur_cmd_lineno);
  *
- * Returned string always ends in a single trailing space so callers can
+ *   - `curCmdSource === 'file'` (running under `-f FILE`, `\i FILE`,
+ *     `\ir FILE`, or `.psqlrc`): `psql:<inputfile>:<lineno>: `.
+ *   - Stdin pipe, `-c "..."`, interactive REPL: empty string — vanilla
+ *     `psql --no-psqlrc -X` reading SQL from stdin emits NO prefix on
+ *     either `\set` validation errors or server `ERROR:` lines.
+ *
+ * Returned string ends in a trailing space when non-empty so callers can
  * concatenate the severity directly (`prefix + 'ERROR:  msg'`).
  */
 export const psqlErrorPrefix = (
   settings: PsqlSettings,
   lineNumber?: number,
 ): string => {
-  if (settings.inputfile) {
+  if (settings.curCmdSource === 'file' && settings.inputfile) {
     const lineSuffix = lineNumber !== undefined ? String(lineNumber) : '';
     return `psql:${settings.inputfile}:${lineSuffix}: `;
   }
-  return 'psql: ';
+  return '';
 };
 
 /**

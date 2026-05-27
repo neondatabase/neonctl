@@ -426,11 +426,15 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       });
       // Match the upstream verbose re-render — two error reports, each
       // followed by `LINE 1: SELECT error;` + a `^` pointer line, then
-      // a `LOCATION:` footer on the second report. The `psql:<stdin>:N`
-      // prefix is approximated with a loose `^psql:.* ERROR:` anchor so
-      // this passes whether or not the TS psql tracks input line nums.
+      // a `LOCATION:` footer on the second report. No `psql:` prefix:
+      // `runPsqlScript` pipes the script via stdin (no `-f -`), so
+      // `curCmdSource === 'stdin'` and upstream `psql_log_pre_callback`
+      // emits no prefix. Upstream's own TAP test uses `-f -` (which sets
+      // `curCmdSource === 'file'` with filename `<stdin>`) — that path
+      // would produce the `psql:<stdin>:N: ` prefix, but our harness
+      // doesn't exercise it.
       expect(r.stderr).toMatch(
-        /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+        /^ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
       );
     });
 
@@ -441,7 +445,7 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         script: '\\set FETCH_COUNT 1\nSELECT error;\n\\errverbose',
       });
       expect(r.stderr).toMatch(
-        /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+        /^ERROR: {2}.*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error;$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
       );
     });
 
@@ -452,7 +456,7 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         script: 'SELECT error\\gdesc\n\\errverbose',
       });
       expect(r.stderr).toMatch(
-        /^psql:.* ERROR: {2}.*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^psql:.*ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
+        /^ERROR: {2}.*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^ERROR: {2}[0-9A-Z]{5}: .*$\n^LINE 1: SELECT error$\n^ +\^.*$\n^LOCATION: {2}.*$/m,
       );
     });
   });

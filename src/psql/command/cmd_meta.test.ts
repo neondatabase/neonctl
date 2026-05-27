@@ -253,8 +253,10 @@ describe('\\set', () => {
     const r = await run(cmdSet, ctx);
     expect(r.status).toBe('error');
     // Upstream `exec_command_set` emits `invalid variable name: "<name>"`
-    // via `pg_log_error`, which prepends the `psql:` diagnostic prefix.
-    expect(stderr()).toMatch(/^psql: invalid variable name: "1bad"\n$/);
+    // via `pg_log_error`. With the default `curCmdSource === 'stdin'`,
+    // `psql_log_pre_callback` adds no prefix — only `-f FILE` / `\i` paths
+    // get the `psql:<file>:<line>: ` prefix.
+    expect(stderr()).toMatch(/^invalid variable name: "1bad"\n$/);
   });
 
   test('invalid characters in name (e.g. "/" — regress/psql line 9)', async () => {
@@ -262,7 +264,7 @@ describe('\\set', () => {
     const ctx = makeMockCtx('set', 'invalid/name foo', settings);
     const r = await run(cmdSet, ctx);
     expect(r.status).toBe('error');
-    expect(stderr()).toBe('psql: invalid variable name: "invalid/name"\n');
+    expect(stderr()).toBe('invalid variable name: "invalid/name"\n');
   });
 
   test('AUTOCOMMIT non-boolean errors with upstream wording', async () => {
@@ -271,7 +273,7 @@ describe('\\set', () => {
     const r = await run(cmdSet, ctx);
     expect(r.status).toBe('error');
     expect(stderr()).toBe(
-      'psql: unrecognized value "foo" for "AUTOCOMMIT": Boolean expected\n',
+      'unrecognized value "foo" for "AUTOCOMMIT": Boolean expected\n',
     );
   });
 
@@ -281,7 +283,7 @@ describe('\\set', () => {
     const r = await run(cmdSet, ctx);
     expect(r.status).toBe('error');
     expect(stderr()).toBe(
-      'psql: invalid value "foo" for "FETCH_COUNT": integer expected\n',
+      'invalid value "foo" for "FETCH_COUNT": integer expected\n',
     );
   });
 
@@ -291,7 +293,7 @@ describe('\\set', () => {
     const r = await run(cmdSet, ctx);
     expect(r.status).toBe('error');
     expect(stderr()).toBe(
-      'psql: unrecognized value "foo" for "ON_ERROR_ROLLBACK"\n' +
+      'unrecognized value "foo" for "ON_ERROR_ROLLBACK"\n' +
         'Available values are: on, off, interactive.\n',
     );
   });
@@ -401,15 +403,16 @@ describe('\\errverbose', () => {
     expect(stdout()).toMatch(/no previous error/);
   });
 
-  test('prints stored error to stderr with psql: prefix', async () => {
+  test('prints stored error to stderr (no prefix in stdin/interactive)', async () => {
     const settings = defaultSettings(createVarStore());
     settings.lastErrorResult = { sqlstate: '42P01', message: 'oops' };
     const ctx = makeMockCtx('errverbose', '', settings);
     await run(cmdErrverbose, ctx);
     // Upstream `exec_command_errverbose` writes the verbose re-render to
-    // stderr (via `pg_log_error`), with the `psql: ` diagnostic prefix on
-    // the leading severity line.
-    expect(stderr()).toMatch(/^psql: /m);
+    // stderr. The `psql:<file>:<n>: ` prefix only fires when
+    // `curCmdSource === 'file'` — the default 'stdin' source emits no
+    // prefix.
+    expect(stderr()).not.toMatch(/^psql: /m);
     expect(stderr()).toMatch(/oops/);
     expect(stderr()).toMatch(/42P01/);
   });
