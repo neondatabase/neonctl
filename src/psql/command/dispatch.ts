@@ -77,6 +77,7 @@ import { registerDescribeCommands } from './cmd_describe.js';
 import { registerPipelineCommands } from './cmd_pipeline.js';
 import { registerMiscCommands } from './cmd_misc.js';
 import { registerLargeObjectCommands } from './cmd_lo.js';
+import { registerShowCommands } from './cmd_show.js';
 import {
   isCommandRestricted,
   registerRestrictCommands,
@@ -361,6 +362,7 @@ export const defaultRegistry = (): BackslashRegistry => {
   registerPipelineCommands(r);
   registerMiscCommands(r);
   registerLargeObjectCommands(r);
+  registerShowCommands(r);
   registerRestrictCommands(r);
   // Must run after every other `register*` call so the wrappers see the
   // final specs for the restricted command names (e.g. `\!`, `\cd`, `\copy`,
