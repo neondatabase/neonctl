@@ -904,6 +904,12 @@ export const sendQuery = async (
     durationMs: 0,
   };
 
+  // Track the most recent SQL we're about to ship so `\g` / `\gx` with an
+  // empty buffer can re-run it (upstream `pset.last_query`). Capture even
+  // if the dispatch fails — upstream populates `last_query` before
+  // `PSQLexec` and leaves it set on error.
+  ctx.settings.lastQuery = sql;
+
   if (!ctx.settings.db) {
     writeError(ctx, 'no connection to the server');
     stats.hadError = true;

@@ -44,6 +44,15 @@ export type PsqlSettings = {
   logfile: NodeJS.WritableStream | null;
   timing: boolean;
   lastErrorResult: LastErrorResult | null;
+  /**
+   * The most recent SQL string our impl actually shipped to the server via
+   * `execSimple` / cursor / extended-pipeline. Upstream tracks this in
+   * `pset.last_query` (called from `SendQuery`) so `\g` / `\gx` invoked with
+   * an empty buffer re-run the prior query. Captured at the start of each
+   * dispatch in `sendQuery`; cleared by `\r` (reset_query_state — not yet
+   * wired). Empty string means "no prior query yet" — `\g` then no-ops.
+   */
+  lastQuery: string;
 };
 
 /**

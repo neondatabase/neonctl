@@ -153,6 +153,7 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
     logfile: null,
     timing: false,
     lastErrorResult: null,
+    lastQuery: '',
   };
 
   // Seed the PROMPT psql variables and wire them to the settings fields so

@@ -474,14 +474,17 @@ const runGCore = async (
   ctx: BackslashContext,
   forceExpanded: boolean,
 ): Promise<BackslashResult> => {
-  const sql = ctx.queryBuf.trim();
+  const bufSql = ctx.queryBuf.trim();
   const target = ctx.nextArg('filepipe');
 
+  // `\g` / `\gx` with an empty buffer re-runs the most recently submitted
+  // query — upstream tracks this in `pset.last_query` and `PSQLexec` reads
+  // it when the active buffer is empty. We mirror via `settings.lastQuery`,
+  // populated in `sendQuery` before dispatch.
+  const sql = bufSql.length > 0 ? bufSql : ctx.settings.lastQuery.trim();
+
   if (sql.length === 0) {
-    // psql treats bare `\g` with an empty buffer as a no-op; the prior
-    // command's last result is what's "re-run" in real psql. For our
-    // purposes returning ok with an empty buf reset matches the visible
-    // behaviour without state we don't have.
+    // No buffered SQL and no prior query — silent no-op like upstream.
     return { status: 'reset-buf', newBuf: '' };
   }
 
@@ -504,6 +507,10 @@ const runGCore = async (
   const topt = ctx.settings.popt.topt;
   const priorExpanded = topt.expanded;
   if (forceExpanded) topt.expanded = 'on';
+
+  // Track for `\g` / `\gx` re-run with empty buffer. Upstream sets
+  // `pset.last_query` in `PSQLexec` before dispatch.
+  ctx.settings.lastQuery = sql;
 
   let execError: string | null = null;
   try {
