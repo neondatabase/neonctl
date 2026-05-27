@@ -1,0 +1,17 @@
+{
+  "name": "neon-launch-vercel-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reference config for `neon launch` against a Next.js + Drizzle + Vercel + Neon Postgres stack.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "launch": "neonctl launch",
+    "launch:preview": "neonctl launch --preview",
+    "launch:prod": "neonctl launch --prod"
+  },
+  "devDependencies": {
+    "neonctl": "file:../.."
+  }
+}

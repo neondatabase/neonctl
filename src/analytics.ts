@@ -105,10 +105,20 @@ export const analyticsMiddleware = async (args: {
   });
 };
 
-export const closeAnalytics = async () => {
+export const closeAnalytics = async (opts?: { timeoutMs?: number }) => {
   if (client) {
     log.debug('Flushing CLI analytics');
-    await client.closeAndFlush();
+    // Segment's default closeAndFlush timeout is flushInterval * 1.25
+    // (~12.5s on the 10s flushInterval default). On a SIGINT path with
+    // a flaky network the user would experience a multi-second hang
+    // before exit. Callers in interactive shutdown paths pass a tighter
+    // timeout (e.g. 1500ms) — at-most-once delivery is acceptable for
+    // SIGINT analytics.
+    if (opts?.timeoutMs !== undefined) {
+      await client.closeAndFlush({ timeout: opts.timeoutMs });
+    } else {
+      await client.closeAndFlush();
+    }
     log.debug('Flushed CLI analytics');
   }
 };
