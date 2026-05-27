@@ -408,11 +408,28 @@ type Glyphs = {
   botLeft: string;
   botMid: string;
   botRight: string;
-  // wrap markers in the gutter when border != 0.
+  // Wrap / newline indicators inside data and header rows. Mirrors
+  // upstream `printTextFormat` in `fe_utils/print.c`:
+  //   headerNlLeft  - emitted in the leading-gutter slot for header lines
+  //                   that are continuations (curr_nl_line > 0).
+  //   headerNlRight - emitted in the trailing slot for header columns that
+  //                   still have more lines below ("+" for ASCII, "↵" for
+  //                   Unicode).
+  //   nlLeft / nlRight - same idea for data rows.
+  //   wrapLeft / wrapRight - emitted instead of nl markers when the
+  //                   continuation is from in-cell wrapping (not a `\n`
+  //                   split): "." for ASCII, "…" for Unicode.
+  //   wrapRightBorder - when true (ASCII / Unicode), the trailing
+  //                   marker is always emitted even at border=0 / on the
+  //                   last column. When false (old-ascii), markers are
+  //                   suppressed at the table edge for border=0.
+  headerNlLeft: string;
+  headerNlRight: string;
   wrapLeft: string;
   wrapRight: string;
   nlLeft: string;
   nlRight: string;
+  wrapRightBorder: boolean;
 };
 
 const ASCII_GLYPHS: Glyphs = {
@@ -427,10 +444,13 @@ const ASCII_GLYPHS: Glyphs = {
   botLeft: '+',
   botMid: '+',
   botRight: '+',
-  wrapLeft: ' ',
-  wrapRight: ' ',
+  headerNlLeft: ' ',
+  headerNlRight: '+',
+  wrapLeft: '.',
+  wrapRight: '.',
   nlLeft: ' ',
-  nlRight: ' ',
+  nlRight: '+',
+  wrapRightBorder: true,
 };
 
 // Light box-drawing glyphs (the only Unicode variant we expose today —
@@ -466,10 +486,16 @@ const UNICODE_GLYPHS: Glyphs = {
   botLeft: '└',
   botMid: '┴',
   botRight: '┘',
-  wrapLeft: ' ',
-  wrapRight: ' ',
+  // U+21B5 ↵ "Downwards Arrow with Corner Leftwards" — newline marker.
+  // U+2026 … "Horizontal Ellipsis" — in-cell wrap marker.
+  // Matches `unicode_style` in upstream `fe_utils/print.c`.
+  headerNlLeft: ' ',
+  headerNlRight: '↵',
+  wrapLeft: '…',
+  wrapRight: '…',
   nlLeft: ' ',
-  nlRight: ' ',
+  nlRight: '↵',
+  wrapRightBorder: true,
 };
 
 const glyphsFor = (style: Unicode2LineStyle): Glyphs =>
@@ -659,14 +685,21 @@ const renderHorizontal = (
         }
       }
 
-      const sepCost = border === 0 ? 1 : 3;
-      const sideCost = border === 2 || border === 3 ? 4 : 0;
+      // Total fixed overhead. Mirrors upstream `print.c` lines 763-769:
+      //   border 0: col_count          (one trailing-marker slot per cell)
+      //   border 1: col_count * 3 - 1  (3 slots per cell minus shared sep)
+      //   border 2: col_count * 3 + 1  (3 slots per cell plus outer rules)
+      // For ASCII / Unicode the trailing marker slot is always emitted
+      // (wrap_right_border=true), so the formula matches verbatim.
+      const overheadFor = (n: number): number => {
+        if (border === 0) return n;
+        if (border === 1) return n * 3 - (n > 0 ? 1 : 0);
+        return n * 3 + 1;
+      };
+      const overhead = overheadFor(colCount);
       const totalHeaderWidth =
-        sideCost +
-        headerCells.reduce((a, c) => a + c.width, 0) +
-        sepCost * Math.max(0, colCount - 1);
-      let total = sideCost + widths.reduce((a, b) => a + b, 0);
-      total += sepCost * Math.max(0, colCount - 1);
+        overhead + headerCells.reduce((a, c) => a + c.width, 0);
+      let total = overhead + widths.reduce((a, b) => a + b, 0);
 
       // Upstream guards against shrinking when even the headers don't
       // fit — there's no point picking columns to wrap if the rule row
@@ -711,31 +744,47 @@ const renderHorizontal = (
 
   // ------- Header row(s) -------
   if (!tuplesOnly) {
-    // Header may be multiline; print each header line as its own row.
-    const headerLineCount = Math.max(
-      1,
-      ...headerCells.map((c) => c.lines.length),
-    );
+    // For wrapped mode the header column may itself need wrapping if its
+    // own width exceeds the (possibly shrunk) column width. Upstream
+    // `print_aligned_text` only computes header line breaks based on `\n`
+    // splits — header text that's wider than the column wraps onto the
+    // next display line via the same wrap loop as the data path. We
+    // mirror that by passing the header text through `wrapLine` in
+    // wrapped mode (and through the simple `\n` split for plain mode).
+    const headerColLines: string[][] = headerCells.map((c, i) => {
+      if (!wrapped) return c.lines;
+      const out: string[] = [];
+      for (const line of c.lines) {
+        out.push(...wrapLine(line, widths[i]));
+      }
+      return out;
+    });
+    const headerLineCount = Math.max(1, ...headerColLines.map((l) => l.length));
     for (let lineIdx = 0; lineIdx < headerLineCount; lineIdx++) {
-      out += renderDataLine(
-        headerCells.map((c) => c.lines[lineIdx] ?? ''),
+      // Per-column wrap state for this physical header line:
+      //   `wrap`   the cell has more content to emit on the next line
+      //            via in-cell wrapping (wrap_left/wrap_right marker)
+      //   `nl`     the cell has more `\n`-split content below
+      //            (header_nl_left/header_nl_right marker)
+      //   `none`   the cell is done (already emitted its last line)
+      const cellWrapPrev: ('wrap' | 'nl' | 'none')[] = headerColLines.map(
+        (l) => (lineIdx > 0 && lineIdx < l.length ? 'nl' : 'none'),
+      );
+      const cellWrapNext: ('wrap' | 'nl' | 'none')[] = headerColLines.map(
+        (l) => (lineIdx < l.length - 1 ? 'nl' : 'none'),
+      );
+      out += renderHeaderLine(
+        headerColLines.map((l) => l[lineIdx] ?? ''),
         widths,
-        aligns.map(() => 'center' as Alignment),
         border,
         glyphs,
-        /* leftGutter */ ' ',
-        /* isHeader */ true,
+        cellWrapPrev,
+        cellWrapNext,
       );
       out += newline;
     }
     // Header rule.
-    if (border >= 1) {
-      out += buildRule(widths, border, glyphs, 'middle') + newline;
-    } else {
-      // border 0: psql emits a row of '-'s with single-space gaps as
-      // the header underline.
-      out += buildRule(widths, border, glyphs, 'middle') + newline;
-    }
+    out += buildRule(widths, border, glyphs, 'middle') + newline;
   }
 
   // ------- Data rows -------
@@ -753,39 +802,61 @@ const renderHorizontal = (
       }
       return out;
     });
+    // We also need to know, per column, which output lines originated as
+    // wrap continuations (vs. `\n` splits) so the markers can pick the
+    // correct glyph: `.` (wrap_left/right) when wrapped from an
+    // over-width source line, `+` (nl_left/right) when split by a literal
+    // newline in the cell content.
+    //
+    // We classify by walking the original cell.lines: each source line
+    // expands to N display lines (N >= 1) via `wrapLine`. The first
+    // expansion is "nl" (or the very first line of the cell, which has
+    // no marker), the rest are "wrap" continuations of the same source
+    // line.
+    const colLineKinds: ('start' | 'wrap' | 'nl')[][] = row.map((cell, i) => {
+      const kinds: ('start' | 'wrap' | 'nl')[] = [];
+      const lines = cell.lines;
+      for (let si = 0; si < lines.length; si++) {
+        const chunks = wrapped ? wrapLine(lines[si], widths[i]) : [lines[si]];
+        for (let ci = 0; ci < chunks.length; ci++) {
+          if (si === 0 && ci === 0) kinds.push('start');
+          else if (ci === 0) kinds.push('nl');
+          else kinds.push('wrap');
+        }
+      }
+      return kinds;
+    });
     const lineCount = Math.max(1, ...colLines.map((l) => l.length));
-    // Per-cell continuation markers. For each cell on each line:
-    //   - if the cell has more lines below (li < l.length - 1),
-    //     emit `+` between content and column separator. This mirrors
-    //     upstream's `format_buf[i].lines > j+1` branch in
-    //     `print_aligned_text`.
-    // Upstream additionally uses `.` (instead of space) as the leading
-    // gutter when the FIRST cell is a wrap-continuation line; that's
-    // wrap-mode-only. In non-wrap mode `\n`-split cells keep the
-    // leading-gutter as a plain space.
+
     for (let li = 0; li < lineCount; li++) {
-      const lineCells = colLines.map((l) => l[li] ?? '');
-      const continuations = colLines.map((l) => (li < l.length - 1 ? '+' : ''));
-      // Leading gutter: `.` only for wrap-continuation of column 0 (the
-      // line was synthesised by `wrapLine`, not present in the original
-      // `cell.lines`). In non-wrap mode every "extra" line for column 0
-      // came from a `\n` split, so leftGutter stays as a space and the
-      // continuation indicator lives in the cell gap as `+`.
-      const firstColWrap =
-        wrapped &&
-        li > 0 &&
-        li < colLines[0].length &&
-        colLines[0].length > (row[0]?.lines.length ?? 0);
-      const leftGutter = firstColWrap ? '.' : ' ';
+      // For each column, determine the wrap state for THIS output line.
+      // The LEFT marker is selected by `cellWrapPrev[j]`: what kind of
+      // continuation made this line exist (the `kind` of the current
+      // line — `wrap` or `nl` — only matters when li > 0).
+      // The RIGHT marker is selected by `cellWrapNext[j]`: the kind of
+      // the NEXT line (li + 1), which tells us whether this cell is
+      // still emitting more content.
+      const cellWrapPrev: ('wrap' | 'nl' | 'none')[] = colLineKinds.map(
+        (kinds, j) => {
+          if (li === 0 || li >= colLines[j].length) return 'none';
+          return kinds[li] === 'wrap' ? 'wrap' : 'nl';
+        },
+      );
+      const cellWrapNext: ('wrap' | 'nl' | 'none')[] = colLineKinds.map(
+        (kinds, j) => {
+          const nextIdx = li + 1;
+          if (nextIdx >= colLines[j].length) return 'none';
+          return kinds[nextIdx] === 'wrap' ? 'wrap' : 'nl';
+        },
+      );
       out += renderDataLine(
-        lineCells,
+        colLines.map((l) => l[li] ?? ''),
         widths,
         aligns,
         border,
         glyphs,
-        leftGutter,
-        /* isHeader */ false,
-        continuations,
+        cellWrapPrev,
+        cellWrapNext,
       );
       out += newline;
     }
@@ -822,18 +893,142 @@ const renderHorizontal = (
   return out;
 };
 
+type WrapState = 'wrap' | 'nl' | 'none';
+
 /**
- * Render one display-line of a horizontal row.
+ * Right-marker glyph for a data row's cell. Mirrors the `wrap[j]`-driven
+ * fputs at upstream `print.c` lines 1151-1156:
+ *   PRINT_LINE_WRAP_WRAP    → format->wrap_right  (`.` ascii, `…` unicode)
+ *   PRINT_LINE_WRAP_NEWLINE → format->nl_right    (`+` ascii, `↵` unicode)
+ *   PRINT_LINE_WRAP_NONE    → " " (only when not at the trailing edge
+ *                                  without border)
+ */
+const dataRightMarker = (
+  state: WrapState,
+  glyphs: Glyphs,
+  isLast: boolean,
+  border: BorderStyle,
+): string => {
+  if (state === 'wrap') return glyphs.wrapRight;
+  if (state === 'nl') return glyphs.nlRight;
+  // state === 'none': trailing edge — only emit a space when there's
+  // something AFTER us (another column to follow, or the right border
+  // of a border=2/3 box). For the LAST cell on a borderless row, nothing.
+  if (isLast && border !== 2 && border !== 3) return '';
+  return ' ';
+};
+
+/**
+ * Left-marker glyph for a data row's cell. Mirrors `wrap[j]` at upstream
+ * `print.c` lines 1066-1073:
+ *   PRINT_LINE_WRAP_WRAP    → format->wrap_left  (`.` ascii, `…` unicode)
+ *   PRINT_LINE_WRAP_NEWLINE → format->nl_left    (" " for both ascii/unicode)
+ *   PRINT_LINE_WRAP_NONE    → " "
  *
- * Layout per psql:
- *   border 0:  `<cell1> <cell2> <cell3>`  (no padding spaces, no rules)
- *   border 1:  ` <cell1> | <cell2> | <cell3>` (no outer rules, but each cell
- *              has a 1-char gutter on both sides — the leading gutter on
- *              the first cell can be `.` to mark a continuation line).
- *   border 2:  `| <cell1> | <cell2> | <cell3> |` (full box).
+ * Only emitted when border != 0 (the leading-gutter slot). For border=0
+ * upstream skips this entirely (no leading marker).
+ */
+const dataLeftMarker = (state: WrapState, glyphs: Glyphs): string => {
+  if (state === 'wrap') return glyphs.wrapLeft;
+  if (state === 'nl') return glyphs.nlLeft;
+  return ' ';
+};
+
+/**
+ * Render one display-line of a header row. Centered cells, fixed
+ * `header_nl_*` markers on continuation lines.
  *
- * `leftGutter` is the single-character marker before the first cell
- * content (a space normally, '.' for wrapped-continuation lines).
+ * Layout (with ASCII glyphs):
+ *   border 0:  `<c1centered>[H]<c2centered>[H]` — `wrap_right_border=true`
+ *              means the trailing slot still gets emitted even at table
+ *              edge. `H` = `header_nl_right` ("+") when the next line in
+ *              this column has more content, else " ".
+ *   border 1:  ` <c1centered>[H]| <c2centered>[H]`
+ *              (leading gutter, header_nl_right marker between content and
+ *              separator, optional trailing " " on the very last cell)
+ *   border 2:  `| <c1centered>[H]| <c2centered>[H]|` (full box)
+ */
+const renderHeaderLine = (
+  cells: string[],
+  widths: number[],
+  border: BorderStyle,
+  glyphs: Glyphs,
+  // What kind of continuation produced THIS line (curr_nl_line > 0 in
+  // upstream): determines the leading marker on this side of the cell.
+  cellWrapPrev: WrapState[],
+  // What kind of continuation follows on the NEXT line: determines
+  // the trailing marker for this cell.
+  cellWrapNext: WrapState[],
+): string => {
+  const { vrule } = glyphs;
+  let out = '';
+
+  if (border === 2 || border === 3) out += vrule;
+
+  for (let i = 0; i < cells.length; i++) {
+    const isLast = i === cells.length - 1;
+    // Leading gutter / wrap marker. Upstream `print.c` line 981-984:
+    //   if (opt_border != 0 || (!format->wrap_right_border && i > 0))
+    //     fputs(curr_nl_line ? format->header_nl_left : " ", fout);
+    // For ASCII (wrap_right_border=true): emitted iff border != 0.
+    // For old-ascii (wrap_right_border=false): emitted for non-first
+    // cells too at border=0 (kept for parity even though our type only
+    // exposes ASCII/Unicode today).
+    if (border !== 0 || (!glyphs.wrapRightBorder && i > 0)) {
+      out +=
+        cellWrapPrev[i] === 'nl' || cellWrapPrev[i] === 'wrap'
+          ? glyphs.headerNlLeft
+          : ' ';
+    }
+
+    // Header cells are always centered and padded to full width
+    // (upstream emits `%-*s%s%-*s` regardless of position — no
+    // skip-padding-on-last-cell quirk on header rows).
+    out += padToWidth(cells[i], widths[i], 'center');
+
+    // Trailing marker. Upstream `print.c` line 1003-1005:
+    //   if (opt_border != 0 || format->wrap_right_border)
+    //     fputs(!header_done[i] ? format->header_nl_right : " ", fout);
+    // For ASCII this is always emitted (wrap_right_border=true), so
+    // multi-line headers get `+` between content and the column
+    // separator AND on the trailing edge of the last column.
+    if (border !== 0 || glyphs.wrapRightBorder) {
+      out += cellWrapNext[i] !== 'none' ? glyphs.headerNlRight : ' ';
+    }
+
+    // Column divider (not on the last column).
+    if (!isLast) {
+      if (border === 0) {
+        // Border 0 with wrap_right_border=true: the trailing marker
+        // (above) consumes the would-be separator space, so no extra
+        // separator needed. For old-ascii (wrap_right_border=false) we
+        // still need a single space between columns.
+        if (!glyphs.wrapRightBorder) out += ' ';
+      } else {
+        out += vrule;
+      }
+    }
+  }
+
+  if (border === 2 || border === 3) out += vrule;
+  return out;
+};
+
+/**
+ * Render one display-line of a data row.
+ *
+ * Mirrors upstream `print_aligned_text` (print.c lines 1047-1180): one
+ * loop body, per-column emit `[left-marker] <content> [right-marker]
+ * [column-divider]`, then `[right-border]`. Padding is applied when:
+ *   - the cell is not the last column (finalspaces=true in upstream),
+ *   - OR `wrap[j]` is set (cell continues, so marker needs an aligned
+ *     position).
+ *
+ * Right-aligned columns always pad on the left (spaces first), but per
+ * upstream they get a trailing right-margin pad only at border=2 (the
+ * `finalspaces` branch). For border 0/1 right-aligned columns we follow
+ * the same rule: padding before content, no trailing pad on the last
+ * column when there's no continuation.
  */
 const renderDataLine = (
   cells: string[],
@@ -841,91 +1036,62 @@ const renderDataLine = (
   aligns: Alignment[],
   border: BorderStyle,
   glyphs: Glyphs,
-  leftGutter: string,
-  // Upstream `print_aligned_text` distinguishes header from data:
-  //   header → emit trailing margin space (column-width pad + " ")
-  //   data   → omit trailing pad/margin entirely on the last cell
-  // Verified against vanilla psql 18:
-  //   header: ` ?column? | ?column? ` (trailing space)
-  //   data:   ` foo      | bar`        (no trailing padding/margin)
-  isHeader = false,
-  // Per-cell continuation indicator placed in the gap between the cell
-  // content and the column separator. Mirrors upstream's
-  // `print_aligned_text`:
-  //   `+`  this cell has more `\n`-split lines below ("multi-line continues")
-  //   `.`  this cell line is a wrap-continuation of a too-wide source line
-  //   ``   normal cell (no indicator — emits a space).
-  // Empty array is treated as all-blank, preserving callers that don't
-  // care (header rows, vertical mode).
-  continuations: string[] = [],
+  // For each column, the "wrap state" carried over from the previous
+  // physical line (drives the LEFT marker — `wrap[j]` in upstream's
+  // pre-content fputs).
+  cellWrapPrev: WrapState[],
+  // For each column, the wrap state determined by THIS line's content
+  // and whatever follows on the NEXT line (drives the RIGHT marker and
+  // the column divider glyph).
+  cellWrapNext: WrapState[],
 ): string => {
   const { vrule } = glyphs;
   let out = '';
 
-  if (border === 2 || border === 3) {
-    out += vrule + leftGutter;
-  } else if (border === 1) {
-    out += leftGutter;
-  }
-  // border == 0: nothing on the left.
+  if (border === 2 || border === 3) out += vrule;
 
   for (let i = 0; i < cells.length; i++) {
     const isLast = i === cells.length - 1;
-    // Data rows skip padding on the last cell — vanilla `print_aligned_text`
-    // emits the bare content with no width-padding and no right margin.
-    if (isLast && !isHeader && border !== 2 && border !== 3) {
-      out +=
-        aligns[i] === 'right'
-          ? padToWidth(cells[i], widths[i], 'right')
-          : cells[i];
-    } else {
-      out += padToWidth(cells[i], widths[i], aligns[i]);
+
+    // Left marker. Border 0 has no leading-gutter slot (upstream line 1066).
+    if (border !== 0) {
+      out += dataLeftMarker(cellWrapPrev[i], glyphs);
     }
-    // Pick the gap glyph for the separator between cells. Default: a
-    // single space. Multi-line / wrap continuations replace it with
-    // `+` / `.` so the column wall looks like `+|` rather than ` |`.
-    const cont = continuations[i] ?? '';
-    const gap = cont.length > 0 ? cont : ' ';
-    if (i < cells.length - 1) {
-      if (border === 0) {
-        out += gap;
-      } else {
-        out += gap + vrule + ' ';
-      }
+
+    // Decide whether to pad this cell. Upstream `print.c` lines 1141-1148:
+    //   left-aligned cells pad iff `finalspaces || wrap[j] != NONE`.
+    //   right-aligned cells always pad on the left side regardless.
+    // `finalspaces` = (border == 2 || not last column).
+    const finalspaces = border === 2 || border === 3 || !isLast;
+    const needsTrailingPad = finalspaces || cellWrapNext[i] !== 'none';
+    if (aligns[i] === 'right') {
+      // Right-aligned cells always get full padding on the left so
+      // content right-aligns. Trailing pad only when finalspaces (or
+      // wrap, to keep marker aligned).
+      out += padToWidth(cells[i], widths[i], 'right');
+    } else if (needsTrailingPad) {
+      out += padToWidth(cells[i], widths[i], 'left');
     } else {
-      // Trailing edge of the last cell. For border 1 data rows with a
-      // continuation indicator we still need the marker even though
-      // there's no further separator (matches upstream: ` qux ` →
-      // ` qux+` when the cell has more lines, with no trailing margin).
-      if (cont.length > 0 && !isHeader && border === 1) {
-        out += cont;
-      }
+      // Last cell, no wrap state — emit raw content (no trailing pad).
+      out += cells[i];
+    }
+
+    // Right marker. Upstream `print.c` lines 1150-1156:
+    //   - WRAP   → wrap_right
+    //   - NEWLINE→ nl_right
+    //   - NONE   → space (only when not last col / border=2)
+    out += dataRightMarker(cellWrapNext[i], glyphs, isLast, border);
+
+    // Column divider. Upstream lines 1158-1169: midvrule varies with
+    // the NEXT column's wrap state in old-ascii (midvrule_nl=":",
+    // midvrule_wrap=";", midvrule_blank=" "). For ASCII / Unicode all
+    // three midvrule_* equal the regular vrule, so we just emit it.
+    if (!isLast && border !== 0) {
+      out += vrule;
     }
   }
 
-  if (border === 2 || border === 3) {
-    out += ' ' + vrule;
-  } else if (border === 1) {
-    // Trailing margin space only on header rows. Data rows have already
-    // been emitted without padding on the last cell (see the isLast +
-    // !isHeader branch above).
-    if (isHeader) {
-      out += ' ';
-    }
-  } else if (border === 0 && isHeader) {
-    // Border 0 with ascii format has `wrap_right_border = true` upstream,
-    // which means `print_aligned_text` emits `header_nl_right` (`+`) or a
-    // plain space after the LAST header cell as well as between cells.
-    // Verified against vanilla psql 18:
-    //   `SELECT 'x' as a, 'y' as b;` (border=0) → `a b ` (note trailing space
-    //   on a single-line header) and a multi-line header `c` row ends in
-    //   one extra space too.
-    // For a continuing cell (more header lines below) we emit `+`,
-    // otherwise a literal space — mirrors upstream's `header_done[i]` flag.
-    const lastCont = continuations[continuations.length - 1] ?? '';
-    out += lastCont.length > 0 ? lastCont : ' ';
-  }
-
+  if (border === 2 || border === 3) out += vrule;
   return out;
 };
 
@@ -1237,11 +1403,14 @@ const renderVerticalLine = (
 const horizontalTotalWidth = (rs: ResultSet, topt: PrintTableOpts): number => {
   const widths = computeColumnWidths(rs, topt);
   const border = topt.border;
-  const sepCost = border === 0 ? 1 : 3;
-  const sideCost = border === 2 || border === 3 ? 4 : 0;
-  let total = sideCost + widths.reduce((a, b) => a + b, 0);
-  total += sepCost * Math.max(0, widths.length - 1);
-  return total;
+  const n = widths.length;
+  // Match upstream `print.c` (lines 763-769) width_total:
+  //   border 0: n; border 1: 3n-1; border 2/3: 3n+1.
+  let overhead: number;
+  if (border === 0) overhead = n;
+  else if (border === 1) overhead = n * 3 - (n > 0 ? 1 : 0);
+  else overhead = n * 3 + 1;
+  return overhead + widths.reduce((a, b) => a + b, 0);
 };
 
 const chooseExpanded = (rs: ResultSet, topt: PrintTableOpts): boolean => {
@@ -1293,7 +1462,6 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
 
   const headerCells = rs.fields.map((f) => formatCell(f.name));
   const widths = headerCells.map((c) => c.width);
-  const aligns = rs.fields.map(() => 'center' as Alignment);
 
   let out = '';
   if (!tuplesOnly && topt.title) out += topt.title + '\n';
@@ -1301,15 +1469,15 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
     out += buildRule(widths, border, glyphs, 'top') + '\n';
   }
   if (!tuplesOnly) {
+    const noneStates: WrapState[] = headerCells.map(() => 'none' as const);
     out +=
-      renderDataLine(
+      renderHeaderLine(
         headerCells.map((c) => c.lines[0] ?? ''),
         widths,
-        aligns,
         border,
         glyphs,
-        ' ',
-        /* isHeader */ true,
+        noneStates,
+        noneStates,
       ) + '\n';
     out += buildRule(widths, border, glyphs, 'middle') + '\n';
   }

@@ -417,19 +417,23 @@ describe('alignedPrinter wrapped mode', () => {
     expect(out).toContain('abc');
   });
 
-  test('ratio-scoring picks the high-variance column to shrink', async () => {
+  test('ratio-scoring picks the high-variance column to shrink first', async () => {
     // Two columns at equal max width (13 chars) but with very different
     // value variance:
     //   - col `a` is uniformly wide (every row is 'xxxxxxxxxxxxx')
     //   - col `b` has one wide outlier and three narrow rows
     //
-    // Greedy `shrink-widest-first` is ambiguous when widths tie; with the
-    // ratio formula `width/avg + max*0.01`, column `b` wins because
-    // shrinking it costs at most 1 wrapped row, while shrinking `a` would
-    // wrap every row.
+    // The ratio formula `width/avg + max*0.01` makes column `b` the
+    // initial victim (avg≈4 for `b` vs 13 for `a`, ratio ≈ 3.4 vs 1.1),
+    // so shrinking proceeds on `b` until it bottoms out at its header
+    // floor. Only then does the algorithm peel chars off `a`.
     //
-    // Target width 20 cols forces ~11 chars of total shrink (full layout
-    // would be 31 cols including the border=1 gutters).
+    // Target width 20 (border=1 overhead is `3n - 1 = 5`, mirroring
+    // upstream `print.c` width_total at lines 763-769). Initial total
+    // is 31, so 11 chars must be shed. `b` can drop from 13 down to its
+    // 1-char header (12 reductions), leaving 10 → still 1 short, so
+    // `a` shrinks by 1 to a=12. Verified byte-for-byte against vanilla
+    // psql 18 (`\pset columns 20 \pset format wrapped`).
     const wideA = 'x'.repeat(13);
     const wideB = 'y'.repeat(13);
     const narrowB = 'y';
@@ -454,15 +458,18 @@ describe('alignedPrinter wrapped mode', () => {
         s,
       ),
     );
-    // Column `a` was NOT shrunk — every one of the 4 data rows shows the
-    // full 13-char `xxxxxxxxxxxxx` value once on its own physical line.
-    const aLines = out.split('\n').filter((l) => l.includes(wideA));
-    expect(aLines.length).toBe(4);
-    // Column `b`'s wide outlier wrapped across multiple display lines:
-    // there must be more total output lines than data rows.
-    const dataLines = out
-      .split('\n')
-      .filter((l) => l.includes('y') || l.includes('x'));
+    const lines = out.split('\n');
+    // Column `a` shrunk from 13 → 12: each data row of `a` now wraps
+    // into ` xxxxxxxxxxxx.` (12 x's + wrap_right marker) plus a `.x`
+    // continuation line. Column `b` shrunk hard — narrow `y` rows render
+    // on a single line (` y ...`), the wide outlier wraps onto five
+    // physical lines.
+    expect(lines).toContain(' xxxxxxxxxxxx.| yyy.');
+    expect(lines).toContain('.x            |.yyy.');
+    // Three narrow-b rows render as: a wraps (2 lines), b shows ` y` once.
+    // So the total data-line count is 4*2 (for `a` wrap) + 4 extra lines
+    // for the wideB cell — at minimum strictly > 4 rows.
+    const dataLines = lines.filter((l) => l.includes('y') || l.includes('x'));
     expect(dataLines.length).toBeGreaterThan(4);
   });
 
@@ -865,5 +872,156 @@ describe('alignedPrinter trailing-whitespace parity', () => {
     );
     const lines = out.split('\n');
     expect(lines[0]).toBe('+-[ RECORD 1 ]-+---------------------+');
+  });
+});
+
+// Multi-line / wrap marker parity. Verifies the `+` (nl) and `.` (wrap)
+// continuation indicators land in the correct slots — between cell
+// content and column separator on the row that has more content, with
+// matching `.` in the leading gutter of the wrap-continuation row.
+describe('alignedPrinter multi-line and wrap markers', () => {
+  test('embedded \\n splits header across lines with `+` between content and separator', async () => {
+    // Two columns, second header has an embedded `\n`. Upstream
+    // `print_aligned_text` emits `header_nl_right` (`+` for ASCII) on
+    // every line whose column still has more lines below. With
+    // wrap_right_border=true, the marker is also emitted at the
+    // trailing edge of the LAST column. Verified against vanilla psql 18.
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b\nc' }],
+      rows: [['x', 'y']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(), s),
+    );
+    const lines = out.split('\n');
+    // Header line 1: `a` centered in width 1, `b` centered in width 1.
+    // Both columns have more lines below, so both get `+` markers.
+    expect(lines[0]).toBe(' a | b+');
+    // Header line 2: `a` is done (empty), `c` is the last line for col b.
+    expect(lines[1]).toBe('   | c ');
+  });
+
+  test('embedded \\n in data row emits `+` continuation in column separator slot', async () => {
+    // Data rows with `\n` cells: upstream pads the cell to full width
+    // (even on the last column) and emits `nl_right` (`+`) on the
+    // continuation side. The next physical line shows the trailing
+    // content (no leading `.`, since this is a newline-continuation,
+    // not a wrap).
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['line1\nline2', 'x']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(), s),
+    );
+    const lines = out.split('\n');
+    // Data line 1: ` ` (leading gutter) + `line1` (content padded to
+    // width 5) + `+` (nl_right marker) + `|` + ` ` (col b leading
+    // gutter) + `x` content. No padding / no trailing marker on the last
+    // col when wrap state = none.
+    expect(lines[2]).toBe(' line1+| x');
+    // Data line 2: col a `line2` last line, right marker = ` ` (non-last
+    // col, state=none); vrule; col b leading gutter ` `; past-end (no
+    // content, no padding, no trailing marker).
+    expect(lines[3]).toBe(' line2 | ');
+  });
+
+  test('wrapped mode emits `.` markers (wrap_left/right) on in-cell wrap', async () => {
+    // Wrapped mode with a single cell wider than the column shrinks
+    // emits `.` at end of one display line and start of the next.
+    // Verified against vanilla psql 18 (`\pset format wrapped`).
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['xxxxxxxxxx', 'y']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          format: 'wrapped',
+          border: 1,
+          columns: 10,
+          envColumns: 10,
+        }),
+        s,
+      ),
+    );
+    // Column `a` shrinks to fit; the value wraps with `.` markers.
+    expect(out).toMatch(/\.\| y/); // wrap_right (`.`) before separator
+    expect(out).toMatch(/\n\./); // wrap_left (`.`) in leading gutter
+  });
+
+  test('border=0 last cell with continuation gets `+` at table edge (wrap_right_border)', async () => {
+    // ASCII format has `wrap_right_border = true` so even at border=0
+    // the trailing slot after the LAST column gets a marker (`+` for
+    // nl_right / `.` for wrap_right / space otherwise). Verified against
+    // vanilla psql 18 (`\pset border 0` on `SELECT 'a', E'line1\nline2'`).
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['short', 'line1\nline2']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(undefined, { border: 0 }), s),
+    );
+    const lines = out.split('\n');
+    // Header: both column widths = 5; `a` and `b` are centered in 5,
+    // with a trailing ` ` marker (wrap_right_border).
+    expect(lines[0]).toBe('  a     b   ');
+    expect(lines[1]).toBe('----- -----');
+    // Data line 1: col a (`short`) has no continuation → trailing ` `.
+    // Col b (`line1`) DOES continue → trailing `+` (nl_right) at the
+    // edge. No leading markers (border=0).
+    expect(lines[2]).toBe('short line1+');
+    // Data line 2: col a is past-end (empty). Upstream pads it because
+    // `finalspaces` is true for non-last cols, then emits col a's right
+    // marker as ` ` (state=none, not last). Col b's last line (`line2`)
+    // has wrap state none, last col, border=0 → no trailing marker.
+    // Result: 5 spaces (a padded) + space (a right marker) + `line2` = 11.
+    expect(lines[3]).toBe('      line2');
+  });
+
+  test('border=0 first cell continuation puts `+` in cell-separator slot', async () => {
+    // When the FIRST column has a `\n`-split cell, the trailing slot of
+    // col a is the same as the (absent) column-divider position. Upstream
+    // emits `nl_right` (`+`) right after col a's content. Verified
+    // against vanilla psql 18.
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['a\nb', 'y']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(undefined, { border: 0 }), s),
+    );
+    const lines = out.split('\n');
+    // Data row 1: `a` + `+` (col a continuation marker) + `y` (col b, no
+    // continuation). Last column at border=0 with state=NONE emits no
+    // trailing marker — `a+y` ends bare.
+    expect(lines[2]).toBe('a+y');
+    // Data row 2: col a has `b` (last line, no continuation) so its
+    // right marker is ` ` (non-last col emits space). Col b is past-end
+    // (no `y` left); no padding (finalspaces=false for last col at
+    // border=0) and no right marker. Result: `b` + ` ` + `` = `b `.
+    expect(lines[3]).toBe('b ');
+  });
+
+  test('border=2 multi-line data row keeps right border aligned with `+` markers', async () => {
+    // Border=2 has a full box, so the last column is padded AND the
+    // right vrule appears after the marker. The `+` lands between
+    // content and the right `|` rule on the row that continues, and
+    // a space appears on the final row.
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['line1\nline2', 'y']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(undefined, { border: 2 }), s),
+    );
+    const lines = out.split('\n');
+    // Data line 1: `line1` (5) + nl_right `+` + vrule + ` ` + `y` + ` `
+    // (col b is not continuing) + vrule (right border).
+    expect(lines[3]).toBe('| line1+| y |');
+    // Data line 2: `line2` (5) + space (no continuation) + vrule +
+    // empty col b padded to 1 + space + vrule.
+    expect(lines[4]).toBe('| line2 |   |');
   });
 });
