@@ -230,7 +230,7 @@ describe('describe/queries — pg17 snapshots', () => {
   });
 
   it('listExtensionContents / pg17', () => {
-    expect(q.listExtensionContents({ serverVersion: PG_17 })).toMatchSnapshot();
+    expect(q.listExtensionContents()).toMatchSnapshot();
   });
 
   it('listOneExtensionContents / fixed oid', () => {

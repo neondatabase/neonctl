@@ -84,8 +84,14 @@ type CommonOpts = {
   serverVersion: ServerVersion;
 };
 
-const params = (opts: { pattern?: string }): unknown[] =>
-  opts.pattern === undefined ? [] : [opts.pattern];
+// Returns the base params for a describe query. Always empty: the pattern
+// itself is threaded through `processSQLNamePattern` + `applyPattern` in
+// cmd_describe.ts, which renders the conditions with their own `$N` slots
+// and pushes the right values into params at runtime. Returning [pattern]
+// here would leave $1 unreferenced in the final SQL (applyPattern shifts
+// the conditions' $N by baseParams.length), causing the server to reject
+// the Parse with "could not determine data type of parameter $1".
+const params = (): unknown[] => [];
 
 /* ------------------------------------------------------------------ */
 /* \da — describeAggregates                                           */
@@ -116,7 +122,7 @@ export const describeAggregates = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1, 2, 4');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'List of aggregate functions',
   };
 };
@@ -144,7 +150,7 @@ export const describeAccessMethods = (opts: CommonOpts): DescribeQuery => {
   sql += '\nFROM pg_catalog.pg_am\n';
   sql += patternStub(false, undefined, 'amname');
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of access methods' };
+  return { sql, params: params(), description: 'List of access methods' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -166,7 +172,7 @@ export const describeTablespaces = (opts: CommonOpts): DescribeQuery => {
   sql += '\nFROM pg_catalog.pg_tablespace\n';
   sql += patternStub(false, undefined, 'spcname');
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of tablespaces' };
+  return { sql, params: params(), description: 'List of tablespaces' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -311,7 +317,7 @@ export const describeFunctions = (
       "      AND n.nspname <> 'information_schema'\n";
   }
   sql += orderBy('1, 2, 4');
-  return { sql, params: params(opts), description: 'List of functions' };
+  return { sql, params: params(), description: 'List of functions' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -361,7 +367,7 @@ export const describeTypes = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(true, 'n.nspname', 't.typname');
   sql += orderBy('1, 2');
-  return { sql, params: params(opts), description: 'List of data types' };
+  return { sql, params: params(), description: 'List of data types' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -401,7 +407,7 @@ export const describeOperators = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(hasWhere, 'n.nspname', 'o.oprname');
   sql += orderBy('1, 2, 3, 4');
-  return { sql, params: params(opts), description: 'List of operators' };
+  return { sql, params: params(), description: 'List of operators' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -455,7 +461,7 @@ export const listAllDbs = (opts: CommonOpts): DescribeQuery => {
     sql += patternStub(false, undefined, 'd.datname');
   }
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of databases' };
+  return { sql, params: params(), description: 'List of databases' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -517,7 +523,7 @@ export const permissionsList = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(true, 'n.nspname', 'c.relname');
   sql += orderBy('1, 2');
-  return { sql, params: params(opts), description: 'Access privileges' };
+  return { sql, params: params(), description: 'Access privileges' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -553,7 +559,7 @@ export const listDefaultACLs = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1, 2, 3');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'Default access privileges',
   };
 };
@@ -638,7 +644,7 @@ export const objectDescription = (opts: CommonOpts): DescribeQuery => {
     ') AS tt\n' +
     '  JOIN pg_catalog.pg_description d ON (tt.oid = d.objoid AND tt.tableoid = d.classoid AND d.objsubid = 0)\n';
   sql += orderBy('1, 2, 3');
-  return { sql, params: params(opts), description: 'Object descriptions' };
+  return { sql, params: params(), description: 'Object descriptions' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -662,7 +668,7 @@ export const describeTableDetails = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('2, 3');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'Get matching relations to describe',
   };
 };
@@ -688,7 +694,7 @@ export const describeRoles = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(true, undefined, 'r.rolname');
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of roles' };
+  return { sql, params: params(), description: 'List of roles' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -749,7 +755,7 @@ export const describeRoleGrants = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(true, undefined, 'm.rolname');
   sql += orderBy('1, 2, 4');
-  return { sql, params: params(opts), description: 'List of role grants' };
+  return { sql, params: params(), description: 'List of role grants' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -851,7 +857,7 @@ export const listTables = (opts: ListTablesOpts): DescribeQuery => {
   }
   sql += patternStub(true, 'n.nspname', 'c.relname');
   sql += orderBy('1,2');
-  return { sql, params: params(opts), description: 'List of relations' };
+  return { sql, params: params(), description: 'List of relations' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -964,7 +970,7 @@ export const listPartitionedTables = (
         : 'List of partitioned relations';
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description,
   };
 };
@@ -1001,7 +1007,7 @@ export const listLanguages = (opts: CommonOpts): DescribeQuery => {
     hasWhere = true;
   }
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of languages' };
+  return { sql, params: params(), description: 'List of languages' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1036,7 +1042,7 @@ export const listDomains = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(true, 'n.nspname', 't.typname');
   sql += orderBy('1, 2');
-  return { sql, params: params(opts), description: 'List of domains' };
+  return { sql, params: params(), description: 'List of domains' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1065,7 +1071,7 @@ export const listConversions = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(true, 'n.nspname', 'c.conname');
   sql += orderBy('1, 2');
-  return { sql, params: params(opts), description: 'List of conversions' };
+  return { sql, params: params(), description: 'List of conversions' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1099,7 +1105,7 @@ export const describeConfigurationParameters = (
   sql += orderBy('1');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description:
       pattern !== undefined
         ? 'List of configuration parameters'
@@ -1124,7 +1130,7 @@ export const listEventTriggers = (opts: CommonOpts): DescribeQuery => {
   sql += '\nFROM pg_catalog.pg_event_trigger e\n';
   sql += patternStub(false, undefined, 'evtname');
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of event triggers' };
+  return { sql, params: params(), description: 'List of event triggers' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1174,7 +1180,7 @@ export const listExtendedStats = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1, 2');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'List of extended statistics',
   };
 };
@@ -1222,7 +1228,7 @@ export const listCasts = (opts: CommonOpts): DescribeQuery => {
   sql += patternStub(true, 'nt.nspname', 'tt.typname');
   sql += ') )\n';
   sql += orderBy('1, 2');
-  return { sql, params: params(opts), description: 'List of casts' };
+  return { sql, params: params(), description: 'List of casts' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1276,7 +1282,7 @@ export const listCollations = (opts: CommonOpts): DescribeQuery => {
     '      AND c.collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding()))\n';
   sql += patternStub(true, 'n.nspname', 'c.collname');
   sql += orderBy('1, 2');
-  return { sql, params: params(opts), description: 'List of collations' };
+  return { sql, params: params(), description: 'List of collations' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1302,7 +1308,7 @@ export const listSchemas = (opts: CommonOpts): DescribeQuery => {
     'n.nspname',
   );
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of schemas' };
+  return { sql, params: params(), description: 'List of schemas' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1322,7 +1328,7 @@ export const listTSParsers = (opts: CommonOpts): DescribeQuery => {
     sql += orderBy('1, 2');
     return {
       sql,
-      params: params(opts),
+      params: params(),
       description: 'List of text search parsers (verbose)',
     };
   }
@@ -1335,7 +1341,7 @@ export const listTSParsers = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1, 2');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'List of text search parsers',
   };
 };
@@ -1388,7 +1394,7 @@ export const listTSDictionaries = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1, 2');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'List of text search dictionaries',
   };
 };
@@ -1417,7 +1423,7 @@ export const listTSTemplates = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1, 2');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'List of text search templates',
   };
 };
@@ -1439,7 +1445,7 @@ export const listTSConfigs = (opts: CommonOpts): DescribeQuery => {
     sql += orderBy('3, 2');
     return {
       sql,
-      params: params(opts),
+      params: params(),
       description: 'List of text search configurations (verbose)',
     };
   }
@@ -1452,7 +1458,7 @@ export const listTSConfigs = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1, 2');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'List of text search configurations',
   };
 };
@@ -1484,7 +1490,7 @@ export const listForeignDataWrappers = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'List of foreign-data wrappers',
   };
 };
@@ -1517,7 +1523,7 @@ export const listForeignServers = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(false, undefined, 's.srvname');
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of foreign servers' };
+  return { sql, params: params(), description: 'List of foreign servers' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1535,7 +1541,7 @@ export const listUserMappings = (opts: CommonOpts): DescribeQuery => {
   sql += '\nFROM pg_catalog.pg_user_mappings um\n';
   sql += patternStub(false, undefined, 'um.srvname');
   sql += orderBy('1, 2');
-  return { sql, params: params(opts), description: 'List of user mappings' };
+  return { sql, params: params(), description: 'List of user mappings' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1563,7 +1569,7 @@ export const listForeignTables = (opts: CommonOpts): DescribeQuery => {
   }
   sql += patternStub(false, 'n.nspname', 'c.relname');
   sql += orderBy('1, 2');
-  return { sql, params: params(opts), description: 'List of foreign tables' };
+  return { sql, params: params(), description: 'List of foreign tables' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1592,18 +1598,18 @@ export const listExtensions = (opts: CommonOpts): DescribeQuery => {
   sql += orderBy('1');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'List of installed extensions',
   };
 };
 
-export const listExtensionContents = (opts: CommonOpts): DescribeQuery => {
+export const listExtensionContents = (): DescribeQuery => {
   let sql = 'SELECT e.extname, e.oid\nFROM pg_catalog.pg_extension e\n';
   sql += patternStub(false, undefined, 'e.extname');
   sql += orderBy('1');
   return {
     sql,
-    params: params(opts),
+    params: params(),
     description: 'Get matching extensions to list contents for',
   };
 };
@@ -1659,7 +1665,7 @@ export const listPublications = (opts: CommonOpts): DescribeQuery => {
   sql += '\nFROM pg_catalog.pg_publication\n';
   sql += patternStub(false, undefined, 'pubname');
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of publications' };
+  return { sql, params: params(), description: 'List of publications' };
 };
 
 /**
@@ -1696,7 +1702,7 @@ export const describePublications = (opts: CommonOpts): DescribeQuery => {
   sql += '\nFROM pg_catalog.pg_publication\n';
   sql += patternStub(false, undefined, 'pubname');
   sql += orderBy('2');
-  return { sql, params: params(opts), description: 'Details of publications' };
+  return { sql, params: params(), description: 'Details of publications' };
 };
 
 /* ------------------------------------------------------------------ */
@@ -1758,7 +1764,7 @@ export const describeSubscriptions = (opts: CommonOpts): DescribeQuery => {
     'WHERE subdbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())';
   sql += patternStub(true, undefined, 'subname');
   sql += orderBy('1');
-  return { sql, params: params(opts), description: 'List of subscriptions' };
+  return { sql, params: params(), description: 'List of subscriptions' };
 };
 
 /* ------------------------------------------------------------------ */
