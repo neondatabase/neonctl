@@ -615,15 +615,39 @@ export const scanSql = (
         cmdEnd = i;
       }
       const cmd = input.slice(i, cmdEnd);
-      // Rest of the line — everything up to a newline. Newlines terminate
-      // slash commands. The slash arg lexer (WP-05) parses the argument
-      // syntax; we just slice.
+      // Rest of the line — up to a newline OR the next unquoted backslash
+      // command on the same line. Mirrors upstream `psqlscanslash.l`'s
+      // <xslasharg> exit-on-`\` rule: a second backslash on the same line
+      // STARTS a new slash command and terminates the previous one's
+      // arg list. We track minimal quote state (single, double, back) so
+      // backslashes inside arg quotes don't trigger the boundary.
       let restEnd = cmdEnd;
+      let inSingle = false;
+      let inDouble = false;
+      let inBack = false;
       while (
         restEnd < input.length &&
         input[restEnd] !== '\n' &&
         input[restEnd] !== '\r'
       ) {
+        const ch = input[restEnd];
+        if (inSingle) {
+          // C-style `\'` escape inside single quotes.
+          if (ch === '\\' && input[restEnd + 1] !== undefined) {
+            restEnd += 2;
+            continue;
+          }
+          if (ch === "'") inSingle = false;
+        } else if (inDouble) {
+          if (ch === '"') inDouble = false;
+        } else if (inBack) {
+          if (ch === '`') inBack = false;
+        } else {
+          if (ch === '\\') break; // next slash-cmd boundary
+          if (ch === "'") inSingle = true;
+          else if (ch === '"') inDouble = true;
+          else if (ch === '`') inBack = true;
+        }
         restEnd++;
       }
       const rest = input.slice(cmdEnd, restEnd);
