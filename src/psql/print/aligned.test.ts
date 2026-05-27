@@ -184,8 +184,13 @@ describe('alignedPrinter horizontal mode', () => {
     const out = await capture((s) =>
       alignedPrinter.printQuery(rs, defaultOpts(undefined, { border: 0 }), s),
     );
+    // Border 0 with ascii format has `wrap_right_border = true` upstream,
+    // so `print_aligned_text` emits a `header_nl_right` marker (a plain
+    // space for done cells) after the LAST header cell as well as between
+    // cells. The header row therefore ends in two trailing spaces:
+    // one from the last cell's centred padding plus the trailing margin.
     expect(out).toBe(
-      'a  b \n' + '-- --\n' + 'x  y\n' + 'zz ww\n' + '(2 rows)\n' + '\n',
+      'a  b  \n' + '-- --\n' + 'x  y\n' + 'zz ww\n' + '(2 rows)\n' + '\n',
     );
   });
 
@@ -573,5 +578,155 @@ describe('alignedPrinter unicode mode', () => {
     expect(out).toContain('┘');
     expect(out).toContain('│');
     expect(out).toContain('─');
+  });
+});
+
+// Trailing-whitespace cosmetic parity with vanilla psql 18. Verified
+// byte-for-byte by `cat -e` / `sed -n l` against `psql --no-psqlrc -X`.
+describe('alignedPrinter trailing-whitespace parity', () => {
+  test('border=1 header keeps trailing space on right margin', async () => {
+    // Two text columns with data that determines the column width. The
+    // header row must end in a literal space (the right margin emitted
+    // by upstream `print_aligned_text` when border != 0).
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['x', 'y']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(), s),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe(' a | b ');
+    // Data rows do NOT have a trailing space (last column padding is skipped).
+    expect(lines[2]).toBe(' x | y');
+  });
+
+  test('border=1 right-aligned last column has no trailing pad on data', async () => {
+    // Single column, right-aligned numeric. Vanilla emits ` 12345` /
+    // ` 7` with no trailing whitespace on data rows.
+    const rs = makeResultSet({
+      columns: [{ name: 'n', oid: 23 }],
+      rows: [[12345], [7]],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(), s),
+    );
+    const lines = out.split('\n');
+    // Header centred in width 5, with a trailing margin space.
+    expect(lines[0]).toBe('   n   ');
+    expect(lines[2]).toBe(' 12345');
+    expect(lines[3]).toBe('     7');
+  });
+
+  test('border=0 header keeps trailing space (wrap_right_border)', async () => {
+    // With ascii format the `wrap_right_border` flag is true upstream, so
+    // border=0 still emits a `header_nl_right` marker after the LAST
+    // header cell — a space when the cell has no more lines below.
+    // Verified against vanilla psql 18 with `\pset border 0`.
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['x', 'y']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(rs, defaultOpts(undefined, { border: 0 }), s),
+    );
+    const lines = out.split('\n');
+    // Header: column width = 1, centred = `a`, plus separator ` `, plus
+    // `b`, plus trailing margin space.
+    expect(lines[0]).toBe('a b ');
+    // Data: no trailing margin.
+    expect(lines[2]).toBe('x y');
+  });
+
+  test('expanded border=0 record header pads to nameWidth+valueWidth', async () => {
+    // Upstream `print_aligned_vertical_line` (border 0 branch, print.c
+    // ~lines 1243-1281) pads `* Record N` with spaces to reach
+    // `hwidth + dwidth` characters. Long names + short values:
+    //   name col `longname` / `longvalue` → hwidth = 9
+    //   value col `key` / `value`          → dwidth = 5
+    //   target = 14, label `* Record 1` is 10 → 4 trailing spaces.
+    const rs = makeResultSet({
+      columns: [{ name: 'longname' }, { name: 'longvalue' }],
+      rows: [['key', 'value']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 0 }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('* Record 1    ');
+    // Data lines: name padded to hwidth, then single space, then bare
+    // value (no trailing pad).
+    expect(lines[1]).toBe('longname  key');
+    expect(lines[2]).toBe('longvalue value');
+  });
+
+  test('expanded border=0 long label is not truncated', async () => {
+    // When the `* Record N` label already meets or exceeds
+    // `hwidth + dwidth`, upstream emits the bare label with no padding.
+    // Force this by giving very short column widths.
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['1', '2']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 0 }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // hwidth=1, dwidth=1, target=2, label=`* Record 1` (10 chars) overflows.
+    expect(lines[0]).toBe('* Record 1');
+  });
+
+  test('expanded border=1 data line emits no trailing value pad', async () => {
+    // Upstream `print_aligned_vertical` only pads the value column for
+    // border > 1. For border=1 the data line ends right after the bare
+    // value bytes — vanilla emits `longname  | key` not `longname  | key  `.
+    const rs = makeResultSet({
+      columns: [{ name: 'longname' }, { name: 'longvalue' }],
+      rows: [['key', 'value']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 1 }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // Data lines (skip the `-[ RECORD ]` divider on line 0).
+    expect(lines[1]).toBe('longname  | key');
+    expect(lines[2]).toBe('longvalue | value');
+  });
+
+  test('expanded border=1 right-aligned values are emitted left-aligned without pad', async () => {
+    // Vertical mode upstream always emits raw bytes in the data column
+    // regardless of `cont->aligns[j]` — numeric columns are not right-
+    // aligned in expanded mode. And there is no trailing pad for border 1.
+    const rs = makeResultSet({
+      columns: [
+        { name: 'small', oid: 23 },
+        { name: 'big', oid: 23 },
+      ],
+      rows: [[1, 999999]],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 1 }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // Both values rendered left-aligned (the integer is just stringified),
+    // and no trailing padding spaces after either value.
+    expect(lines[1]).toBe('small | 1');
+    expect(lines[2]).toBe('big   | 999999');
   });
 });

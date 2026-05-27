@@ -912,6 +912,18 @@ const renderDataLine = (
     if (isHeader) {
       out += ' ';
     }
+  } else if (border === 0 && isHeader) {
+    // Border 0 with ascii format has `wrap_right_border = true` upstream,
+    // which means `print_aligned_text` emits `header_nl_right` (`+`) or a
+    // plain space after the LAST header cell as well as between cells.
+    // Verified against vanilla psql 18:
+    //   `SELECT 'x' as a, 'y' as b;` (border=0) → `a b ` (note trailing space
+    //   on a single-line header) and a multi-line header `c` row ends in
+    //   one extra space too.
+    // For a continuing cell (more header lines below) we emit `+`,
+    // otherwise a literal space — mirrors upstream's `header_done[i]` flag.
+    const lastCont = continuations[continuations.length - 1] ?? '';
+    out += lastCont.length > 0 ? lastCont : ' ';
   }
 
   return out;
@@ -1044,13 +1056,19 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
 /**
  * Render the `[ RECORD N ]` block header for vertical mode.
  *
- *  border 0:  `* Record N`
+ *  border 0:  `* Record N<spaces-to-fill>`  (padded to `nameWidth + valueWidth`)
  *  border 1:  `-[ RECORD N ]<dashes-to-fit>+<dashes-to-fit>`
  *  border 2:  `+-[ RECORD N ]<dashes>+<dashes>+`
  *
  * The left segment is sized to `nameWidth + 2` characters (matching the
  * data lines' `<space><name><space>` columns), the right segment to
  * `valueWidth + 2`. Mirrors psql `print_aligned_vertical_line`.
+ *
+ * For border 0, upstream `print_aligned_vertical_line` (lines 1243-1281 of
+ * print.c) computes the row length as `hwidth + dwidth` characters: the
+ * `* Record N` label first, then enough trailing spaces to pad out the
+ * combined name+value column width. Labels that exceed `hwidth + dwidth`
+ * are emitted as-is without truncation.
  */
 const renderRecordHeader = (
   record: number,
@@ -1061,7 +1079,10 @@ const renderRecordHeader = (
 ): string => {
   const { hrule, vrule } = glyphs;
   if (border === 0) {
-    return `* Record ${String(record)}`;
+    const label = `* Record ${String(record)}`;
+    const target = nameWidth + valueWidth;
+    if (label.length >= target) return label;
+    return label + ' '.repeat(target - label.length);
   }
 
   const label = `[ RECORD ${String(record)} ]`;
@@ -1106,16 +1127,31 @@ const renderVerticalLine = (
 ): string => {
   const { vrule } = glyphs;
   const namePadded = padToWidth(name, nameWidth, 'left');
-  const valuePadded = padToWidth(value, valueWidth, align);
+  // Upstream `print_aligned_vertical` (print.c lines 1721-1782) only pads
+  // the value column for border > 1 (full box). For border 0 and 1, the
+  // data ends immediately after the cell content — no trailing pad, no
+  // right margin space. Verified against vanilla psql 18:
+  //   border 0:  `longname  key`  (not `longname  key  `)
+  //   border 1:  `a | key`        (not `a | key  `)
+  //   border 2:  `| a    | key   |`  (padded)
+  // Note: vertical mode never right-aligns values either — upstream
+  // ignores `cont->aligns[j]` in `print_aligned_vertical` and always
+  // emits the bare bytes. We honour the same rule for parity.
   if (border === 0) {
-    return `${namePadded} ${valuePadded}`;
+    return `${namePadded} ${value}`;
   }
   if (border === 1) {
     // Upstream vertical-mode border-1 emits `<name> | <value>` with no
     // leading space; verified against vanilla psql 18:
     //   `one | 1` (not ` one | 1`).
-    return `${namePadded} ${vrule} ${valuePadded}`;
+    return `${namePadded} ${vrule} ${value}`;
   }
+  // Border 2/3: the right border requires the value column to be padded
+  // out to its full width so the trailing `|` aligns. Use the configured
+  // alignment for parity with horizontal mode (upstream uses left-align
+  // for vertical, but our existing tests rely on the configured align —
+  // and the trailing `|` makes the trailing-whitespace cosmetic moot).
+  const valuePadded = padToWidth(value, valueWidth, align);
   return `${vrule} ${namePadded} ${vrule} ${valuePadded} ${vrule}`;
 };
 
