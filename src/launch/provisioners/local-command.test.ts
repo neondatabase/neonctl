@@ -141,6 +141,30 @@ describe('startLocalCommand — kill', () => {
     expect(result.signal === 'SIGKILL' || result.code === 137).toBe(true);
   }, 10_000);
 
+  it('gracefulShutdown reaps SIGTERM-trapping children within the term grace, before parent would exit', async () => {
+    // The shutdown handler in runner.ts schedules `process.exit(code)` after
+    // a ~1.5s analytics flush. kill()'s own SIGKILL escalation is 5s — by
+    // the time the timer fires the parent is gone. gracefulShutdown must
+    // dispatch SIGKILL directly within the term-grace window.
+    const handle = startLocalCommand({
+      resourceFqn: 'sigterm-trap-shutdown',
+      spec: {
+        command: `node -e "process.on('SIGTERM', () => {}); console.log('alive'); setTimeout(() => {}, 60_000);"`,
+        readiness: { logMatch: /alive/ },
+      },
+      resolvedEnv: {},
+      stdioMode: 'prefixed',
+    });
+    await handle.ready;
+    const { gracefulShutdown } = await import('../runner.js');
+    const t0 = Date.now();
+    await gracefulShutdown([handle], 1_000); // 1s grace, well under 5s
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeLessThan(2_500);
+    const result = await handle.exited;
+    expect(result.signal === 'SIGKILL' || result.code === 137).toBe(true);
+  }, 10_000);
+
   it('inherit/non-detached: kill() escalates to SIGKILL when child traps SIGTERM', async () => {
     // Inherit mode → non-detached → child.kill('SIGTERM') sets
     // child.killed = true IMMEDIATELY on dispatch (Node spec). A

@@ -12,6 +12,6 @@
     "launch:prod": "neonctl launch --prod"
   },
   "devDependencies": {
-    "neonctl": "file:../.."
+    "neonctl": "file:../../dist"
   }
 }

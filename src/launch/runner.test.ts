@@ -232,4 +232,19 @@ describe('getCliProjectIdFromArgv', () => {
       getCliProjectIdFromArgv(['cli', 'launch', '--project-id']),
     ).toBeUndefined();
   });
+
+  it('`--` end-of-options separator stops the scan (pass-through args ignored)', () => {
+    // yargs is configured with populate--: true. Without the stop, the
+    // scanner would silently treat `neon launch -- --project-id=X` as an
+    // explicit CLI flag, overriding env vars even though the user
+    // intended X to flow through to a downstream tool.
+    expect(
+      getCliProjectIdFromArgv([
+        'cli',
+        'launch',
+        '--',
+        '--project-id=prj_passthrough',
+      ]),
+    ).toBeUndefined();
+  });
 });

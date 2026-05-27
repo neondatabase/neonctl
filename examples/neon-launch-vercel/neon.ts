@@ -13,11 +13,12 @@
  *   VERCEL_TOKEN        — only for --preview / --prod
  *
  * Vercel project lookup: `spec.project` below resolves to a project the
- * launcher GET's via `/v9/projects/<name>` on first run. The resolved id
- * + name are then persisted to `.neon-launch.env` so subsequent runs skip
- * the lookup. The example uses `'neon-launch-vercel-demo'` as a placeholder
- * — change it to a project YOU own (create one at vercel.com/new first),
- * or set VERCEL_PROJECT_ID in env to bypass the name lookup entirely.
+ * launcher GETs via `/v9/projects/<name>` on first run. The resolved id +
+ * name are persisted to `.neon-launch.env` so subsequent runs skip the
+ * lookup — that's a cache: `VERCEL_PROJECT_ID` / `VERCEL_PROJECT_NAME`
+ * only short-circuit the lookup when they match `spec.project`. The cache
+ * does NOT bypass an unset / wrong `spec.project`; you must edit the
+ * `project:` line below first.
  *
  * Commit `.neon-launch.env` only if your team shares the same Vercel project.
  */
@@ -81,17 +82,25 @@ export default stack({
     });
 
     if (prod || preview) {
+      // CHANGE-ME: replace with the Vercel project name (or id) you own,
+      // then delete this guard. Without it a fresh `npx neonctl launch
+      // --preview` would hit Vercel's /v9/projects 404 with no pointer
+      // back to the line the user actually needs to edit.
+      const vercelProject = 'CHANGE-ME-IN-NEON-TS';
+      if (vercelProject === 'CHANGE-ME-IN-NEON-TS') {
+        throw new Error(
+          '[neon-launch-vercel] examples/neon-launch-vercel/neon.ts: edit `vercelProject` ' +
+            'to the name of a Vercel project you own (create one at vercel.com/new), ' +
+            'then delete this guard.',
+        );
+      }
       const web = vercelDeployment({
         // `migrate` listed for ordering: Vercel must deploy against an
         // already-migrated branch or the running app would hit an
         // unmigrated schema on first request.
         dependsOn: { db, migrate },
         spec: ({ db }) => ({
-          // CHANGE-ME: replace with a Vercel project name (or id) you
-          // own. Lookup hits /v9/projects/<this> on the first run; if
-          // the project doesn't exist you'll see a 404 from Vercel
-          // pointing at this line.
-          project: 'CHANGE-ME-IN-NEON-TS',
+          project: vercelProject,
           production: prod,
           env: {
             DATABASE_URL: db.connectionString({ pooled: true }),

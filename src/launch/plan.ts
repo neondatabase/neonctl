@@ -129,7 +129,21 @@ function walkTree(
     // Invoke the spec callback. The root stack gets `deps = {}`; each
     // child leaf gets a record of Ref-bearing proxies (see makeOutputProxy
     // below) the runner swaps for real values before that leaf runs.
-    const spec = frame.resource.__spec(frame.depsArg as never, ctx);
+    //
+    // User-thrown exceptions (typos, undefined dereferences, bad value
+    // derivation in their callback) are config errors, not runtime
+    // failures. Wrap so the CLI exit code is CONFIG_ERROR (exit 2)
+    // instead of falling through to RESOURCE_FAILED (exit 1).
+    let spec: unknown;
+    try {
+      spec = frame.resource.__spec(frame.depsArg as never, ctx);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new LaunchError(
+        `[neon launch] spec callback for ${fqn || 'root'} threw during plan-time evaluation:\n${message}`,
+        ExitCode.CONFIG_ERROR,
+      );
+    }
 
     // Stacks return a record; leaves return a spec object.
     if (frame.resource.__kind === 'stack') {
@@ -470,7 +484,7 @@ export async function buildPlan(
         `    },`,
         `  });`,
         '',
-        `Then run \`neon launch\` again. See the full announcement in the repo.`,
+        `Then run \`neon launch\` again. Example: https://github.com/neondatabase/neonctl/tree/main/examples/neon-launch-vercel`,
       ].join('\n'),
       ExitCode.CONFIG_ERROR,
     );

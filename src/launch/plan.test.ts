@@ -331,6 +331,31 @@ describe('plan invariants', () => {
     );
   });
 
+  it('spec callback exception (user TypeError etc.) → CONFIG_ERROR, not RESOURCE_FAILED', async () => {
+    // Falsifier: a user's spec callback throws a TypeError (undefined
+    // dereference, wrong field, anything). The runtime classification
+    // must be CONFIG_ERROR (exit 2) so CI scripts that retry on exit
+    // 1 don't infinite-loop on a config bug.
+    const root = stack({
+      spec: () => {
+        const db = postgres({
+          spec: () => {
+            // Simulate a user typo / config error.
+            const cfg: { name?: string } | undefined = undefined;
+            return { name: (cfg as unknown as { name: string }).name };
+          },
+        });
+        return { db };
+      },
+    });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
+      /spec callback.*threw|TypeError/i,
+    );
+  });
+
   it('stack spec returning a non-object throws stackSpecNotRecord', async () => {
     const root = stack({
       // Returning a string violates the "record of resources" contract.

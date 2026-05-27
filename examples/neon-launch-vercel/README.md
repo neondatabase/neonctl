@@ -4,12 +4,14 @@ Reference config for `neon launch` against a Next.js + Drizzle + Vercel + Neon P
 
 > **From-source until release.** This example imports `neonctl/config`, a
 > subpath export added in the PR that introduces `neon launch`. The
-> example's `package.json` resolves `neonctl` to `file:../..` so that
-> `npm install` picks up the local source build (you must
-> `bun install && bun run build` in the neonctl repo root first). Once a
-> released version with `./config` exposed ships to npm, the `file:`
-> reference will be replaced with a pinned `^X.Y.Z` and a top-level
-> `npm install neonctl` will work.
+> example's `package.json` resolves `neonctl` to `file:../../dist` so
+> that `npm install` symlinks the local build output (you must
+> `bun install && bun run build` in the neonctl repo root first — the
+> `dist/` directory IS the publishable package shape, with `cli.js` at
+> its root and a copy of `package.json` carrying the `bin` entries).
+> Once a released version with `./config` exposed ships to npm, the
+> `file:` reference will be replaced with a pinned `^X.Y.Z` and a
+> top-level `npm install neonctl` will work.
 
 The interesting file is [`neon.ts`](./neon.ts). It declares three resources:
 
@@ -54,12 +56,12 @@ Prerequisites:
 
    …and the minimal `drizzle.config.ts` / `schema.ts` from the [Drizzle quickstart](https://orm.drizzle.team/docs/get-started-postgresql). The migration step can be any one-shot that exits 0 — `psql -f schema.sql`, a custom `node` script, anything; we use Drizzle here because it's the most common choice.
 
-4. **A Vercel project** (only for `--preview` / `--prod`). Create one at <https://vercel.com/new>, then edit `spec.project` in `neon.ts` (currently `'CHANGE-ME-IN-NEON-TS'`) to match its name — or `export VERCEL_PROJECT_ID=...` to bypass the name lookup.
+4. **A Vercel project** (only for `--preview` / `--prod`). Create one at <https://vercel.com/new>, then **edit `spec.project` in `neon.ts`** (currently `'CHANGE-ME-IN-NEON-TS'`) to match its name. `VERCEL_PROJECT_ID` is a _cache_ of the resolved id, not a bypass — the launcher still reads `spec.project` and validates it against the cache before skipping the API lookup.
 
 Then:
 
 ```bash
-npm install                    # picks up neonctl from `file:../..` (local source build)
+npm install                    # picks up neonctl from `file:../../dist` (local build output)
 
 export NEON_API_KEY=...        # https://console.neon.tech/app/settings/api-keys
 export NEON_PROJECT_ID=...     # from your Neon project settings

@@ -107,6 +107,52 @@ function newRuntime(): Runtime {
 }
 
 /**
+ * Bounded SIGTERM→SIGKILL teardown of local-command handles. Dispatches
+ * SIGTERM, polls for child exits for up to `termGraceMs` (default 2s),
+ * then sends SIGKILL directly to any survivors. Returns once every
+ * handle has exited OR we've issued SIGKILL.
+ *
+ * Used from the signal handler path where the parent is about to exit
+ * after a short analytics flush — `LocalCommandHandle.kill()`'s own 5s
+ * SIGKILL escalation timer would never fire because the parent dies
+ * first. Exporting so the integration test can hit a SIGTERM-trapping
+ * child end-to-end without process-level fakery.
+ */
+export async function gracefulShutdown(
+  handles: LocalCommandHandle[],
+  termGraceMs = 2_000,
+): Promise<void> {
+  if (handles.length === 0) return;
+  for (const h of handles) void h.kill();
+  const start = Date.now();
+  const isDead = (h: LocalCommandHandle): boolean =>
+    h.child.exitCode !== null || h.child.signalCode !== null;
+  while (Date.now() - start < termGraceMs) {
+    if (handles.every(isDead)) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  // Survivors: force SIGKILL directly. On Unix with a detached child we
+  // can target the process group; otherwise fall back to child.kill.
+  for (const h of handles) {
+    if (isDead(h)) continue;
+    try {
+      if (h.child.pid !== undefined) {
+        process.kill(-h.child.pid, 'SIGKILL');
+      }
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== 'ESRCH') {
+        try {
+          h.child.kill('SIGKILL');
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+  }
+}
+
+/**
  * Scan raw argv for the `--project-id` / `--projectId` CLI flag. We can't
  * read it off `opts.argv.projectId` because the `enrichFromContext`
  * middleware writes the `.neon` file's value into the same slot when the
@@ -120,6 +166,11 @@ export function getCliProjectIdFromArgv(argv: string[]): string | undefined {
     v !== undefined && v !== '' ? v : undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // Honor the `--` end-of-options separator. Yargs is configured with
+    // `populate--: true`, so flags after `--` are pass-through. Without
+    // this stop, `neon launch -- --project-id=…` would misclassify the
+    // pass-through arg as an explicit CLI flag and skip the env fallback.
+    if (a === '--') return undefined;
     if (a === '--project-id' || a === '--projectId') {
       const next = argv[i + 1];
       // Skip the next arg if it starts with `--` — that's the next flag,
@@ -432,14 +483,16 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
       runtime.shuttingDown.value = true;
       setCliShutdownInFlight();
       log.info(`[launch] ${signal} — stopping any running local commands.`);
-      for (const h of liveLocalCommands) void h.kill();
-      // Flush analytics before exit so the shutdown event isn't dropped.
-      // Tight timeout so an unreachable Segment endpoint doesn't hang
-      // Ctrl-C for the SDK's ~12.5s default — at-most-once delivery is
-      // acceptable on the interactive shutdown path.
-      void closeAnalytics({ timeoutMs: 1_500 }).finally(() => {
-        process.exit(code);
-      });
+      // Tight SIGTERM-grace before SIGKILL: `h.kill()` schedules its own
+      // 5s SIGKILL escalation, but the analytics flush below force-exits
+      // the parent at ~1.5s — without explicit escalation here, a
+      // SIGTERM-trapping child outlives the parent and orphans on init.
+      // The grace is bounded so a misbehaving child can't deadlock Ctrl-C.
+      void gracefulShutdown(liveLocalCommands)
+        .then(() => closeAnalytics({ timeoutMs: 1_500 }))
+        .finally(() => {
+          process.exit(code);
+        });
     };
   };
   const onSigint = makeShutdownHandler('SIGINT', ExitCode.SIGINT);
@@ -696,11 +749,19 @@ async function provisionVercelNode(args: {
   const token = process.env.VERCEL_TOKEN ?? '';
   if (!token)
     throw new LaunchError(vercelTokenMissingMessage(), ExitCode.AUTH_MISSING);
-  // Precedence: process.env > .neon-launch.env > spec.teamId.
+  // Precedence: spec.teamId (explicit user intent) > process.env >
+  // .neon-launch.env. If the user types a `teamId: 'team_xyz'` into
+  // their neon.ts that disagrees with a cached `VERCEL_TEAM_ID`, the
+  // explicit spec wins — silently deploying to the cached team instead
+  // would be cross-team corruption. The cache exists to skip slug
+  // resolution for `spec.team`, not to override explicit ids. (If the
+  // user uses `spec.team` for slug-based addressing, `provisionVercelDeployment`
+  // resolves the slug fresh when neither this `teamId` nor a cached
+  // `VERCEL_TEAM_ID` is present.)
   const teamId =
+    spec.teamId ??
     process.env.VERCEL_TEAM_ID ??
     args.neonLaunchEnv.VERCEL_TEAM_ID ??
-    spec.teamId ??
     undefined;
   // Cached project id/name from a previous run let us skip the
   // `/v9/projects/{idOrName}` lookup. Same env > .neon-launch.env order.

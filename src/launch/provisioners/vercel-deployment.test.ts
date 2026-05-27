@@ -266,16 +266,26 @@ describe('createDeployment — terminal event routing', () => {
         },
       },
     ];
+    // Two assertions: the message matches the fixed string AND it does
+    // NOT contain the secret env-var value. A regression that fell back
+    // to JSON.stringify(payload) would surface "postgres://secret:..."
+    // in the user terminal AND the sendError analytics payload.
     await expect(
       createDeployment({ ...baseOpts, production: false }),
-    ).rejects.toThrow(/Vercel deployment canceled: deployment was canceled/);
-    // The secret value must not leak into the thrown message.
-    try {
-      await createDeployment({ ...baseOpts, production: false });
-    } catch (err) {
-      expect((err as Error).message).not.toContain('secret');
-      expect((err as Error).message).not.toContain('DATABASE_URL');
-    }
+    ).rejects.toThrow(
+      expect.objectContaining({
+        message: expect.stringMatching(
+          /Vercel deployment canceled: deployment was canceled/,
+        ),
+      }),
+    );
+    await expect(
+      createDeployment({ ...baseOpts, production: false }),
+    ).rejects.toThrow(
+      expect.not.objectContaining({
+        message: expect.stringContaining('secret'),
+      }),
+    );
   });
 
   it('checks-v2-failed extracts the deployment-alias check errorMessage', async () => {

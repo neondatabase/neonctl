@@ -151,12 +151,16 @@ describe('resolveGitBranch precedence', () => {
   });
 });
 
-describe('writeNeonLaunchEnv concurrency', () => {
-  it('concurrent writes to the same path merge keys without losing any', async () => {
-    // Two concurrent writes to the same .neon-launch.env from different
-    // provisioners. The per-path write-lock must serialize the
-    // read-merge-write cycle; a regression that drops the lock would
-    // make the second writer overwrite the first's keys.
+describe('writeNeonLaunchEnv', () => {
+  it('concurrent writes merge keys (basic intent — body is sync so the lock is defense-in-depth)', async () => {
+    // Honest scope: the production body is `readFileSync → in-memory
+    // merge → writeFileSync → renameSync`, all synchronous. Two parallel
+    // calls serialize via Node's single-threaded event loop regardless
+    // of the per-path `writeLocks` map. This test pins the happy-path
+    // outcome (no key loss); it does NOT prove the lock is load-bearing
+    // — that would require the body to span an `await`. If the IO ever
+    // becomes async (fs.promises.*), revisit this test to interleave
+    // reads/writes around the await point.
     const dir = mkdtempSync(join(tmpdir(), 'neon-launch-env-test-'));
     await Promise.all([
       writeNeonLaunchEnv(dir, { VERCEL_PROJECT_ID: 'prj_1' }),

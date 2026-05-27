@@ -361,18 +361,27 @@ export async function createDeployment(opts: {
   let timedOut = false;
   const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
     timedOut = true;
-    void iterator.return?.(undefined);
+    void iterator.return?.(undefined)?.catch(() => undefined);
   }, DEPLOY_TIMEOUT_MS);
+  timer.unref?.();
   try {
     let aliasedUrl: string | undefined;
     for await (const event of iterator) {
-      const payload = event.payload as {
+      // The aliasError path yields `{ type: 'error', payload: deploymentUpdate.aliasError }`
+      // — `aliasError` is typed `string | null`. A naive `payload.url` lookup
+      // on `null` throws TypeError, replacing the user-visible deploy-failed
+      // message with a stack trace. Coerce to an object for the property
+      // reads; the terminal-event switch below handles the null/string
+      // cases via extractEventMessage.
+      const payload = (event.payload ?? {}) as {
         url?: string;
         alias?: string[];
         readyState?: string;
       };
-      if (payload.url) url = `https://${payload.url}`;
-      if (payload.readyState) status = payload.readyState;
+      if (typeof payload === 'object' && payload.url)
+        url = `https://${payload.url}`;
+      if (typeof payload === 'object' && payload.readyState)
+        status = payload.readyState;
       if (event.type === 'ready' && !opts.production) {
         return { url: url ?? '', status: 'READY' };
       }
@@ -413,10 +422,13 @@ export async function createDeployment(opts: {
     );
   } finally {
     clearTimeout(timer);
-    // Defensive: if we exited via return (success) or via a `throw`
-    // from within the for-await, make sure the iterator is closed so a
-    // lingering SDK fetch doesn't hold the event loop in library mode.
-    void iterator.return?.(undefined);
+    // Await iterator close so a lingering SDK fetch doesn't hold the
+    // event loop in library mode. .return() only takes effect at the
+    // iterator's next yield, but the await + .catch ensures whatever
+    // rejection the SDK ever produces is observed (Node 22's default
+    // --unhandled-rejections=throw would otherwise crash the parent on
+    // an SDK regression).
+    await iterator.return?.(undefined)?.catch(() => undefined);
   }
 }
 
