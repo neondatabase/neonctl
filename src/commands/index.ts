@@ -9,6 +9,7 @@ import * as databases from './databases.js';
 import * as roles from './roles.js';
 import * as operations from './operations.js';
 import * as cs from './connection_string.js';
+import * as psql from './psql.js';
 import * as setContext from './set_context.js';
 import * as init from './init.js';
 
@@ -24,6 +25,7 @@ export default [
   roles,
   operations,
   cs,
+  psql,
   setContext,
   init,
 ];

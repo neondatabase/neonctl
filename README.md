@@ -114,19 +114,20 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 
 ## Commands
 
-| Command                                                                    | Subcommands                                                                                 | Description                  |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------- |
-| [auth](https://neon.com/docs/reference/cli-auth)                           |                                                                                             | Authenticate                 |
-| [projects](https://neon.com/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                                                 | Manage projects              |
-| [ip-allow](https://neon.com/docs/reference/cli-ip-allow)                   | `list`, `add`, `remove`, `reset`                                                            | Manage IP Allow              |
-| [me](https://neon.com/docs/reference/cli-me)                               |                                                                                             | Show current user            |
-| [branches](https://neon.com/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-default`, `set-expiration`, `delete`, `get` | Manage branches              |
-| [databases](https://neon.com/docs/reference/cli-databases)                 | `list`, `create`, `delete`                                                                  | Manage databases             |
-| [roles](https://neon.com/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                                  | Manage roles                 |
-| [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                      | Manage operations            |
-| [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                             | Get connection string        |
-| [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                             | Set context for session      |
-| [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                             | Generate a completion script |
+| Command                                                                    | Subcommands                                                                                 | Description                    |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------ |
+| [auth](https://neon.com/docs/reference/cli-auth)                           |                                                                                             | Authenticate                   |
+| [projects](https://neon.com/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                                                 | Manage projects                |
+| [ip-allow](https://neon.com/docs/reference/cli-ip-allow)                   | `list`, `add`, `remove`, `reset`                                                            | Manage IP Allow                |
+| [me](https://neon.com/docs/reference/cli-me)                               |                                                                                             | Show current user              |
+| [branches](https://neon.com/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-default`, `set-expiration`, `delete`, `get` | Manage branches                |
+| [databases](https://neon.com/docs/reference/cli-databases)                 | `list`, `create`, `delete`                                                                  | Manage databases               |
+| [roles](https://neon.com/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                                  | Manage roles                   |
+| [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                      | Manage operations              |
+| [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                             | Get connection string          |
+| psql                                                                       |                                                                                             | Connect to a database via psql |
+| [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                             | Set context for session        |
+| [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                             | Generate a completion script   |
 
 ## Global options
 
@@ -192,17 +193,19 @@ Global options are supported with any Neon CLI command.
 
 ## Contribute
 
+This repo uses [pnpm](https://pnpm.io). The required version is pinned in `.tool-versions` and `package.json`'s `packageManager` field. The simplest way to get the right version is [mise](https://mise.jdx.dev): `mise install` reads `.tool-versions` and installs Node and pnpm. Alternatives: `npm install -g pnpm@9.15.9`, or [Corepack](https://nodejs.org/api/corepack.html) (`corepack enable pnpm`).
+
 To run the CLI locally, execute the build command after making changes:
 
 ```shell
-bun install
-bun run build
+pnpm install
+pnpm run build
 ```
 
 To develop continuously:
 
 ```shell
-bun run watch
+pnpm run watch
 ```
 
 To run commands from the local build, replace the `neonctl` command with `node dist`; for example:
