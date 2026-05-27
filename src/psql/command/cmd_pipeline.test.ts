@@ -119,6 +119,8 @@ const run = (spec: BackslashCmdSpec, ctx: BackslashContext) => spec.run(ctx);
 type MockConn = Connection & {
   prepared: string[];
   preparedClose: string[];
+  /** Names passed to the dedicated `Close('S', NAME)` entry point. */
+  closePreparedNames: string[];
 };
 
 const mkPrepared = (
@@ -157,10 +159,12 @@ const mkPrepared = (
 const makeMockConn = (): MockConn => {
   const prepared: string[] = [];
   const preparedClose: string[] = [];
+  const closePreparedNames: string[] = [];
   const conn: MockConn = {
     serverVersion: 170000,
     prepared,
     preparedClose,
+    closePreparedNames,
     parameterStatus: () => undefined,
     query: () => Promise.reject(new Error('not implemented')),
     execSimple: () => Promise.resolve([]),
@@ -183,6 +187,10 @@ const makeMockConn = (): MockConn => {
           () => preparedClose.push(name),
         ),
       );
+    },
+    closePreparedStatement: (name: string) => {
+      closePreparedNames.push(name);
+      return Promise.resolve();
     },
     startCopyIn: () => Promise.reject(new Error('nope')),
     startCopyOut: () => Promise.reject(new Error('nope')),
@@ -273,13 +281,51 @@ describe('\\parse / \\close_prepared', () => {
     expect(stderr()).toMatch(/no query buffer/);
   });
 
+  test('\\parse sets settings.lastQuery so a later \\g can re-run the SQL', async () => {
+    // After a successful \parse, upstream populates pset.last_query
+    // with the prepared SQL. This lets a subsequent \g (e.g. after a
+    // failed \bind_named NAME that wipes bind state) re-execute the
+    // parsed text via the simple-query path and surface server errors
+    // like "there is no parameter $1".
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    expect(s.lastQuery).toBe('');
+    const ctx = makeMockCtx('parse', 'stmt3', s, 'SELECT $1, $2');
+    const r = await run(cmdParse, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(s.lastQuery).toBe('SELECT $1, $2');
+  });
+
   test('\\close_prepared NAME closes the statement', async () => {
     const conn = makeMockConn();
     const s = makeSettings(conn);
     const ctx = makeMockCtx('close_prepared', 'stm', s);
     const r = await run(cmdClosePrepared, ctx);
     expect(r.status).toBe('ok');
-    expect(conn.preparedClose).toContain('stm');
+    // Upstream issues `Close('S', NAME) + Sync` directly — no fake Parse
+    // round-trip. We assert that the dedicated entry point was called
+    // and that no PreparedStatement.close() ran (`preparedClose` is
+    // populated by the PreparedStatement mock's close callback).
+    expect(conn.closePreparedNames).toEqual(['stm']);
+    expect(conn.preparedClose).not.toContain('stm');
+    expect(conn.prepared).not.toContain('stm::SELECT 1');
+  });
+
+  test('\\close_prepared NAME falls back to prepare+close when conn lacks the dedicated API', async () => {
+    // Older Connection mocks may not implement closePreparedStatement;
+    // cmdClosePrepared should still work by going through the same
+    // prepare(name, 'SELECT 1') -> close() round-trip we used to use.
+    const conn = makeMockConn();
+    // Strip the dedicated method to exercise the fallback branch.
+    (
+      conn as unknown as { closePreparedStatement?: unknown }
+    ).closePreparedStatement = undefined;
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('close_prepared', 'fallback', s);
+    const r = await run(cmdClosePrepared, ctx);
+    expect(r.status).toBe('ok');
+    expect(conn.prepared).toContain('fallback::SELECT 1');
+    expect(conn.preparedClose).toContain('fallback');
   });
 });
 

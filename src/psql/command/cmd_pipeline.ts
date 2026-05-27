@@ -234,6 +234,14 @@ export const cmdParse: BackslashCmdSpec = {
       // adjacent state; we keep a local map so a follow-on `\g` can
       // bind + execute without re-parsing.
       stashPrepared(ctx.settings, name, ps);
+      // Upstream `exec_command_parse` also updates `pset.last_query` to
+      // the prepared SQL so a subsequent `\g` (e.g. after a failed
+      // `\bind_named NAME` that wipes bind state) re-runs the parsed
+      // text via the simple-query path. Without this, our `\g` would
+      // either no-op or fall back to a stale prior query, missing the
+      // "ERROR: there is no parameter $1" the conformance corpus
+      // expects from `SELECT $1, $2` executed without bind params.
+      ctx.settings.lastQuery = sql;
       return { status: 'reset-buf', newBuf: '' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -255,17 +263,28 @@ export const cmdClosePrepared: BackslashCmdSpec = {
     if (name === null) {
       return errResult(ctx, 'missing required argument');
     }
-    if (!ctx.settings.db) {
+    const db = ctx.settings.db;
+    if (!db) {
       return errResult(ctx, 'no connection to the server');
     }
     try {
-      // The Connection interface doesn't expose a raw Close('S', name); use
-      // a fresh prepare()-then-close() round-trip so we go through the same
-      // extended-protocol plumbing.
-      const stmt = await ctx.settings.db.prepare(name, 'SELECT 1');
-      // We just need to issue Close('S', name). The prepared statement
-      // wrapper's close() does exactly that with the captured name.
-      await stmt.close();
+      // Upstream psql just issues `Close('S', name) + Sync` directly; the
+      // server treats Close on a missing name as a no-op (CloseComplete
+      // without diagnostics), so we don't need to know whether the
+      // statement exists. A previous implementation faked a
+      // `prepare(name, 'SELECT 1')` to reach the same Close, which broke
+      // when the name was already prepared on the server (Parse fails
+      // with `prepared statement "NAME" already exists`).
+      if (db.closePreparedStatement) {
+        await db.closePreparedStatement(name);
+      } else {
+        // Backwards-compat path for Connection mocks that don't
+        // implement the dedicated entry point. The real PgConnection
+        // always provides closePreparedStatement; this branch only
+        // fires under unit tests with bespoke Connection mocks.
+        const stmt = await db.prepare(name, 'SELECT 1');
+        await stmt.close();
+      }
       // Drop any cached binding so a later `\bind_named NAME \g` errors
       // cleanly instead of using a stale handle.
       dropPrepared(ctx.settings, name);
