@@ -833,7 +833,7 @@ export const executeAndPrint = async (
   sql: string,
   opts: SendQueryOpts = {},
 ): Promise<QueryStats> => {
-  const started = ctx.settings.timing ? Date.now() : 0;
+  const started = ctx.settings.timing ? performance.now() : 0;
   const stats: QueryStats = {
     rowsAffected: 0,
     rowsPrinted: 0,
@@ -878,7 +878,7 @@ export const executeAndPrint = async (
     stats.hadError = true;
   } finally {
     if (ctx.settings.timing) {
-      stats.durationMs = Date.now() - started;
+      stats.durationMs = performance.now() - started;
       ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
     }
   }
@@ -938,7 +938,7 @@ export const sendQuery = async (
   const onErrorRollback = readOnErrorRollback(ctx.settings);
   const interactive = !ctx.settings.notty;
 
-  const started = ctx.settings.timing ? Date.now() : 0;
+  const started = ctx.settings.timing ? performance.now() : 0;
 
   // ----- AUTOCOMMIT: implicit BEGIN ----------------------------------------
   let implicitBeginIssued = false;
@@ -951,7 +951,7 @@ export const sendQuery = async (
       writeQueryError(ctx, message);
       stats.hadError = true;
       if (ctx.settings.timing) {
-        stats.durationMs = Date.now() - started;
+        stats.durationMs = performance.now() - started;
         ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
       }
       return stats;
@@ -976,7 +976,7 @@ export const sendQuery = async (
       writeQueryError(ctx, message);
       stats.hadError = true;
       if (ctx.settings.timing) {
-        stats.durationMs = Date.now() - started;
+        stats.durationMs = performance.now() - started;
         ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
       }
       return stats;
@@ -1034,7 +1034,7 @@ export const sendQuery = async (
   void implicitBeginIssued;
 
   if (ctx.settings.timing) {
-    stats.durationMs = Date.now() - started;
+    stats.durationMs = performance.now() - started;
     ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
   }
   return stats;
