@@ -11,11 +11,15 @@
  *   NEON_API_KEY        — from https://console.neon.tech/app/settings/api-keys
  *   NEON_PROJECT_ID     — from your project's settings page
  *   VERCEL_TOKEN        — only for --preview / --prod
- *   VERCEL_PROJECT_ID   — auto-resolved by `neon launch` on first run
  *
- * The launcher writes resolved Vercel ids back to `.neon-launch.env` so
- * subsequent runs skip the lookup. Commit `.neon-launch.env` only if your
- * team shares the same Vercel project.
+ * Vercel project lookup: `spec.project` below resolves to a project the
+ * launcher GET's via `/v9/projects/<name>` on first run. The resolved id
+ * + name are then persisted to `.neon-launch.env` so subsequent runs skip
+ * the lookup. The example uses `'neon-launch-vercel-demo'` as a placeholder
+ * — change it to a project YOU own (create one at vercel.com/new first),
+ * or set VERCEL_PROJECT_ID in env to bypass the name lookup entirely.
+ *
+ * Commit `.neon-launch.env` only if your team shares the same Vercel project.
  */
 import {
   localCommand,

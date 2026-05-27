@@ -9,6 +9,28 @@
 // Exit codes
 // =============================================================================
 
+/**
+ * CLI-process-wide shutdown latch. The runner's signal handler sets
+ * this when SIGINT/SIGTERM kicks off a graceful exit (kill children,
+ * flush analytics, `process.exit(signalCode)`). The CLI catch in
+ * `commands/launch.ts` reads it to avoid racing the handler with a
+ * duplicate `closeAnalytics + process.exit(RESOURCE_FAILED)` after the
+ * killed-sibling rejection bubbles up.
+ *
+ * Library callers ignore the flag — they receive the rethrown error
+ * normally and decide their own exit policy. Kept here (not in
+ * `runner.ts`) so the CLI catch can read it without statically
+ * importing the heavy runner module, which would pull `jiti` and the
+ * provisioners into Node-18 paths.
+ */
+let cliShutdownInFlight = false;
+export function isCliShutdownInFlight(): boolean {
+  return cliShutdownInFlight;
+}
+export function setCliShutdownInFlight(): void {
+  cliShutdownInFlight = true;
+}
+
 export const ExitCode = {
   SUCCESS: 0,
   RESOURCE_FAILED: 1,
@@ -138,7 +160,7 @@ export function branchQuotaMessage(opts: {
     '',
     `Or upgrade the project: https://console.neon.tech/app/projects/${opts.projectId}/settings`,
     '',
-    `(Free tier caps at 10 — see https://neon.com/docs/introduction/plans)`,
+    `Branch caps per plan: https://neon.com/docs/introduction/plans`,
   ].join('\n');
 }
 

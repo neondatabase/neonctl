@@ -11,7 +11,7 @@ import type yargs from 'yargs';
 
 import { log } from '../log.js';
 import { closeAnalytics, sendError } from '../analytics.js';
-import { ExitCode } from '../launch/errors.js';
+import { ExitCode, isCliShutdownInFlight } from '../launch/errors.js';
 
 const RECOGNIZED_FLAGS = new Set([
   'config',
@@ -50,7 +50,7 @@ const RECOGNIZED_FLAGS = new Set([
 
 export const command = 'launch';
 export const describe =
-  'Launch the stack defined in your neon.ts (requires Node 22+)';
+  'Provision a Neon + Vercel + local-command stack from a neon.ts file (requires Node 22+; see examples/neon-launch-vercel)';
 
 export const builder = (argv: yargs.Argv) =>
   argv
@@ -66,8 +66,34 @@ export const builder = (argv: yargs.Argv) =>
     .option('branch-timeout', {
       type: 'number',
       describe:
-        'Per-branch poll budget in seconds when waiting for Neon create ops',
+        'Per-branch poll budget in seconds (covers create-op polling AND branch-ready polling)',
       default: 300,
+    })
+    .example('$0 launch', 'Run the stack defined in ./neon.ts')
+    .example(
+      '$0 launch --config infra/launch.ts',
+      'Use a non-default config path',
+    )
+    .example(
+      '$0 launch --preview --branch "${BRANCH_NAME}"',
+      'CI preview deploy — branch flows into Neon branch name + Vercel preview scoping',
+    )
+    .epilogue(
+      'See https://github.com/neondatabase/neonctl/tree/main/examples/neon-launch-vercel for a runnable example.',
+    )
+    .check((args) => {
+      // `--output=json` is a global flag that callers expect to make the
+      // command produce machine-readable JSON. The launcher's runtime is
+      // streaming human logs from child processes (next dev, migrations,
+      // vercel build), so JSON output is not coherent for `launch` in v1.
+      // Reject explicitly rather than silently ignoring — a CI script
+      // piping to `jq` should fail loudly.
+      if (args.output === 'json') {
+        throw new Error(
+          '[neon launch] --output=json is not supported for `launch` (the command streams human logs from child processes). Drop the flag and parse stdout/stderr directly, or open an issue if you need structured output.',
+        );
+      }
+      return true;
     })
     .strict(false);
 
@@ -103,6 +129,14 @@ export const handler = async (argv: LaunchArgs): Promise<void> => {
       recognizedFlags: RECOGNIZED_FLAGS,
     });
   } catch (err) {
+    // If a SIGINT/SIGTERM handler is already mid-shutdown (kill children
+    // + flush analytics + process.exit(signalCode)), the killed-sibling
+    // rejection bubbles up here. Park instead of racing the handler with
+    // our own closeAnalytics + exit — the handler owns the exit code.
+    if (isCliShutdownInFlight()) {
+      await new Promise<never>(() => undefined);
+      return;
+    }
     const error = err instanceof Error ? err : new Error(String(err));
     sendError(error, 'NEON_LAUNCH_FAILED');
     log.error(error.message);
@@ -111,7 +145,7 @@ export const handler = async (argv: LaunchArgs): Promise<void> => {
     await closeAnalytics();
     // LaunchError carries the right exit code (CONFIG_ERROR for plan-time,
     // AUTH_MISSING for missing tokens, etc.); other errors fall through to
-    // RESOURCE_FAILED. The SIGINT path exits 130 itself, never reaches here.
+    // RESOURCE_FAILED.
     const exitCode =
       (error as { exitCode?: number }).exitCode ?? ExitCode.RESOURCE_FAILED;
     process.exit(exitCode);

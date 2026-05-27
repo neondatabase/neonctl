@@ -171,6 +171,10 @@ describe('provisionPostgres — concurrent-create race', () => {
     });
     expect(result.branch.id).toBe('br_now_exists');
     expect(api.createProjectBranch).toHaveBeenCalledTimes(1);
+    // 3 list calls confirm the fallback path: find-by-name, resolve-default,
+    // post-409 retry. A skipped retry would still pass the branch.id check
+    // by accident if the parent listing happened to contain the name.
+    expect(api.listProjectBranches).toHaveBeenCalledTimes(3);
   });
 
   it('422 with branch present after → falls back to attach', async () => {
@@ -188,6 +192,7 @@ describe('provisionPostgres — concurrent-create race', () => {
       resourceFqn: 'db',
     });
     expect(result.branch.id).toBe('br_now_exists');
+    expect(api.listProjectBranches).toHaveBeenCalledTimes(3);
   });
 
   it('409 with branch still absent → rethrows original error', async () => {
@@ -207,7 +212,7 @@ describe('provisionPostgres — concurrent-create race', () => {
     ).rejects.toBe(err);
   });
 
-  it('quota-exhausted body in 4xx → LaunchError(AUTH_MISSING)', async () => {
+  it('quota-exhausted body in 4xx → LaunchError(CONFIG_ERROR)', async () => {
     const api = makeApi({
       listings: [[PARENT_BRANCH]],
       createReject: axiosErr(403, 'branch limit reached for free plan'),
@@ -221,7 +226,7 @@ describe('provisionPostgres — concurrent-create race', () => {
       }),
     ).rejects.toThrowError(
       expect.objectContaining({
-        exitCode: ExitCode.AUTH_MISSING,
+        exitCode: ExitCode.CONFIG_ERROR,
         message: expect.stringMatching(/branch.*limit|quota/i),
       }),
     );
@@ -256,7 +261,13 @@ describe('pollOpsTerminal — diagnostic preservation', () => {
     vi.useRealTimers();
   });
 
-  it('timeout message includes last-seen op.error and failures_count', async () => {
+  it('timeout message includes the LATEST seen op.error and failures_count', async () => {
+    // Two iterations of the poll loop: the first one observes
+    // failures_count=2 and error="early"; the second observes
+    // failures_count=5 and error="latest". The timeout message must
+    // carry the LATEST snapshot, not the first — proves that lastSeen
+    // accumulates across iterations rather than getting reset.
+    let iteration = 0;
     const api = makeApi({
       listings: [],
       opSequence: {
@@ -264,27 +275,60 @@ describe('pollOpsTerminal — diagnostic preservation', () => {
           {
             id: 'op_1',
             status: 'running',
-            error: 'replica creation failed: insufficient capacity',
-            failures_count: 3,
+            error: 'early: pool exhausted',
+            failures_count: 2,
+          },
+          {
+            id: 'op_1',
+            status: 'running',
+            error: 'latest: still pool exhausted',
+            failures_count: 5,
           },
         ],
       },
+    });
+    // Override getProjectOperation to walk the opSequence positionally
+    // (the default mock clamps to the last entry after the first poll).
+    api.getProjectOperation.mockImplementation(() => {
+      const i = Math.min(iteration, 1);
+      iteration += 1;
+      return Promise.resolve({
+        data: { operation: { ...api } } as never,
+      } as never).then(() => ({
+        data: {
+          operation: [
+            {
+              id: 'op_1',
+              status: 'running',
+              error: 'early: pool exhausted',
+              failures_count: 2,
+            },
+            {
+              id: 'op_1',
+              status: 'running',
+              error: 'latest: still pool exhausted',
+              failures_count: 5,
+            },
+          ][i],
+        },
+      }));
     });
     const promise = pollOpsTerminal(
       api as any,
       'prj_1',
       ['op_1'],
-      1, // 1s budget — one poll then deadline expires.
+      // 5s budget: one poll → sleep 2s → second poll → sleep 2s → deadline.
+      5,
     );
-    // Attach the rejection assertion immediately so Node sees the
-    // rejection as handled before we drive the fake timer forward.
     const assertion = expect(promise).rejects.toThrow(
-      /Timed out.*op_1.*status=running.*failures=3.*replica creation failed: insufficient capacity/s,
+      /Timed out.*op_1.*failures=5.*latest: still pool exhausted/s,
     );
-    // Let the first getProjectOperation resolve, then advance past the
-    // 2s sleep so the while-condition flips false and we get the throw.
+    // Drain the two poll-and-sleep cycles + the deadline slip.
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     await assertion;
   });
 });

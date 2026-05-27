@@ -311,19 +311,13 @@ function enforceDepsInTree(registry: Map<string, PlanNode>): void {
 }
 
 /**
- * A `localCommand` whose process never signals readiness has no defined
- * "done" point — dependents would start as soon as its child spawns and
- * race the work it was supposed to do (migrations vs. dev server). The
- * factory's `readiness` field is optional because not every command has
- * dependents; here we enforce that it's required when other resources
- * depend on this command.
- */
-/**
  * When the user runs `--preview` (vercelDeployment with `production: false`)
  * the launcher passes `ctx.gitBranch` to Vercel as the env-var scoping key
- * and as `gitMetadata.commitRef`. An empty `gitBranch` (non-git directory,
- * detached HEAD with no `--branch` flag, etc.) makes Vercel 400 with a
- * deep error message. Catch it at plan time with launcher-level guidance.
+ * and as `gitMetadata.commitRef`. An empty `gitBranch` would scope the
+ * upserted env vars to ALL preview branches (Vercel accepts a missing
+ * `gitBranch` and treats it as "all previews") — meaning the values
+ * intended for this deploy would leak into every other PR's preview.
+ * Catch it at plan time before any Vercel call.
  */
 function enforceGitBranchForPreviewDeploys(
   registry: Map<string, PlanNode>,
@@ -337,9 +331,9 @@ function enforceGitBranchForPreviewDeploys(
     throw new LaunchError(
       [
         `[neon launch] vercelDeployment '${node.name}' is a preview deploy`,
-        `(production:false / default) but ctx.gitBranch is empty. Vercel`,
-        `requires a non-empty branch for preview scoping; without it`,
-        `the env-var upsert + deployment trigger will fail with a 400.`,
+        `(production:false / default) but ctx.gitBranch is empty. Without a`,
+        `branch name the upserted env vars scope to ALL preview branches,`,
+        `which leaks values across unrelated PRs.`,
         '',
         `Pass --branch <name> on the command line, or run from a git`,
         `repo where the current branch can be detected automatically.`,
@@ -352,6 +346,14 @@ function enforceGitBranchForPreviewDeploys(
   }
 }
 
+/**
+ * A `localCommand` whose process never signals readiness has no defined
+ * "done" point — dependents would start as soon as its child spawns and
+ * race the work it was supposed to do (migrations vs. dev server). The
+ * factory's `readiness` field is optional because not every command has
+ * dependents; here we enforce that it's required when other resources
+ * depend on this command.
+ */
 function enforceLocalCommandReadiness(registry: Map<string, PlanNode>): void {
   const dependedOn = new Set<string>();
   for (const node of registry.values()) {

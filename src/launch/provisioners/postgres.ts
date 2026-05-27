@@ -404,9 +404,13 @@ export async function provisionPostgres(opts: {
         : undefined;
       const quotaHit = /branch.*limit|quota/i.test(responseBody?.message ?? '');
       if (quotaHit) {
+        // Quota is a plan-level limit, not an auth failure. CONFIG_ERROR
+        // matches the user-actionable framing of the message (delete
+        // branches or upgrade the project) and is consistent with the
+        // documented exit-code contract.
         throw new LaunchError(
           branchQuotaMessage({ projectId }),
-          ExitCode.AUTH_MISSING,
+          ExitCode.CONFIG_ERROR,
         );
       }
       if (status === 409 || status === 422) {

@@ -123,19 +123,28 @@ describe('pickStdioMode', () => {
     readiness: { logMatch: /ready/ },
   });
 
-  it("single leaf node without dependents and without logMatch → 'inherit'", () => {
-    expect(pickStdioMode(cmdNoReadiness, 1, false)).toBe('inherit');
+  it("single leaf node alone in its stage → 'inherit'", () => {
+    expect(pickStdioMode(cmdNoReadiness, 1, false, 1)).toBe('inherit');
   });
 
   it("logMatch readiness forces 'prefixed' (needs captured stdout)", () => {
-    expect(pickStdioMode(cmdLogMatch, 1, false)).toBe('prefixed');
+    expect(pickStdioMode(cmdLogMatch, 1, false, 1)).toBe('prefixed');
   });
 
   it("having dependents forces 'prefixed' (kill cascade must reach grandchildren)", () => {
-    expect(pickStdioMode(cmdNoReadiness, 1, true)).toBe('prefixed');
+    expect(pickStdioMode(cmdNoReadiness, 1, true, 1)).toBe('prefixed');
   });
 
   it("more than one local-command in the stage forces 'prefixed' (no TTY interleave)", () => {
-    expect(pickStdioMode(cmdNoReadiness, 2, false)).toBe('prefixed');
+    expect(pickStdioMode(cmdNoReadiness, 2, false, 2)).toBe('prefixed');
+  });
+
+  it("any sibling in the same stage forces 'prefixed' (sibling failure → kill cascade)", () => {
+    // Stage has [vercelDeployment, localCommand]. The localCommand has no
+    // dependents and is the only local-command, but if the Vercel sibling
+    // 4xx's the fast-cancel will kill this node. In inherit mode that
+    // signals only the wrapping shell — the dev-server grandchild
+    // survives and holds its port.
+    expect(pickStdioMode(cmdNoReadiness, 1, false, 2)).toBe('prefixed');
   });
 });

@@ -16,18 +16,17 @@ import { writeNeonLaunchEnv } from '../context.js';
 import { ExitCode, LaunchError, vercelTokenMissingMessage } from '../errors.js';
 
 // =============================================================================
-// Endpoint versions (locked, do not change without re-checking)
+// Endpoint versions (verified 2026-05-27 against vercel.com/docs/rest-api)
 // =============================================================================
 
 const VERCEL_API = {
   base: 'https://api.vercel.com',
-  /** Single-project read. v9 still current per Vercel docs 2026-05. */
+  /** Find a project by id or name. */
   projectGet: (idOrName: string) => `/v9/projects/${idOrName}`,
-  /** Project list (paginated `{ projects, pagination }`). */
-  projectList: () => `/v10/projects`,
-  /** Env-var upsert (array body). */
+  /** Create or upsert env vars for a project (array body). */
   envUpsert: (id: string) => `/v10/projects/${id}/env?upsert=true`,
-  /** Team-slug → team-id resolution. */
+  /** Resolve a team by slug. Vercel's `/v2/teams/{teamId}` accepts `slug=`
+   *  as an alternate addressing mode when the path id is omitted. */
   teamBySlug: (slug: string) => `/v2/teams?slug=${encodeURIComponent(slug)}`,
 } as const;
 
@@ -258,75 +257,119 @@ export async function createDeployment(opts: {
       : undefined,
   };
 
-  // The client iterator emits 'ready' BEFORE 'alias-assigned'. At 'ready'
-  // the deployment is live but `payload.url` is the immutable per-deploy
-  // <id>.vercel.app host and aliases haven't been wired.
-  //   - PROD: wait for 'alias-assigned' so we return the canonical
-  //     production domain (the user expects vercel.app or their custom
-  //     domain, not <id>.vercel.app).
-  //   - PREVIEW: 'alias-assigned' may NEVER fire — git-connected
-  //     branch-aliased URLs are a property of git-connected projects;
-  //     file-upload deploys against non-git-connected projects have no
-  //     alias to assign. Resolve at 'ready' with the immutable URL,
-  //     which IS the correct URL for that case.
-  // 'checks-v2-failed' is a terminal yield-and-return failure.
-  // Overall timeout guards against builds that never error and never
-  // emit a terminal event (rare but observed; reviewer flagged it).
+  // Terminal-event handling:
+  //   - PREVIEW success: 'ready' resolves with the per-deploy URL (the
+  //     <id>.vercel.app host). 'alias-assigned' may NEVER fire for non-
+  //     git-connected file-upload deploys, so we don't wait for it.
+  //   - PROD success: 'alias-assigned' resolves with the canonical
+  //     domain. 'ready' fires earlier but `payload.url` is still the
+  //     per-deploy host at that point; aliases haven't been wired yet.
+  //   - Failures: 'error', 'canceled', 'checks-v2-failed',
+  //     'checks-conclusion-failed', 'checks-conclusion-canceled'.
+  //
+  // Outer timeout via Promise.race: if the underlying stream goes
+  // silent (Vercel edge partial outage holding the connection open
+  // without emitting events), the `for await` blocks indefinitely on
+  // the iterator's `next()` promise — checking the deadline inside
+  // the loop body would never fire. The race kicks the timeout
+  // independent of stream activity.
   const DEPLOY_TIMEOUT_MS = 15 * 60 * 1_000;
-  const deadline = Date.now() + DEPLOY_TIMEOUT_MS;
-  let aliasedUrl: string | undefined;
   const iterator = vercelCreateDeployment(
     clientOpts as Parameters<typeof vercelCreateDeployment>[0],
     deploymentOpts as Parameters<typeof vercelCreateDeployment>[1],
   );
-  for await (const event of iterator) {
-    if (Date.now() > deadline) {
-      throw new Error(
-        `[neon launch] Vercel deployment exceeded ${DEPLOY_TIMEOUT_MS / 60_000}min timeout (last status: ${status ?? 'unknown'}).`,
-      );
+  const walk = async (): Promise<VercelDeploymentResult> => {
+    let aliasedUrl: string | undefined;
+    for await (const event of iterator) {
+      const payload = event.payload as {
+        url?: string;
+        alias?: string[];
+        readyState?: string;
+      };
+      if (payload.url) url = `https://${payload.url}`;
+      if (payload.readyState) status = payload.readyState;
+      if (event.type === 'ready' && !opts.production) {
+        return { url: url ?? '', status: 'READY' };
+      }
+      if (event.type === 'alias-assigned') {
+        const first = payload.alias?.[0];
+        if (first) aliasedUrl = `https://${first}`;
+        return { url: aliasedUrl ?? url ?? '', status: 'READY' };
+      }
+      if (
+        event.type === 'error' ||
+        event.type === 'canceled' ||
+        event.type === 'checks-v2-failed' ||
+        event.type === 'checks-conclusion-failed' ||
+        event.type === 'checks-conclusion-canceled'
+      ) {
+        throw new Error(
+          `[neon launch] Vercel deployment ${event.type}: ${extractEventMessage(event.type, event.payload)}`,
+        );
+      }
     }
-    const payload = event.payload as {
-      url?: string;
-      alias?: string[];
-      readyState?: string;
-      // Vercel error shapes vary: `deploymentUpdate.error.message` (poll
-      // path), `deploymentUpdate.aliasError.message` (alias path), and
-      // `deploymentUpdate.errorMessage` (top-level on failed deploys).
-      message?: string;
-      errorMessage?: string;
-    };
-    if (payload.url) url = `https://${payload.url}`;
-    if (payload.readyState) status = payload.readyState;
-    if (event.type === 'ready' && !opts.production) {
-      // Preview: the per-deploy URL is what the user gets; resolve here.
-      return { url: url ?? '', status: 'READY' };
-    }
-    if (event.type === 'alias-assigned') {
-      // Prefer the canonical alias (production domain or branch alias)
-      // when present; fall back to the per-deploy URL.
-      const first = payload.alias?.[0];
-      if (first) aliasedUrl = `https://${first}`;
-      return { url: aliasedUrl ?? url ?? '', status: 'READY' };
-    }
-    if (
-      event.type === 'error' ||
-      event.type === 'canceled' ||
-      event.type === 'checks-v2-failed'
-    ) {
-      const msg =
-        event.payload instanceof Error
-          ? event.payload.message
-          : (payload.message ??
-            payload.errorMessage ??
-            JSON.stringify(event.payload));
-      throw new Error(`[neon launch] Vercel deployment ${event.type}: ${msg}`);
-    }
+    throw new Error(
+      `[neon launch] Vercel deployment stream ended without a terminal event (last status: ${status ?? 'unknown'}).`,
+    );
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      walk(),
+      new Promise<VercelDeploymentResult>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `[neon launch] Vercel deployment exceeded ${DEPLOY_TIMEOUT_MS / 60_000}min timeout (last status: ${status ?? 'unknown'}).`,
+            ),
+          );
+        }, DEPLOY_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
+}
 
-  // Iterator ended without a terminal event — surface what we last saw.
-  throw new Error(
-    `[neon launch] Vercel deployment stream ended without a terminal event (last status: ${status ?? 'unknown'}).`,
-  );
+/**
+ * Pull a human-readable message out of a Vercel deployment event payload
+ * without leaking the full deployment object to the user terminal.
+ *
+ * Payload shapes the client yields (verified against
+ * node_modules/@vercel/client/dist/check-deployment-status.js):
+ *   - `error` from BUILD_FAILED / isFailed: deployment object whose
+ *     `.error` may carry a `.message` string.
+ *   - `error` from isAliasError: BARE STRING (`deploymentUpdate.aliasError`,
+ *     typed `string | null`) — NOT an object.
+ *   - `canceled` / `checks-v2-failed` / `checks-conclusion-*`: the full
+ *     deployment object. `checks-v2-failed` carries the underlying check
+ *     reason at `payload.checks['deployment-alias'].errorMessage`.
+ *
+ * We DO NOT fall back to JSON.stringify(payload) — the deployment object
+ * carries env-var keys/values and other sensitive shape that has no place
+ * in a terminal error line.
+ */
+function extractEventMessage(eventType: string, payload: unknown): string {
+  if (payload instanceof Error) return payload.message;
+  if (typeof payload === 'string') return payload;
+  if (payload !== null && typeof payload === 'object') {
+    const p = payload as {
+      message?: unknown;
+      errorMessage?: unknown;
+      error?: { message?: unknown };
+      checks?: { 'deployment-alias'?: { errorMessage?: unknown } };
+    };
+    if (typeof p.message === 'string') return p.message;
+    if (typeof p.errorMessage === 'string') return p.errorMessage;
+    if (typeof p.error?.message === 'string') return p.error.message;
+    const checkMsg = p.checks?.['deployment-alias']?.errorMessage;
+    if (typeof checkMsg === 'string') return checkMsg;
+  }
+  // Fixed fallback per event type — never the raw payload.
+  if (eventType === 'canceled') return 'deployment was canceled';
+  if (eventType === 'checks-conclusion-canceled') return 'checks canceled';
+  if (eventType === 'checks-conclusion-failed') return 'checks failed';
+  return 'no detail provided by Vercel';
 }
 
 // =============================================================================

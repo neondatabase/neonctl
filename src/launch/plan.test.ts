@@ -6,8 +6,30 @@
 import { describe, it, expect } from 'vitest';
 
 import { postgres, localCommand, stack, vercelDeployment } from './config.js';
+import { ExitCode } from './errors.js';
 import { isInternalResource } from './plan.js';
 import type { LaunchContext } from './config.js';
+
+/**
+ * Assert that a buildPlan promise rejects with a LaunchError whose
+ * message matches the regex AND whose exitCode matches the expected
+ * value. Every plan-time invariant must use this — message-only
+ * matching doesn't catch an accidental swap to `throw new Error(...)`
+ * (which would silently exit 1 instead of 2, breaking the documented
+ * exit-code contract).
+ */
+async function expectPlanError(
+  promise: Promise<unknown>,
+  matcher: RegExp,
+  exitCode: number = ExitCode.CONFIG_ERROR,
+): Promise<void> {
+  await expect(promise).rejects.toThrowError(
+    expect.objectContaining({
+      message: expect.stringMatching(matcher),
+      exitCode,
+    }),
+  );
+}
 
 const ctx: LaunchContext = {
   gitBranch: 'main',
@@ -30,7 +52,8 @@ describe('plan invariants', () => {
     if (!isInternalResource(root)) throw new Error('test setup wrong');
     const { buildPlan } = await import('./plan.js');
     const tmpPath = await writeTempConfig(root);
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /Found 0 postgres resources/,
     );
   });
@@ -45,7 +68,8 @@ describe('plan invariants', () => {
     });
     const tmpPath = await writeTempConfig(root);
     const { buildPlan } = await import('./plan.js');
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /Found 2 postgres resources/,
     );
   });
@@ -59,7 +83,8 @@ describe('plan invariants', () => {
     });
     const tmpPath = await writeTempConfig(root);
     const { buildPlan } = await import('./plan.js');
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /returns the same resource at two keys/,
     );
   });
@@ -136,7 +161,8 @@ describe('plan invariants', () => {
       postgres({ spec: () => ({ name: 'x' }) }),
     );
     const { buildPlan } = await import('./plan.js');
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /default-export a stack.*Found: postgres/s,
     );
   });
@@ -176,7 +202,8 @@ describe('plan invariants', () => {
     });
     const tmpPath = await writeTempConfig(root);
     const { buildPlan } = await import('./plan.js');
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /Nested stacks are not supported in v1/,
     );
   });
@@ -199,7 +226,8 @@ describe('plan invariants', () => {
     });
     const tmpPath = await writeTempConfig(root);
     const { buildPlan } = await import('./plan.js');
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /depends on 'orphan'.*not in the resolved tree/s,
     );
   });
@@ -225,7 +253,8 @@ describe('plan invariants', () => {
     });
     const tmpPath = await writeTempConfig(root);
     const { buildPlan } = await import('./plan.js');
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /localCommand 'migrate' has dependents but no `readiness`/,
     );
   });
@@ -250,7 +279,8 @@ describe('plan invariants', () => {
     const root = stack({ spec: () => ({ a, b }) });
     const tmpPath = await writeTempConfig(root);
     const { buildPlan } = await import('./plan.js');
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /Cycle detected.*a.*b|Cycle detected.*b.*a/s,
     );
   });
@@ -277,7 +307,8 @@ describe('plan invariants', () => {
       flags: {},
       processEnv: {},
     };
-    await expect(buildPlan(tmpPath, ctxNoGit)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctxNoGit),
       /preview deploy.*ctx\.gitBranch is empty/s,
     );
   });
@@ -290,9 +321,50 @@ describe('plan invariants', () => {
       { db };
     const tmpPath = await writeTempConfig(root);
     const { buildPlan } = await import('./plan.js');
-    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
       /root stack cannot have `dependsOn`/,
     );
+  });
+
+  it('stack spec returning a non-object throws stackSpecNotRecord', async () => {
+    const root = stack({
+      // Returning a string violates the "record of resources" contract.
+      spec: () => 'not-a-record' as never,
+    });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    await expectPlanError(
+      buildPlan(tmpPath, ctx),
+      /did not return a record of resources/,
+    );
+  });
+
+  it('invariant order — cycle fires before localCommand-readiness when both are violated', async () => {
+    // A cyclic graph is a more fundamental error than a missing readiness
+    // signal. The header comment in plan.ts documents this order; the test
+    // pins it so a future refactor of buildPlan can't silently reorder
+    // user-facing errors.
+    const a = postgres({ spec: () => ({ name: 'main' }) });
+    // `b` has dependents (a, after we inject the back-edge) and no
+    // readiness — would normally fire enforceLocalCommandReadiness.
+    const b = localCommand({
+      dependsOn: { a },
+      spec: ({ a }) => ({
+        command: 'echo hi',
+        env: { X: a.host },
+        // No readiness — violates enforceLocalCommandReadiness if reached.
+      }),
+    });
+    // Inject the back-edge a → b to create a cycle.
+    (a as unknown as { __dependsOn: Record<string, unknown> }).__dependsOn = {
+      b,
+    };
+    const root = stack({ spec: () => ({ a, b }) });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    // Cycle wins.
+    await expectPlanError(buildPlan(tmpPath, ctx), /Cycle detected/);
   });
 
   it('localCommand without dependents may omit readiness', async () => {

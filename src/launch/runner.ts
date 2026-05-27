@@ -30,7 +30,12 @@ import {
 } from './provisioners/local-command.js';
 import { provisionVercelDeployment } from './provisioners/vercel-deployment.js';
 import { isRef } from './refs.js';
-import { ExitCode, LaunchError, vercelTokenMissingMessage } from './errors.js';
+import {
+  ExitCode,
+  LaunchError,
+  setCliShutdownInFlight,
+  vercelTokenMissingMessage,
+} from './errors.js';
 import type {
   LocalCommandSpec,
   PostgresSpec,
@@ -225,25 +230,33 @@ async function resolveEnv(
  *
  * 'inherit' passes the parent's TTY straight through — preserves Windows
  * native SIGINT routing into child prompts, lets the user interact with
- * `next dev` / `vite` shortcuts. Constraints:
+ * `next dev` / `vite` shortcuts. Constraints (any one of these falls back
+ * to 'prefixed'):
  *
- *   1. logMatch readiness needs captured stdout — force 'prefixed'.
- *   2. Another local-command in the stage would interleave on the TTY —
- *      force 'prefixed'.
- *   3. If the node HAS dependents, a sibling failure (or any non-TTY
- *      teardown trigger) will explicitly call `kill()` on this handle.
- *      In inherit mode `detached` is false to preserve TTY control, so
- *      `kill()` signals only the wrapping `sh -c` — the dev-server
- *      grandchild survives, re-parents to init, and keeps holding its
- *      port. Force 'prefixed' (detached) so the kill cascade reaches
- *      the grandchild's process group. TTY Ctrl-C still works because
- *      the kernel signals the whole foreground group.
+ *   1. logMatch readiness needs captured stdout — can't share the TTY.
+ *   2. Another local-command in the same stage would interleave on the
+ *      TTY — prefixed serializes line output.
+ *   3. The node has dependents — downstream stage teardown will call
+ *      `kill()` on this handle. In inherit mode `detached` is false to
+ *      preserve TTY control, so `kill()` signals only the wrapping
+ *      `sh -c` — the dev-server grandchild survives, re-parents to init,
+ *      and keeps holding its port. Prefixed (detached) lets the kill
+ *      cascade reach the grandchild's process group.
+ *   4. ANY sibling resource is in the same stage (postgres, vercel-
+ *      deployment, or another local-command). Sibling failure triggers
+ *      a fast-cancel kill of every live local-command — including this
+ *      one — and the same grandchild-leak in (3) applies. The only stage
+ *      where inherit is safe is one where this is the ONLY node.
+ *      TTY Ctrl-C still works in prefixed mode because the kernel
+ *      signals the whole foreground group.
  */
 export function pickStdioMode(
   node: PlanNode,
   localCmdCount: number,
   hasDependents: boolean,
+  stageSize: number,
 ): StdioMode {
+  if (stageSize > 1) return 'prefixed';
   if (localCmdCount !== 1) return 'prefixed';
   const spec = node.spec as { readiness?: { logMatch?: RegExp } };
   if (spec.readiness && 'logMatch' in spec.readiness) return 'prefixed';
@@ -398,6 +411,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
         return;
       }
       runtime.shuttingDown.value = true;
+      setCliShutdownInFlight();
       log.info(`[launch] ${signal} — stopping any running local commands.`);
       for (const h of liveLocalCommands) void h.kill();
       // Flush analytics before exit so the shutdown event isn't dropped.
@@ -515,6 +529,7 @@ async function provisionStages(args: StagesArgs): Promise<void> {
           node,
           localCmdCount,
           dependedOnFqns.has(node.name),
+          stage.length,
         ),
         liveLocalCommands,
         neonLaunchEnv,

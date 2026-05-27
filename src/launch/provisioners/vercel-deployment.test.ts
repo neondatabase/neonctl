@@ -8,9 +8,27 @@
  *   - `upsertEnvVars` body shape: production:true → target:['production']
  *     (no gitBranch); production:false → target:['preview'] with gitBranch.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { upsertEnvVars, wrapTeam } from './vercel-deployment.js';
+// `@vercel/client` is lazy-imported inside createDeployment; mock the
+// surface that contributes to the iterator. Each test supplies its own
+// event sequence via the per-test mockReturnValue below.
+let mockEvents: { type: string; payload: unknown }[] = [];
+vi.mock('@vercel/client', () => ({
+  createDeployment: () => {
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async function* gen() {
+      for (const e of mockEvents) yield e;
+    }
+    return gen();
+  },
+}));
+
+import {
+  createDeployment,
+  upsertEnvVars,
+  wrapTeam,
+} from './vercel-deployment.js';
 
 describe('wrapTeam', () => {
   it('no teamId → path unchanged', () => {
@@ -115,5 +133,155 @@ describe('upsertEnvVars body shape', () => {
     // always emits `?` would produce `?upsert=true?teamId=…` (invalid)
     // and slip past a loose `toContain('teamId=team_xyz')`.
     expect(capturedUrl).toContain('?upsert=true&teamId=team_xyz');
+  });
+});
+
+describe('createDeployment — terminal event routing', () => {
+  const baseOpts = {
+    projectName: 'demo',
+    cwd: '/tmp',
+    gitBranch: 'main',
+    ctx: { token: 't' },
+  };
+
+  it('preview success resolves at `ready` with the per-deploy URL', async () => {
+    mockEvents = [
+      { type: 'building', payload: { readyState: 'BUILDING' } },
+      {
+        type: 'ready',
+        payload: { url: 'abc.vercel.app', readyState: 'READY' },
+      },
+    ];
+    const result = await createDeployment({ ...baseOpts, production: false });
+    expect(result.url).toBe('https://abc.vercel.app');
+    expect(result.status).toBe('READY');
+  });
+
+  it('production success resolves at `alias-assigned` with the canonical alias', async () => {
+    mockEvents = [
+      { type: 'ready', payload: { url: 'abc.vercel.app' } },
+      // `ready` for production must NOT resolve — the iterator must wait
+      // for alias-assigned to surface the production domain.
+      {
+        type: 'alias-assigned',
+        payload: { url: 'abc.vercel.app', alias: ['demo.vercel.app'] },
+      },
+    ];
+    const result = await createDeployment({ ...baseOpts, production: true });
+    expect(result.url).toBe('https://demo.vercel.app');
+  });
+
+  it('production falls back to per-deploy URL when alias-assigned carries no alias', async () => {
+    mockEvents = [
+      { type: 'ready', payload: { url: 'abc.vercel.app' } },
+      { type: 'alias-assigned', payload: { url: 'abc.vercel.app', alias: [] } },
+    ];
+    const result = await createDeployment({ ...baseOpts, production: true });
+    expect(result.url).toBe('https://abc.vercel.app');
+  });
+
+  it('error event with object payload uses payload.message', async () => {
+    mockEvents = [
+      {
+        type: 'error',
+        payload: { message: 'BUILD_FAILED: missing tsconfig.json' },
+      },
+    ];
+    await expect(
+      createDeployment({ ...baseOpts, production: false }),
+    ).rejects.toThrow(
+      /Vercel deployment error: BUILD_FAILED: missing tsconfig\.json/,
+    );
+  });
+
+  it('error event with bare-string payload (aliasError shape) uses the string directly', async () => {
+    // The @vercel/client emits `{ type: 'error', payload: deploymentUpdate.aliasError }`
+    // when the alias step fails — aliasError is typed `string | null`,
+    // NOT an object. The honest-message extractor must handle bare strings.
+    mockEvents = [
+      { type: 'error', payload: 'Domain not configured for this team' },
+    ];
+    await expect(
+      createDeployment({ ...baseOpts, production: true }),
+    ).rejects.toThrow(
+      /Vercel deployment error: Domain not configured for this team/,
+    );
+  });
+
+  it('canceled event with full deployment payload yields a fixed message (not a JSON blob)', async () => {
+    // The 'canceled' event carries the entire deployment object as payload
+    // (~30 fields including env values). The extractor must NOT JSON-
+    // stringify the payload — that would leak DATABASE_URL et al. to the
+    // user terminal and the analytics sink.
+    mockEvents = [
+      {
+        type: 'canceled',
+        payload: {
+          // shape echoes what @vercel/client emits — readyState + env etc.
+          readyState: 'CANCELED',
+          id: 'dpl_xyz',
+          env: { DATABASE_URL: 'postgres://secret:secret@host/db' },
+        },
+      },
+    ];
+    await expect(
+      createDeployment({ ...baseOpts, production: false }),
+    ).rejects.toThrow(/Vercel deployment canceled: deployment was canceled/);
+    // The secret value must not leak into the thrown message.
+    try {
+      await createDeployment({ ...baseOpts, production: false });
+    } catch (err) {
+      expect((err as Error).message).not.toContain('secret');
+      expect((err as Error).message).not.toContain('DATABASE_URL');
+    }
+  });
+
+  it('checks-v2-failed extracts the deployment-alias check errorMessage', async () => {
+    mockEvents = [
+      {
+        type: 'checks-v2-failed',
+        payload: {
+          checks: {
+            'deployment-alias': {
+              state: 'failed',
+              errorMessage: 'dns-01 challenge failed',
+            },
+          },
+        },
+      },
+    ];
+    await expect(
+      createDeployment({ ...baseOpts, production: true }),
+    ).rejects.toThrow(
+      /Vercel deployment checks-v2-failed: dns-01 challenge failed/,
+    );
+  });
+
+  it('checks-conclusion-failed is terminal (does not hang the 15-min budget)', async () => {
+    mockEvents = [
+      { type: 'checks-conclusion-failed', payload: { id: 'dpl_xyz' } },
+    ];
+    await expect(
+      createDeployment({ ...baseOpts, production: true }),
+    ).rejects.toThrow(/checks-conclusion-failed: checks failed/);
+  });
+
+  it('checks-conclusion-canceled is terminal', async () => {
+    mockEvents = [{ type: 'checks-conclusion-canceled', payload: {} }];
+    await expect(
+      createDeployment({ ...baseOpts, production: true }),
+    ).rejects.toThrow(/checks-conclusion-canceled: checks canceled/);
+  });
+
+  it('iterator ending without a terminal event surfaces the last-seen status', async () => {
+    mockEvents = [
+      { type: 'building', payload: { readyState: 'BUILDING' } },
+      // No terminal event.
+    ];
+    await expect(
+      createDeployment({ ...baseOpts, production: false }),
+    ).rejects.toThrow(
+      /stream ended without a terminal event \(last status: BUILDING\)/,
+    );
   });
 });
