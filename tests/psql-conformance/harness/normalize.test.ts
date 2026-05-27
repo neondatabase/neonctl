@@ -62,6 +62,31 @@ describe('normalize: per-rule coverage', () => {
       expect(normalize(s)).toBe('PGSHAREDIR');
     }
   });
+
+  it('regress-abs-builddir masks the psql-conformance-regress prefix', () => {
+    expect(
+      normalize(
+        '/var/folders/00/g7cppbgs2lx0h9flgt7f9fn40000gp/T/psql-conformance-regress-8u8tye/results/psql-output1',
+      ),
+    ).toBe('ABS_BUILDDIR/results/psql-output1');
+    expect(
+      normalize('/tmp/psql-conformance-regress-abc123/results/psql-output1'),
+    ).toBe('ABS_BUILDDIR/results/psql-output1');
+  });
+
+  it('regress-abs-builddir-mktemp-darwin masks /var/folders/.../T/tmp.* dirs', () => {
+    expect(
+      normalize(
+        '/var/folders/00/g7cppbgs2lx0h9flgt7f9fn40000gp/T/tmp.AbCdEf12/results/foo',
+      ),
+    ).toBe('ABS_BUILDDIR/results/foo');
+  });
+
+  it('regress-abs-builddir-mktemp-linux masks bare /tmp/tmp.* dirs', () => {
+    expect(normalize('/tmp/tmp.XYZ987/results/foo')).toBe(
+      'ABS_BUILDDIR/results/foo',
+    );
+  });
 });
 
 describe('normalize: composition', () => {

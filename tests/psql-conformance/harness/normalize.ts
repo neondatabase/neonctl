@@ -87,10 +87,29 @@ export const defaultRules: readonly NormalizeRule[] = [
   // messages or `\g`/`\copy` failure text. Once the underlying scanner
   // fix (`:'VAR'` interpolation + space-trim) lands the path stops
   // appearing in successful output, but error paths still benefit.
+  //
+  // The harness allocates abs_builddir with the
+  // `psql-conformance-regress-<rand>` prefix (see pg-fixture.ts), so the
+  // first alternative covers our own temp dir. The second / third
+  // alternatives also cover bare-`tmp.<rand>` mkdtemps, which can leak
+  // in via tooling we don't directly control (e.g. mktemp(1) wrappers,
+  // pg internals on some platforms). On macOS the realpath of
+  // tmpdir() resolves to `/var/folders/<two>/<long>/T/...`; on Linux
+  // it's simply `/tmp/...`. We cover both shapes.
   {
     name: 'regress-abs-builddir',
     pattern:
       /(?:[A-Za-z]:)?[\\/](?:[^\s/\\]+[\\/])*psql-conformance-regress-[A-Za-z0-9]+/g,
+    replacement: 'ABS_BUILDDIR',
+  },
+  {
+    name: 'regress-abs-builddir-mktemp-darwin',
+    pattern: /\/var\/folders\/[^\s/]+\/[^\s/]+\/T\/tmp\.[A-Za-z0-9]+/g,
+    replacement: 'ABS_BUILDDIR',
+  },
+  {
+    name: 'regress-abs-builddir-mktemp-linux',
+    pattern: /\/tmp\/tmp\.[A-Za-z0-9]+/g,
     replacement: 'ABS_BUILDDIR',
   },
 ];
