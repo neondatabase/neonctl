@@ -47,7 +47,9 @@ describe('defaultSettings', () => {
     expect(s.popt.topt.format).toBe('aligned');
     expect(s.popt.topt.border).toBe(1);
     expect(s.popt.topt.expanded).toBe('off');
-    expect(s.popt.topt.pager).toBe('off');
+    // Upstream `pset.popt.topt.pager = 1` (on) — see `printPsetInfo`'s
+    // numeric encoding (0=never, 1=if-needed, 2=always).
+    expect(s.popt.topt.pager).toBe('on');
     expect(s.popt.topt.startTable).toBe(true);
     expect(s.popt.topt.stopTable).toBe(true);
     expect(s.popt.topt.defaultFooter).toBe(true);

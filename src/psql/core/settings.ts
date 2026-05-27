@@ -71,16 +71,17 @@ const WATCH_INTERVAL_MAX = 1000000;
 /**
  * Build the psql `PrintQueryOpts` with the same defaults as upstream's
  * pset.popt initialization (see `startup.c` after the `pset.db = NULL`
- * block). border=1, format=aligned, pager=off (we treat pager-on as a
- * separate concern handled by the printer WP), start/stop_table=true,
- * default_footer=true.
+ * block). border=1, format=aligned, pager="on" (upstream
+ * `pset.popt.topt.pager = 1` — the printer paginates only on a TTY and
+ * only when output exceeds the screen height, so the default is harmless
+ * for non-TTY runs), start/stop_table=true, default_footer=true.
  */
 const buildDefaultPrintOpts = (): PrintQueryOpts => ({
   topt: {
     format: 'aligned',
     expanded: 'off',
     border: 1,
-    pager: 'off',
+    pager: 'on',
     pagerMinLines: 0,
     tuplesOnly: false,
     startTable: true,
@@ -93,6 +94,12 @@ const buildDefaultPrintOpts = (): PrintQueryOpts => ({
     unicodeBorderLineStyle: 'ascii',
     unicodeColumnLineStyle: 'ascii',
     unicodeHeaderLineStyle: 'ascii',
+    // Upstream `popt.topt.unicode_{border,column,header}_linestyle` default
+    // to `UNICODE_LINESTYLE_SINGLE` (see `initialize_global_options` in
+    // `print.c`). Independent of `unicode*LineStyle` (ascii|unicode).
+    unicodeBorderStyle: 'single',
+    unicodeColumnStyle: 'single',
+    unicodeHeaderStyle: 'single',
     fieldSep: DEFAULT_FIELD_SEP,
     recordSep: DEFAULT_RECORD_SEP,
     numericLocale: false,
@@ -103,6 +110,10 @@ const buildDefaultPrintOpts = (): PrintQueryOpts => ({
     translateColumns: null,
     nullPrint: '',
     csvFieldSep: DEFAULT_CSV_FIELD_SEP,
+    // Upstream `pset.popt.topt.expanded_header_width_type =
+    // PRINT_XHEADER_FULL` — default rendered as the literal "full" in the
+    // bulk `\pset` view.
+    xheaderWidth: 'full',
   },
   nullPrint: '',
   title: null,

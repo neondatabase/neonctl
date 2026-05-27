@@ -311,8 +311,31 @@ export const applyPset = (
       return { status: 'ok' };
     }
     case 'fieldsep_zero': {
+      // Upstream: any value (or none) forces fieldSep to the NUL byte.
+      // The bulk-view's `fieldsep_zero` line is derived from fieldSep
+      // (on iff fieldSep === '\0').
       topt.fieldSep = '\0';
       writeOutMaybe('Field separator is zero byte.\n');
+      return { status: 'ok' };
+    }
+    case 'footer': {
+      if (value === null) {
+        topt.defaultFooter = !topt.defaultFooter;
+      } else {
+        const b = parseBool(value);
+        if (b === null) {
+          writeErr(
+            `\\${cmdName}: \\pset: unrecognized value "${value}" for "footer": Boolean expected\n`,
+          );
+          return { status: 'error' };
+        }
+        topt.defaultFooter = b;
+      }
+      writeOutMaybe(
+        topt.defaultFooter
+          ? 'Default footer is on.\n'
+          : 'Default footer is off.\n',
+      );
       return { status: 'ok' };
     }
     case 'recordsep': {
@@ -498,9 +521,27 @@ export const applyPset = (
       return { status: 'ok' };
     }
     case 'xheader_width': {
-      // We store as-is for now; the printer in WP-09 owns the semantics
-      // ("full", "column", "page", or a positive integer).
-      writeOutMaybe(`Expanded header width is ${value ?? 'full'}.\n`);
+      if (value === null) {
+        writeOutMaybe(
+          `Expanded header width is ${xheaderWidthDisplay(topt.xheaderWidth ?? 'full')}.\n`,
+        );
+        return { status: 'ok' };
+      }
+      const lower = value.toLowerCase();
+      if (lower === 'full' || lower === 'column' || lower === 'page') {
+        topt.xheaderWidth = lower;
+        writeOutMaybe(`Expanded header width is ${lower}.\n`);
+        return { status: 'ok' };
+      }
+      const n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n <= 0 || !/^[+]?\d+$/.test(value.trim())) {
+        writeErr(
+          `\\${cmdName}: \\pset: allowed xheader_width values are "full" (default), "column", "page", or a number specifying the exact width\n`,
+        );
+        return { status: 'error' };
+      }
+      topt.xheaderWidth = n;
+      writeOutMaybe(`Expanded header width is ${n}.\n`);
       return { status: 'ok' };
     }
     case 'unicode_border_linestyle':
@@ -509,10 +550,10 @@ export const applyPset = (
       if (value === null) {
         const current =
           opt === 'unicode_border_linestyle'
-            ? topt.unicodeBorderLineStyle
+            ? (topt.unicodeBorderStyle ?? 'single')
             : opt === 'unicode_column_linestyle'
-              ? topt.unicodeColumnLineStyle
-              : topt.unicodeHeaderLineStyle;
+              ? (topt.unicodeColumnStyle ?? 'single')
+              : (topt.unicodeHeaderStyle ?? 'single');
         writeOutMaybe(
           `Unicode ${opt.replace('unicode_', '').replace('_linestyle', '')} linestyle is "${current}".\n`,
         );
@@ -523,17 +564,13 @@ export const applyPset = (
         writeErr(`\\${cmdName}: \\pset: ${opt} must be single or double\n`);
         return { status: 'error' };
       }
-      // The underlying field is Unicode2LineStyle (ascii|unicode) in our
-      // types; we map single/double onto unicode for now, preserving the
-      // distinction in a side-channel for the printer to consume later.
       const style: Unicode2BorderStyle = lower;
-      void style;
       if (opt === 'unicode_border_linestyle') {
-        topt.unicodeBorderLineStyle = 'unicode';
+        topt.unicodeBorderStyle = style;
       } else if (opt === 'unicode_column_linestyle') {
-        topt.unicodeColumnLineStyle = 'unicode';
+        topt.unicodeColumnStyle = style;
       } else {
-        topt.unicodeHeaderLineStyle = 'unicode';
+        topt.unicodeHeaderStyle = style;
       }
       writeOutMaybe(
         `Unicode ${opt.replace('unicode_', '').replace('_linestyle', '')} linestyle is "${lower}".\n`,
@@ -565,10 +602,28 @@ const psetQuotedString = (str: string): string => {
 };
 
 /**
+ * Render the numeric pager encoding upstream uses in `printPsetInfo`:
+ * 0 = never, 1 = "if needed" (our `'on'`), 2 = always. We keep
+ * `topt.pager` as the upstream-style triple ('off'|'on'|'always') for
+ * `applyPset`'s state machine; this is only the bulk-view conversion.
+ */
+const pagerNumeric = (pager: PrintTableOpts['pager']): number =>
+  pager === 'off' ? 0 : pager === 'on' ? 1 : 2;
+
+/**
+ * Render `xheader_width` for the bulk view. Enum values print verbatim;
+ * numeric values print as the integer.
+ */
+const xheaderWidthDisplay = (
+  w: NonNullable<PrintTableOpts['xheaderWidth']>,
+): string => (typeof w === 'number' ? String(w) : w);
+
+/**
  * Print the full current `\pset` state, one option per line, to stdout.
  * Used when `\pset` is invoked with no arguments. String-valued settings
  * are single-quoted (matching upstream `pset_value_string`); `tableattr`
- * and `title` are unquoted-empty when unset.
+ * and `title` are unquoted-empty when unset. The set, ordering, and
+ * column-spacing mirror `printPsetInfo` in `src/bin/psql/command.c`.
  */
 const printAllPset = (topt: PrintTableOpts): void => {
   writeOut(`border                   ${topt.border}\n`);
@@ -576,13 +631,23 @@ const printAllPset = (topt: PrintTableOpts): void => {
   writeOut(`csv_fieldsep             ${psetQuotedString(topt.csvFieldSep)}\n`);
   writeOut(`expanded                 ${topt.expanded}\n`);
   writeOut(`fieldsep                 ${psetQuotedString(topt.fieldSep)}\n`);
+  // fieldsep_zero / recordsep_zero are derived: upstream emits "on" iff
+  // the corresponding separator is the NUL byte.
+  writeOut(
+    `fieldsep_zero            ${topt.fieldSep === '\0' ? 'on' : 'off'}\n`,
+  );
+  writeOut(`footer                   ${topt.defaultFooter ? 'on' : 'off'}\n`);
   writeOut(`format                   ${topt.format}\n`);
   writeOut(`linestyle                ${topt.unicodeBorderLineStyle}\n`);
   writeOut(`null                     ${psetQuotedString(topt.nullPrint)}\n`);
   writeOut(`numericlocale            ${topt.numericLocale ? 'on' : 'off'}\n`);
-  writeOut(`pager                    ${topt.pager}\n`);
+  // pager is emitted numerically (0/1/2) — upstream uses %d in printPsetInfo.
+  writeOut(`pager                    ${pagerNumeric(topt.pager)}\n`);
   writeOut(`pager_min_lines          ${topt.pagerMinLines}\n`);
   writeOut(`recordsep                ${psetQuotedString(topt.recordSep)}\n`);
+  writeOut(
+    `recordsep_zero           ${topt.recordSep === '\0' ? 'on' : 'off'}\n`,
+  );
   writeOut(
     `tableattr                ${topt.tableAttr === null ? '' : psetQuotedString(topt.tableAttr)}\n`,
   );
@@ -590,6 +655,12 @@ const printAllPset = (topt: PrintTableOpts): void => {
     `title                    ${topt.title === null ? '' : psetQuotedString(topt.title)}\n`,
   );
   writeOut(`tuples_only              ${topt.tuplesOnly ? 'on' : 'off'}\n`);
+  writeOut(`unicode_border_linestyle ${topt.unicodeBorderStyle ?? 'single'}\n`);
+  writeOut(`unicode_column_linestyle ${topt.unicodeColumnStyle ?? 'single'}\n`);
+  writeOut(`unicode_header_linestyle ${topt.unicodeHeaderStyle ?? 'single'}\n`);
+  writeOut(
+    `xheader_width            ${xheaderWidthDisplay(topt.xheaderWidth ?? 'full')}\n`,
+  );
 };
 
 /**

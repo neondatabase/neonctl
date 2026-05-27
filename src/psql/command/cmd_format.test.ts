@@ -318,4 +318,96 @@ describe('\\pset misc', () => {
     expect(out).toMatch(/format /);
     expect(out).toMatch(/expanded /);
   });
+
+  test('no args emits every upstream-parity setting', async () => {
+    // Mirrors vanilla psql 18's `\pset` bulk view (alphabetical, 25-col
+    // gutter). The exact wording is regression-checked in
+    // tests/psql-conformance/regress.spec.ts:psql.out — this test guards
+    // the unit-level shape so a refactor doesn't silently drop entries.
+    await run(cmdPset, makeMockCtx('pset', ''));
+    const out = stdout();
+    expect(out).toContain('border                   1\n');
+    expect(out).toContain('columns                  0\n');
+    expect(out).toContain("csv_fieldsep             ','\n");
+    expect(out).toContain('expanded                 off\n');
+    expect(out).toContain("fieldsep                 '|'\n");
+    expect(out).toContain('fieldsep_zero            off\n');
+    expect(out).toContain('footer                   on\n');
+    expect(out).toContain('format                   aligned\n');
+    expect(out).toContain('linestyle                ascii\n');
+    expect(out).toContain("null                     ''\n");
+    expect(out).toContain('numericlocale            off\n');
+    expect(out).toContain('pager                    1\n');
+    expect(out).toContain('pager_min_lines          0\n');
+    expect(out).toContain("recordsep                '\\n'\n");
+    expect(out).toContain('recordsep_zero           off\n');
+    expect(out).toContain('tableattr                \n');
+    expect(out).toContain('title                    \n');
+    expect(out).toContain('tuples_only              off\n');
+    expect(out).toContain('unicode_border_linestyle single\n');
+    expect(out).toContain('unicode_column_linestyle single\n');
+    expect(out).toContain('unicode_header_linestyle single\n');
+    expect(out).toContain('xheader_width            full\n');
+  });
+
+  test('fieldsep_zero / recordsep_zero are derived from sep value', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'fieldsep_zero', settings));
+    await run(cmdPset, makeMockCtx('pset', 'recordsep_zero', settings));
+    await run(cmdPset, makeMockCtx('pset', '', settings));
+    const out = stdout();
+    expect(out).toContain('fieldsep_zero            on\n');
+    expect(out).toContain('recordsep_zero           on\n');
+  });
+
+  test('pager bulk-show uses numeric encoding (0=off / 1=on / 2=always)', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'pager off', settings));
+    await run(cmdPset, makeMockCtx('pset', '', settings));
+    expect(stdout()).toMatch(/pager\s+0\n/);
+
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'pager always', settings));
+    await run(cmdPset, makeMockCtx('pset', '', settings));
+    expect(stdout()).toMatch(/pager\s+2\n/);
+  });
+
+  test('footer toggles defaultFooter and rejects non-boolean', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'footer off', settings));
+    expect(settings.popt.topt.defaultFooter).toBe(false);
+    await run(cmdPset, makeMockCtx('pset', 'footer on', settings));
+    expect(settings.popt.topt.defaultFooter).toBe(true);
+    // toggle via no-arg
+    await run(cmdPset, makeMockCtx('pset', 'footer', settings));
+    expect(settings.popt.topt.defaultFooter).toBe(false);
+    const r = await run(cmdPset, makeMockCtx('pset', 'footer maybe', settings));
+    expect(r.status).toBe('error');
+  });
+
+  test('unicode_*_linestyle stores single/double independently', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(
+      cmdPset,
+      makeMockCtx('pset', 'unicode_border_linestyle double', settings),
+    );
+    expect(settings.popt.topt.unicodeBorderStyle).toBe('double');
+    expect(settings.popt.topt.unicodeColumnStyle).toBe('single');
+    expect(settings.popt.topt.unicodeHeaderStyle).toBe('single');
+  });
+
+  test('xheader_width accepts full/column/page and positive int', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'xheader_width column', settings));
+    expect(settings.popt.topt.xheaderWidth).toBe('column');
+    await run(cmdPset, makeMockCtx('pset', 'xheader_width 42', settings));
+    expect(settings.popt.topt.xheaderWidth).toBe(42);
+    await run(cmdPset, makeMockCtx('pset', 'xheader_width full', settings));
+    expect(settings.popt.topt.xheaderWidth).toBe('full');
+    const r = await run(
+      cmdPset,
+      makeMockCtx('pset', 'xheader_width -5', settings),
+    );
+    expect(r.status).toBe('error');
+  });
 });
