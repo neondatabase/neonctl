@@ -48,6 +48,37 @@ describe('makeRef — required Proxy behaviors', () => {
     expect(calledStr).toMatch(/"__ref":"x"/);
   });
 
+  it('4a. opts arg is preserved verbatim into __opts (no stringification, all keys)', () => {
+    const base = makeRef('x');
+    const opts = { pooled: false, role: 'app_user', database: 'neondb' };
+    const called = (base as unknown as (o: unknown) => unknown)(opts);
+    const marker = JSON.parse(JSON.stringify(called)) as {
+      __opts: Record<string, unknown>;
+    };
+    expect(marker.__opts).toEqual(opts);
+  });
+
+  it('4b. two calls each produce independent refs (no shared opts state)', () => {
+    const base = makeRef('x');
+    const callable = base as unknown as (o: unknown) => unknown;
+    const a = callable({ pooled: true });
+    const b = callable({ pooled: false });
+    const aMarker = JSON.parse(JSON.stringify(a)) as {
+      __opts: { pooled: boolean };
+    };
+    const bMarker = JSON.parse(JSON.stringify(b)) as {
+      __opts: { pooled: boolean };
+    };
+    expect(aMarker.__opts.pooled).toBe(true);
+    expect(bMarker.__opts.pooled).toBe(false);
+    // And the base ref still has no __opts (the calls didn't mutate it).
+    const baseMarker = JSON.parse(JSON.stringify(base)) as Record<
+      string,
+      unknown
+    >;
+    expect(baseMarker.__opts).toBeUndefined();
+  });
+
   it('5. Object.assign({}, ref) preserves the marker keys', () => {
     const ref = makeRef('x');
     const flat = Object.assign({}, ref) as Record<string, unknown>;

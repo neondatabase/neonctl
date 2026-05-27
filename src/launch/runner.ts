@@ -239,7 +239,7 @@ async function resolveEnv(
  *      the grandchild's process group. TTY Ctrl-C still works because
  *      the kernel signals the whole foreground group.
  */
-function pickStdioMode(
+export function pickStdioMode(
   node: PlanNode,
   localCmdCount: number,
   hasDependents: boolean,
@@ -256,7 +256,7 @@ function pickStdioMode(
  * nodes whose deps are satisfied by previous stages. Within a stage, nodes
  * run in parallel.
  */
-function groupStages(plan: Plan): PlanNode[][] {
+export function groupStages(plan: Plan): PlanNode[][] {
   const stages: PlanNode[][] = [];
   const done = new Set<string>();
   const remaining = new Set(plan.order);

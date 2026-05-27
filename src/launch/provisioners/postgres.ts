@@ -183,7 +183,7 @@ async function pollBranchReady(
   );
 }
 
-async function pollOpsTerminal(
+export async function pollOpsTerminal(
   api: NeonApi,
   projectId: string,
   operationIds: string[],

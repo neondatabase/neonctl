@@ -76,6 +76,35 @@ describe('plan invariants', () => {
     const plan = await buildPlan(tmpPath, ctx);
     expect(plan.registry.size).toBe(1);
     expect(plan.order).toEqual(['db']);
+    // The resolved spec is recorded on the node — verify the contents
+    // round-trip and the kind is preserved.
+    const node = plan.registry.get('db');
+    expect(node?.resource.__kind).toBe('postgres');
+    expect((node?.spec as { name: string }).name).toBe('main');
+  });
+
+  it('spec callback receives ctx — ctx.gitBranch flows into resolved spec', async () => {
+    const root = stack({
+      spec: () => {
+        const db = postgres({
+          spec: (_, ctx) => ({
+            name: ctx.gitBranch === 'main' ? 'prod' : `dev-${ctx.gitBranch}`,
+          }),
+        });
+        return { db };
+      },
+    });
+    const ctxFeature: LaunchContext = {
+      gitBranch: 'feature-x',
+      flags: { ci: 'true' },
+      processEnv: { CI: 'true' },
+    };
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    const plan = await buildPlan(tmpPath, ctxFeature);
+    expect((plan.registry.get('db')?.spec as { name: string }).name).toBe(
+      'dev-feature-x',
+    );
   });
 
   it('dep order — postgres before localCommand', async () => {
@@ -198,6 +227,71 @@ describe('plan invariants', () => {
     const { buildPlan } = await import('./plan.js');
     await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
       /localCommand 'migrate' has dependents but no `readiness`/,
+    );
+  });
+
+  it('cycle in dependencies throws cycleDetectedMessage with involved resources', async () => {
+    // Cycles can't be constructed through the factories (forward
+    // reference required), so build the back-edge by mutating
+    // __dependsOn after both resources exist.
+    const a = postgres({ spec: () => ({ name: 'main' }) });
+    const b = localCommand({
+      dependsOn: { a },
+      spec: ({ a }) => ({
+        command: 'echo hi',
+        env: { X: a.host },
+        readiness: { onExit: 0 },
+      }),
+    });
+    // Inject the back-edge b → a.
+    (a as unknown as { __dependsOn: Record<string, unknown> }).__dependsOn = {
+      b,
+    };
+    const root = stack({ spec: () => ({ a, b }) });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+      /Cycle detected.*a.*b|Cycle detected.*b.*a/s,
+    );
+  });
+
+  it('preview vercelDeployment requires non-empty ctx.gitBranch', async () => {
+    const root = stack({
+      spec: () => {
+        const db = postgres({ spec: () => ({ name: 'main' }) });
+        const web = vercelDeployment({
+          dependsOn: { db },
+          spec: ({ db }) => ({
+            project: 'demo',
+            // production:false → preview deploy
+            env: { DATABASE_URL: db.connectionString },
+          }),
+        });
+        return { db, web };
+      },
+    });
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    const ctxNoGit: LaunchContext = {
+      gitBranch: '',
+      flags: {},
+      processEnv: {},
+    };
+    await expect(buildPlan(tmpPath, ctxNoGit)).rejects.toThrow(
+      /preview deploy.*ctx\.gitBranch is empty/s,
+    );
+  });
+
+  it('root stack with dependsOn rejected at plan time', async () => {
+    const db = postgres({ spec: () => ({ name: 'main' }) });
+    const root = stack({ spec: () => ({ db }) });
+    // Inject illegal dependsOn on the root.
+    (root as unknown as { __dependsOn: Record<string, unknown> }).__dependsOn =
+      { db };
+    const tmpPath = await writeTempConfig(root);
+    const { buildPlan } = await import('./plan.js');
+    await expect(buildPlan(tmpPath, ctx)).rejects.toThrow(
+      /root stack cannot have `dependsOn`/,
     );
   });
 

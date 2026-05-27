@@ -67,7 +67,7 @@ type VercelDeploymentResult = {
  * the merged query string. Handles both pre-existing query strings and bare
  * paths.
  */
-function wrapTeam(path: string, ctx: VercelClientCtx): string {
+export function wrapTeam(path: string, ctx: VercelClientCtx): string {
   if (!ctx.teamId) return path;
   const sep = path.includes('?') ? '&' : '?';
   return `${path}${sep}teamId=${encodeURIComponent(ctx.teamId)}`;
