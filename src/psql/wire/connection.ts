@@ -933,6 +933,30 @@ export class PgConnection implements Connection {
     };
   }
 
+  /**
+   * Issue `Close('S', name) + Sync` directly, without a preceding Parse.
+   * The server responds with CloseComplete + ReadyForQuery (even when
+   * the named statement doesn't exist — PG treats unknown-name Close as
+   * a no-op). Used by `\close_prepared NAME` so we don't have to fake a
+   * Parse just to reach the Close step.
+   */
+  public async closePreparedStatement(name: string): Promise<void> {
+    this.ensureIdle();
+    this.startExtendedBatch();
+    const cP = this.enqueueClose();
+    const sP = this.enqueueSync();
+    this.socket.write(Close('S', name));
+    this.socket.write(Sync());
+    let err: unknown = null;
+    cP.catch((e: unknown) => {
+      if (err === null) err = e;
+    });
+    await sP.catch((e: unknown) => {
+      if (err === null) err = e;
+    });
+    if (err !== null) throw asThrowable(err);
+  }
+
   public startCopyIn(sql: string): Promise<CopyInStream> {
     this.ensureIdle();
     // COPY mid-pipeline is rejected by libpq with a fixed diagnostic; we

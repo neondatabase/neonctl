@@ -1417,6 +1417,79 @@ describe('PgConnection', () => {
     await conn.close();
   });
 
+  test('closePreparedStatement issues Close("S", name) + Sync without a Parse', async () => {
+    const seen: { type: string; target?: string; name?: string }[] = [];
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      seen.push({
+        type: msg.type,
+        target: msg.target as string | undefined,
+        name: msg.name as string | undefined,
+      });
+      if (msg.type === 'Close') {
+        client.send(closeComplete());
+        return;
+      }
+      if (msg.type === 'Sync') {
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    await conn.closePreparedStatement('stmt2');
+    // No Parse — just Close('S','stmt2') + Sync.
+    expect(seen).toEqual([
+      { type: 'Close', target: 'S', name: 'stmt2' },
+      { type: 'Sync', target: undefined, name: undefined },
+    ]);
+    await conn.close();
+  });
+
+  test('closePreparedStatement on an unknown name succeeds quietly', async () => {
+    // PG treats Close('S', missing) as a no-op (CloseComplete with no
+    // diagnostic). We exercise the rejected-error path separately via
+    // the server pumping an ErrorResponse — this just confirms the
+    // happy path resolves rather than throwing.
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Close') {
+        client.send(closeComplete());
+        return;
+      }
+      if (msg.type === 'Sync') {
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    await expect(conn.closePreparedStatement('nope')).resolves.toBeUndefined();
+    await conn.close();
+  });
+
   test('pipeline() flushes 3 queries and returns ordered results', async () => {
     let parseCount = 0;
     let bindCount = 0;

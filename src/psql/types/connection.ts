@@ -90,6 +90,23 @@ export type Connection = {
     sql: string,
     paramTypes?: number[],
   ): Promise<PreparedStatement>;
+  /**
+   * Close a server-side prepared statement by name without a preceding
+   * `prepare()` round-trip. Mirrors libpq's `Close('S', name) + Sync`
+   * sequence used by upstream psql's `\close_prepared NAME`.
+   *
+   * Closing an unknown name is *not* a server error — Postgres treats
+   * Close('S', missing) as a no-op (CloseComplete with no diagnostic),
+   * matching the empty-output behaviour of upstream `\close_prepared
+   * unknown_name`.
+   *
+   * Optional on the interface so existing mocks (which fully implement
+   * the surface as object literals) don't all need to grow a stub at
+   * the same time as the production code. `PgConnection` always supplies
+   * the real method; the only caller (`\close_prepared`) checks for
+   * presence and reports a clear diagnostic otherwise.
+   */
+  closePreparedStatement?(name: string): Promise<void>;
   startCopyIn(sql: string): Promise<CopyInStream>;
   startCopyOut(sql: string): Promise<CopyOutStream>;
   pipeline(): Pipeline;
