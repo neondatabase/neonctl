@@ -6,7 +6,7 @@ export const isDebug = () => {
   return Boolean(process.env.DEBUG);
 };
 
-export const getGithubEnvVars = (env: Dict<string>) => {
+export const getGithubEnvVars = (env: NodeJS.Dict<string>) => {
   const vars = [
     // github action info
     'GITHUB_ACTION_PATH',
