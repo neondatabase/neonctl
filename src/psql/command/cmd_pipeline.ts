@@ -47,6 +47,7 @@ import type {
 } from '../types/connection.js';
 
 import { writeErr } from './shared.js';
+import { alignedPrinter } from '../print/aligned.js';
 
 // ---------------------------------------------------------------------------
 // Settings stash. We can't add new fields to PsqlSettings (frozen WP-00) so
@@ -314,9 +315,23 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       return errResult(ctx, 'no pipeline active');
     }
     try {
-      await ps.session.end();
+      const sets = await ps.session.end();
       stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
       ctx.settings.sendMode = 'extended-query';
+      // Render each ResultSet through the active printer so the
+      // pipeline's queued queries surface their output. Empty-result
+      // sets (CREATE/INSERT/etc.) still go through so command tags
+      // emit. Upstream's `\endpipeline` calls `ProcessResult` per
+      // queued result in the same way.
+      for (const rs of sets) {
+        if (rs.fields.length > 0) {
+          await alignedPrinter.printQuery(
+            rs,
+            ctx.settings.popt,
+            process.stdout,
+          );
+        }
+      }
       return { status: 'ok' };
     } catch (err) {
       stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
