@@ -2205,6 +2205,19 @@ export class PgConnection implements Connection {
       return;
     }
 
+    // COPY-in-pipeline: when an `Execute` in pipeline mode hits a
+    // `COPY ... FROM STDIN` / `COPY ... TO STDOUT`, the server replies
+    // with `CopyInResponse` / `CopyOutResponse` instead of the usual
+    // result-stream messages. Upstream libpq refuses the combination
+    // with "COPY in a pipeline is not supported, aborting connection"
+    // and tears the connection down. Mirror that so `\startpipeline +
+    // COPY ...` surfaces the expected fatal error rather than hanging
+    // on a response the extended driver doesn't know how to consume.
+    if (msg.type === 'CopyInResponse' || msg.type === 'CopyOutResponse') {
+      this.abortForCopyInPipeline();
+      return;
+    }
+
     while (driver.error !== null) {
       const head = driver.queue[0];
       if (!head || head.kind === 'sync') break;
