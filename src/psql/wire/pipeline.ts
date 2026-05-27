@@ -65,13 +65,19 @@ export type PipelineHost = {
 
 export class PipelineSession implements Pipeline {
   private readonly results: Promise<ResultSet>[] = [];
+  // Promises for ops whose server-side completion we still need to
+  // observe (Parse, Bind, Describe, Close). In pipeline mode the
+  // server doesn't reply until the next Sync, so awaiting them in
+  // these methods would deadlock — we keep them and let `sync()` /
+  // `end()` drain them.
+  private readonly pending: Promise<unknown>[] = [];
 
   public constructor(private readonly conn: PipelineHost) {
     this.conn._extPipelineActive = true;
     this.conn.startExtendedBatch();
   }
 
-  public async parse(
+  public parse(
     name: string,
     sql: string,
     paramTypes?: number[],
@@ -79,38 +85,46 @@ export class PipelineSession implements Pipeline {
     this.conn.startExtendedBatch();
     const p = this.conn.enqueueParse();
     this.conn.writeRaw(Parse(name, sql, paramTypes ?? []));
-    await p;
+    // Don't await: server response is held until Sync. Capture into
+    // pending so sync()/end() can observe completion.
+    this.pending.push(p);
+    return Promise.resolve();
   }
 
-  public async bind(name: string, values: unknown[]): Promise<void> {
+  public bind(name: string, values: unknown[]): Promise<void> {
     this.conn.startExtendedBatch();
     const p = this.conn.enqueueBind();
     const encoded = values.map(toBindValue);
     this.conn.writeRaw(Bind('', name, [], encoded, [0]));
-    await p;
+    this.pending.push(p);
+    return Promise.resolve();
   }
 
-  public async execute(name: string, maxRows?: number): Promise<void> {
+  public execute(name: string, maxRows?: number): Promise<void> {
     this.conn.startExtendedBatch();
     const ep = this.conn.enqueueExecute();
     this.results.push(ep);
     this.conn.writeRaw(Execute(name, maxRows ?? 0));
-    await ep;
+    // Don't await: the ResultSet promise resolves after Sync. It's
+    // already in `results` so end() / sync() will surface it.
+    return Promise.resolve();
   }
 
-  public async describe(name: string): Promise<void> {
+  public describe(name: string): Promise<void> {
     this.conn.startExtendedBatch();
     // psql's `\describe` in pipeline context is portal-targeted.
     const p = this.conn.enqueueDescribePortal();
     this.conn.writeRaw(Describe('P', name));
-    await p;
+    this.pending.push(p);
+    return Promise.resolve();
   }
 
-  public async close(name: string): Promise<void> {
+  public close(name: string): Promise<void> {
     this.conn.startExtendedBatch();
     const p = this.conn.enqueueClose();
     this.conn.writeRaw(Close('S', name));
-    await p;
+    this.pending.push(p);
+    return Promise.resolve();
   }
 
   public async flush(): Promise<void> {
