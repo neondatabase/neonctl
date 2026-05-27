@@ -724,6 +724,7 @@ const renderHorizontal = (
         border,
         glyphs,
         /* leftGutter */ ' ',
+        /* isHeader */ true,
       );
       out += newline;
     }
@@ -824,6 +825,13 @@ const renderDataLine = (
   border: BorderStyle,
   glyphs: Glyphs,
   leftGutter: string,
+  // Upstream `print_aligned_text` distinguishes header from data:
+  //   header → emit trailing margin space (column-width pad + " ")
+  //   data   → omit trailing pad/margin entirely on the last cell
+  // Verified against vanilla psql 18:
+  //   header: ` ?column? | ?column? ` (trailing space)
+  //   data:   ` foo      | bar`        (no trailing padding/margin)
+  isHeader = false,
 ): string => {
   const { vrule } = glyphs;
   let out = '';
@@ -836,7 +844,17 @@ const renderDataLine = (
   // border == 0: nothing on the left.
 
   for (let i = 0; i < cells.length; i++) {
-    out += padToWidth(cells[i], widths[i], aligns[i]);
+    const isLast = i === cells.length - 1;
+    // Data rows skip padding on the last cell — vanilla `print_aligned_text`
+    // emits the bare content with no width-padding and no right margin.
+    if (isLast && !isHeader && border !== 2 && border !== 3) {
+      out +=
+        aligns[i] === 'right'
+          ? padToWidth(cells[i], widths[i], 'right')
+          : cells[i];
+    } else {
+      out += padToWidth(cells[i], widths[i], aligns[i]);
+    }
     if (i < cells.length - 1) {
       if (border === 0) {
         out += ' ';
@@ -849,14 +867,10 @@ const renderDataLine = (
   if (border === 2 || border === 3) {
     out += ' ' + vrule;
   } else if (border === 1) {
-    // Upstream `print_aligned_text` skips the trailing margin space when
-    // the last column is right-aligned — right-aligned numeric content
-    // sits at the right edge of the cell with no right-side padding.
-    // Left- and center-aligned cells get the trailing space because the
-    // column-width padding extends to fill the cell. Without this skip,
-    // every data row with a right-aligned tail column carries a stray
-    // trailing space that the regress harness diffs against.
-    if (aligns[cells.length - 1] !== 'right') {
+    // Trailing margin space only on header rows. Data rows have already
+    // been emitted without padding on the last cell (see the isLast +
+    // !isHeader branch above).
+    if (isHeader) {
       out += ' ';
     }
   }
@@ -1145,6 +1159,7 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
         border,
         glyphs,
         ' ',
+        /* isHeader */ true,
       ) + '\n';
     out += buildRule(widths, border, glyphs, 'middle') + '\n';
   }

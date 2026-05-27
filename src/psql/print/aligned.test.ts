@@ -166,8 +166,8 @@ describe('alignedPrinter horizontal mode', () => {
     expect(out).toBe(
       ' id | name  \n' +
         '----+-------\n' +
-        '  1 | alice \n' +
-        '  2 | bob   \n' +
+        '  1 | alice\n' +
+        '  2 | bob\n' +
         '(2 rows)\n' +
         '\n',
     );
@@ -185,7 +185,7 @@ describe('alignedPrinter horizontal mode', () => {
       alignedPrinter.printQuery(rs, defaultOpts(undefined, { border: 0 }), s),
     );
     expect(out).toBe(
-      'a  b \n' + '-- --\n' + 'x  y \n' + 'zz ww\n' + '(2 rows)\n' + '\n',
+      'a  b \n' + '-- --\n' + 'x  y\n' + 'zz ww\n' + '(2 rows)\n' + '\n',
     );
   });
 
@@ -222,8 +222,8 @@ describe('alignedPrinter horizontal mode', () => {
     expect(out).toBe(
       '  n  |   label    \n' +
         '-----+------------\n' +
-        '   1 | one        \n' +
-        ' 222 | twohundred \n' +
+        '   1 | one\n' +
+        ' 222 | twohundred\n' +
         '(2 rows)\n' +
         '\n',
     );
@@ -238,7 +238,7 @@ describe('alignedPrinter horizontal mode', () => {
       alignedPrinter.printQuery(rs, defaultOpts({ nullPrint: '∅' }), s),
     );
     expect(out).toBe(
-      '  v  \n' + '-----\n' + ' ∅   \n' + ' set \n' + '(2 rows)\n' + '\n',
+      '  v  \n' + '-----\n' + ' ∅\n' + ' set\n' + '(2 rows)\n' + '\n',
     );
   });
 
@@ -280,7 +280,7 @@ describe('alignedPrinter horizontal mode', () => {
         s,
       ),
     );
-    expect(out).toBe(' x \n y \n');
+    expect(out).toBe(' x\n y\n');
   });
 
   test('east-asian wide chars are padded correctly', async () => {
@@ -293,7 +293,7 @@ describe('alignedPrinter horizontal mode', () => {
     );
     // Both rows should align: 中文 is 4 cols, abc is 3 cols, so col width is 4.
     expect(out).toBe(
-      ' name \n' + '------\n' + ' 中文 \n' + ' abc  \n' + '(2 rows)\n' + '\n',
+      ' name \n' + '------\n' + ' 中文\n' + ' abc\n' + '(2 rows)\n' + '\n',
     );
   });
 
