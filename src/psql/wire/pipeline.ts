@@ -178,8 +178,11 @@ export class PipelineSession implements Pipeline {
     // Wait for the final Sync's RfQ, but tolerate a sticky pipeline
     // error: enqueueSync rejects when the pipeline ended in error
     // state. `\endpipeline` still needs to harvest the queued
-    // ResultSets, so don't propagate this rejection.
-    await finalSync.catch((): void => undefined);
+    // ResultSets, so we capture rather than propagate immediately.
+    let fatal: unknown = null;
+    await finalSync.catch((err: unknown): void => {
+      fatal = err;
+    });
     this.conn._extPipelineActive = false;
     // Drain pending ops too — Parse/Bind/Describe/Close that rejected
     // (e.g. bind-param-count mismatch) would otherwise surface as
@@ -190,6 +193,20 @@ export class PipelineSession implements Pipeline {
     const out: ResultSet[] = [];
     for (const r of settled) {
       if (r.status === 'fulfilled') out.push(r.value);
+    }
+    // FATAL-class pipeline aborts (e.g. "COPY in a pipeline is not
+    // supported, aborting connection") must surface to the caller so
+    // `\endpipeline` can render the diagnostic on stderr. Plain
+    // per-op errors stay swallowed so a partial pipeline still
+    // returns its successful results.
+    if (fatal !== null) {
+      const sev = (fatal as { severity?: string }).severity;
+      if (sev === 'FATAL') {
+        if (fatal instanceof Error) throw fatal;
+        const msg =
+          (fatal as { message?: string }).message ?? 'pipeline aborted';
+        throw Object.assign(new Error(msg), fatal as object);
+      }
     }
     return out;
   }

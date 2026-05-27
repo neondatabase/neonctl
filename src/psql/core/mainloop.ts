@@ -534,6 +534,38 @@ const dispatchSendQuery = async (
   // session helper so the wire enqueueing matches `\sendpipeline`.
   const ps = getPipelineState(ctx.settings);
   if (ps && ctx.settings.db) {
+    // Upstream `libpq` refuses `COPY ... FROM STDIN` / `COPY ... TO
+    // STDOUT` inside a pipeline with the fatal diagnostic
+    // "COPY in a pipeline is not supported, aborting connection".
+    // Detect, emit the same wording client-side, and tear down the
+    // connection so the mainloop's `checkConnectionLost` halt path
+    // fires for any subsequent statement (matching the upstream
+    // "aborting connection" semantics).
+    const trimmed = sql.trimStart();
+    if (
+      /^COPY\b/i.test(trimmed) &&
+      /\b(FROM\s+STDIN|TO\s+STDOUT)\b/i.test(trimmed)
+    ) {
+      ctx.stderr.write(
+        'psql: error: COPY in a pipeline is not supported, aborting connection\n',
+      );
+      // Hard-abort the underlying socket so isClosed() flips true and the
+      // mainloop's post-dispatch `checkConnectionLost` ends the loop.
+      try {
+        const db = ctx.settings.db as unknown as {
+          abortForCopyInPipeline?: () => void;
+          close?: () => Promise<void>;
+        };
+        if (typeof db.abortForCopyInPipeline === 'function') {
+          db.abortForCopyInPipeline();
+        } else if (typeof db.close === 'function') {
+          await db.close();
+        }
+      } catch {
+        // ignore — the diagnostic has already been emitted.
+      }
+      return false;
+    }
     try {
       // Pipeline-mode `;`-queries: empty parameter list, anonymous prepared
       // statement, anonymous portal. The result will surface later through
