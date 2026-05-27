@@ -729,4 +729,141 @@ describe('alignedPrinter trailing-whitespace parity', () => {
     expect(lines[1]).toBe('small | 1');
     expect(lines[2]).toBe('big   | 999999');
   });
+
+  test('expanded border=1 record header pads to row width when label overflows left segment', async () => {
+    // Upstream `print_aligned_vertical_line` pads the `[ RECORD N ]`
+    // label with hrules out to the FULL data-row width when the label
+    // overflows the pre-`|` segment but still fits within the row. The
+    // mid `+` junction is dropped in this case. Verified against vanilla
+    // psql 18: `SELECT 'x' as a, 'value here' as bb \gx` (nameWidth=2,
+    // valueWidth=10) emits `-[ RECORD 1 ]--` — 2 trailing dashes pad
+    // out to the data-row width (`bb | value here` = 15 chars).
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'bb' }],
+      rows: [['x', 'value here']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 1 }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('-[ RECORD 1 ]--');
+    expect(lines[1]).toBe('a  | x');
+    expect(lines[2]).toBe('bb | value here');
+  });
+
+  test('expanded border=1 record header emits `+` junction aligned with data `|`', async () => {
+    // When the `[ RECORD N ]` label fits within the pre-`|` segment
+    // (long name column), upstream pads the label-prefix with hrules
+    // to leftSpan = nameWidth + 1 chars, then emits the mid `+`
+    // junction at the same column as the data `|`, then enough hrules
+    // to fill the trailing valueWidth + 1 chars. Verified against
+    // vanilla psql 18: `SELECT 'a' as widename_col_one, 'b' as another_widename_two \gx`
+    // (nameWidth=20) emits `-[ RECORD 1 ]--------+--` with the `+` at
+    // position 22, matching the `|` in `widename_col_one     | a`.
+    const rs = makeResultSet({
+      columns: [{ name: 'widename_col_one' }, { name: 'another_widename_two' }],
+      rows: [['a', 'b']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 1 }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('-[ RECORD 1 ]--------+--');
+    // Confirm `+` and `|` columns align.
+    const recordHdr = lines[0];
+    const dataLine = lines[1];
+    expect(recordHdr.indexOf('+')).toBe(dataLine.indexOf('|'));
+  });
+
+  test('expanded border=2 record header uses top corners on first record, mid on subsequent', async () => {
+    // For border 2, upstream uses the TOP glyph set (`┌`, `┬`, `┐` in
+    // unicode; all `+` in ASCII) on the first record header — the rule
+    // looks like a normal table-top — and the MID glyph set (`├`, `┼`,
+    // `┤`) on subsequent records — the rule looks like an inter-row
+    // separator. Verified against vanilla psql 18 with
+    // `\pset linestyle unicode`. ASCII collapses to `+` everywhere so
+    // we test the unicode glyphs to lock in the distinction.
+    const rs = makeResultSet({
+      columns: [{ name: 'one' }, { name: 'two' }],
+      rows: [
+        [1, 2],
+        [3, 4],
+      ],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          expanded: 'on',
+          border: 2,
+          unicodeBorderLineStyle: 'unicode',
+          unicodeColumnLineStyle: 'unicode',
+          unicodeHeaderLineStyle: 'unicode',
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('┌─[ RECORD 1 ]─┐');
+    // Second record uses MID glyphs.
+    const secondRecord = lines.find((l) => l.includes('[ RECORD 2 ]'));
+    expect(secondRecord).toBe('├─[ RECORD 2 ]─┤');
+  });
+
+  test('expanded border=2 record header omits mid junction when label overflows left segment', async () => {
+    // When the `[ RECORD N ]` label is wider than the left segment but
+    // narrower than the natural row, upstream drops the mid junction
+    // and pads with hrules between the outer corners out to the full
+    // row width. Verified against vanilla psql 18:
+    // `SELECT 1 as one, 234567890 as two \gx \pset border 2` emits
+    // `+-[ RECORD 1 ]----+` (19 chars, no mid `+`).
+    const rs = makeResultSet({
+      columns: [
+        { name: 'one', oid: 23 },
+        { name: 'two', oid: 23 },
+      ],
+      rows: [[1, 234567890]],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 2 }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('+-[ RECORD 1 ]----+');
+    // Verify no mid `+` between the corners. Strip the outer `+`s.
+    const inner = lines[0].slice(1, -1);
+    expect(inner.includes('+')).toBe(false);
+  });
+
+  test('expanded border=2 record header embeds mid junction when label fits left segment', async () => {
+    // With wider columns (left segment >= 1 + label.length), upstream
+    // emits `topLeft + hrule + label + hrules-to-leftSegLen + topMid +
+    // hrules(rightSegLen) + topRight`. Verified against vanilla psql 18:
+    // `SELECT 'a longer label here' as alongcolname, 1 as b \gx \pset border 2`
+    // emits `+-[ RECORD 1 ]-+---------------------+`.
+    const rs = makeResultSet({
+      columns: [{ name: 'alongcolname' }, { name: 'b' }],
+      rows: [['a longer label here', '1']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 2 }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('+-[ RECORD 1 ]-+---------------------+');
+  });
 });

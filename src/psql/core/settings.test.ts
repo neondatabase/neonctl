@@ -510,6 +510,75 @@ describe('defaultSettings — special-variable hooks', () => {
     });
   });
 
+  describe('IGNOREEOF', () => {
+    test('seeded "0" on startup (ignoreeof_substitute_hook parity)', () => {
+      // Upstream substitute hook: NULL → "0" — fires on `SetVariableHooks`
+      // registration, so `\echo :IGNOREEOF` immediately after startup prints
+      // "0" with no explicit seed. Verified empirically against vanilla psql 18.
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.get('IGNOREEOF')).toBe('0');
+    });
+
+    test('accepts integer values', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.set('IGNOREEOF', '5')).toBe(true);
+      expect(v.get('IGNOREEOF')).toBe('5');
+      expect(v.set('IGNOREEOF', '0')).toBe(true);
+      expect(v.get('IGNOREEOF')).toBe('0');
+      // Negative values are accepted (strtol_base0 has no lower bound).
+      expect(v.set('IGNOREEOF', '-1')).toBe(true);
+      expect(v.get('IGNOREEOF')).toBe('-1');
+    });
+
+    test('accepts hex / octal forms (strtol base 0)', () => {
+      // Upstream `ParseVariableNum` calls `strtol(value, &end, 0)` which
+      // recognizes `0x`/`0X` (hex) and leading-`0` (octal) prefixes. The
+      // substitute hook only checks parsability — the original string is
+      // stored verbatim on success. Verified empirically against vanilla
+      // psql 18: `\set IGNOREEOF 0xff; \echo :IGNOREEOF` → "0xff".
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.set('IGNOREEOF', '0xff')).toBe(true);
+      expect(v.get('IGNOREEOF')).toBe('0xff');
+      expect(v.set('IGNOREEOF', '010')).toBe(true);
+      expect(v.get('IGNOREEOF')).toBe('010');
+    });
+
+    test('silently rewrites non-integer to "10" (bash default count)', () => {
+      // Upstream `ignoreeof_substitute_hook` calls
+      // `ParseVariableNum(newval, NULL, &dummy)` (NULL name suppresses the
+      // error report) and on failure substitutes "10" — the documented
+      // bash IGNOREEOF default. Verified empirically:
+      //   \set IGNOREEOF on  →  :IGNOREEOF prints "10"
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.set('IGNOREEOF', 'on')).toBe(true);
+      expect(v.get('IGNOREEOF')).toBe('10');
+      expect(v.set('IGNOREEOF', 'garbage')).toBe(true);
+      expect(v.get('IGNOREEOF')).toBe('10');
+    });
+
+    test('empty value substitutes to "10" (same path as junk)', () => {
+      // `\set IGNOREEOF` (empty) reaches `ParseVariableNum("")` which fails
+      // and falls into the same `"10"` substitute branch as any other
+      // non-numeric input. Verified empirically against vanilla psql 18.
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.set('IGNOREEOF', '')).toBe(true);
+      expect(v.get('IGNOREEOF')).toBe('10');
+    });
+
+    test('unset substitutes to "0"', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      v.set('IGNOREEOF', '5');
+      v.unset('IGNOREEOF');
+      expect(v.get('IGNOREEOF')).toBe('0');
+    });
+  });
+
   describe('WATCH_INTERVAL', () => {
     test('seeded "2" on startup via watch_interval_substitute_hook', () => {
       const v = createVarStore();
@@ -610,6 +679,7 @@ describe('defaultSettings — special-variable hooks', () => {
       // numeric / per-variable substitute hooks
       ['FETCH_COUNT', '0'],
       ['HISTSIZE', '500'],
+      ['IGNOREEOF', '0'],
       ['WATCH_INTERVAL', '2'],
     ])('\\unset %s substitutes to "%s"', (name, expected) => {
       const v = createVarStore();
@@ -660,6 +730,7 @@ describe('defaultSettings — special-variable hooks', () => {
       ['HISTCONTROL', 'none'],
       ['FETCH_COUNT', '0'],
       ['HISTSIZE', '500'],
+      ['IGNOREEOF', '0'],
       ['WATCH_INTERVAL', '2'],
       ['ON_ERROR_STOP', 'off'],
       ['ON_ERROR_ROLLBACK', 'off'],

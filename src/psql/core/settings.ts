@@ -424,6 +424,30 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
     return true;
   });
 
+  // IGNOREEOF — upstream `ignoreeof_substitute_hook` + `ignoreeof_hook`.
+  // The substitute hook is unusual: it silently rewrites non-numeric values
+  // to "10" (bash's documented default) instead of rejecting them, and maps
+  // null → "0" (feature disabled). The assign hook never fails in practice
+  // because the substitute already normalized the value — it's
+  // `ParseVariableNum(newval, "IGNOREEOF", &pset.ignoreeof)` over a value
+  // guaranteed to parse. We have no derived `settings.ignoreeof` field (the
+  // EOF-counting logic lives in the REPL, which isn't implemented), so the
+  // hook just maintains the variable surface: `\echo :IGNOREEOF` prints "0"
+  // on startup, accepts integers (incl. hex / octal — `ParseVariableNum`
+  // uses `strtol(..., 0)`), silently rewrites junk to "10", and on `\unset`
+  // resubstitutes "0". This is the key behavior the regress/psql `\gset
+  // IGNORE` test relies on (it expects `:IGNOREEOF` to render "0" even
+  // though `\gset` rejected the assignment as specially-treated).
+  varStore.addHook('IGNOREEOF', (newValue) => {
+    if (newValue === null) {
+      return { substitute: '0' };
+    }
+    if (parseStrtolBase0OrNull(newValue) === null) {
+      return { substitute: '10' };
+    }
+    return true;
+  });
+
   return settings;
 };
 
@@ -573,8 +597,11 @@ const makeEchoHiddenHook = (
 
 /**
  * Parse a non-empty string as a base-10 signed integer. Returns `null` on
- * any junk (mirrors `ParseVariableNum` semantics but without the radix-0
- * extensions — FETCH_COUNT is decimal-only in upstream's eyes).
+ * any junk. Used by FETCH_COUNT / HISTSIZE — both invoke
+ * `ParseVariableNum` upstream which internally uses `strtol(..., 0)`
+ * (accepting hex/octal/decimal); we tighten to decimal-only here. The
+ * deviation is observable for `\set FETCH_COUNT 0xff` (upstream accepts,
+ * we reject); intentional for now because the regress doesn't exercise it.
  */
 const parseIntOrNull = (raw: string): number | null => {
   const trimmed = raw.trim();
@@ -584,6 +611,53 @@ const parseIntOrNull = (raw: string): number | null => {
   if (!Number.isFinite(n)) return null;
   if (n < -0x80000000 || n > 0x7fffffff) return null;
   return n;
+};
+
+/**
+ * Parse a non-empty string as a strtol-base-0 signed integer (decimal,
+ * `0x`/`0X` hex, leading-`0` octal). Returns `null` on any junk. Mirrors
+ * upstream `ParseVariableNum`'s `strtol(value, &end, 0)` syntax — used by
+ * IGNOREEOF's substitute hook, where the original string is preserved on
+ * success (the hook only checks parsability to decide whether to swap in
+ * "10").
+ */
+const parseStrtolBase0OrNull = (raw: string): number | null => {
+  // strtol skips leading whitespace; mirror that.
+  const trimmed = raw.replace(/^\s+/, '');
+  if (trimmed.length === 0) return null;
+
+  let body = trimmed;
+  let sign = 1;
+  if (body.startsWith('+')) {
+    body = body.slice(1);
+  } else if (body.startsWith('-')) {
+    sign = -1;
+    body = body.slice(1);
+  }
+  if (body.length === 0) return null;
+
+  let radix = 10;
+  if (body.startsWith('0x') || body.startsWith('0X')) {
+    radix = 16;
+    body = body.slice(2);
+  } else if (body.length > 1 && body.startsWith('0')) {
+    // Leading zero on a multi-char body → octal (matches strtol base 0).
+    radix = 8;
+    body = body.slice(1);
+  }
+  if (body.length === 0) return null;
+
+  // Reject trailing junk — strtol returns success only when the entire
+  // body is consumed (`*end == '\0'`), and ParseVariableNum requires that.
+  const digitRe =
+    radix === 16 ? /^[0-9a-fA-F]+$/ : radix === 8 ? /^[0-7]+$/ : /^[0-9]+$/;
+  if (!digitRe.test(body)) return null;
+
+  const parsed = sign * parseInt(body, radix);
+  if (!Number.isFinite(parsed)) return null;
+  // 32-bit signed range (ParseVariableNum's `numval == (int) numval` check).
+  if (parsed < -0x80000000 || parsed > 0x7fffffff) return null;
+  return parsed;
 };
 
 /**

@@ -410,6 +410,71 @@ export const psqlErrorPrefix = (
 };
 
 /**
+ * Walk past leading whitespace + `--` line comments + slash-star block
+ * comments at the head of `sqlText`. Returns the byte index of the first
+ * "real" content character. Used by `renderLineAndCaret` to align the
+ * `LINE N:` counter with upstream psql — vanilla strips these from the
+ * buffer before `PQexec` (so the server's `position` is relative to the
+ * trimmed buffer), but `captureLastError`/`normaliseSqlAndPosition` only
+ * strips whitespace. Re-stripping here closes the gap when the captured
+ * `sqlText` still carries leading `-- comment` lines (the common case
+ * for SQL that the mainloop dispatched directly via `sendQuery`,
+ * because that path doesn't pre-trim comments).
+ *
+ * Idempotent for already-trimmed input: if `sqlText` has no leading
+ * prelude we return `0`, the caller takes the existing fast-path, and
+ * the LINE count remains the count of newlines strictly before
+ * `position - 1`.
+ */
+const skipLeadingPrelude = (sqlText: string): number => {
+  let i = 0;
+  const n = sqlText.length;
+  while (i < n) {
+    const c = sqlText.charCodeAt(i);
+    if (
+      c === 0x20 ||
+      c === 0x09 ||
+      c === 0x0a ||
+      c === 0x0d ||
+      c === 0x0c ||
+      c === 0x0b
+    ) {
+      i++;
+      continue;
+    }
+    if (c === 0x2d && sqlText.charCodeAt(i + 1) === 0x2d) {
+      i += 2;
+      while (i < n && sqlText.charCodeAt(i) !== 0x0a) i++;
+      continue;
+    }
+    if (c === 0x2f && sqlText.charCodeAt(i + 1) === 0x2a) {
+      i += 2;
+      let depth = 1;
+      while (i < n && depth > 0) {
+        if (
+          sqlText.charCodeAt(i) === 0x2f &&
+          sqlText.charCodeAt(i + 1) === 0x2a
+        ) {
+          depth++;
+          i += 2;
+        } else if (
+          sqlText.charCodeAt(i) === 0x2a &&
+          sqlText.charCodeAt(i + 1) === 0x2f
+        ) {
+          depth--;
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+      continue;
+    }
+    break;
+  }
+  return i;
+};
+
+/**
  * Render the `LINE N: …` re-print plus the `^` pointer underneath the
  * failing character, mirroring upstream psql's `report_error_query`
  * helper. Returns `null` when we don't have enough context (no SQL text
@@ -426,6 +491,12 @@ export const psqlErrorPrefix = (
  * it points at the failing token. Trailing newlines on the picked line
  * are stripped so the `$` end-anchor in upstream's regex still matches.
  *
+ * Leading whitespace + comments are skipped before computing the LINE
+ * number so the count starts at the first content line — vanilla
+ * advances past these before `PQexec`, so the server's `position` is
+ * 1-based relative to a trimmed buffer; without the same skip here we'd
+ * count newlines that vanilla never sent.
+ *
  * Exported so the per-statement error renderer in `core/common.ts` can
  * share the helper with `\errverbose`.
  */
@@ -436,16 +507,25 @@ export const renderLineAndCaret = (
   if (!sqlText || !position) return null;
   const pos = parseInt(position, 10);
   if (!Number.isFinite(pos) || pos <= 0) return null;
+  // Advance past leading WS + comments so the LINE count starts at the
+  // first content line. The server's position is into the on-the-wire
+  // bytes — typically already past these, so rebasing keeps it inside
+  // the content range; if the rebased position would underflow we drop
+  // the LINE/caret block rather than mis-pointing.
+  const skip = skipLeadingPrelude(sqlText);
+  const trimmed = skip === 0 ? sqlText : sqlText.slice(skip);
+  const rebasedPos = pos - skip;
+  if (rebasedPos <= 0) return null;
   // The server's offset is 1-based and points at the failing character.
-  const idx = Math.min(pos - 1, sqlText.length);
+  const idx = Math.min(rebasedPos - 1, trimmed.length);
   // Find the line containing `idx`.
-  let lineStart = sqlText.lastIndexOf('\n', idx - 1);
+  let lineStart = trimmed.lastIndexOf('\n', idx - 1);
   lineStart = lineStart === -1 ? 0 : lineStart + 1;
-  let lineEnd = sqlText.indexOf('\n', lineStart);
-  if (lineEnd === -1) lineEnd = sqlText.length;
-  const lineText = sqlText.slice(lineStart, lineEnd);
+  let lineEnd = trimmed.indexOf('\n', lineStart);
+  if (lineEnd === -1) lineEnd = trimmed.length;
+  const lineText = trimmed.slice(lineStart, lineEnd);
   // Line number for the `LINE N:` prefix — 1-based.
-  const before = sqlText.slice(0, lineStart);
+  const before = trimmed.slice(0, lineStart);
   const lineNumber = (before.match(/\n/gu)?.length ?? 0) + 1;
   // Column inside the picked line (0-based) where the `^` goes. Tabs
   // upstream are expanded to a fixed width; we approximate with a

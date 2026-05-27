@@ -262,6 +262,72 @@ const isSpeciallyTreatedVar = (settings: PsqlSettings, name: string): boolean =>
   settings.vars.hasSubstituteHook(name) || UPSTREAM_SPECIAL_VAR_NAMES.has(name);
 
 /**
+ * Strip leading whitespace and `--` line / slash-star block comments from
+ * `sql`. Mirrors what upstream psql's scanner advances past before handing
+ * a statement to `PQexec` — the server-reported error `position` is a
+ * 1-based offset into THAT trimmed buffer, so the `LINE N:` re-print
+ * computed from `count('\n')` in `sql.slice(0, position - 1)` aligns with
+ * vanilla output only when the same leading prelude is stripped here too.
+ *
+ * Without this, queryBuf accumulated across `\bind` re-entries carries the
+ * preceding blank lines + `-- comment` lines, and the server-relative
+ * position (which points inside the stripped server-side buffer) lands on
+ * a line index that's offset by however many comment lines preceded the
+ * SELECT — producing `LINE 3: SELECT foo` where vanilla emits `LINE 1`.
+ *
+ * Block comments support nested depths (PG extension). Embedded comments
+ * mid-statement are intentionally NOT stripped — they participate in the
+ * line count of the executing statement, same as upstream.
+ */
+const stripLeadingCommentsAndWS = (sql: string): string => {
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql.charCodeAt(i);
+    // Whitespace per psql_scan: space, tab, CR, LF, form-feed, vertical-tab.
+    if (
+      c === 0x20 ||
+      c === 0x09 ||
+      c === 0x0a ||
+      c === 0x0d ||
+      c === 0x0c ||
+      c === 0x0b
+    ) {
+      i++;
+      continue;
+    }
+    // `--` line comment: consume up to (but not including) the next \n.
+    if (c === 0x2d && sql.charCodeAt(i + 1) === 0x2d) {
+      i += 2;
+      while (i < n && sql.charCodeAt(i) !== 0x0a) i++;
+      continue;
+    }
+    // `/* … */` block comment with nested depth tracking.
+    if (c === 0x2f && sql.charCodeAt(i + 1) === 0x2a) {
+      i += 2;
+      let depth = 1;
+      while (i < n && depth > 0) {
+        if (sql.charCodeAt(i) === 0x2f && sql.charCodeAt(i + 1) === 0x2a) {
+          depth++;
+          i += 2;
+        } else if (
+          sql.charCodeAt(i) === 0x2a &&
+          sql.charCodeAt(i + 1) === 0x2f
+        ) {
+          depth--;
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+      continue;
+    }
+    break;
+  }
+  return i === 0 ? sql : sql.slice(i);
+};
+
+/**
  * Render a server-side error in upstream psql's 3-line shape (severity +
  * message, then `LINE N:` / `^` re-print) and refresh the `:LAST_ERROR_*`
  * diagnostic variables so a subsequent `\errverbose` sees the rich payload.
@@ -724,7 +790,14 @@ const runGCore = async (
   ctx: BackslashContext,
   forceExpanded: boolean,
 ): Promise<BackslashResult> => {
-  const bufSql = ctx.queryBuf.trim();
+  // Strip leading whitespace + `--`/`/* */` comments so the SQL we hand to
+  // the wire (and use for `LINE N:` re-print on error) matches what vanilla
+  // psql sends through `PQexec`. Without the strip, queryBuf accumulated
+  // across `\bind` re-entries carries blank+comment lines from the gap
+  // between the previous `\g` and this one, and the server-relative
+  // position lands on `LINE 3` instead of `LINE 1`.
+  const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
+  const bufSql = trimmedBuf.trim();
   let target: string | null;
   let psetOverrides: { option: string; value: string }[] | null = null;
 
@@ -892,10 +965,13 @@ const runGCore = async (
     // statement errors take in `core/common.ts::writeQueryError`. The
     // `\<cmd>:` prefix is reserved for client-side I/O / parse errors
     // (e.g. `\g: no connection`), not server-side ErrorResponse-shaped
-    // failures. Pass the raw (un-trimmed) queryBuf so the `LINE N:`
-    // re-print preserves any trailing whitespace upstream emits (e.g.
-    // `LINE 1: SELECT $1, $2 ` with the space before `\g`).
-    return formatServerError(ctx, execError, ctx.queryBuf);
+    // failures. Pass the COMMENT-STRIPPED buffer (`trimmedBuf`) so the
+    // `LINE N:` count starts at the first content line — vanilla strips
+    // leading comments + blank lines from queryBuf before `PQexec`, and
+    // the server's reported `position` is a 1-based offset into THAT
+    // trimmed buffer. We preserve trailing whitespace so a `\g` after
+    // `SELECT $1, $2 ` still renders `LINE 1: SELECT $1, $2 ` verbatim.
+    return formatServerError(ctx, execError, trimmedBuf);
   }
   if (pipeError !== null) {
     return errResult(ctx, pipeError);
@@ -944,7 +1020,9 @@ export const cmdGset: BackslashCmdSpec = {
   name: 'gset',
   helpKey: 'gset',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
-    const bufSql = ctx.queryBuf.trim();
+    // Strip leading whitespace + comments — see runGCore for the rationale.
+    const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
+    const bufSql = trimmedBuf.trim();
     const prefix = ctx.nextArg('normal') ?? '';
 
     // Empty buffer behaviour mirrors upstream `exec_command_gset`'s
@@ -961,21 +1039,23 @@ export const cmdGset: BackslashCmdSpec = {
       return errResult(ctx, 'no connection to the server');
     }
 
+    // Track for a subsequent `\g` re-run with empty buffer. Upstream
+    // `exec_command_gset` updates `pset.last_query` to the dispatched SQL
+    // before sending, so a follow-on `\g` (with the buffer reset by the
+    // implicit `\\` separator in `... \gset pref01_ \\ \g`) re-executes
+    // this same statement and prints the result table.
+    ctx.settings.lastQuery = sql;
+
     let results: ResultSet[];
     try {
       results = await ctx.settings.db.execSimple(sql);
     } catch (err) {
       // Server-side ErrorResponse — render in upstream's 3-line shape
       // (severity + message + LINE N / caret) instead of `\gset: <msg>`.
-      // Pass the raw queryBuf so the `LINE N:` re-print preserves any
-      // trailing whitespace before `\gset`. When the buffer was empty,
-      // fall back to the re-run SQL — the user wants to see WHICH
-      // statement failed.
-      return formatServerError(
-        ctx,
-        err,
-        bufSql.length > 0 ? ctx.queryBuf : sql,
-      );
+      // Pass the comment-stripped buffer so the `LINE N:` count matches
+      // vanilla. When the buffer was empty, fall back to the re-run SQL
+      // — the user wants to see WHICH statement failed.
+      return formatServerError(ctx, err, bufSql.length > 0 ? trimmedBuf : sql);
     }
 
     // Use the last result that returned rows. Upstream uses the most-recent
@@ -1143,7 +1223,9 @@ export const cmdGdesc: BackslashCmdSpec = {
   name: 'gdesc',
   helpKey: 'gdesc',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
-    const sql = ctx.queryBuf.trim();
+    // Strip leading whitespace + comments — see runGCore for the rationale.
+    const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
+    const sql = trimmedBuf.trim();
     if (sql.length === 0) {
       // Upstream `\gdesc` with no buffer falls through `PSQL_CMD_SEND` to
       // the printer which renders the synthetic 0-column result via
@@ -1174,9 +1256,9 @@ export const cmdGdesc: BackslashCmdSpec = {
       // 3-line shape (severity + message + LINE N / caret), refresh the
       // diagnostic vars, and signal `errorWritten` to the mainloop so the
       // `\errverbose` re-render after `\gdesc` sees the rich layers. Pass
-      // the raw queryBuf so the LINE re-print preserves trailing whitespace
-      // upstream emits before `\gdesc`.
-      return formatServerError(ctx, err, ctx.queryBuf);
+      // the comment-stripped buffer so the `LINE N:` count starts at the
+      // first content line (matches vanilla — see runGCore).
+      return formatServerError(ctx, err, trimmedBuf);
     }
 
     // When the prepared statement describes back zero columns (DDL, empty
@@ -1233,7 +1315,9 @@ export const cmdGexec: BackslashCmdSpec = {
   name: 'gexec',
   helpKey: 'gexec',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
-    const bufSql = ctx.queryBuf.trim();
+    // Strip leading whitespace + comments — see runGCore for the rationale.
+    const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
+    const bufSql = trimmedBuf.trim();
     // Upstream `\gexec` with no buffer falls through `PSQL_CMD_SEND` and
     // re-runs `pset.last_query` (or nothing). Silent on empty + no prior
     // query — exit 0, no message. Verified against vanilla psql 18.
@@ -1250,9 +1334,9 @@ export const cmdGexec: BackslashCmdSpec = {
       firstPass = await ctx.settings.db.execSimple(sql);
     } catch (err) {
       // Render the first-pass server error in upstream's 3-line shape.
-      // Pass the raw queryBuf so the LINE re-print preserves trailing
-      // whitespace upstream emits before `\gexec`.
-      return formatServerError(ctx, err, ctx.queryBuf);
+      // Pass the comment-stripped buffer so the `LINE N:` count matches
+      // vanilla — see runGCore for the rationale.
+      return formatServerError(ctx, err, trimmedBuf);
     }
 
     const tupled = firstPass.filter((r) => r.fields.length > 0);
@@ -1261,12 +1345,30 @@ export const cmdGexec: BackslashCmdSpec = {
     }
 
     const out = pickOut(ctx.settings, null);
+    // Echo each generated SQL when ECHO is `all` or `queries`. Vanilla
+    // `exec_command_gexec` calls `SendQuery` for each row's text, and
+    // SendQuery itself prints the statement via the standard query-echo
+    // path: stdout, no `\gexec:` / `psql:` prefix, trailing LF. The echo
+    // appears BEFORE the result body so the conformance harness sees
+    // the same interleaving vanilla produces.
+    const echo = ctx.settings.echo;
+    const shouldEcho = echo === 'all' || echo === 'queries';
+    // Per-row errors are tolerated: upstream `\gexec` calls
+    // `SendQuery` in a loop and ignores its return value (the only
+    // escape is the global ON_ERROR_STOP variable, which the
+    // conformance harness sets to 0). Without this, the regress
+    // expects `drop table gexec_test\nERROR: ...\nselect ...` and we'd
+    // truncate at the ERROR.
+    let sawError = false;
     for (const rs of tupled) {
       for (const row of rs.rows) {
         for (const cell of row) {
           if (cell === null || cell === undefined) continue;
           const statement = formatCell(cell).trim();
           if (statement.length === 0) continue;
+          if (shouldEcho) {
+            out.write(statement + '\n');
+          }
           try {
             const nested = await ctx.settings.db.execSimple(statement);
             for (const sub of nested) {
@@ -1275,14 +1377,27 @@ export const cmdGexec: BackslashCmdSpec = {
               }
             }
           } catch (err) {
-            // Each iteration is its own statement; surface the per-statement
-            // server error in upstream's 3-line shape against the offending
-            // synthesised SQL (so LINE / caret are positioned correctly).
-            return formatServerError(ctx, err, statement);
+            // Each iteration is its own statement; render the per-row
+            // server error in upstream's 3-line shape (LINE / caret are
+            // positioned against `statement`, the offending row text)
+            // but DO NOT return — vanilla continues to the next row.
+            formatServerError(ctx, err, statement);
+            sawError = true;
+            // Honour ON_ERROR_STOP: when set, halt the loop after the
+            // first failing row. Upstream's `do_gexec` consults the
+            // global `pset.on_error_stop` flag via `SendQuery`'s
+            // return; we mirror by checking the setting directly.
+            if (ctx.settings.onErrorStop) {
+              return { status: 'error', errorWritten: true };
+            }
           }
         }
       }
     }
+    // Even with errors, return `reset-buf` so the mainloop clears the
+    // outer `\gexec` buffer. Per-row error rendering already happened;
+    // returning `error` here would re-trigger the writeError path.
+    void sawError;
     return { status: 'reset-buf', newBuf: '' };
   },
 };
@@ -1517,7 +1632,9 @@ export const cmdWatch: BackslashCmdSpec = {
   name: 'watch',
   helpKey: 'watch',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
-    const sql = ctx.queryBuf.trim();
+    // Strip leading whitespace + comments — see runGCore for the rationale.
+    const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
+    const sql = trimmedBuf.trim();
     if (sql.length === 0) {
       return errResult(ctx, 'no query buffer');
     }
@@ -1660,9 +1777,9 @@ export const cmdWatch: BackslashCmdSpec = {
           // message + LINE / caret) — same path top-level statement errors
           // take. The `\watch:` prefix is reserved for client-side
           // argument-parsing errors (e.g. `incorrect interval value "-10"`).
-          // Pass the raw queryBuf so the LINE re-print preserves trailing
-          // whitespace upstream emits before `\watch`.
-          return formatServerError(ctx, err, ctx.queryBuf);
+          // Pass the comment-stripped buffer so the `LINE N:` count starts
+          // at the first content line — see runGCore for the rationale.
+          return formatServerError(ctx, err, trimmedBuf);
         }
         // Stop if `c=` reached the configured iteration cap, OR if `m=`
         // was set and the previous result returned FEWER than `min_rows`

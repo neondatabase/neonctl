@@ -512,6 +512,82 @@ describe('formatErrorReport', () => {
       expect(l).toMatch(/^[A-Z]+: {2}/);
     }
   });
+
+  test('leading -- line comments do not inflate LINE N (regress/psql parity)', () => {
+    // SQL like `-- subject command should not have executed\nTABLE bububu;`
+    // would naively count to LINE 2. Vanilla psql strips the leading
+    // comment + whitespace before `PQexec`, and the server's position is
+    // 1-based relative to the trimmed buffer — so LINE 1 is the right
+    // anchor for the SELECT. Verified against psql.sql line 167.
+    const sqlText =
+      '-- subject command should not have executed\nTABLE bububu;';
+    // Server position is into the BYTES PASSED TO PQexec. Vanilla strips
+    // leading whitespace before sending, leaving the `-- comment\n` in
+    // place — so position 45 points at `TABLE`, the failing token.
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'relation "bububu" does not exist',
+        position: '45',
+        sqlText,
+      },
+      'default',
+      'errors',
+    );
+    expect(lines).toContain('LINE 1: TABLE bububu;');
+  });
+
+  test('leading slash-star block comments are skipped too', () => {
+    const sqlText = '/* leading\n   block */\nTABLE bububu;';
+    // Position 24 is the 1-based byte index of `T` in `TABLE` (after
+    // the comment + newline).
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'relation "bububu" does not exist',
+        position: '24',
+        sqlText,
+      },
+      'default',
+      'errors',
+    );
+    expect(lines).toContain('LINE 1: TABLE bububu;');
+  });
+
+  test('nested block comments are tracked', () => {
+    const sqlText = '/* outer /* inner */ closing */ TABLE bububu;';
+    // Pre-strip prelude leaves `TABLE bububu;`; position 33 points at `T`.
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'relation "bububu" does not exist',
+        position: '33',
+        sqlText,
+      },
+      'default',
+      'errors',
+    );
+    expect(lines).toContain('LINE 1: TABLE bububu;');
+  });
+
+  test('intermediate comments still bump the LINE count', () => {
+    // The fix only strips LEADING prelude. A `-- comment` on a line
+    // before the failing statement (with non-comment content elsewhere)
+    // should still bump LINE because it's part of the executed statement.
+    const sqlText = 'SELECT 1\n-- middle comment\nWHERE foo;';
+    // Position 28 points just inside the WHERE — server-reported line 3.
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        message: 'syntax error at or near "WHERE"',
+        position: '28',
+        sqlText,
+      },
+      'default',
+      'errors',
+    );
+    expect(lines).toContain('LINE 3: WHERE foo;');
+  });
 });
 
 describe('\\!', () => {

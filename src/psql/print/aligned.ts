@@ -1009,7 +1009,14 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
 
   for (let r = 0; r < cellGrid.length; r++) {
     if (!tuplesOnly) {
-      out += renderRecordHeader(r + 1, nameWidth, valueWidth, border, glyphs);
+      out += renderRecordHeader(
+        r + 1,
+        nameWidth,
+        valueWidth,
+        border,
+        glyphs,
+        r === 0,
+      );
       out += newline;
     }
     for (let c = 0; c < headers.length; c++) {
@@ -1060,15 +1067,40 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
  *  border 1:  `-[ RECORD N ]<dashes-to-fit>+<dashes-to-fit>`
  *  border 2:  `+-[ RECORD N ]<dashes>+<dashes>+`
  *
- * The left segment is sized to `nameWidth + 2` characters (matching the
- * data lines' `<space><name><space>` columns), the right segment to
- * `valueWidth + 2`. Mirrors psql `print_aligned_vertical_line`.
+ * Mirrors psql `print_aligned_vertical_line`.
  *
- * For border 0, upstream `print_aligned_vertical_line` (lines 1243-1281 of
- * print.c) computes the row length as `hwidth + dwidth` characters: the
- * `* Record N` label first, then enough trailing spaces to pad out the
- * combined name+value column width. Labels that exceed `hwidth + dwidth`
- * are emitted as-is without truncation.
+ * Layout invariants (verified empirically against vanilla psql 18):
+ *
+ *  border 1 — data line is `<name padded to nameWidth> | <value>`:
+ *    - The `|` column-separator sits at position `nameWidth + 2`.
+ *    - Record header `+` mid junction aligns with that `|`, so the
+ *      pre-junction (left) span is `nameWidth + 1` chars and the
+ *      post-junction (right) span is `valueWidth + 1` chars.
+ *    - When `1 + label.length` overflows the pre-junction span but the
+ *      label still fits in the full data row width, upstream pads with
+ *      hrule chars to the row width and OMITS the mid junction
+ *      (`-[ RECORD 1 ]--` for `nameWidth=2, valueWidth=10`).
+ *    - When `1 + label.length` overflows the row width too, upstream
+ *      emits just the label-prefix with no padding (the label IS the
+ *      whole divider line).
+ *
+ *  border 2 — data line is `| <name> | <value> |`, row width is
+ *    `1 + (nameWidth + 2) + 1 + (valueWidth + 2) + 1`:
+ *    - Outer corners use the TOP glyph set on the first record
+ *      (`topLeft`, `topMid`, `topRight`) and the MID glyph set on
+ *      subsequent records (`midLeft`, `midMid`, `midRight`). The bottom
+ *      rule (emitted by `renderVertical`) uses the BOT glyphs.
+ *    - The `topMid` (or `midMid`) junction sits at position
+ *      `leftSegLen + 2` to match the `|` column-separator in the data
+ *      row. When `1 + label.length` overflows the left segment, the
+ *      junction glyph is dropped and the row is padded entirely with
+ *      hrule chars between the outer corners.
+ *
+ *  border 0 — label is padded with spaces to `nameWidth + valueWidth`.
+ *    Labels that exceed `nameWidth + valueWidth` pass through unchanged.
+ *
+ * `isFirst` only affects border 2 glyph selection; border 0 and 1 share
+ * a single set of single-line rule glyphs across all records.
  */
 const renderRecordHeader = (
   record: number,
@@ -1076,8 +1108,9 @@ const renderRecordHeader = (
   valueWidth: number,
   border: BorderStyle,
   glyphs: Glyphs,
+  isFirst: boolean,
 ): string => {
-  const { hrule, vrule } = glyphs;
+  const { hrule } = glyphs;
   if (border === 0) {
     const label = `* Record ${String(record)}`;
     const target = nameWidth + valueWidth;
@@ -1086,34 +1119,76 @@ const renderRecordHeader = (
   }
 
   const label = `[ RECORD ${String(record)} ]`;
-  const leftSegLen = nameWidth + 2;
-  const rightSegLen = valueWidth + 2;
 
   // border 1: `-[ RECORD N ]---+---------`
   if (border === 1) {
-    // Single-hrule prefix, then the label, then enough hrule chars to
-    // reach leftSegLen. When the label already overflows the left segment
-    // (narrow columns relative to "[ RECORD N ]"'s 12+ char fixed cost),
-    // upstream omits the `+` divider and the right dash segment — the
-    // label IS the entire divider line. Verified empirically against
-    // vanilla psql: `SELECT 1 as one, 2 as two \gx` emits just
-    // `-[ RECORD 1 ]` with no trailing `+---`.
-    let left = hrule + label;
-    if (left.length >= leftSegLen) {
-      return left;
+    // Data row width = nameWidth + 3 + valueWidth (`<name padded> | <value>`).
+    // Pre-junction span = nameWidth + 1 (name col + gutter space). The
+    // `+` mid junction lands at position `nameWidth + 2`, mirroring the
+    // `|` in the data lines. Post-junction span = valueWidth + 1.
+    const rowWidth = nameWidth + 3 + valueWidth;
+    const leftSpan = nameWidth + 1;
+    const rightSpan = valueWidth + 1;
+    const left = hrule + label;
+    if (left.length <= leftSpan) {
+      // Label fits in the pre-junction span. Pad left to leftSpan, emit
+      // the mid junction (`+`), then rightSpan hrules.
+      const leftPadded = left + hrule.repeat(leftSpan - left.length);
+      return leftPadded + glyphs.midMid + hrule.repeat(rightSpan);
     }
-    left += hrule.repeat(leftSegLen - left.length);
-    const right = hrule.repeat(rightSegLen);
-    return left + glyphs.midMid + right;
+    if (left.length < rowWidth) {
+      // Label overflows the pre-junction span but still fits within the
+      // full row. Pad the label-prefix out to the row width with hrule
+      // chars and DROP the mid junction (vanilla psql parity).
+      return left + hrule.repeat(rowWidth - left.length);
+    }
+    // Label exceeds the full row width — emit just the label-prefix
+    // (no padding, no junction).
+    return left;
   }
 
-  // border 2/3: `+-[ RECORD N ]---+--------+`
-  let left = vrule + hrule + label;
-  if (left.length < leftSegLen + 1) {
-    left += hrule.repeat(leftSegLen + 1 - left.length);
+  // border 2 / 3.
+  //
+  // Outer corners come from the TOP glyph set on the first record (so
+  // the leading rule looks like a normal table top) and from the MID
+  // glyph set on subsequent records (so it looks like an inter-row rule).
+  // For ASCII these all collapse to `+`; the distinction matters for
+  // Unicode (`┌`/`┐`/`┬` vs `├`/`┤`/`┼`).
+  const outerLeft = isFirst ? glyphs.topLeft : glyphs.midLeft;
+  const outerRight = isFirst ? glyphs.topRight : glyphs.midRight;
+  const outerMid = isFirst ? glyphs.topMid : glyphs.midMid;
+
+  // Data row width = 1 + (nameWidth + 2) + 1 + (valueWidth + 2) + 1.
+  const leftSegLen = nameWidth + 2;
+  const rightSegLen = valueWidth + 2;
+  const leftCore = hrule + label;
+  if (leftCore.length <= leftSegLen) {
+    // Label fits in the left segment. Pad left to leftSegLen, emit the
+    // top/mid junction, then rightSegLen hrules, then top/mid right
+    // corner.
+    const leftPadded = leftCore + hrule.repeat(leftSegLen - leftCore.length);
+    return (
+      outerLeft + leftPadded + outerMid + hrule.repeat(rightSegLen) + outerRight
+    );
   }
-  const right = hrule.repeat(rightSegLen) + vrule;
-  return left + glyphs.midMid + right;
+  // Label overflows the left segment. Drop the mid junction and pad
+  // hrules between the outer corners. When the natural row inner width
+  // (= leftSegLen + 1 + rightSegLen) is itself smaller than the label
+  // plus a single trailing hrule, the rule grows past the data-row
+  // width so the label always has at least one `─`/`-` of breathing
+  // room before the closing corner (verified against vanilla psql 18:
+  // `\gx` on `SELECT 1 as one, 2 as two \pset border 2` emits
+  // `┌─[ RECORD 1 ]─┐` — 14 inner chars vs the 9-char inner data row).
+  const innerWidth = Math.max(
+    leftSegLen + 1 + rightSegLen,
+    leftCore.length + 1,
+  );
+  return (
+    outerLeft +
+    leftCore +
+    hrule.repeat(innerWidth - leftCore.length) +
+    outerRight
+  );
 };
 
 const renderVerticalLine = (

@@ -445,6 +445,33 @@ describe('\\g', () => {
     expect(s.vars.get('SQLSTATE')).toBe('42P02');
     expect(s.vars.get('LAST_ERROR_MESSAGE')).toBe('there is no parameter $1');
   });
+
+  test('leading comments + blank lines in queryBuf still emit LINE 1', async () => {
+    // Reproduces the psql.sql `SELECT foo \bind \g` case where the buffer
+    // carries blank+comment lines from the gap after a previous `\g`'s
+    // reset. Without stripping the prelude, queryBuf newlines would push
+    // the count to LINE 3 even though only `SELECT foo` was on the wire.
+    const conn = makeMockConn();
+    conn.execSimple = () => {
+      const err = Object.assign(new Error('column "foo" does not exist'), {
+        severity: 'ERROR',
+        code: '42703',
+        position: '8',
+      });
+      return Promise.reject(err);
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx(
+      'g',
+      '',
+      s,
+      '\n\n-- errors\n-- parse error\nSELECT foo ',
+    );
+    const r = await run(cmdG, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/^LINE 1: SELECT foo /m);
+    expect(stderr()).not.toMatch(/LINE 3:/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -579,6 +606,23 @@ describe('\\gset', () => {
     expect(s.vars.get('SQLSTATE')).toBe('42P01');
     expect(s.vars.get('ERROR')).toBe('true');
   });
+
+  test('updates settings.lastQuery so a follow-on `\\g` re-runs the SELECT', async () => {
+    // Vanilla `exec_command_gset` writes the dispatched SQL to
+    // `pset.last_query` before sending. The psql.sql regress corpus
+    // relies on this: `select 5 as x, 6 as y \gset pref01_ \\ \g`
+    // expects `\g` (empty buffer) to re-execute the SELECT and print
+    // its result table. Without the assignment, the variables get
+    // populated but the table is missing.
+    const conn = makeMockConn();
+    conn.reply = () => [rs(['x'], [[5]])];
+    const s = makeSettings(conn);
+    expect(s.lastQuery).toBe('');
+    const ctx = makeMockCtx('gset', 'pref_', s, 'select 5 as x');
+    const r = await run(cmdGset, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(s.lastQuery).toBe('select 5 as x');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -644,11 +688,107 @@ describe('\\gexec', () => {
     const s = makeSettings(conn);
     const ctx = makeMockCtx('gexec', '', s, 'select stmt');
     const r = await run(cmdGexec, ctx);
-    expect(r.status).toBe('error');
+    // Upstream `\gexec` tolerates per-row errors and continues to the
+    // next row — only ON_ERROR_STOP escalates. With one failing row and
+    // no further rows, we return `reset-buf` (the error was already
+    // rendered to stderr via `formatServerError`).
+    expect(r.status).toBe('reset-buf');
     expect(stderr()).toMatch(
       /^ERROR: {2}syntax error at or near "BROKEN_SQL"/m,
     );
     expect(stderr()).not.toMatch(/\\gexec:/);
+  });
+
+  test('tolerates per-row errors and continues to the next row', async () => {
+    const conn = makeMockConn();
+    let phase = 0;
+    conn.execSimple = (sql) => {
+      conn.history.push(sql);
+      phase += 1;
+      if (phase === 1) {
+        // First-pass meta query: three rows of generated SQL.
+        return Promise.resolve([
+          rs(
+            ['stmt'],
+            [['drop table missing'], ['select 1 as ok'], ['select 2 as also']],
+          ),
+        ]);
+      }
+      if (phase === 2) {
+        // First derived row errors.
+        const err = Object.assign(new Error('table "missing" does not exist'), {
+          severity: 'ERROR',
+          code: '42P01',
+        });
+        return Promise.reject(err);
+      }
+      // Subsequent derived rows succeed.
+      return Promise.resolve([rs(['ok'], [[1]])]);
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('gexec', '', s, 'select stmt');
+    const r = await run(cmdGexec, ctx);
+    expect(r.status).toBe('reset-buf');
+    // All three derived statements were dispatched in order — vanilla
+    // does not abort the loop on the first failure when ON_ERROR_STOP
+    // is unset.
+    expect(conn.history).toEqual([
+      'select stmt',
+      'drop table missing',
+      'select 1 as ok',
+      'select 2 as also',
+    ]);
+    expect(stderr()).toMatch(/table "missing" does not exist/);
+  });
+
+  test("echoes each row's generated SQL when ECHO=all", async () => {
+    const conn = makeMockConn();
+    let phase = 0;
+    conn.reply = () => {
+      phase += 1;
+      if (phase === 1) {
+        return [
+          rs(['stmt'], [['create index on t(a)'], ['create index on t(b)']]),
+        ];
+      }
+      return [rs([], [], 'CREATE INDEX')];
+    };
+    const s = makeSettings(conn);
+    s.echo = 'all';
+    const ctx = makeMockCtx('gexec', '', s, 'select stmt');
+    await run(cmdGexec, ctx);
+    // Each row's SQL is echoed verbatim on stdout (one line per dispatch),
+    // matching vanilla `do_gexec`'s SendQuery echo path under
+    // `--echo-all` / `\set ECHO all`.
+    expect(stdout()).toMatch(/create index on t\(a\)/);
+    expect(stdout()).toMatch(/create index on t\(b\)/);
+  });
+
+  test('stops on first error when ON_ERROR_STOP is set', async () => {
+    const conn = makeMockConn();
+    let phase = 0;
+    conn.execSimple = (sql) => {
+      conn.history.push(sql);
+      phase += 1;
+      if (phase === 1) {
+        return Promise.resolve([
+          rs(['stmt'], [['fail one'], ['select 1 as never']]),
+        ]);
+      }
+      // First derived row errors.
+      const err = Object.assign(new Error('boom'), {
+        severity: 'ERROR',
+        code: '42000',
+      });
+      return Promise.reject(err);
+    };
+    const s = makeSettings(conn);
+    s.onErrorStop = true;
+    const ctx = makeMockCtx('gexec', '', s, 'select stmt');
+    const r = await run(cmdGexec, ctx);
+    expect(r.status).toBe('error');
+    // Only the first derived row was attempted.
+    expect(conn.history).toEqual(['select stmt', 'fail one']);
   });
 });
 
