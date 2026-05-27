@@ -139,6 +139,15 @@ const mkPrepared = (
       rows: [],
       notices: [],
     }),
+  bindAndExecute: (): Promise<ResultSet> =>
+    Promise.resolve({
+      command: 'SELECT',
+      rowCount: 0,
+      oid: null,
+      fields,
+      rows: [],
+      notices: [],
+    }),
   close: () => {
     onClose();
     return Promise.resolve();
@@ -215,7 +224,7 @@ describe('\\bind', () => {
     const r = await run(cmdBind, ctx);
     expect(r.status).toBe('ok');
     const stash = consumeBindState(s);
-    expect(stash).toEqual({ name: '', values: ['1', 'two'] });
+    expect(stash).toEqual({ name: '', values: ['1', 'two'], byName: false });
     // Second consume returns null.
     expect(consumeBindState(s)).toBeNull();
   });
@@ -225,7 +234,11 @@ describe('\\bind', () => {
     const ctx = makeMockCtx('bind_named', 'st1 a b', s);
     const r = await run(cmdBindNamed, ctx);
     expect(r.status).toBe('ok');
-    expect(consumeBindState(s)).toEqual({ name: 'st1', values: ['a', 'b'] });
+    expect(consumeBindState(s)).toEqual({
+      name: 'st1',
+      values: ['a', 'b'],
+      byName: true,
+    });
   });
 
   test('\\bind_named without name fails', async () => {

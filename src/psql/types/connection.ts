@@ -53,6 +53,19 @@ export type PreparedStatement = {
   bind(values: unknown[], paramFormats?: (0 | 1)[]): Promise<void>;
   describe(): Promise<FieldDescription[]>;
   execute(maxRows?: number): Promise<ResultSet>;
+  /**
+   * Atomic Bind + Execute + Sync in one extended-protocol batch. The
+   * server's anonymous portal lives only until the next Sync, so
+   * calling `bind()` and `execute()` separately doesn't work — the
+   * portal goes away with bind's Sync before execute can use it. Use
+   * this when you need to execute a previously-prepared statement
+   * (`\bind_named NAME \g`).
+   */
+  bindAndExecute(
+    values: unknown[],
+    maxRows?: number,
+    paramFormats?: (0 | 1)[],
+  ): Promise<ResultSet>;
   close(): Promise<void>;
 };
 

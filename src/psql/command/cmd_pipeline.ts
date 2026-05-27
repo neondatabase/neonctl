@@ -40,7 +40,11 @@ import type {
   BackslashResult,
 } from '../types/backslash.js';
 import type { PsqlSettings } from '../types/settings.js';
-import type { Pipeline, ResultSet } from '../types/connection.js';
+import type {
+  Pipeline,
+  PreparedStatement,
+  ResultSet,
+} from '../types/connection.js';
 
 import { writeErr } from './shared.js';
 
@@ -51,11 +55,19 @@ import { writeErr } from './shared.js';
 
 const BIND_STATE_KEY = Symbol.for('neonctl.psql.bindState');
 const PIPELINE_KEY = Symbol.for('neonctl.psql.pipeline');
+const PREPARED_BY_NAME_KEY = Symbol.for('neonctl.psql.preparedByName');
 
 type BindState = {
   /** Named prepared statement to bind to ('' = anonymous). */
   name: string;
   values: string[];
+  /**
+   * `true` when this was set by `\bind_named NAME` — `\g` should look up
+   * the previously-prepared statement (via `\parse NAME`) and just run
+   * Bind + Execute against it. `false` (set by `\bind`) means re-prepare
+   * from the current buffer and execute in one round-trip.
+   */
+  byName: boolean;
 };
 
 type PipelineStash = {
@@ -67,6 +79,7 @@ type PipelineStash = {
 type Stash = Record<symbol, unknown> & {
   [BIND_STATE_KEY]?: BindState;
   [PIPELINE_KEY]?: PipelineStash;
+  [PREPARED_BY_NAME_KEY]?: Map<string, PreparedStatement>;
 };
 
 const stashOf = (settings: PsqlSettings): Stash => settings as unknown as Stash;
@@ -77,6 +90,47 @@ export const consumeBindState = (settings: PsqlSettings): BindState | null => {
   const cur = s[BIND_STATE_KEY] ?? null;
   s[BIND_STATE_KEY] = undefined;
   return cur;
+};
+
+/**
+ * Peek at the bind stash without consuming. Used by `\g` to decide
+ * whether to skip the "empty buffer, no prior query" no-op guard:
+ * when a `\bind_named NAME` is pending, the prepared statement carries
+ * the SQL server-side so no buffer text is needed.
+ */
+export const stagedNamedBindPresent = (settings: PsqlSettings): boolean => {
+  const cur = stashOf(settings)[BIND_STATE_KEY];
+  return !!cur && cur.byName;
+};
+
+/** Stash a PreparedStatement for later `\bind_named NAME \g` lookup. */
+export const stashPrepared = (
+  settings: PsqlSettings,
+  name: string,
+  ps: PreparedStatement,
+): void => {
+  const s = stashOf(settings);
+  let map = s[PREPARED_BY_NAME_KEY];
+  if (!map) {
+    map = new Map();
+    s[PREPARED_BY_NAME_KEY] = map;
+  }
+  map.set(name, ps);
+};
+
+/** Look up a previously-stashed PreparedStatement by name. */
+export const lookupPrepared = (
+  settings: PsqlSettings,
+  name: string,
+): PreparedStatement | null => {
+  const map = stashOf(settings)[PREPARED_BY_NAME_KEY];
+  return map?.get(name) ?? null;
+};
+
+/** Drop a stashed PreparedStatement (after `\close_prepared`). */
+export const dropPrepared = (settings: PsqlSettings, name: string): void => {
+  const map = stashOf(settings)[PREPARED_BY_NAME_KEY];
+  if (map) map.delete(name);
 };
 
 /** Peek at the current pipeline session (or null). */
@@ -115,7 +169,11 @@ export const cmdBind: BackslashCmdSpec = {
   helpKey: 'bind',
   run(ctx: BackslashContext): Promise<BackslashResult> {
     const values = readAllArgs(ctx);
-    stashOf(ctx.settings)[BIND_STATE_KEY] = { name: '', values };
+    stashOf(ctx.settings)[BIND_STATE_KEY] = {
+      name: '',
+      values,
+      byName: false,
+    };
     return Promise.resolve({ status: 'ok' });
   },
 };
@@ -133,10 +191,14 @@ export const cmdBindNamed: BackslashCmdSpec = {
     // case. `''` IS valid — it addresses the unnamed prepared statement
     // slot (set via `\parse ''`).
     if (name === null) {
+      // Upstream wipes any prior `\bind_named` state on this error so a
+      // follow-on `\g` falls back to `pset.last_query` (the previous
+      // successful query) instead of executing against a stale handle.
+      stashOf(ctx.settings)[BIND_STATE_KEY] = undefined;
       return Promise.resolve(errResult(ctx, 'missing required argument'));
     }
     const values = readAllArgs(ctx);
-    stashOf(ctx.settings)[BIND_STATE_KEY] = { name, values };
+    stashOf(ctx.settings)[BIND_STATE_KEY] = { name, values, byName: true };
     return Promise.resolve({ status: 'ok' });
   },
 };
@@ -165,7 +227,12 @@ export const cmdParse: BackslashCmdSpec = {
       return errResult(ctx, 'no connection to the server');
     }
     try {
-      await ctx.settings.db.prepare(name, sql);
+      const ps = await ctx.settings.db.prepare(name, sql);
+      // Cache for `\bind_named NAME \g` lookup later. Upstream tracks
+      // server-side prepared statements by name in `pset.psqlScanState`-
+      // adjacent state; we keep a local map so a follow-on `\g` can
+      // bind + execute without re-parsing.
+      stashPrepared(ctx.settings, name, ps);
       return { status: 'reset-buf', newBuf: '' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -198,6 +265,9 @@ export const cmdClosePrepared: BackslashCmdSpec = {
       // We just need to issue Close('S', name). The prepared statement
       // wrapper's close() does exactly that with the captured name.
       await stmt.close();
+      // Drop any cached binding so a later `\bind_named NAME \g` errors
+      // cleanly instead of using a stale handle.
+      dropPrepared(ctx.settings, name);
       return { status: 'ok' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

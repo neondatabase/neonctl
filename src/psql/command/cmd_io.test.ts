@@ -899,6 +899,15 @@ const mockGdescConn = (
           rows: [],
           notices: [],
         }),
+      bindAndExecute: (): Promise<ResultSet> =>
+        Promise.resolve({
+          command: 'SELECT',
+          rowCount: 0,
+          oid: null,
+          fields,
+          rows: [],
+          notices: [],
+        }),
       close: () => {
         preparedClose.push(name);
         return Promise.resolve();

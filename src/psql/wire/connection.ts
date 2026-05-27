@@ -825,6 +825,44 @@ export class PgConnection implements Connection {
         }
         return rs;
       },
+      async bindAndExecute(
+        values: unknown[],
+        maxRows?: number,
+        paramFormats?: (0 | 1)[],
+      ): Promise<ResultSet> {
+        conn.ensureIdle();
+        const encoded = encodeParams(values);
+        conn.startExtendedBatch();
+        const bP = conn.enqueueBind();
+        const eP = conn.enqueueExecuteWithFields(fields);
+        const sP = conn.enqueueSync();
+        conn.socket.write(Bind('', name, paramFormats ?? [], encoded, [0]));
+        conn.socket.write(Execute('', maxRows ?? 0));
+        conn.socket.write(Sync());
+        let err: unknown = null;
+        let rs: ResultSet | null = null;
+        bP.catch((e: unknown) => {
+          if (err === null) err = e;
+        });
+        eP.then(
+          (r) => {
+            rs = r;
+          },
+          (e: unknown) => {
+            if (err === null) err = e;
+          },
+        );
+        await sP.catch((e: unknown) => {
+          if (err === null) err = e;
+        });
+        if (err !== null) throw asThrowable(err);
+        if (rs === null) {
+          throw new Error(
+            'PgConnection.prepare.bindAndExecute: server returned no result',
+          );
+        }
+        return rs;
+      },
       async close(): Promise<void> {
         conn.ensureIdle();
         conn.startExtendedBatch();

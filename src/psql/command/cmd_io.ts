@@ -104,6 +104,11 @@ import { writeErr } from './shared.js';
 import { enqueue as enqueueInput } from './inputQueue.js';
 import { formatErrorReport, psqlErrorPrefix } from './cmd_meta.js';
 import { applyPset } from './cmd_format.js';
+import {
+  consumeBindState,
+  lookupPrepared,
+  stagedNamedBindPresent,
+} from './cmd_pipeline.js';
 import { captureLastError } from '../core/common.js';
 
 // ---------------------------------------------------------------------------
@@ -567,8 +572,14 @@ const runGCore = async (
   // populated in `sendQuery` before dispatch.
   const sql = bufSql.length > 0 ? bufSql : ctx.settings.lastQuery.trim();
 
-  if (sql.length === 0) {
-    // No buffered SQL and no prior query — silent no-op like upstream.
+  // If a `\bind_named NAME` has staged a server-side prepared statement
+  // lookup, we don't need any SQL text — the prepared statement carries
+  // it server-side. Skip the empty-sql guard so the bind branch below
+  // can do its thing.
+  const hasPendingNamedBind = stagedNamedBindPresent(ctx.settings);
+  if (sql.length === 0 && !hasPendingNamedBind) {
+    // No buffered SQL, no prior query, no staged bind — silent no-op
+    // like upstream.
     return { status: 'reset-buf', newBuf: '' };
   }
 
@@ -609,12 +620,45 @@ const runGCore = async (
   // `pset.last_query` in `PSQLexec` before dispatch.
   ctx.settings.lastQuery = sql;
 
+  // Consume any pending `\bind` / `\bind_named` state. Upstream's
+  // `\g` routes through the extended-query protocol when bind params
+  // are set: anonymous `\bind` re-prepares from the buffer; named
+  // `\bind_named NAME` looks up the server-side prepared statement
+  // by NAME (set earlier via `\parse NAME`) and just runs Bind +
+  // Execute against it.
+  const bindState = consumeBindState(ctx.settings);
+
   let execError: string | null = null;
   try {
-    const results = await ctx.settings.db.execSimple(sql);
     const out = pickOut(ctx.settings, oneShot?.stream ?? null);
-    for (const rs of results) {
+    if (bindState?.byName) {
+      // \bind_named NAME — execute the previously-prepared statement
+      // identified by NAME. The cache was populated by `\parse NAME`.
+      // The empty-string NAME is the upstream "unnamed" prepared
+      // statement slot.
+      const ps = lookupPrepared(ctx.settings, bindState.name);
+      if (!ps) {
+        execError = `prepared statement "${bindState.name}" does not exist`;
+      } else {
+        // Bind + Execute MUST go in one extended-protocol batch: the
+        // anonymous portal is implicitly closed at the next Sync, so a
+        // separate ps.bind() then ps.execute() would lose the portal in
+        // between. `bindAndExecute` issues both messages before the
+        // Sync.
+        const rs = await ps.bindAndExecute(bindState.values);
+        await renderResult(ctx.settings, rs, out);
+      }
+    } else if (bindState) {
+      // Anonymous \bind — re-prepare from the current buffer (or
+      // lastQuery fallback) and execute with the supplied params.
+      const rs = await ctx.settings.db.query(sql, bindState.values);
       await renderResult(ctx.settings, rs, out);
+    } else {
+      // Plain `\g` / `\gx`: simple-query dispatch.
+      const results = await ctx.settings.db.execSimple(sql);
+      for (const rs of results) {
+        await renderResult(ctx.settings, rs, out);
+      }
     }
   } catch (err) {
     execError = err instanceof Error ? err.message : String(err);
