@@ -85,14 +85,20 @@ type StaticOutputResolver = {
 
 type OutputResolver = PostgresOutputResolver | StaticOutputResolver;
 
-const outputs = new Map<string /* resource __id */, OutputResolver>();
+/**
+ * Per-invocation mutable state. Pre-round-11 this was module-scoped,
+ * which made two concurrent `runLaunch` calls (library mode) clobber
+ * each other's outputs and trip each other's shutdown flag. Now each
+ * invocation owns its own Runtime that's threaded through provisioners
+ * and observed by foregroundPhase + the signal handlers via closure.
+ */
+type Runtime = {
+  outputs: Map<string /* resource __id */, OutputResolver>;
+  shuttingDown: { value: boolean };
+};
 
-// Module-scoped because the SIGINT handler is registered at runner entry
-// but observed by foregroundPhase (which can't see the handler's closure
-// variable). Reset on each runLaunch invocation.
-let interrupted = false;
-function isShuttingDown(): boolean {
-  return interrupted;
+function newRuntime(): Runtime {
+  return { outputs: new Map(), shuttingDown: { value: false } };
 }
 
 /**
@@ -117,10 +123,13 @@ function getCliProjectIdFromArgv(argv: string[]): string | undefined {
   return undefined;
 }
 
-async function resolveLeaf(ref: {
-  __ref: string;
-  __opts?: unknown;
-}): Promise<string> {
+async function resolveLeaf(
+  runtime: Runtime,
+  ref: {
+    __ref: string;
+    __opts?: unknown;
+  },
+): Promise<string> {
   const dot = ref.__ref.lastIndexOf('.');
   if (dot < 0) {
     throw new Error(
@@ -129,7 +138,7 @@ async function resolveLeaf(ref: {
   }
   const id = ref.__ref.slice(0, dot);
   const prop = ref.__ref.slice(dot + 1);
-  const resolver = outputs.get(id);
+  const resolver = runtime.outputs.get(id);
   if (!resolver) {
     throw new Error(
       `[neon launch] Unresolved Ref<T>: ${ref.__ref}. ` +
@@ -185,6 +194,7 @@ async function resolveLeaf(ref: {
  * values are always strings or refs per the type contract).
  */
 async function resolveEnv(
+  runtime: Runtime,
   envIn: Record<string, unknown> | undefined,
 ): Promise<Record<string, string>> {
   if (!envIn) return {};
@@ -195,7 +205,7 @@ async function resolveEnv(
       continue;
     }
     if (isRef(v)) {
-      out[k] = await resolveLeaf(v);
+      out[k] = await resolveLeaf(runtime, v);
       continue;
     }
     throw new Error(
@@ -378,21 +388,16 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   // of the SAME kind during the analytics-flush window short-circuits
   // to immediate process.exit so the user can force-quit if Segment
   // wedges.
-  interrupted = false; // reset for this invocation (module-scoped)
-  outputs.clear(); // ditto — would otherwise leak refs across re-invocations
-  let secondSignalFires = 0;
+  const runtime = newRuntime();
   const makeShutdownHandler = (signal: 'SIGINT' | 'SIGTERM', code: number) => {
     return () => {
-      if (interrupted) {
+      if (runtime.shuttingDown.value) {
         // Second signal arrived during cleanup — user wants out NOW.
-        secondSignalFires += 1;
-        if (secondSignalFires >= 1) {
-          log.info(`[launch] ${signal} again — force-exiting.`);
-          process.exit(code);
-        }
+        log.info(`[launch] ${signal} again — force-exiting.`);
+        process.exit(code);
         return;
       }
-      interrupted = true;
+      runtime.shuttingDown.value = true;
       log.info(`[launch] ${signal} — stopping any running local commands.`);
       for (const h of liveLocalCommands) void h.kill();
       // Flush analytics before exit so the shutdown event isn't dropped.
@@ -424,6 +429,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
 
   try {
     await provisionStages({
+      runtime,
       stages,
       dependedOnFqns,
       api,
@@ -444,7 +450,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
       log.info('[launch] no foreground processes; exiting 0.');
       return;
     }
-    await foregroundPhase(liveLocalCommands);
+    await foregroundPhase(runtime, liveLocalCommands);
   } finally {
     // Match the handlers' lifecycle to this invocation so library-mode
     // callers don't accumulate one handler per runLaunch.
@@ -454,6 +460,7 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
 }
 
 type StagesArgs = {
+  runtime: Runtime;
   stages: PlanNode[][];
   /** FQNs of every node that some other node lists in `dependsOn`. */
   dependedOnFqns: Set<string>;
@@ -469,6 +476,7 @@ type StagesArgs = {
 
 async function provisionStages(args: StagesArgs): Promise<void> {
   const {
+    runtime,
     stages,
     dependedOnFqns,
     api,
@@ -493,35 +501,50 @@ async function provisionStages(args: StagesArgs): Promise<void> {
     // allSettled so those secondary rejections are observed (not left
     // dangling for Node to surface as 'unhandled promise rejection'
     // racing the user-facing error in commands/launch.ts).
-    const results = await Promise.allSettled(
-      stage.map((node) =>
-        provisionOne({
+    const tasks = stage.map((node) =>
+      provisionOne({
+        runtime,
+        node,
+        api,
+        projectId,
+        repoRoot,
+        cwd,
+        gitBranch,
+        branchTimeoutSeconds,
+        stdioMode: pickStdioMode(
           node,
-          api,
-          projectId,
-          repoRoot,
-          cwd,
-          gitBranch,
-          branchTimeoutSeconds,
-          stdioMode: pickStdioMode(
-            node,
-            localCmdCount,
-            dependedOnFqns.has(node.name),
-          ),
-          liveLocalCommands,
-          neonLaunchEnv,
-        }),
-      ),
+          localCmdCount,
+          dependedOnFqns.has(node.name),
+        ),
+        liveLocalCommands,
+        neonLaunchEnv,
+      }),
     );
-    const firstRejection = results.find(
-      (r): r is PromiseRejectedResult => r.status === 'rejected',
-    );
-    if (firstRejection) {
-      // Tear down any local-commands that came up either in this stage
-      // or an earlier one. Without this they leak as orphan processes
-      // (compounded by detached shells holding ports).
+
+    // Fast-cancel: on the FIRST rejection, immediately kill any local
+    // commands already running. Their `handle.ready` rejects via the
+    // child-exit pathway, which unblocks their provisioner — siblings
+    // settle quickly instead of waiting out their own readiness budget
+    // (5min logMatch / 2min httpGet / 60s portListening). Postgres and
+    // Vercel polls keep their own clocks; their typical durations are
+    // short enough to not be worth a deeper signal-threading refactor.
+    let firstReject: { reason: unknown } | undefined;
+    for (const t of tasks) {
+      t.catch((err: unknown) => {
+        if (firstReject !== undefined) return;
+        firstReject = { reason: err };
+        for (const h of liveLocalCommands) void h.kill();
+      });
+    }
+    // Still await allSettled so the late-rejection promises are observed
+    // (not left dangling for Node to surface as 'unhandled promise
+    // rejection' racing the user-facing error in commands/launch.ts).
+    await Promise.allSettled(tasks);
+    if (firstReject !== undefined) {
+      // Catch any local-commands that came up between the abort and the
+      // final settle (defensive — should be empty by now).
       await Promise.all(liveLocalCommands.map((h) => h.kill()));
-      throw firstRejection.reason as Error;
+      throw firstReject.reason as Error;
     }
   }
 }
@@ -531,6 +554,7 @@ async function provisionStages(args: StagesArgs): Promise<void> {
 // =============================================================================
 
 async function provisionOne(args: {
+  runtime: Runtime;
   node: PlanNode;
   api: ApiClient;
   projectId: string;
@@ -547,6 +571,7 @@ async function provisionOne(args: {
 
   if (kind === 'postgres') {
     await provisionPostgresNode({
+      runtime: args.runtime,
       node,
       api: args.api,
       projectId: args.projectId,
@@ -556,6 +581,7 @@ async function provisionOne(args: {
   }
   if (kind === 'vercel-deployment') {
     await provisionVercelNode({
+      runtime: args.runtime,
       node,
       repoRoot: args.repoRoot,
       cwd: args.cwd,
@@ -566,6 +592,7 @@ async function provisionOne(args: {
   }
   if (kind === 'local-command') {
     await provisionLocalCommandNode({
+      runtime: args.runtime,
       node,
       cwd: args.cwd,
       stdioMode: args.stdioMode,
@@ -580,6 +607,7 @@ async function provisionOne(args: {
 }
 
 async function provisionPostgresNode(args: {
+  runtime: Runtime;
   node: PlanNode;
   api: ApiClient;
   projectId: string;
@@ -594,7 +622,7 @@ async function provisionPostgresNode(args: {
     resourceFqn: args.node.name,
   });
   // Seed the output table for this resource so downstream refs resolve.
-  outputs.set(args.node.resource.__id, {
+  args.runtime.outputs.set(args.node.resource.__id, {
     kind: 'postgres',
     api: args.api,
     projectId: args.projectId,
@@ -610,6 +638,7 @@ async function provisionPostgresNode(args: {
 }
 
 async function provisionVercelNode(args: {
+  runtime: Runtime;
   node: PlanNode;
   repoRoot: string;
   cwd: string;
@@ -632,7 +661,7 @@ async function provisionVercelNode(args: {
     process.env.VERCEL_PROJECT_ID ?? args.neonLaunchEnv.VERCEL_PROJECT_ID;
   const cachedProjectName =
     process.env.VERCEL_PROJECT_NAME ?? args.neonLaunchEnv.VERCEL_PROJECT_NAME;
-  const resolvedEnv = await resolveEnv(spec.env);
+  const resolvedEnv = await resolveEnv(args.runtime, spec.env);
   const result = await provisionVercelDeployment({
     resourceFqn: args.node.name,
     spec,
@@ -644,7 +673,7 @@ async function provisionVercelNode(args: {
     cachedProjectId,
     cachedProjectName,
   });
-  outputs.set(args.node.resource.__id, {
+  args.runtime.outputs.set(args.node.resource.__id, {
     kind: 'static',
     values: { url: result.url },
   });
@@ -652,13 +681,14 @@ async function provisionVercelNode(args: {
 }
 
 async function provisionLocalCommandNode(args: {
+  runtime: Runtime;
   node: PlanNode;
   cwd: string;
   stdioMode: StdioMode;
   liveLocalCommands: LocalCommandHandle[];
 }): Promise<void> {
   const spec = args.node.spec as LocalCommandSpec;
-  const resolvedEnv = await resolveEnv(spec.env);
+  const resolvedEnv = await resolveEnv(args.runtime, spec.env);
   const handle = startLocalCommand({
     resourceFqn: args.node.name,
     spec,
@@ -682,7 +712,7 @@ async function provisionLocalCommandNode(args: {
     if (idx >= 0) args.liveLocalCommands.splice(idx, 1);
     throw err;
   }
-  outputs.set(args.node.resource.__id, {
+  args.runtime.outputs.set(args.node.resource.__id, {
     kind: 'static',
     values: {},
   });
@@ -700,7 +730,10 @@ async function provisionLocalCommandNode(args: {
 
 // Caller (runLaunch) owns the SIGINT handler lifecycle: registered at
 // runner entry, observed here via `isShuttingDown()`.
-async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
+async function foregroundPhase(
+  runtime: Runtime,
+  handles: LocalCommandHandle[],
+): Promise<void> {
   log.info(
     `[launch] foreground: holding for ${handles.length} local-command(s). Ctrl-C to stop.`,
   );
@@ -727,13 +760,13 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
   //      only to the child (external `kill -INT/-TERM <child-pid>`,
   //      debugger, etc.) — fall through and treat as a sibling crash
   //      rather than parking forever.
-  if (isShuttingDown()) {
+  if (runtime.shuttingDown.value) {
     await new Promise(() => undefined);
     return;
   }
   if (firstExit.signal === 'SIGINT' || firstExit.signal === 'SIGTERM') {
     await new Promise((r) => setImmediate(r));
-    if (isShuttingDown()) {
+    if (runtime.shuttingDown.value) {
       await new Promise(() => undefined);
       return;
     }
