@@ -1258,12 +1258,15 @@ describe('cmdCopy.run', () => {
 
   test('TO PROGRAM still prints COPY tag (program destination, variant 2)', async () => {
     // PROGRAM is a child process — its stdout doesn't collide with ours,
-    // so the COPY tag is safe to print.
+    // so the COPY tag is safe to print. Use a program that actually reads
+    // its stdin (`cat`) so the pipe drains on both Linux and macOS;
+    // `true` exits before reading, which races EPIPE on Linux even though
+    // macOS's kernel-side pipe buffering hides it.
     const { conn } = makeMockConn({
       copyOutChunks: [Buffer.from('x\n')],
       copyTag: 'COPY 1',
     });
-    const ctx = makeMockCtx("t TO PROGRAM 'true'", settingsWithConn(conn));
+    const ctx = makeMockCtx("t TO PROGRAM 'cat'", settingsWithConn(conn));
     await withStdoutCapture(async (out) => {
       const r = await cmdCopy.run(ctx);
       expect(r.status).toBe('ok');
