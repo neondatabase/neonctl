@@ -364,6 +364,69 @@ describe('runMainLoop — backslash commands', () => {
     expect(db?.calls[0]).toMatch(/SELECT 1/);
     expect(db?.calls[0]).toMatch(/\+ 2;/);
   });
+
+  test('two successive reset-buf commands do not leak a leading \\n into queryBuf', async () => {
+    // Regression guard for the `\parse stmt1\nSELECT $1, $2 \parse stmt3`
+    // shape from regress/psql. With the original scanner (which stops the
+    // backslash boundary BEFORE the trailing `\n`), the residual `\n` would
+    // get folded back into queryBuf via the `eof` accumulation path on the
+    // very next scanSql call — and the next `reset-buf`-returning command
+    // would see queryBuf = `\nSELECT ...`. Commands that store the buffer
+    // verbatim (notably `\parse`) then emit a stray leading 0x0a byte.
+    //
+    // The mainloop's `reset-buf` branch now strips that residual line
+    // terminator from `working` so the next pass starts cleanly. Verify
+    // by recording what each invocation of a buffer-consuming command
+    // saw in `ctx.queryBuf`.
+    const captured: string[] = [];
+    const captureSpec: BackslashCmdSpec = {
+      name: 'capture',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run(ctx) {
+        captured.push(ctx.queryBuf);
+        return { status: 'reset-buf', newBuf: '' };
+      },
+    };
+    const { ctx } = buildCtx({
+      lines: ['SELECT 2 \\capture', 'SELECT $1, $2 \\capture'],
+      registrySpecs: [captureSpec],
+    });
+    await runMainLoop(ctx);
+    // Both buffers are exactly what the user typed before the slash — no
+    // leading `\n` on the second.
+    expect(captured).toEqual(['SELECT 2 ', 'SELECT $1, $2 ']);
+  });
+
+  test('errored slash command also strips the residual line terminator', async () => {
+    // Mirror of the `reset-buf` regression test but for the `error` branch:
+    // an errored slash command also drops the buffer, and we don't want the
+    // line-terminator residue to seep into the next statement's queryBuf
+    // either.
+    const captured: string[] = [];
+    const errSpec: BackslashCmdSpec = {
+      name: 'failsafe',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run() {
+        return { status: 'error', errorWritten: true };
+      },
+    };
+    const captureSpec: BackslashCmdSpec = {
+      name: 'capture',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run(ctx) {
+        captured.push(ctx.queryBuf);
+        return { status: 'reset-buf', newBuf: '' };
+      },
+    };
+    const { ctx } = buildCtx({
+      lines: ['SELECT 1 \\failsafe', 'SELECT 2 \\capture'],
+      registrySpecs: [errSpec, captureSpec],
+    });
+    await runMainLoop(ctx);
+    // The `\failsafe` errored (queryBuf dropped, line terminator stripped);
+    // `\capture` then sees a clean `SELECT 2 ` with no `\n` prefix.
+    expect(captured).toEqual(['SELECT 2 ']);
+  });
 });
 
 // ---------------------------------------------------------------------------

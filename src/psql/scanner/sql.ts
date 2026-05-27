@@ -676,7 +676,14 @@ export const scanSql = (
       const rest = input.slice(cmdEnd, restEnd);
       const consumed = sawDoubleBackslashSeparator ? restEnd + 2 : restEnd;
       // Note: we *don't* consume the newline; it's left for the next chunk
-      // so caller can see PROMPT1 reset cleanly.
+      // so caller can see PROMPT1 reset cleanly. Upstream's
+      // `psql_scan_slash_command_end()` does eat the trailing newline, but
+      // doing so HERE would lose the inter-line `\n` separator when a
+      // non-buffer-consuming slash command (e.g. `\echo`) sits between two
+      // lines of a continuing multi-line query. We compensate elsewhere:
+      // the mainloop's `reset-buf` branch strips a residual leading `\n`
+      // from the working chunk so the next statement's queryBuf doesn't
+      // pick it up via the `eof` accumulation path.
       return {
         kind: 'backslash',
         cmd,

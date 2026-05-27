@@ -744,7 +744,11 @@ describe('scanSql — backslash after buffered SQL on same line', () => {
     expect(r.cmd).toBe('echo');
     expect(r.rest).toBe(' hi');
     // Consumed up to the newline; the rest of the input (newline + FROM t;)
-    // is left for the next scan pass.
+    // is left for the next scan pass. The `\n` plays double duty as the
+    // line separator between the slash-command line and the following SQL —
+    // preserving it keeps line breaks intact when the mainloop accumulates
+    // a multi-line query split by a non-buffer-consuming command (e.g.
+    // `SELECT 1 \echo hi\nFROM t;` resolves to `SELECT 1 \nFROM t;`).
     expect(r.consumed).toBe('SELECT 1 \\echo hi'.length);
   });
 

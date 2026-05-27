@@ -989,6 +989,36 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           queryBuf = bres.newBuf ?? '';
           scanState = initialScanState();
           stmtLineNumber = 1;
+          // The SQL scanner intentionally stops the backslash boundary on
+          // (not past) the trailing line terminator so that an inter-line
+          // `\n` separating a slash command from continuing SQL on the
+          // next line survives in `working`. That's the right call when
+          // the slash command leaves `queryBuf` intact — the `\n` keeps
+          // line breaks in the assembled multi-line query.
+          //
+          // For `reset-buf`, however, the buffer is being intentionally
+          // dropped: the slash command (`\g`, `\gset`, `\gdesc`, `\gexec`,
+          // `\crosstabview`, `\watch`, `\bind`, `\parse`, …) has just
+          // consumed and dispatched whatever was buffered. A residual
+          // `\n` at the head of `working` is then leftover line-terminator
+          // bytes from the slash-command line itself — NOT a continuation
+          // separator. If we let it survive, the next scanSql pass returns
+          // an `eof` with `sql: '\n'`, the loop's
+          // `queryBuf += result.sql` line folds it into the NEXT
+          // statement's buffer, and commands that store the buffer
+          // verbatim (notably `\parse`, which uses the buffer text as the
+          // prepared-statement source) emit a stray leading 0x0a byte.
+          //
+          // Strip the line terminator here so the next pass starts cleanly.
+          // This matches upstream `psql_scan_slash_command_end()`'s eat-
+          // through-newline behaviour for the buffer-reset case — without
+          // changing the scanner's semantics for the inline-slash + multi-
+          // line shape that depends on the `\n` surviving.
+          if (working.startsWith('\r\n')) {
+            working = working.slice(2);
+          } else if (working.startsWith('\n') || working.startsWith('\r')) {
+            working = working.slice(1);
+          }
         }
         // Upstream `mainloop.c`: on PSQL_CMD_ERROR, the query buffer is
         // reset and the scanner state is dropped. Mirrors `resetPQExpBuffer`
@@ -1001,6 +1031,15 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           queryBuf = '';
           scanState = initialScanState();
           stmtLineNumber = 1;
+          // Same residual-newline reasoning as `reset-buf`: the buffer is
+          // being dropped on a failed slash command, so the `\n` left over
+          // from the slash-command line shouldn't seep into the next
+          // statement's queryBuf via the `eof` accumulation path.
+          if (working.startsWith('\r\n')) {
+            working = working.slice(2);
+          } else if (working.startsWith('\n') || working.startsWith('\r')) {
+            working = working.slice(1);
+          }
         }
         lastWasError = bres?.status === 'error';
         // Backslash commands like \connect can also tear down the connection.
