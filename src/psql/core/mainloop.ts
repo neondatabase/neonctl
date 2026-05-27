@@ -870,6 +870,16 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       }
       if (line === null) break; // EOF
 
+      // 2'. ECHO=all — upstream `--echo-all` / `\set ECHO all` echoes every
+      // non-empty input line to stdout *before* it's processed, including
+      // comments. Pure-blank lines are skipped (matches `MainLoop()`'s
+      // `echo_hidden` branch in `mainloop.c`: the scanner consumes them
+      // as no-op without surfacing to the echo path). ECHO=queries echoes
+      // only completed queries — handled separately by the exec path.
+      if (ctx.settings.echo === 'all' && line.trim().length > 0) {
+        ctx.stdout.write(line + '\n');
+      }
+
       // 2a. `exit`/`quit` keyword handling.
       //
       //   - Empty buffer  → exit the REPL.
