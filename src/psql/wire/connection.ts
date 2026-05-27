@@ -733,7 +733,19 @@ export class PgConnection implements Connection {
   }
 
   public async query(sql: string, params?: unknown[]): Promise<ResultSet> {
-    if (!params || params.length === 0) {
+    // `params === undefined` → caller has no intent to use extended protocol
+    // (e.g. a buffered SQL run without `\bind`). Use the simple-query path so
+    // chained `\;`-separated statements still work via `PQexec`-shaped
+    // semantics.
+    //
+    // `params` defined (even as `[]`) → caller staged a `\bind` (or a
+    // describe-formatter explicitly asking for the extended path). The
+    // extended protocol sends a single Parse message verbatim; the server
+    // rejects multi-statement SQL with SQLSTATE 42601 / "cannot insert
+    // multiple commands into a prepared statement", which is the upstream
+    // contract for `\bind`/`\parse`. Switching on length === 0 would silently
+    // fall back to simple-query and mask that diagnostic.
+    if (params === undefined) {
       const sets = await this.execSimple(sql);
       if (sets.length === 0) {
         throw new Error('PgConnection.query: server returned no result sets');

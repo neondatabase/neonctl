@@ -1351,6 +1351,104 @@ describe('PgConnection', () => {
     await conn.close();
   });
 
+  test('query(sql, []) — explicit empty-array params still go through extended protocol', async () => {
+    // Regression guard: an explicit `params=[]` signals that the caller staged
+    // a `\bind` (even with zero values). The wire layer MUST use the extended
+    // protocol so the server can reject multi-statement SQL with the upstream
+    // "cannot insert multiple commands into a prepared statement" diagnostic.
+    // Falling back to simple-Query (PQexec semantics) would silently execute
+    // both statements and return the last result, masking the failure.
+    const seen: string[] = [];
+    let parsedSql: string | null = null;
+    server = await startFakeServer((msg, client) => {
+      seen.push(msg.type);
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Parse') {
+        parsedSql = (msg as unknown as { sql: string }).sql;
+        client.send(parseComplete());
+        return;
+      }
+      if (msg.type === 'Bind') {
+        client.send(bindComplete());
+        return;
+      }
+      if (msg.type === 'Describe') {
+        client.send(rowDescription([{ name: 'a', oid: 23, size: 4 }]));
+        return;
+      }
+      if (msg.type === 'Execute') {
+        client.send(dataRow(['1']));
+        client.send(commandComplete('SELECT 1'));
+        return;
+      }
+      if (msg.type === 'Sync') {
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    // SQL the server will see verbatim in a single Parse — extended path.
+    const rs = await conn.query('SELECT 1', []);
+    expect(rs.rowCount).toBe(1);
+    expect(rs.rows).toEqual([['1']]);
+    expect(parsedSql).toBe('SELECT 1');
+    expect(seen).toEqual(
+      expect.arrayContaining(['Parse', 'Bind', 'Describe', 'Execute', 'Sync']),
+    );
+    // Critically: NO simple `Query` message. The presence of a Q would mean
+    // we fell back to execSimple and the multi-statement guard wouldn't fire.
+    expect(seen).not.toContain('Query');
+    await conn.close();
+  });
+
+  test('query(sql) — params undefined still uses simple-Query (multi-statement OK)', async () => {
+    // Inverse guard: when the caller passes NO `params` argument, we route
+    // through the simple-Query path so chained `\;` statements still flow
+    // through `PQexec`-shaped semantics.
+    const seen: string[] = [];
+    server = await startFakeServer((msg, client) => {
+      seen.push(msg.type);
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(rowDescription([{ name: 'a', oid: 23, size: 4 }]));
+        client.send(dataRow(['1']));
+        client.send(commandComplete('SELECT 1'));
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    const rs = await conn.query('SELECT 1');
+    expect(rs.rows).toEqual([['1']]);
+    expect(seen).toContain('Query');
+    expect(seen).not.toContain('Parse');
+    await conn.close();
+  });
+
   test('prepare() returns a usable PreparedStatement', async () => {
     let parseSeen: { name: string; sql: string; paramTypes: number[] } | null =
       null;
