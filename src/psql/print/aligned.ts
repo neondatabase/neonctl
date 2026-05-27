@@ -840,8 +840,16 @@ const renderDataLine = (
   if (border === 2 || border === 3) {
     out += ' ' + vrule;
   } else if (border === 1) {
-    // Trailing gutter after the last cell.
-    out += ' ';
+    // Upstream `print_aligned_text` skips the trailing margin space when
+    // the last column is right-aligned — right-aligned numeric content
+    // sits at the right edge of the cell with no right-side padding.
+    // Left- and center-aligned cells get the trailing space because the
+    // column-width padding extends to fill the cell. Without this skip,
+    // every data row with a right-aligned tail column carries a stray
+    // trailing space that the regress harness diffs against.
+    if (aligns[cells.length - 1] !== 'right') {
+      out += ' ';
+    }
   }
 
   return out;
