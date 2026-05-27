@@ -385,6 +385,22 @@ export function startLocalCommand(opts: {
       stderrTail = lines.pop() ?? '';
       for (const line of lines) pumpLine(line);
     });
+    // Flush any final un-newlined fragment when the streams close.
+    // Without this, a child that does `process.stdout.write('READY')`
+    // and exits drops the last line — logMatch readiness would never
+    // fire on the dropped tail, and the user sees truncated logs.
+    child.stdout.on('end', () => {
+      if (stdoutTail) {
+        pumpLine(stdoutTail);
+        stdoutTail = '';
+      }
+    });
+    child.stderr.on('end', () => {
+      if (stderrTail) {
+        pumpLine(stderrTail);
+        stderrTail = '';
+      }
+    });
   }
 
   const exited = new Promise<{
@@ -480,9 +496,15 @@ export function startLocalCommand(opts: {
     sendSignal('SIGTERM');
     // Schedule SIGKILL escalation, but cancel it if the child exits
     // gracefully first so a normal teardown doesn't keep the timer
-    // (and hence the event loop) alive.
+    // (and hence the event loop) alive. Liveness check uses
+    // `exitCode === null && signalCode === null` — Node's
+    // `child.killed` flips to `true` immediately on the
+    // `child.kill('SIGTERM')` dispatch (per node:child_process docs),
+    // NOT on child death, so a `!child.killed` check would short-
+    // circuit every escalation in the non-detached path. `exitCode`
+    // and `signalCode` reflect actual termination state.
     const escalation = setTimeout(() => {
-      if (child.exitCode === null && !child.killed) {
+      if (child.exitCode === null && child.signalCode === null) {
         log.info(
           `[${resourceFqn}] still alive ${KILL_ESCALATION_MS}ms after SIGTERM — escalating to SIGKILL.`,
         );

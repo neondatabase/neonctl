@@ -202,6 +202,11 @@ export async function pollOpsTerminal(
     string,
     { error?: string; failures: number; status: string }
   >();
+  // failures_count ceiling: Neon retries internally, but an op stuck
+  // at N retries for the full timeout-window is wedged. Bail at this
+  // threshold with the latest diagnostic so the user sees the cause
+  // in seconds rather than minutes.
+  const FAILURES_CEILING = 5;
   while (remaining.size > 0 && Date.now() < deadline) {
     for (const opId of [...remaining]) {
       const { data } = await withRetries(() =>
@@ -217,6 +222,12 @@ export async function pollOpsTerminal(
       }
       if (TERMINAL_OP_STATUSES.has(op.status)) {
         remaining.delete(opId);
+      } else if (op.failures_count >= FAILURES_CEILING) {
+        throw new Error(
+          `[neon launch] Neon operation ${opId} wedged after ${op.failures_count} internal retries ` +
+            `(status=${op.status}, error=${op.error ?? 'unknown'}). Likely a regional issue; ` +
+            `retry in a few minutes or check Neon status page.`,
+        );
       }
     }
     if (remaining.size > 0) await sleep(DEFAULT_POLL_INTERVAL_MS);

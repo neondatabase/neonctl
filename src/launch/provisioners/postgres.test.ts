@@ -330,13 +330,56 @@ describe('pollOpsTerminal — diagnostic preservation', () => {
     vi.useRealTimers();
   });
 
-  it('timeout message includes the LATEST seen op.error and failures_count', async () => {
-    // Two iterations of the poll loop: the first one observes
-    // failures_count=2 and error="early"; the second observes
-    // failures_count=5 and error="latest". The timeout message must
-    // carry the LATEST snapshot, not the first — proves that lastSeen
-    // accumulates across iterations rather than getting reset.
+  it('lastSeen accumulates across iterations — first poll carries the diagnostic, last poll is clean', async () => {
+    // Falsifier discipline: reviewer R14 flagged the previous form of
+    // this test as performative (the mock clamped to "latest" forever,
+    // so a regression that re-init'd lastSeen every iteration would
+    // STILL pass because the final iteration would just rewrite the
+    // same value). The honest pin: first iteration reports an error,
+    // LATER iterations report clean (no error, failures_count=0).
+    // A reset-each-iteration regression would lose the diagnostic;
+    // accumulation preserves it.
     let iteration = 0;
+    const api = makeApi({
+      listings: [],
+    });
+    api.getProjectOperation.mockImplementation(() => {
+      const seq = [
+        {
+          id: 'op_1',
+          status: 'running',
+          error: 'transient: pool exhausted',
+          failures_count: 1,
+        },
+        // Subsequent polls: clean (no diagnostic). Op is still running
+        // so we don't terminate, but `op.error || failures_count > 0`
+        // is false → `lastSeen` is NOT updated on these polls.
+        { id: 'op_1', status: 'running', error: undefined, failures_count: 0 },
+      ];
+      const i = Math.min(iteration, seq.length - 1);
+      iteration += 1;
+      return Promise.resolve({ data: { operation: seq[i] } });
+    });
+    const promise = pollOpsTerminal(
+      api as any,
+      'prj_1',
+      ['op_1'],
+      5, // 5s budget — multiple polls fit before deadline
+    );
+    const assertion = expect(promise).rejects.toThrow(
+      /Timed out.*op_1.*failures=1.*transient: pool exhausted/s,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await assertion;
+  });
+
+  it('failures_count ≥ ceiling triggers a fail-fast error instead of burning the full budget', async () => {
+    // Production: pollOpsTerminal bails when failures_count crosses
+    // FAILURES_CEILING (=5) without burning the rest of the timeout.
     const api = makeApi({
       listings: [],
       opSequence: {
@@ -344,60 +387,22 @@ describe('pollOpsTerminal — diagnostic preservation', () => {
           {
             id: 'op_1',
             status: 'running',
-            error: 'early: pool exhausted',
-            failures_count: 2,
-          },
-          {
-            id: 'op_1',
-            status: 'running',
-            error: 'latest: still pool exhausted',
-            failures_count: 5,
+            error: 'replica creation failed: regional outage',
+            failures_count: 6,
           },
         ],
       },
-    });
-    // Override getProjectOperation to walk the opSequence positionally
-    // (the default mock clamps to the last entry after the first poll).
-    api.getProjectOperation.mockImplementation(() => {
-      const i = Math.min(iteration, 1);
-      iteration += 1;
-      return Promise.resolve({
-        data: { operation: { ...api } } as never,
-      } as never).then(() => ({
-        data: {
-          operation: [
-            {
-              id: 'op_1',
-              status: 'running',
-              error: 'early: pool exhausted',
-              failures_count: 2,
-            },
-            {
-              id: 'op_1',
-              status: 'running',
-              error: 'latest: still pool exhausted',
-              failures_count: 5,
-            },
-          ][i],
-        },
-      }));
     });
     const promise = pollOpsTerminal(
       api as any,
       'prj_1',
       ['op_1'],
-      // 5s budget: one poll → sleep 2s → second poll → sleep 2s → deadline.
-      5,
+      300, // generous budget — the ceiling must fire first
     );
     const assertion = expect(promise).rejects.toThrow(
-      /Timed out.*op_1.*failures=5.*latest: still pool exhausted/s,
+      /wedged after 6 internal retries.*regional outage/s,
     );
-    // Drain the two poll-and-sleep cycles + the deadline slip.
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(2_000);
     await assertion;
   });
 });

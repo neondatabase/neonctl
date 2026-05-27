@@ -457,7 +457,7 @@ export async function buildPlan(
       [
         `[neon launch] Config file not found: ${absPath}`,
         '',
-        `Create a \`neon.ts\` at the repo root. Minimal starter:`,
+        `Create the file at \`${absPath}\` (or pass \`--config <path>\` to a different file). Minimal starter:`,
         '',
         `  import { stack, postgres } from 'neonctl/config';`,
         '',
@@ -477,7 +477,26 @@ export async function buildPlan(
   }
 
   const jiti = createJiti(import.meta.url);
-  const loaded = await jiti.import(absPath);
+  let loaded: unknown;
+  try {
+    loaded = await jiti.import(absPath);
+  } catch (err) {
+    // Syntax errors, missing imports, runtime exceptions during config
+    // eval — all bubble up as plain Error. Convert to a CONFIG_ERROR so
+    // the user sees exit 2 (config issue, not provisioning failure) and
+    // a clear "this is your neon.ts" prefix.
+    const message = err instanceof Error ? err.message : String(err);
+    throw new LaunchError(
+      [
+        `[neon launch] Failed to load \`${absPath}\` — your neon.ts threw during evaluation:`,
+        '',
+        message,
+        '',
+        `Fix the error and re-run. The launcher hasn't touched any resources yet.`,
+      ].join('\n'),
+      ExitCode.CONFIG_ERROR,
+    );
+  }
   const mod = loaded as { default?: unknown };
   const def = mod.default;
   if (!isInternalResource(def) || def.__kind !== 'stack') {

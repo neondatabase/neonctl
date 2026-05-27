@@ -183,8 +183,12 @@ export function stackSpecNotRecordMessage(opts: {
   stackName: string;
   got: string;
 }): string {
+  const hint =
+    opts.got === 'undefined'
+      ? `\n(Your spec returned nothing — did you forget the \`return\` at the end of the callback?)`
+      : '';
   return [
-    `[neon launch] Stack '${opts.stackName}' spec did not return a record of resources (got ${opts.got}).`,
+    `[neon launch] Stack '${opts.stackName}' spec did not return a record of resources (got ${opts.got}).${hint}`,
     '',
     `A stack's spec callback must return an object literal whose values are`,
     `the result of factory calls (postgres, vercelDeployment, localCommand).`,

@@ -26,6 +26,7 @@ vi.mock('@vercel/client', () => ({
 
 import {
   createDeployment,
+  parseRetryAfter,
   upsertEnvVars,
   wrapTeam,
 } from './vercel-deployment.js';
@@ -333,5 +334,38 @@ describe('createDeployment — terminal event routing', () => {
     ).rejects.toThrow(
       /stream ended without a terminal event \(last status: BUILDING\)/,
     );
+  });
+});
+
+describe('parseRetryAfter — RFC 9110 §10.2.3 dual form', () => {
+  it('parses delta-seconds to milliseconds', () => {
+    expect(parseRetryAfter('30')).toBe(30_000);
+  });
+
+  it('returns undefined for null / missing header', () => {
+    expect(parseRetryAfter(null)).toBeUndefined();
+    expect(parseRetryAfter('')).toBeUndefined();
+  });
+
+  it('parses HTTP-date form (RFC 9110)', () => {
+    // Future date, ~10 seconds out. Use a value far enough in the
+    // future that test scheduling jitter won't flip the sign.
+    const tenSecondsFromNow = new Date(Date.now() + 10_000).toUTCString();
+    const result = parseRetryAfter(tenSecondsFromNow);
+    expect(result).toBeGreaterThan(8_000);
+    expect(result).toBeLessThan(11_000);
+  });
+
+  it('past HTTP-date returns undefined (negative delta → exponential backoff fallback)', () => {
+    const yesterday = new Date(Date.now() - 86_400_000).toUTCString();
+    expect(parseRetryAfter(yesterday)).toBeUndefined();
+  });
+
+  it('garbage header returns undefined', () => {
+    expect(parseRetryAfter('not-a-date-not-a-number')).toBeUndefined();
+  });
+
+  it('negative seconds returns undefined', () => {
+    expect(parseRetryAfter('-30')).toBeUndefined();
   });
 });

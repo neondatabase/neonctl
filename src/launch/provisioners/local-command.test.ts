@@ -123,6 +123,53 @@ describe('startLocalCommand — kill', () => {
     await expect(handle.kill()).resolves.toBeUndefined();
   });
 
+  it('detached/prefixed: kill() escalates to SIGKILL after timeout when child traps SIGTERM', async () => {
+    // Prefixed mode → detached → process.kill(-pid, sig) does NOT touch
+    // child.killed. Tests the detached escalation path.
+    const handle = startLocalCommand({
+      resourceFqn: 'sigterm-trap-detached',
+      spec: {
+        command: `node -e "process.on('SIGTERM', () => {}); console.log('trapped'); setTimeout(() => {}, 60_000);"`,
+        readiness: { logMatch: /trapped/ },
+      },
+      resolvedEnv: {},
+      stdioMode: 'prefixed',
+    });
+    await handle.ready;
+    await handle.kill();
+    const result = await handle.exited;
+    expect(result.signal === 'SIGKILL' || result.code === 137).toBe(true);
+  }, 10_000);
+
+  it('inherit/non-detached: kill() escalates to SIGKILL when child traps SIGTERM', async () => {
+    // Inherit mode → non-detached → child.kill('SIGTERM') sets
+    // child.killed = true IMMEDIATELY on dispatch (Node spec). A
+    // SIGKILL-escalation check that reads `!child.killed` is dead code
+    // in this path. Without the fix, this test hangs until vitest's
+    // timeout. With it, SIGKILL fires after 5s.
+    //
+    // No readiness probe — inherit mode doesn't capture stdout so
+    // logMatch can't fire. We sleep briefly to let the child spawn,
+    // then kill.
+    const handle = startLocalCommand({
+      resourceFqn: 'sigterm-trap-inherit',
+      spec: {
+        command: `node -e "process.on('SIGTERM', () => {}); setTimeout(() => {}, 60_000);"`,
+        // No readiness — ready resolves immediately.
+      },
+      resolvedEnv: {},
+      stdioMode: 'inherit',
+    });
+    await handle.ready;
+    // Give the child ~200ms to actually spawn + install the SIGTERM trap
+    // before we kill — otherwise the SIGTERM arrives before the trap
+    // handler is registered and the default disposition kills the child.
+    await new Promise((r) => setTimeout(r, 200));
+    await handle.kill();
+    const result = await handle.exited;
+    expect(result.signal === 'SIGKILL' || result.code === 137).toBe(true);
+  }, 10_000);
+
   it('kill() on a still-running child SIGTERMs it; `exited` resolves shortly after', async () => {
     // A long-running child that responds to SIGTERM with the default
     // exit. We can't use logMatch readiness here because we want to

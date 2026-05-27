@@ -17,6 +17,7 @@ import {
   buildLaunchContext,
   readNeonLaunchEnv,
   resolveGitBranch,
+  resolveStateValue,
   writeNeonLaunchEnv,
 } from './context.js';
 
@@ -182,5 +183,61 @@ describe('writeNeonLaunchEnv concurrency', () => {
   it('readNeonLaunchEnv returns {} when the file is absent', () => {
     const dir = mkdtempSync(join(tmpdir(), 'neon-launch-env-absent-'));
     expect(readNeonLaunchEnv(dir)).toEqual({});
+  });
+});
+
+describe('resolveStateValue precedence chain', () => {
+  // Documented: process.env > .neon-launch.env > .neon middleware context.
+  // Empty strings in higher tiers fall through to the next tier (this
+  // matters for CI where missing env vars sometimes arrive as empty
+  // strings via templating).
+  it('process.env wins over .neon-launch.env', () => {
+    expect(
+      resolveStateValue(
+        'NEON_PROJECT_ID',
+        { NEON_PROJECT_ID: 'from-env' },
+        { NEON_PROJECT_ID: 'from-launch-env' },
+        { NEON_PROJECT_ID: 'from-neon-ctx' },
+      ),
+    ).toBe('from-env');
+  });
+
+  it('.neon-launch.env wins over .neon context when process.env is absent', () => {
+    expect(
+      resolveStateValue(
+        'NEON_PROJECT_ID',
+        {},
+        { NEON_PROJECT_ID: 'from-launch-env' },
+        { NEON_PROJECT_ID: 'from-neon-ctx' },
+      ),
+    ).toBe('from-launch-env');
+  });
+
+  it('falls through to .neon context when both above are absent', () => {
+    expect(
+      resolveStateValue(
+        'NEON_PROJECT_ID',
+        {},
+        {},
+        { NEON_PROJECT_ID: 'from-neon-ctx' },
+      ),
+    ).toBe('from-neon-ctx');
+  });
+
+  it('empty string in process.env falls through (NOT treated as set)', () => {
+    // CI templating sometimes injects `--project-id=$EMPTY_VAR` → empty.
+    // The fallback should still pick up the lower tier.
+    expect(
+      resolveStateValue(
+        'NEON_PROJECT_ID',
+        { NEON_PROJECT_ID: '' },
+        { NEON_PROJECT_ID: 'from-launch-env' },
+        {},
+      ),
+    ).toBe('from-launch-env');
+  });
+
+  it('all tiers empty/absent → undefined', () => {
+    expect(resolveStateValue('NEON_PROJECT_ID', {}, {}, {})).toBeUndefined();
   });
 });

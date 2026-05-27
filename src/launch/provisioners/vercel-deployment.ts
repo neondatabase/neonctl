@@ -81,7 +81,7 @@ const VERCEL_BASE_DELAY_MS = 500;
  * a naive `Number(header)` silently misses the date form. Returns the
  * delay in milliseconds, or undefined if absent / unparseable / negative.
  */
-function parseRetryAfter(header: string | null): number | undefined {
+export function parseRetryAfter(header: string | null): number | undefined {
   if (!header) return undefined;
   const asSeconds = Number(header);
   if (Number.isFinite(asSeconds) && asSeconds > 0) return asSeconds * 1_000;
@@ -335,9 +335,10 @@ export async function createDeployment(opts: {
   //     domain. 'ready' fires earlier but `payload.url` is still the
   //     per-deploy host at that point; aliases haven't been wired yet.
   //   - Hard failures: 'error', 'canceled', 'checks-v2-failed'.
-  //     These are the events `@vercel/client` itself uses `return yield`
-  //     for in check-deployment-status.js — i.e. they actually terminate
-  //     the upstream iterator.
+  //     We treat these as terminal at the launcher layer. (Upstream
+  //     `check-deployment-status.js` uses `return yield` only for
+  //     `error` and `checks-v2-failed`; `canceled` keeps yielding but
+  //     we don't want to keep waiting on a canceled deploy.)
   //   - Soft failures (log-and-continue): 'checks-conclusion-failed' /
   //     'checks-conclusion-canceled'. These fire even for non-blocking
   //     checks; the upstream SDK yields them without returning, and
@@ -346,13 +347,12 @@ export async function createDeployment(opts: {
   //     would fail deployments Vercel itself promotes.
   //
   // Outer timeout via setTimeout flag: if the underlying stream goes
-  // silent (Vercel edge partial outage holding the connection open
-  // without emitting events), the `for await` blocks indefinitely on
-  // the iterator's `next()` promise. We flip a flag from the timer and
-  // call `iterator.return?.()` to break out cleanly — that lets the
-  // `for await` exit normally (its internal `.return()` path runs), so
-  // the underlying HTTP connection + SDK state are released instead of
-  // leaking across library-mode re-invocations.
+  // silent (Vercel edge partial outage), we'd otherwise block on the
+  // iterator's `next()` indefinitely. The timer flips a flag and
+  // signals `iterator.return?.()` so the for-await exits at the next
+  // yield point. Note: `.return()` only takes effect at the next yield,
+  // so an in-flight `await fetch` inside the SDK adds up to one poll
+  // tick (~5-15s) to the timeout — fine for the 15-min budget.
   const DEPLOY_TIMEOUT_MS = 15 * 60 * 1_000;
   const iterator = vercelCreateDeployment(
     clientOpts as Parameters<typeof vercelCreateDeployment>[0],
@@ -456,6 +456,7 @@ function extractEventMessage(eventType: string, payload: unknown): string {
     const p = payload as {
       message?: unknown;
       errorMessage?: unknown;
+      errorCode?: unknown;
       error?: { message?: unknown };
       checks?: { 'deployment-alias'?: { errorMessage?: unknown } };
     };
@@ -464,6 +465,11 @@ function extractEventMessage(eventType: string, payload: unknown): string {
     if (typeof p.error?.message === 'string') return p.error.message;
     const checkMsg = p.checks?.['deployment-alias']?.errorMessage;
     if (typeof checkMsg === 'string') return checkMsg;
+    // BUILD_FAILED error events carry the full deployment object whose
+    // only diagnostic is `errorCode` (e.g. "BUILD_FAILED"); without
+    // this fallback the user sees "no detail provided by Vercel" for
+    // the most common Vercel deploy failure mode.
+    if (typeof p.errorCode === 'string') return p.errorCode;
   }
   // Fixed fallback per event type — never the raw payload.
   if (eventType === 'canceled') return 'deployment was canceled';

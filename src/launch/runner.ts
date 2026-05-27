@@ -522,6 +522,19 @@ async function provisionStages(args: StagesArgs): Promise<void> {
     neonLaunchEnv,
   } = args;
   for (const [idx, stage] of stages.entries()) {
+    // SIGINT/SIGTERM may have fired between stages. The handler kills
+    // any already-spawned local-commands and schedules process.exit
+    // after the analytics flush, but it can't reach into this loop —
+    // without this guard we'd spawn the next stage's local-commands
+    // (including DB migrations) during the 1.5s flush window. Throw
+    // a sentinel so the surrounding allSettled drains cleanly and
+    // the user-visible exit comes from the signal handler.
+    if (runtime.shuttingDown.value) {
+      throw new LaunchError(
+        '[neon launch] shutdown signal received before stage start — aborting before any further work.',
+        ExitCode.SIGINT,
+      );
+    }
     log.info(
       `[launch] stage ${idx + 1}/${stages.length}: ${stage.map((n) => n.name).join(', ')}`,
     );
@@ -746,16 +759,37 @@ async function provisionLocalCommandNode(args: {
     if (idx >= 0) args.liveLocalCommands.splice(idx, 1);
     throw err;
   }
+  // Detect a one-shot vs a still-running dependent.
+  //
+  // `onExit:N` readiness IS the exit signal — when ready resolves the
+  // child is gone by construction. Drop the handle so the
+  // foreground-phase doesn't try to SIGTERM a dead pid.
+  //
+  // For OTHER readiness modes (portListening / httpGet / logMatch) an
+  // already-exited child after ready resolves means the child died
+  // BETWEEN the readiness probe firing and us reaching this line — a
+  // post-readiness crash that should fail the whole launch, not be
+  // silently swallowed by treating the dead child as "ready and one-
+  // shot." Throw with the exit info so the runner's per-task catch in
+  // provisionStages can tear down siblings.
+  const isOnExitReadiness =
+    spec.readiness !== undefined &&
+    typeof spec.readiness === 'object' &&
+    spec.readiness !== null &&
+    'onExit' in spec.readiness;
+  if (handle.child.exitCode !== null || handle.child.signalCode !== null) {
+    const idx = args.liveLocalCommands.indexOf(handle);
+    if (idx >= 0) args.liveLocalCommands.splice(idx, 1);
+    if (!isOnExitReadiness) {
+      throw new Error(
+        `[neon launch] local-command '${args.node.name}' exited (code ${handle.child.exitCode}, signal ${handle.child.signalCode}) immediately after readiness fired — dependents would race a dead resource. Treating as a crash.`,
+      );
+    }
+  }
   args.runtime.outputs.set(args.node.resource.__id, {
     kind: 'static',
     values: {},
   });
-  // If the command was a one-shot that already exited, drop it from the
-  // foreground-phase list so we don't try to SIGTERM a dead pid.
-  if (handle.child.exitCode !== null || handle.child.killed) {
-    const idx = args.liveLocalCommands.indexOf(handle);
-    if (idx >= 0) args.liveLocalCommands.splice(idx, 1);
-  }
 }
 
 // =============================================================================
@@ -811,10 +845,14 @@ async function foregroundPhase(
       `[launch] a local-command exited with code ${firstExit.code ?? 'null'} — stopping siblings.`,
     );
     for (const h of handles) void h.kill();
-    await Promise.all(handles.map((h) => h.exited));
+    // allSettled so a sibling's rejection (spawn-layer failures emit
+    // `error` and reject `exited`) doesn't bubble out and skip the
+    // analytics flush — we want the crash event delivered before exit.
+    await Promise.allSettled(handles.map((h) => h.exited));
     await closeAnalytics();
     process.exit(ExitCode.RESOURCE_FAILED);
   }
-  // Successful exit; wait for siblings too.
-  await Promise.all(handles.map((h) => h.exited));
+  // Successful exit; wait for siblings too — allSettled for the same
+  // reason as the crash path.
+  await Promise.allSettled(handles.map((h) => h.exited));
 }

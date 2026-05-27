@@ -87,7 +87,11 @@ export default stack({
         // unmigrated schema on first request.
         dependsOn: { db, migrate },
         spec: ({ db }) => ({
-          project: 'neon-launch-vercel-demo',
+          // CHANGE-ME: replace with a Vercel project name (or id) you
+          // own. Lookup hits /v9/projects/<this> on the first run; if
+          // the project doesn't exist you'll see a 404 from Vercel
+          // pointing at this line.
+          project: 'CHANGE-ME-IN-NEON-TS',
           production: prod,
           env: {
             DATABASE_URL: db.connectionString({ pooled: true }),

@@ -3,12 +3,13 @@
 Reference config for `neon launch` against a Next.js + Drizzle + Vercel + Neon Postgres stack.
 
 > **From-source until release.** This example imports `neonctl/config`, a
-> subpath export added in the PR that introduces `neon launch`. Until that
-> PR is released to npm, `npm install neonctl` will not expose
-> `neonctl/config` and the example won't resolve. Follow the "Try it from
-> source" section of the PR (#487) to build neonctl locally; once a
-> released version ships, this section will be replaced with a pinned
-> npm install.
+> subpath export added in the PR that introduces `neon launch`. The
+> example's `package.json` resolves `neonctl` to `file:../..` so that
+> `npm install` picks up the local source build (you must
+> `bun install && bun run build` in the neonctl repo root first). Once a
+> released version with `./config` exposed ships to npm, the `file:`
+> reference will be replaced with a pinned `^X.Y.Z` and a top-level
+> `npm install neonctl` will work.
 
 The interesting file is [`neon.ts`](./neon.ts). It declares three resources:
 
@@ -33,7 +34,8 @@ The deploy URLs returned are the deployment's own immutable `<id>.vercel.app` ho
 Prerequisites:
 
 1. **Node 22+** (`node --version`). `neon launch` uses `jiti`'s native TS support, which requires Node 22.
-2. **A Next.js + Drizzle app in this directory.** This example is config-only; the migrations and dev server come from your own app. The fastest way to get one:
+2. **A git repo or an explicit `--branch` flag.** The example reads `ctx.gitBranch` to name the per-PR Neon branch. If you copy this example outside a git tree, either run `git init && git checkout -b dev` first, or always pass `--branch <name>`.
+3. **A Next.js + Drizzle app in this directory.** This example is config-only; the migrations and dev server come from your own app. The fastest way to get one:
 
    ```bash
    cd examples/neon-launch-vercel
@@ -52,11 +54,13 @@ Prerequisites:
 
    …and the minimal `drizzle.config.ts` / `schema.ts` from the [Drizzle quickstart](https://orm.drizzle.team/docs/get-started-postgresql). The migration step can be any one-shot that exits 0 — `psql -f schema.sql`, a custom `node` script, anything; we use Drizzle here because it's the most common choice.
 
-3. **A Vercel project** (only for `--preview` / `--prod`). Create one at <https://vercel.com/new> (any name works). Then either edit `spec.project` in `neon.ts` to match the name, or `export VERCEL_PROJECT_ID=...` to bypass the name lookup.
+4. **A Vercel project** (only for `--preview` / `--prod`). Create one at <https://vercel.com/new>, then edit `spec.project` in `neon.ts` (currently `'CHANGE-ME-IN-NEON-TS'`) to match its name — or `export VERCEL_PROJECT_ID=...` to bypass the name lookup.
 
 Then:
 
 ```bash
+npm install                    # picks up neonctl from `file:../..` (local source build)
+
 export NEON_API_KEY=...        # https://console.neon.tech/app/settings/api-keys
 export NEON_PROJECT_ID=...     # from your Neon project settings
 export VERCEL_TOKEN=...        # only for --preview / --prod

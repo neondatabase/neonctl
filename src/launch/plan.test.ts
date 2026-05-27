@@ -281,7 +281,11 @@ describe('plan invariants', () => {
     const { buildPlan } = await import('./plan.js');
     await expectPlanError(
       buildPlan(tmpPath, ctx),
-      /Cycle detected.*a.*b|Cycle detected.*b.*a/s,
+      // Tightened: the involved-resources line names exactly `a` and `b`
+      // (in either order) with nothing else. The old `/Cycle detected.*a.*b/s`
+      // form accepted any output that mentioned a + b anywhere, masking
+      // a regression that included healthy resources in the list.
+      /Cycle detected[\s\S]*?Involved resources: (?:a, b|b, a)\./,
     );
   });
 

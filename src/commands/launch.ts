@@ -50,7 +50,7 @@ const RECOGNIZED_FLAGS = new Set([
 
 export const command = 'launch';
 export const describe =
-  'Provision a Neon + Vercel + local-command stack from a neon.ts file (requires Node 22+; see examples/neon-launch-vercel)';
+  'Provision a Neon + Vercel + local-command stack from a neon.ts file (requires Node 22+)';
 
 export const builder = (argv: yargs.Argv) =>
   argv
