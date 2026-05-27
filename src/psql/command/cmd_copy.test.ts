@@ -150,6 +150,93 @@ describe('parseSlashCopy', () => {
     if (!r.ok) return;
     expect(r.value.beforeToFrom.toLowerCase()).toContain('binary');
   });
+
+  // -------------------------------------------------------------------------
+  // Advanced syntax variants — close upstream regress gaps.
+  // -------------------------------------------------------------------------
+
+  test('subquery TO STDOUT WITH CSV HEADER (variant 1)', () => {
+    // `\copy (SELECT ...) TO STDOUT WITH CSV HEADER` is the canonical
+    // form for piping a query result into the user's terminal as CSV.
+    const r = parseSlashCopy(
+      '(SELECT 1 as a, 2 as b) TO STDOUT WITH CSV HEADER',
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.direction).toBe('to');
+    expect(r.value.beforeToFrom.replace(/\s+/g, ' ').trim()).toBe(
+      '( SELECT 1 as a, 2 as b )',
+    );
+    expect(r.value.file).toBeNull();
+    expect(r.value.afterToFrom).toBe('WITH CSV HEADER');
+  });
+
+  test("TO PROGRAM 'cat' (variant 2)", () => {
+    // The destination form: COPY data flows from the server through psql
+    // to a child shell command. Mirror of the `FROM PROGRAM` lexing path.
+    const r = parseSlashCopy("psql_pipeline TO PROGRAM 'cat'");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.direction).toBe('to');
+    expect(r.value.program).toBe(true);
+    expect(r.value.file).toBe('cat');
+    expect(r.value.beforeToFrom).toBe('psql_pipeline');
+  });
+
+  test("WITH (FORMAT csv, DELIMITER '|', HEADER true) parenthesised options (variant 3)", () => {
+    // Modern WITH-options syntax (PG 9.0+). The options blob is shovelled
+    // through verbatim so the server parses it.
+    const r = parseSlashCopy(
+      "psql_pipeline TO STDOUT WITH (FORMAT csv, DELIMITER '|', HEADER true)",
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.afterToFrom).toBe(
+      "WITH (FORMAT csv, DELIMITER '|', HEADER true)",
+    );
+    expect(r.value.file).toBeNull();
+  });
+
+  test('column list + FROM file + parenthesised WITH (variant 4)', () => {
+    const r = parseSlashCopy(
+      "mytable (col1, col2) FROM 'data.csv' WITH (FORMAT csv)",
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.beforeToFrom.replace(/\s+/g, ' ').trim()).toBe(
+      'mytable ( col1, col2 )',
+    );
+    expect(r.value.file).toBe('data.csv');
+    expect(r.value.afterToFrom).toBe('WITH (FORMAT csv)');
+    expect(r.value.direction).toBe('from');
+  });
+
+  test("TO STDOUT DELIMITER E'\\t' (variant 5: escape-string delimiter)", () => {
+    // The `E'…'` escape-string form is unwrapped by the server, not by
+    // us — the parser must just preserve the raw bytes in the options
+    // blob so the server's WITH-DELIMITER grammar sees `E'\t'` verbatim.
+    const r = parseSlashCopy("foo TO STDOUT DELIMITER E'\\t'");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.afterToFrom).toBe("DELIMITER E'\\t'");
+    expect(r.value.file).toBeNull();
+  });
+
+  test('CSV DEFAULT option (variant 6, PG 17+ server feature)', () => {
+    // PG 17 added the `DEFAULT '<placeholder>'` option to CSV COPY for
+    // folding sentinel cells back to column defaults. Client side we
+    // only need to forward the blob — the server validates and applies.
+    const r = parseSlashCopy(
+      "copy_default from 'd.csv' with (format 'csv', default 'placeholder')",
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.file).toBe('d.csv');
+    expect(r.value.afterToFrom).toBe(
+      "with (format 'csv', default 'placeholder')",
+    );
+    expect(r.value.direction).toBe('from');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -179,6 +266,80 @@ describe('buildCopySql', () => {
       direction: 'to',
     });
     expect(sql).toBe('COPY t TO STDOUT WITH csv');
+  });
+
+  // -------------------------------------------------------------------------
+  // SQL emitted for each advanced syntax variant. We assert the exact text
+  // the server sees so a future refactor of the option-blob lexer can't
+  // silently change wire bytes.
+  // -------------------------------------------------------------------------
+
+  test('subquery TO STDOUT WITH CSV HEADER (variant 1)', () => {
+    const sql = buildCopySql({
+      beforeToFrom: '( SELECT 1 as a, 2 as b )',
+      afterToFrom: 'WITH CSV HEADER',
+      file: null,
+      program: false,
+      psqlInOut: false,
+      direction: 'to',
+    });
+    expect(sql).toBe(
+      'COPY ( SELECT 1 as a, 2 as b ) TO STDOUT WITH CSV HEADER',
+    );
+  });
+
+  test('parenthesised options TO STDOUT (variant 3)', () => {
+    const sql = buildCopySql({
+      beforeToFrom: 't',
+      afterToFrom: "WITH (FORMAT csv, DELIMITER '|', HEADER true)",
+      file: null,
+      program: false,
+      psqlInOut: false,
+      direction: 'to',
+    });
+    expect(sql).toBe(
+      "COPY t TO STDOUT WITH (FORMAT csv, DELIMITER '|', HEADER true)",
+    );
+  });
+
+  test('column list + parenthesised WITH FROM STDIN (variant 4)', () => {
+    const sql = buildCopySql({
+      beforeToFrom: 'mytable ( col1, col2 )',
+      afterToFrom: 'WITH (FORMAT csv)',
+      file: '/tmp/data.csv',
+      program: false,
+      psqlInOut: false,
+      direction: 'from',
+    });
+    expect(sql).toBe(
+      'COPY mytable ( col1, col2 ) FROM STDIN WITH (FORMAT csv)',
+    );
+  });
+
+  test("DELIMITER E'\\t' (variant 5) survives unchanged", () => {
+    const sql = buildCopySql({
+      beforeToFrom: 'foo',
+      afterToFrom: "DELIMITER E'\\t'",
+      file: null,
+      program: false,
+      psqlInOut: false,
+      direction: 'to',
+    });
+    expect(sql).toBe("COPY foo TO STDOUT DELIMITER E'\\t'");
+  });
+
+  test('CSV DEFAULT option preserved verbatim (variant 6)', () => {
+    const sql = buildCopySql({
+      beforeToFrom: 'copy_default',
+      afterToFrom: "with (format 'csv', default 'placeholder')",
+      file: '/tmp/d.csv',
+      program: false,
+      psqlInOut: false,
+      direction: 'from',
+    });
+    expect(sql).toBe(
+      "COPY copy_default FROM STDIN with (format 'csv', default 'placeholder')",
+    );
   });
 });
 
