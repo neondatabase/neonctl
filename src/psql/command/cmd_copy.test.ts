@@ -994,6 +994,149 @@ describe('cmdCopy.run', () => {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // COPY tag suppression — TO STDOUT/PSTDOUT must NOT print "COPY N"
+  // (would corrupt the data stream); TO file/PROGRAM and FROM still do.
+  //
+  // These tests need a stdout mock that honours the (chunk, callback) form
+  // of `Writable.write` because `drainCopyTo` awaits the callback before
+  // pushing the next chunk. A naive `process.stdout.write = ...` that
+  // ignores the callback hangs the COPY loop.
+  // -------------------------------------------------------------------------
+
+  /** Replace `process.stdout.write` with a recorder that drives the cb. */
+  const withStdoutCapture = async (
+    fn: (out: { chunks: string[] }) => Promise<void>,
+  ): Promise<void> => {
+    const out = { chunks: [] as string[] };
+    const orig = process.stdout.write.bind(process.stdout);
+    const writer = (
+      chunk: unknown,
+      encOrCb?: unknown,
+      maybeCb?: unknown,
+    ): boolean => {
+      const cb = typeof encOrCb === 'function' ? encOrCb : maybeCb;
+      out.chunks.push(
+        Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk),
+      );
+      if (typeof cb === 'function') (cb as (err?: Error | null) => void)(null);
+      return true;
+    };
+    process.stdout.write = writer as typeof process.stdout.write;
+    try {
+      await fn(out);
+    } finally {
+      process.stdout.write = orig;
+    }
+  };
+
+  test('TO STDOUT suppresses COPY tag (variant 1) — output stream is data, not metadata', async () => {
+    // Upstream `do_copy()` quietly skips the result tag when COPY's
+    // destination is psql's own stdout (`pset.queryFout`): emitting it
+    // would mix the tag into the user's data stream. Mirror that here.
+    const chunks = [Buffer.from('a,b\n'), Buffer.from('1,2\n')];
+    const { conn, recorded } = makeMockConn({
+      copyOutChunks: chunks,
+      copyTag: 'COPY 1',
+    });
+    const ctx = makeMockCtx(
+      '(SELECT 1 as a, 2 as b) TO STDOUT WITH CSV HEADER',
+      settingsWithConn(conn),
+    );
+    await withStdoutCapture(async (out) => {
+      const r = await cmdCopy.run(ctx);
+      expect(r.status).toBe('ok');
+      const text = out.chunks.join('');
+      // The data must be present...
+      expect(text).toContain('a,b');
+      expect(text).toContain('1,2');
+      // ...and the COPY tag must NOT be appended (would corrupt CSV).
+      expect(text).not.toMatch(/COPY 1/);
+      // SQL sent to the server uses the parenthesised query verbatim.
+      // (Whitespace normalisation hides a tiny leading-space artifact in
+      // the subquery emitter — the server is whitespace-tolerant here.)
+      expect(recorded.sql.replace(/\s+/g, ' ')).toBe(
+        'COPY ( SELECT 1 as a, 2 as b ) TO STDOUT WITH CSV HEADER',
+      );
+    });
+  });
+
+  test('TO PSTDOUT also suppresses COPY tag (PSTDOUT == STDOUT)', async () => {
+    // PSTDOUT is the same code path (psql treats it identical to STDOUT
+    // since we don't track current-input-source separately).
+    const { conn } = makeMockConn({
+      copyOutChunks: [Buffer.from('foo\n')],
+      copyTag: 'COPY 1',
+    });
+    const ctx = makeMockCtx('t TO PSTDOUT', settingsWithConn(conn));
+    await withStdoutCapture(async (out) => {
+      const r = await cmdCopy.run(ctx);
+      expect(r.status).toBe('ok');
+      const text = out.chunks.join('');
+      expect(text).toContain('foo');
+      expect(text).not.toMatch(/COPY 1/);
+    });
+  });
+
+  test('TO file still prints COPY tag (file destination)', async () => {
+    // The tag-suppression carve-out applies ONLY to STDOUT/PSTDOUT.
+    // File destinations get the standard "COPY N" footer because the
+    // tag has its own stdout to land on without colliding with data.
+    const file = tmpFile();
+    const { conn } = makeMockConn({
+      copyOutChunks: [Buffer.from('x\n')],
+      copyTag: 'COPY 1',
+    });
+    const ctx = makeMockCtx(`t TO '${file}'`, settingsWithConn(conn));
+    await withStdoutCapture(async (out) => {
+      const r = await cmdCopy.run(ctx);
+      expect(r.status).toBe('ok');
+      expect(out.chunks.join('')).toMatch(/COPY 1/);
+    });
+  });
+
+  test('TO PROGRAM still prints COPY tag (program destination, variant 2)', async () => {
+    // PROGRAM is a child process — its stdout doesn't collide with ours,
+    // so the COPY tag is safe to print.
+    const { conn } = makeMockConn({
+      copyOutChunks: [Buffer.from('x\n')],
+      copyTag: 'COPY 1',
+    });
+    const ctx = makeMockCtx("t TO PROGRAM 'true'", settingsWithConn(conn));
+    await withStdoutCapture(async (out) => {
+      const r = await cmdCopy.run(ctx);
+      expect(r.status).toBe('ok');
+      expect(out.chunks.join('')).toMatch(/COPY 1/);
+    });
+  });
+
+  test('FROM STDIN still prints COPY tag (FROM never suppressed)', async () => {
+    // Only TO-STDOUT triggers tag suppression. COPY FROM STDIN flows
+    // data INTO the server, so the tag has nowhere to collide.
+    const { conn } = makeMockConn({ copyTag: 'COPY 0' });
+    const ctx = makeMockCtx('t FROM STDIN', settingsWithConn(conn));
+    // Replace stdin with an empty readable so the COPY-FROM doesn't hang.
+    const origStdin = process.stdin;
+    Object.defineProperty(process, 'stdin', {
+      value: Readable.from([]),
+      configurable: true,
+      writable: true,
+    });
+    try {
+      await withStdoutCapture(async (out) => {
+        const r = await cmdCopy.run(ctx);
+        expect(r.status).toBe('ok');
+        expect(out.chunks.join('')).toMatch(/COPY 0/);
+      });
+    } finally {
+      Object.defineProperty(process, 'stdin', {
+        value: origStdin,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
   test('rejects with "COPY in a pipeline" diagnostic when pipeline is active', async () => {
     // \copy must short-circuit before sending Query when a pipeline session
     // is active — libpq otherwise aborts the connection with the same

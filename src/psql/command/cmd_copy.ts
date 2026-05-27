@@ -1009,13 +1009,27 @@ export const cmdCopy: BackslashCmdSpec = {
     // Print the upstream-style command tag (e.g. "COPY 17") so users see the
     // same summary as `psql`. If the connection didn't surface a tag, just
     // print `COPY` — the operation still succeeded.
-    const rows = parseCopyTagRows(result.tag);
-    if (result.tag !== null && rows !== null) {
-      writeOut(`COPY ${String(rows)}\n`);
-    } else if (result.tag !== null) {
-      writeOut(`${result.tag}\n`);
-    } else {
-      writeOut('COPY\n');
+    //
+    // BUT: when the COPY destination is psql's own stdout (i.e. `\copy ...
+    // TO STDOUT` / `TO PSTDOUT`), emitting the tag would mix it into the
+    // user's data stream. Upstream `do_copy()` suppresses the tag in this
+    // case — `pset.queryFout` is shared between the data stream and the tag
+    // print path, so the tag has nowhere to land. Mirror that here: only
+    // print when the destination is a file, a program, or when the COPY is
+    // a FROM (where the data flowed *into* the server, not out to stdout).
+    const suppressTag =
+      parsed.value.direction === 'to' &&
+      parsed.value.file === null &&
+      !parsed.value.program;
+    if (!suppressTag) {
+      const rows = parseCopyTagRows(result.tag);
+      if (result.tag !== null && rows !== null) {
+        writeOut(`COPY ${String(rows)}\n`);
+      } else if (result.tag !== null) {
+        writeOut(`${result.tag}\n`);
+      } else {
+        writeOut('COPY\n');
+      }
     }
     return { status: 'ok' };
   },
