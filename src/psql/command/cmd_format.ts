@@ -238,17 +238,23 @@ export const cmdEncoding: BackslashCmdSpec = {
  * Returns `{ status: 'error' }` and writes an error if the value is
  * unrecognised; `{ status: 'ok' }` otherwise.
  */
-const applyPset = (
+export const applyPset = (
   topt: PrintTableOpts,
   option: string,
   value: string | null,
   cmdName: string,
+  // When `silent` is true, suppress the "X is now Y." status lines that
+  // `\pset` emits on a successful set. Errors (invalid option / bad
+  // value) still go to stderr. Used by `\g (option=value ...)` —
+  // upstream applies the temporary overrides silently.
+  silent = false,
 ): BackslashResult => {
+  const writeOutMaybe = silent ? () => undefined : writeOut;
   const opt = option.toLowerCase();
   switch (opt) {
     case 'format': {
       if (value === null) {
-        writeOut(`Output format is ${formatName(topt.format)}.\n`);
+        writeOutMaybe(`Output format is ${formatName(topt.format)}.\n`);
         return { status: 'ok' };
       }
       const v = value.toLowerCase();
@@ -260,12 +266,12 @@ const applyPset = (
         return { status: 'error' };
       }
       topt.format = match;
-      writeOut(`Output format is ${formatName(match)}.\n`);
+      writeOutMaybe(`Output format is ${formatName(match)}.\n`);
       return { status: 'ok' };
     }
     case 'border': {
       if (value === null) {
-        writeOut(`Border style is ${topt.border}.\n`);
+        writeOutMaybe(`Border style is ${topt.border}.\n`);
         return { status: 'ok' };
       }
       const n = parseInt(value, 10);
@@ -274,7 +280,7 @@ const applyPset = (
         return { status: 'error' };
       }
       topt.border = n as BorderStyle;
-      writeOut(`Border style is ${topt.border}.\n`);
+      writeOutMaybe(`Border style is ${topt.border}.\n`);
       return { status: 'ok' };
     }
     case 'expanded':
@@ -292,35 +298,35 @@ const applyPset = (
         topt.expanded =
           p === 'toggle' ? (topt.expanded === 'on' ? 'off' : 'on') : p;
       }
-      writeOut(`Expanded display is ${tripleLabel(topt.expanded)}.\n`);
+      writeOutMaybe(`Expanded display is ${tripleLabel(topt.expanded)}.\n`);
       return { status: 'ok' };
     }
     case 'fieldsep': {
       if (value === null) {
-        writeOut(`Field separator is "${topt.fieldSep}".\n`);
+        writeOutMaybe(`Field separator is "${topt.fieldSep}".\n`);
         return { status: 'ok' };
       }
       topt.fieldSep = value;
-      writeOut(`Field separator is "${topt.fieldSep}".\n`);
+      writeOutMaybe(`Field separator is "${topt.fieldSep}".\n`);
       return { status: 'ok' };
     }
     case 'fieldsep_zero': {
       topt.fieldSep = '\0';
-      writeOut('Field separator is zero byte.\n');
+      writeOutMaybe('Field separator is zero byte.\n');
       return { status: 'ok' };
     }
     case 'recordsep': {
       if (value === null) {
-        writeOut(`Record separator is "${topt.recordSep}".\n`);
+        writeOutMaybe(`Record separator is "${topt.recordSep}".\n`);
         return { status: 'ok' };
       }
       topt.recordSep = value;
-      writeOut(`Record separator is "${topt.recordSep}".\n`);
+      writeOutMaybe(`Record separator is "${topt.recordSep}".\n`);
       return { status: 'ok' };
     }
     case 'recordsep_zero': {
       topt.recordSep = '\0';
-      writeOut('Record separator is zero byte.\n');
+      writeOutMaybe('Record separator is zero byte.\n');
       return { status: 'ok' };
     }
     case 'tuples_only':
@@ -337,7 +343,7 @@ const applyPset = (
         }
         topt.tuplesOnly = b;
       }
-      writeOut(
+      writeOutMaybe(
         topt.tuplesOnly ? 'Tuples only is on.\n' : 'Tuples only is off.\n',
       );
       return { status: 'ok' };
@@ -345,9 +351,9 @@ const applyPset = (
     case 'title': {
       topt.title = value;
       if (value === null) {
-        writeOut('Title is unset.\n');
+        writeOutMaybe('Title is unset.\n');
       } else {
-        writeOut(`Title is "${value}".\n`);
+        writeOutMaybe(`Title is "${value}".\n`);
       }
       return { status: 'ok' };
     }
@@ -355,9 +361,9 @@ const applyPset = (
     case 't_a': {
       topt.tableAttr = value;
       if (value === null) {
-        writeOut('Table attributes unset.\n');
+        writeOutMaybe('Table attributes unset.\n');
       } else {
-        writeOut(`Table attributes are "${value}".\n`);
+        writeOutMaybe(`Table attributes are "${value}".\n`);
       }
       return { status: 'ok' };
     }
@@ -381,7 +387,7 @@ const applyPset = (
           topt.pager = b ? 'on' : 'off';
         }
       }
-      writeOut(
+      writeOutMaybe(
         topt.pager === 'always'
           ? 'Pager is always used.\n'
           : topt.pager === 'on'
@@ -392,7 +398,7 @@ const applyPset = (
     }
     case 'pager_min_lines': {
       if (value === null) {
-        writeOut(
+        writeOutMaybe(
           `Pager won't be used for less than ${topt.pagerMinLines} line(s).\n`,
         );
         return { status: 'ok' };
@@ -403,17 +409,17 @@ const applyPset = (
         return { status: 'error' };
       }
       topt.pagerMinLines = n;
-      writeOut(`Pager won't be used for less than ${n} line(s).\n`);
+      writeOutMaybe(`Pager won't be used for less than ${n} line(s).\n`);
       return { status: 'ok' };
     }
     case 'null': {
       topt.nullPrint = value ?? '';
-      writeOut(`Null display is "${topt.nullPrint}".\n`);
+      writeOutMaybe(`Null display is "${topt.nullPrint}".\n`);
       return { status: 'ok' };
     }
     case 'csv_fieldsep': {
       if (value === null) {
-        writeOut(`CSV field separator is "${topt.csvFieldSep}".\n`);
+        writeOutMaybe(`CSV field separator is "${topt.csvFieldSep}".\n`);
         return { status: 'ok' };
       }
       if (
@@ -428,7 +434,7 @@ const applyPset = (
         return { status: 'error' };
       }
       topt.csvFieldSep = value;
-      writeOut(`CSV field separator is "${value}".\n`);
+      writeOutMaybe(`CSV field separator is "${value}".\n`);
       return { status: 'ok' };
     }
     case 'numericlocale': {
@@ -444,7 +450,7 @@ const applyPset = (
         }
         topt.numericLocale = p === 'toggle' ? !topt.numericLocale : p === 'on';
       }
-      writeOut(
+      writeOutMaybe(
         topt.numericLocale
           ? 'Locale-adjusted numeric output is on.\n'
           : 'Locale-adjusted numeric output is off.\n',
@@ -453,7 +459,7 @@ const applyPset = (
     }
     case 'linestyle': {
       if (value === null) {
-        writeOut(`Line style is ${topt.unicodeBorderLineStyle}.\n`);
+        writeOutMaybe(`Line style is ${topt.unicodeBorderLineStyle}.\n`);
         return { status: 'ok' };
       }
       const lower = value.toLowerCase();
@@ -462,14 +468,14 @@ const applyPset = (
         topt.unicodeBorderLineStyle = ls;
         topt.unicodeColumnLineStyle = ls;
         topt.unicodeHeaderLineStyle = ls;
-        writeOut(`Line style is ${ls}.\n`);
+        writeOutMaybe(`Line style is ${ls}.\n`);
         return { status: 'ok' };
       }
       if (lower === 'old-ascii') {
         topt.unicodeBorderLineStyle = 'ascii';
         topt.unicodeColumnLineStyle = 'ascii';
         topt.unicodeHeaderLineStyle = 'ascii';
-        writeOut('Line style is old-ascii.\n');
+        writeOutMaybe('Line style is old-ascii.\n');
         return { status: 'ok' };
       }
       writeErr(
@@ -479,7 +485,7 @@ const applyPset = (
     }
     case 'columns': {
       if (value === null) {
-        writeOut(`Target width is ${topt.columns}.\n`);
+        writeOutMaybe(`Target width is ${topt.columns}.\n`);
         return { status: 'ok' };
       }
       const n = parseInt(value, 10);
@@ -488,13 +494,13 @@ const applyPset = (
         return { status: 'error' };
       }
       topt.columns = n;
-      writeOut(`Target width is ${n}.\n`);
+      writeOutMaybe(`Target width is ${n}.\n`);
       return { status: 'ok' };
     }
     case 'xheader_width': {
       // We store as-is for now; the printer in WP-09 owns the semantics
       // ("full", "column", "page", or a positive integer).
-      writeOut(`Expanded header width is ${value ?? 'full'}.\n`);
+      writeOutMaybe(`Expanded header width is ${value ?? 'full'}.\n`);
       return { status: 'ok' };
     }
     case 'unicode_border_linestyle':
@@ -507,7 +513,7 @@ const applyPset = (
             : opt === 'unicode_column_linestyle'
               ? topt.unicodeColumnLineStyle
               : topt.unicodeHeaderLineStyle;
-        writeOut(
+        writeOutMaybe(
           `Unicode ${opt.replace('unicode_', '').replace('_linestyle', '')} linestyle is "${current}".\n`,
         );
         return { status: 'ok' };
@@ -529,7 +535,7 @@ const applyPset = (
       } else {
         topt.unicodeHeaderLineStyle = 'unicode';
       }
-      writeOut(
+      writeOutMaybe(
         `Unicode ${opt.replace('unicode_', '').replace('_linestyle', '')} linestyle is "${lower}".\n`,
       );
       return { status: 'ok' };

@@ -103,6 +103,7 @@ import { unalignedPrinter } from '../print/unaligned.js';
 import { writeErr } from './shared.js';
 import { enqueue as enqueueInput } from './inputQueue.js';
 import { formatErrorReport, psqlErrorPrefix } from './cmd_meta.js';
+import { applyPset } from './cmd_format.js';
 import { captureLastError } from '../core/common.js';
 
 // ---------------------------------------------------------------------------
@@ -470,12 +471,95 @@ export const cmdWrite: BackslashCmdSpec = {
 // \g, \gx — execute the query buffer with optional one-shot redirect.
 // ---------------------------------------------------------------------------
 
+/**
+ * Parse the body of a `\g (option=value option2=value2 ...)` clause —
+ * the text between the outer parentheses, already stripped. Options
+ * are separated by whitespace; values may be single-quoted to embed
+ * spaces. Unquoted values run to the next whitespace.
+ *
+ * Mirrors upstream's `parse_slash_pgopts_list`. We deliberately stay
+ * narrow — the conformance corpus exercises `format=`, `csv_fieldsep=`,
+ * and `title=` only.
+ */
+const parseGPsetOptions = (
+  body: string,
+): { option: string; value: string }[] => {
+  const out: { option: string; value: string }[] = [];
+  let i = 0;
+  while (i < body.length) {
+    // Skip whitespace between pairs.
+    while (i < body.length && /\s/.test(body[i])) i++;
+    if (i >= body.length) break;
+    // Read option name up to `=`.
+    const optStart = i;
+    while (i < body.length && body[i] !== '=' && !/\s/.test(body[i])) i++;
+    const option = body.slice(optStart, i);
+    if (option.length === 0) break;
+    let value = '';
+    if (body[i] === '=') {
+      i++; // skip '='
+      // Value: single-quoted or unquoted.
+      if (body[i] === "'") {
+        i++;
+        while (i < body.length && body[i] !== "'") {
+          // Single-quoted strings support `''` doubling and a few
+          // C-style escapes (\n, \t, \\, \'). Mirror enough of the
+          // upstream `xslashquote` handling to round-trip the regress
+          // corpus.
+          if (body[i] === '\\' && i + 1 < body.length) {
+            const next = body[i + 1];
+            if (next === 'n') value += '\n';
+            else if (next === 't') value += '\t';
+            else if (next === 'r') value += '\r';
+            else if (next === '\\') value += '\\';
+            else if (next === "'") value += "'";
+            else value += next;
+            i += 2;
+            continue;
+          }
+          value += body[i++];
+        }
+        if (body[i] === "'") i++;
+      } else {
+        const vStart = i;
+        while (i < body.length && !/\s/.test(body[i])) i++;
+        value = body.slice(vStart, i);
+      }
+    }
+    out.push({ option, value });
+  }
+  return out;
+};
+
 const runGCore = async (
   ctx: BackslashContext,
   forceExpanded: boolean,
 ): Promise<BackslashResult> => {
   const bufSql = ctx.queryBuf.trim();
-  const target = ctx.nextArg('filepipe');
+  let target: string | null;
+  let psetOverrides: { option: string; value: string }[] | null = null;
+
+  // `\g (option=value ...)` — temporary pset overrides for this query
+  // only. Upstream `exec_command_g` recognises a leading `(` and slurps
+  // the rest of the args until matching `)`. We can't call nextArg in
+  // two different modes against the BackslashContext (each mode has its
+  // own cursor), so when the leading char is `(`, parse the entire raw
+  // arg block ourselves; otherwise fall back to normal filepipe arg
+  // extraction.
+  const rawTrimmed = ctx.rawArgs.trimStart();
+  if (rawTrimmed.startsWith('(')) {
+    const close = rawTrimmed.indexOf(')');
+    if (close === -1) {
+      return errResult(ctx, 'missing right parenthesis in \\g options');
+    }
+    // Strip parens; parse `key=value` pairs (values may be single-
+    // quoted). The conformance corpus exercises `format=`,
+    // `csv_fieldsep=`, and `title=` only.
+    psetOverrides = parseGPsetOptions(rawTrimmed.slice(1, close).trim());
+    target = null;
+  } else {
+    target = ctx.nextArg('filepipe');
+  }
 
   // `\g` / `\gx` with an empty buffer re-runs the most recently submitted
   // query — upstream tracks this in `pset.last_query` and `PSQLexec` reads
@@ -505,8 +589,21 @@ const runGCore = async (
   }
 
   const topt = ctx.settings.popt.topt;
-  const priorExpanded = topt.expanded;
+  // Snapshot topt BEFORE any per-query mutation so the restore in
+  // `finally` covers both `\gx`'s `expanded = 'on'` and any `\g (...)`
+  // pset overrides in one shot. Snapshotting AFTER the `forceExpanded`
+  // mutation would persist `expanded = 'on'` across queries.
+  const toptSnapshot = { ...topt };
   if (forceExpanded) topt.expanded = 'on';
+
+  // Apply per-query pset overrides silently. Upstream applies the
+  // temporary options without emitting the status lines that
+  // interactive `\pset` would.
+  if (psetOverrides) {
+    for (const { option, value } of psetOverrides) {
+      applyPset(topt, option, value, ctx.cmdName, true);
+    }
+  }
 
   // Track for `\g` / `\gx` re-run with empty buffer. Upstream sets
   // `pset.last_query` in `PSQLexec` before dispatch.
@@ -522,7 +619,10 @@ const runGCore = async (
   } catch (err) {
     execError = err instanceof Error ? err.message : String(err);
   } finally {
-    if (forceExpanded) topt.expanded = priorExpanded;
+    // Restore the pre-query topt verbatim — covers both the `\gx`
+    // `expanded = 'on'` swap and any `\g (...)` pset overrides, so a
+    // subsequent plain `\g` runs in the user's persistent print mode.
+    Object.assign(topt, toptSnapshot);
   }
 
   // Close the one-shot writer regardless of execution success so any
