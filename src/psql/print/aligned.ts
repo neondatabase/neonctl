@@ -782,7 +782,11 @@ const renderHorizontal = (
     out += buildRule(widths, border, glyphs, 'bottom') + newline;
   }
 
-  // Footer: (N rows)
+  // Footer: (N rows) + trailing blank line. Upstream's
+  // `print_aligned_text` emits `printTableAddFooter()` and then
+  // `printTableCleanup()` adds a separator `\n`. Verified against
+  // vanilla psql 18: `SELECT 1; SELECT 2;` emits each result followed
+  // by `(1 row)\n\n` so consecutive queries are visually separated.
   if (!tuplesOnly && topt.defaultFooter) {
     const n = rs.rows.length;
     out += `(${String(n)} ${n === 1 ? 'row' : 'rows'})` + newline;
@@ -790,6 +794,11 @@ const renderHorizontal = (
 
   if (!tuplesOnly && opts.footers) {
     for (const f of opts.footers) out += f + newline;
+  }
+
+  // Trailing blank line between query results (upstream parity).
+  if (!tuplesOnly) {
+    out += newline;
   }
 
   return out;
@@ -966,9 +975,12 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
       newline;
   }
 
-  if (!tuplesOnly && topt.defaultFooter) {
-    const n = rs.rows.length;
-    out += `(${String(n)} ${n === 1 ? 'row' : 'rows'})` + newline;
+  // Expanded mode emits a single trailing blank line after the last
+  // record instead of the horizontal-mode `(N rows)` row counter.
+  // Verified against vanilla psql 18: `\gx` ends with a bare `\n`
+  // after the last data line.
+  if (!tuplesOnly) {
+    out += newline;
   }
   if (!tuplesOnly && opts.footers) {
     for (const f of opts.footers) out += f + newline;
@@ -1005,12 +1017,18 @@ const renderRecordHeader = (
 
   // border 1: `-[ RECORD N ]---+---------`
   if (border === 1) {
-    // The dash-prefix-then-label-then-dashes pattern: a single hrule,
-    // then the label, then enough hrule chars to reach leftSegLen.
+    // Single-hrule prefix, then the label, then enough hrule chars to
+    // reach leftSegLen. When the label already overflows the left segment
+    // (narrow columns relative to "[ RECORD N ]"'s 12+ char fixed cost),
+    // upstream omits the `+` divider and the right dash segment — the
+    // label IS the entire divider line. Verified empirically against
+    // vanilla psql: `SELECT 1 as one, 2 as two \gx` emits just
+    // `-[ RECORD 1 ]` with no trailing `+---`.
     let left = hrule + label;
-    if (left.length < leftSegLen) {
-      left += hrule.repeat(leftSegLen - left.length);
+    if (left.length >= leftSegLen) {
+      return left;
     }
+    left += hrule.repeat(leftSegLen - left.length);
     const right = hrule.repeat(rightSegLen);
     return left + glyphs.midMid + right;
   }
@@ -1040,7 +1058,10 @@ const renderVerticalLine = (
     return `${namePadded} ${valuePadded}`;
   }
   if (border === 1) {
-    return ` ${namePadded} ${vrule} ${valuePadded}`;
+    // Upstream vertical-mode border-1 emits `<name> | <value>` with no
+    // leading space; verified against vanilla psql 18:
+    //   `one | 1` (not ` one | 1`).
+    return `${namePadded} ${vrule} ${valuePadded}`;
   }
   return `${vrule} ${namePadded} ${vrule} ${valuePadded} ${vrule}`;
 };

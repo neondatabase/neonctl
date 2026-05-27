@@ -168,7 +168,8 @@ describe('alignedPrinter horizontal mode', () => {
         '----+-------\n' +
         '  1 | alice \n' +
         '  2 | bob   \n' +
-        '(2 rows)\n',
+        '(2 rows)\n' +
+        '\n',
     );
   });
 
@@ -184,7 +185,7 @@ describe('alignedPrinter horizontal mode', () => {
       alignedPrinter.printQuery(rs, defaultOpts(undefined, { border: 0 }), s),
     );
     expect(out).toBe(
-      'a  b \n' + '-- --\n' + 'x  y \n' + 'zz ww\n' + '(2 rows)\n',
+      'a  b \n' + '-- --\n' + 'x  y \n' + 'zz ww\n' + '(2 rows)\n' + '\n',
     );
   });
 
@@ -202,7 +203,8 @@ describe('alignedPrinter horizontal mode', () => {
         '+---+---+\n' +
         '| x | y |\n' +
         '+---+---+\n' +
-        '(1 row)\n',
+        '(1 row)\n' +
+        '\n',
     );
   });
 
@@ -222,7 +224,8 @@ describe('alignedPrinter horizontal mode', () => {
         '-----+------------\n' +
         '   1 | one        \n' +
         ' 222 | twohundred \n' +
-        '(2 rows)\n',
+        '(2 rows)\n' +
+        '\n',
     );
   });
 
@@ -235,7 +238,7 @@ describe('alignedPrinter horizontal mode', () => {
       alignedPrinter.printQuery(rs, defaultOpts({ nullPrint: '∅' }), s),
     );
     expect(out).toBe(
-      '  v  \n' + '-----\n' + ' ∅   \n' + ' set \n' + '(2 rows)\n',
+      '  v  \n' + '-----\n' + ' ∅   \n' + ' set \n' + '(2 rows)\n' + '\n',
     );
   });
 
@@ -247,7 +250,8 @@ describe('alignedPrinter horizontal mode', () => {
     const out = await capture((s) =>
       alignedPrinter.printQuery(rs, defaultOpts(), s),
     );
-    expect(out.endsWith('(1 row)\n')).toBe(true);
+    // Footer is followed by a trailing blank line per upstream parity.
+    expect(out.endsWith('(1 row)\n\n')).toBe(true);
     expect(out).not.toContain('(1 rows)');
   });
 
@@ -289,7 +293,7 @@ describe('alignedPrinter horizontal mode', () => {
     );
     // Both rows should align: 中文 is 4 cols, abc is 3 cols, so col width is 4.
     expect(out).toBe(
-      ' name \n' + '------\n' + ' 中文 \n' + ' abc  \n' + '(2 rows)\n',
+      ' name \n' + '------\n' + ' 中文 \n' + ' abc  \n' + '(2 rows)\n' + '\n',
     );
   });
 
@@ -331,10 +335,12 @@ describe('alignedPrinter expanded mode', () => {
     expect(out).toContain('[ RECORD 2 ]');
     expect(out).toMatch(/\| id\s+\| 1\s+\|/);
     expect(out).toMatch(/\| name\s+\| alice\s+\|/);
-    expect(out.endsWith('(2 rows)\n')).toBe(true);
+    // Expanded mode emits no `(N rows)` footer (upstream parity).
+    expect(out.endsWith('(2 rows)\n')).toBe(false);
+    expect(out.endsWith('\n')).toBe(true);
   });
 
-  test('border=1 uses + junction without outer rule', async () => {
+  test('border=1 renders short-column RECORD header without + divider', async () => {
     const rs = makeResultSet({
       columns: [{ name: 'k' }, { name: 'v' }],
       rows: [['key', 'value']],
@@ -346,8 +352,12 @@ describe('alignedPrinter expanded mode', () => {
         s,
       ),
     );
+    // When the `[ RECORD N ]` label already overflows the left segment
+    // (short column names), upstream emits just the label with the dash
+    // prefix and omits the `+<right-segment>` divider. Verified against
+    // vanilla psql 18: `SELECT 'key' as k, 'value' as v \gx` emits
+    // `-[ RECORD 1 ]` with no trailing `+---`.
     expect(out).toContain('-[ RECORD 1 ]');
-    expect(out).toContain('+');
     expect(out).toContain('k | key');
     expect(out).toContain('v | value');
   });
@@ -510,7 +520,8 @@ describe('alignedPrinter unicode linestyle variants', () => {
         '│ x │ y │\n' +
         '│ z │ w │\n' +
         '└───┴───┘\n' +
-        '(2 rows)\n',
+        '(2 rows)\n' +
+        '\n',
     );
   });
 
