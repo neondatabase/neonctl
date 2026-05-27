@@ -624,8 +624,16 @@ const validateWatchInterval = (raw: string): string | null => {
     return `invalid value "${raw}" for variable "WATCH_INTERVAL"`;
   }
   const value = parseFloat(raw);
-  if (!Number.isFinite(value)) {
+  // Upstream `ParseVariableDouble` consults `errno = ERANGE` after
+  // `strtod` to distinguish overflow from generic junk: the overflow
+  // case emits `is out of range` rather than the generic `invalid
+  // value`. JS `parseFloat` returns Infinity on overflow — use that as
+  // the ERANGE proxy.
+  if (Number.isNaN(value)) {
     return `invalid value "${raw}" for variable "WATCH_INTERVAL"`;
+  }
+  if (!Number.isFinite(value)) {
+    return `invalid value "${raw}" for variable "WATCH_INTERVAL": is out of range`;
   }
   if (value < 0) {
     return `invalid value "${raw}" for variable "WATCH_INTERVAL": must be greater than 0.00`;
