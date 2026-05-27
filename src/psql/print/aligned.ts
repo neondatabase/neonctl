@@ -1139,22 +1139,99 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
 
   // Width of the name column = max header width.
   let nameWidth = 0;
+  let hmultiline = false;
   for (const h of headers) {
     const w = displayWidth(h);
     if (w > nameWidth) nameWidth = w;
+    if (h.includes('\n')) hmultiline = true;
   }
 
   // Width of the value column = max value width across all rows.
   let valueWidth = 0;
+  let dmultiline = false;
   const cellGrid: string[][] = rs.rows.map((row) =>
     row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
   );
   for (const row of cellGrid) {
     for (const v of row) {
+      if (v.includes('\n')) dmultiline = true;
       for (const line of v.split('\n')) {
         const w = displayWidth(line);
         if (w > valueWidth) valueWidth = w;
       }
+    }
+  }
+
+  // Compute the wrapped data-column width that the record header should
+  // be padded against in `\pset format wrapped` mode at border < 2.
+  // Mirrors upstream `print_aligned_vertical` in `fe_utils/print.c`
+  // lines 1463-1583: the value column shrinks to fit `output_columns`
+  // (with a hard floor enforced via `min_width` and `rwidth`). The same
+  // calculation runs for borders 0/1/2 in vanilla — we restrict the
+  // override to border 0/1 because at border 2 the bottom rule and the
+  // data-row padding both consume the value width, and shrinking the
+  // header without wrapping the data rows would create a shape
+  // mismatch. For border 0/1 the data row uses `${name} ${value}` (no
+  // value-width padding), so changing the header alone is a pure
+  // trailing-whitespace fix.
+  //
+  // The `swidth` table below mirrors the upstream branches:
+  //   border 0: 1 (gutter)         +1 if hmultiline   +1 if dmultiline*
+  //   border 1: 3 (` | `)          +1 if hmultiline*  +1 if dmultiline*
+  //     *upstream extras: hmultiline-only at border 1 when format ==
+  //      old-ascii, dmultiline-only when border < 2 AND format !=
+  //      old-ascii. We don't expose old-ascii in our printer (it
+  //      collapses onto ASCII) so we always take the non-old-ascii
+  //      branch: dmultiline adds 1, hmultiline at border 1 doesn't.
+  //   border 2: 7 — not used here (we leave header width untouched).
+  //
+  // `rwidth` is the natural label width (`* RECORD N` + digit count).
+  // The two-pass loop turns `dmultiline` on the first iteration if a
+  // wrap is needed, then recomputes with the bumped swidth. We
+  // implement that as a single pass over the two possible swidths.
+  const wrapped = topt.format === 'wrapped' && (border === 0 || border === 1);
+  let headerValueWidth = valueWidth;
+  if (wrapped) {
+    const outputColumns = topt.columns > 0 ? topt.columns : topt.envColumns;
+    if (outputColumns > 0) {
+      // swidth: gutter + multiline marker slots. We branch on
+      // (hmultiline, dmultiline) to mirror upstream — for our ASCII /
+      // Unicode glyphs (we don't model old-ascii) the relevant additions
+      // are the data-nl marker column when dmultiline is set. Upstream's
+      // wrap loop also bumps dmultiline on the second iteration if it
+      // started false and a wrap is needed, so we compute swidth twice.
+      const baseSwidth = (border === 0 ? 1 : 3) + (hmultiline ? 1 : 0);
+      const swidthInit = baseSwidth + (dmultiline ? 1 : 0);
+      const swidthAfterWrap = baseSwidth + 1; // dmultiline forced true
+
+      // rwidth = label-width floor: `* RECORD N`(9) or `-[ RECORD N ]`
+      // (12) + digit count for `N` (1 + log10(nrows)).
+      const labelOverhead = border === 0 ? 9 : 12;
+      const nrows = cellGrid.length;
+      const rwidth =
+        labelOverhead +
+        (nrows > 0 ? 1 + Math.floor(Math.log10(Math.max(1, nrows))) : 0);
+
+      const compute = (swidth: number): number => {
+        let width = nameWidth + swidth + valueWidth;
+        if (width < rwidth) width = rwidth;
+        let minWidth = nameWidth + swidth + 3;
+        if (minWidth < rwidth) minWidth = rwidth;
+        if (outputColumns >= width) return width - nameWidth - swidth;
+        if (outputColumns < minWidth) return minWidth - nameWidth - swidth;
+        return outputColumns - nameWidth - swidth;
+      };
+
+      // First pass with the natural swidth.
+      let newDwidth = compute(swidthInit);
+      // If wrap is needed (newDwidth < natural) AND dmultiline wasn't
+      // already true, upstream toggles it on and re-runs with swidth+1.
+      if (newDwidth < valueWidth && !dmultiline) {
+        newDwidth = compute(swidthAfterWrap);
+      }
+      // Clamp: never grow the header beyond the natural value width
+      // (matches the `dwidth = newdwidth` assignment in upstream).
+      headerValueWidth = newDwidth < valueWidth ? newDwidth : valueWidth;
     }
   }
 
@@ -1178,7 +1255,7 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
       out += renderRecordHeader(
         r + 1,
         nameWidth,
-        valueWidth,
+        headerValueWidth,
         border,
         glyphs,
         r === 0,

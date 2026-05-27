@@ -873,6 +873,160 @@ describe('alignedPrinter trailing-whitespace parity', () => {
     const lines = out.split('\n');
     expect(lines[0]).toBe('+-[ RECORD 1 ]-+---------------------+');
   });
+
+  test('expanded wrapped border=0 record header is padded to wrapped dwidth', async () => {
+    // Upstream `print_aligned_vertical` (print.c lines 1463-1583) shrinks
+    // the value column when `\pset format wrapped` AND `\pset columns N`
+    // is in effect: the `* Record N` header is then padded to
+    // `hwidth + dwidth_wrapped`, not the natural value width.
+    //
+    // Reproduces psql.sql regress lines 1648..1685 (`\pset expanded on`,
+    // `\pset columns 30`, `\pset border 0`, `\pset format wrapped`):
+    //   nameWidth = 16, valueWidth = 18, columns = 30 →
+    //   swidth = 1 (border 0 gutter) + 1 (dmultiline after wrap = needed)
+    //          = 2
+    //   newdwidth = columns - nameWidth - swidth = 30 - 16 - 2 = 12.
+    //   Header target = nameWidth + newdwidth = 28.
+    //   `* Record 1` is 10 chars → 18 trailing spaces (28 total).
+    //
+    // Verified byte-for-byte against vanilla psql 18 for the same
+    // query (`prepare q as select repeat('x',2*n) as
+    // "0123456789abcdef", repeat('y',20-2*n) as "0123456789" from
+    // generate_series(1,10) as n; \pset columns 30 \pset format wrapped
+    // \x execute q`).
+    const rs = makeResultSet({
+      columns: [{ name: '0123456789abcdef' }, { name: '0123456789' }],
+      rows: [
+        ['xx', 'y'.repeat(18)],
+        ['xxxx', 'y'.repeat(16)],
+      ],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          format: 'wrapped',
+          expanded: 'on',
+          border: 0,
+          columns: 30,
+          envColumns: 30,
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // Record headers padded to 28 chars (16 + 12), not the natural 34.
+    expect(lines[0]).toBe('* Record 1                  ');
+    expect(lines[0].length).toBe(28);
+    // Data rows still use the full natural value width (we don't wrap
+    // them — value-column wrapping in expanded mode is a separate
+    // shape change beyond the trailing-whitespace fix).
+    expect(lines[1]).toBe('0123456789abcdef xx');
+    expect(lines[2]).toBe(`0123456789       ${'y'.repeat(18)}`);
+  });
+
+  test('expanded wrapped border=0 record header floors at min_width when columns is tight', async () => {
+    // When `columns` is below the natural width AND below `min_width`
+    // (hwidth + swidth + 3), upstream falls back to `min_width` so the
+    // record-header label still has room for a 3-char minimum data
+    // window. Reproduces psql.sql regress lines 1980..2055 (`\pset
+    // columns 20`):
+    //   nameWidth=16, swidth=2 (border 0 + dmultiline), min_width=21.
+    //   output_columns(20) < min_width(21) → newdwidth = 21-16-2 = 3.
+    //   Header target = 16 + 3 = 19.
+    const rs = makeResultSet({
+      columns: [{ name: '0123456789abcdef' }, { name: '0123456789' }],
+      rows: [
+        ['xx', 'y'.repeat(18)],
+        ['xxxx', 'y'.repeat(16)],
+      ],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          format: 'wrapped',
+          expanded: 'on',
+          border: 0,
+          columns: 20,
+          envColumns: 20,
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('* Record 1         ');
+    expect(lines[0].length).toBe(19);
+  });
+
+  test('expanded wrapped border=1 record header uses wrapped dwidth for right span', async () => {
+    // For border 1 the record-header layout is `-[ RECORD N ]<dashes
+    // to leftSpan>+<dashes to rightSpan>`. In wrapped mode the right
+    // span shrinks alongside the data column. Reproduces psql.sql
+    // regress lines 1751..1791 (`\pset border 1`, columns=30, wrapped):
+    //   swidth = 3 (border 1) + 1 (dmultiline) = 4.
+    //   newdwidth = 30 - 16 - 4 = 10.
+    //   leftSpan = nameWidth+1 = 17. rightSpan = newdwidth+1 = 11.
+    //   Header = `-[ RECORD 1 ]<3 dashes><+><11 dashes>` = 32 chars.
+    const rs = makeResultSet({
+      columns: [{ name: '0123456789abcdef' }, { name: '0123456789' }],
+      rows: [
+        ['xx', 'y'.repeat(18)],
+        ['xxxx', 'y'.repeat(16)],
+      ],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          format: 'wrapped',
+          expanded: 'on',
+          border: 1,
+          columns: 30,
+          envColumns: 30,
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('-[ RECORD 1 ]----+-----------');
+    expect(lines[0].length).toBe(29);
+  });
+
+  test('expanded wrapped record header is unaffected when natural width fits', async () => {
+    // When `output_columns >= natural width`, no wrap is needed and the
+    // record header keeps the natural `nameWidth + valueWidth` padding.
+    //   nameWidth=16, valueWidth=18, swidth=1 (border 0, single-line
+    //   header, no embedded \n in cells). width = 35.
+    //   output_columns(40) >= width(35): newdwidth = width - hwidth -
+    //   swidth = 18 (= natural valueWidth). headerValueWidth = 18.
+    //   Header target = 16 + 18 = 34.
+    const rs = makeResultSet({
+      columns: [{ name: '0123456789abcdef' }, { name: '0123456789' }],
+      rows: [
+        ['xx', 'y'.repeat(18)],
+        ['xxxx', 'y'.repeat(16)],
+      ],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          format: 'wrapped',
+          expanded: 'on',
+          border: 0,
+          columns: 40,
+          envColumns: 40,
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // No wrap: header equals nameWidth + valueWidth, identical to the
+    // aligned-mode header for the same data.
+    expect(lines[0]).toBe('* Record 1                        ');
+    expect(lines[0].length).toBe(34);
+  });
 });
 
 // Multi-line / wrap marker parity. Verifies the `+` (nl) and `.` (wrap)
