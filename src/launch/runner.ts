@@ -119,6 +119,34 @@ function newRuntime(): Runtime {
  * first. Exporting so the integration test can hit a SIGTERM-trapping
  * child end-to-end without process-level fakery.
  */
+/**
+ * Resolve the Vercel `teamId` for this run. ONLY consults the env-var
+ * and persisted cache when the spec actually wants a team binding
+ * (`spec.teamId` or `spec.team`). Without this guard, removing
+ * `spec.team` from `neon.ts` to deploy to a personal account silently
+ * picks up `process.env.VERCEL_TEAM_ID` (CI environments routinely
+ * export it) and the deploy lands on the wrong team. R19 fixed the
+ * persisted-cache half; this is the env-var half, which wins precedence.
+ *
+ * Falsifier: invert the `wantsTeam` guard to always consult the
+ * fallback chain — the `aliases-personal-account-to-CI-team-var` test
+ * below fails.
+ */
+export function resolveVercelTeamId(args: {
+  spec: { teamId?: string; team?: string };
+  processEnv: { VERCEL_TEAM_ID?: string | undefined } & NodeJS.ProcessEnv;
+  neonLaunchEnv: { VERCEL_TEAM_ID?: string };
+}): string | undefined {
+  const wantsTeam = !!args.spec.teamId || !!args.spec.team;
+  if (!wantsTeam) return undefined;
+  return (
+    args.spec.teamId ??
+    args.processEnv.VERCEL_TEAM_ID ??
+    args.neonLaunchEnv.VERCEL_TEAM_ID ??
+    undefined
+  );
+}
+
 export async function gracefulShutdown(
   handles: LocalCommandHandle[],
   termGraceMs = 2_000,
@@ -793,11 +821,11 @@ async function provisionVercelNode(args: {
   // user uses `spec.team` for slug-based addressing, `provisionVercelDeployment`
   // resolves the slug fresh when neither this `teamId` nor a cached
   // `VERCEL_TEAM_ID` is present.)
-  const teamId =
-    spec.teamId ??
-    process.env.VERCEL_TEAM_ID ??
-    args.neonLaunchEnv.VERCEL_TEAM_ID ??
-    undefined;
+  const teamId = resolveVercelTeamId({
+    spec,
+    processEnv: process.env,
+    neonLaunchEnv: args.neonLaunchEnv,
+  });
   // Cached project id/name from a previous run let us skip the
   // `/v9/projects/{idOrName}` lookup. Same env > .neon-launch.env order.
   const cachedProjectId =

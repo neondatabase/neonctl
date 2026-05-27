@@ -21,6 +21,7 @@ import {
   getCliProjectIdFromArgv,
   groupStages,
   pickStdioMode,
+  resolveVercelTeamId,
 } from './runner.js';
 
 // -----------------------------------------------------------------------------
@@ -247,6 +248,77 @@ describe('getCliProjectIdFromArgv', () => {
         '--',
         '--project-id=prj_passthrough',
       ]),
+    ).toBeUndefined();
+  });
+});
+
+describe('resolveVercelTeamId — env-precedence aliasing fix', () => {
+  // R20 P0: R19 cleared `.neon-launch.env` on a `spec.team` → personal-account
+  // pivot, but `process.env.VERCEL_TEAM_ID` wins precedence anyway, so a
+  // CI run with that env var exported silently aliased every personal-account
+  // deploy to the prior team. Fix: only consult the fallback chain when the
+  // spec actually wants a team binding.
+
+  it('returns undefined when spec wants personal account, EVEN IF process.env.VERCEL_TEAM_ID is set (R20 P0)', () => {
+    // Falsifier (the regression): remove the wantsTeam guard so the
+    // function falls through to process.env. This assertion fails —
+    // teamId resolves to 'team_X' and the Vercel deploy lands on the
+    // wrong team.
+    expect(
+      resolveVercelTeamId({
+        spec: {}, // no spec.team, no spec.teamId → personal account
+        processEnv: { VERCEL_TEAM_ID: 'team_X' },
+        neonLaunchEnv: {},
+      }),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined when spec wants personal account, EVEN IF .neon-launch.env has VERCEL_TEAM_ID', () => {
+    expect(
+      resolveVercelTeamId({
+        spec: {},
+        processEnv: {},
+        neonLaunchEnv: { VERCEL_TEAM_ID: 'team_stale' },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('spec.teamId wins over env and cache (explicit user intent)', () => {
+    expect(
+      resolveVercelTeamId({
+        spec: { teamId: 'team_explicit' },
+        processEnv: { VERCEL_TEAM_ID: 'team_env' },
+        neonLaunchEnv: { VERCEL_TEAM_ID: 'team_cache' },
+      }),
+    ).toBe('team_explicit');
+  });
+
+  it('spec.team (slug) without teamId → consults env, then cache', () => {
+    // Slug-based binding wants a team — fallback chain is allowed.
+    // process.env wins over cache.
+    expect(
+      resolveVercelTeamId({
+        spec: { team: 'my-team' },
+        processEnv: { VERCEL_TEAM_ID: 'team_env' },
+        neonLaunchEnv: { VERCEL_TEAM_ID: 'team_cache' },
+      }),
+    ).toBe('team_env');
+    expect(
+      resolveVercelTeamId({
+        spec: { team: 'my-team' },
+        processEnv: {},
+        neonLaunchEnv: { VERCEL_TEAM_ID: 'team_cache' },
+      }),
+    ).toBe('team_cache');
+  });
+
+  it('spec.team (slug) with no env / no cache → undefined (provisioner will resolve from slug)', () => {
+    expect(
+      resolveVercelTeamId({
+        spec: { team: 'my-team' },
+        processEnv: {},
+        neonLaunchEnv: {},
+      }),
     ).toBeUndefined();
   });
 });
