@@ -233,7 +233,7 @@ describe('\\bind', () => {
     const ctx = makeMockCtx('bind_named', '', s);
     const r = await run(cmdBindNamed, ctx);
     expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/missing statement name/);
+    expect(stderr()).toMatch(/missing required argument/);
   });
 });
 

@@ -91,7 +91,9 @@ export const getPipelineState = (
 const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
   ctx.settings.lastErrorResult = { message };
   writeErr(`\\${ctx.cmdName}: ${message}\n`);
-  return { status: 'error' };
+  // Tell mainloop the diagnostic is already on stderr so it doesn't add
+  // a `psql: ERROR:  <msg>` fallback line.
+  return { status: 'error', errorWritten: true };
 };
 
 const readAllArgs = (ctx: BackslashContext): string[] => {
@@ -127,8 +129,11 @@ export const cmdBindNamed: BackslashCmdSpec = {
   helpKey: 'bind_named',
   run(ctx: BackslashContext): Promise<BackslashResult> {
     const name = ctx.nextArg('normal');
-    if (name === null || name.length === 0) {
-      return Promise.resolve(errResult(ctx, 'missing statement name'));
+    // Upstream `exec_command_bind_named` rejects only the missing-arg
+    // case. `''` IS valid — it addresses the unnamed prepared statement
+    // slot (set via `\parse ''`).
+    if (name === null) {
+      return Promise.resolve(errResult(ctx, 'missing required argument'));
     }
     const values = readAllArgs(ctx);
     stashOf(ctx.settings)[BIND_STATE_KEY] = { name, values };
@@ -145,8 +150,12 @@ export const cmdParse: BackslashCmdSpec = {
   helpKey: 'parse',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
     const name = ctx.nextArg('normal');
-    if (name === null || name.length === 0) {
-      return errResult(ctx, 'missing statement name');
+    // Upstream `exec_command_parse` rejects only the missing-arg case
+    // with `missing required argument`. An explicit empty string `''`
+    // IS valid — it's the "unnamed" prepared statement slot, addressable
+    // later via `\bind_named ''`.
+    if (name === null) {
+      return errResult(ctx, 'missing required argument');
     }
     const sql = ctx.queryBuf.trim();
     if (sql.length === 0) {
@@ -174,8 +183,9 @@ export const cmdClosePrepared: BackslashCmdSpec = {
   helpKey: 'close_prepared',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
     const name = ctx.nextArg('normal');
-    if (name === null || name.length === 0) {
-      return errResult(ctx, 'missing statement name');
+    // Empty string `''` is the valid unnamed prepared statement.
+    if (name === null) {
+      return errResult(ctx, 'missing required argument');
     }
     if (!ctx.settings.db) {
       return errResult(ctx, 'no connection to the server');
