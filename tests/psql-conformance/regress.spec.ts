@@ -90,8 +90,16 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
       conn.db,
     ];
     const args = [...PSQL_PREARGS, ...psqlArgs];
-    log(`regress/${name}: invoking ${PSQL_COMMAND} ${args.join(' ')}`);
-    const result = spawnSync(PSQL_COMMAND, args, {
+    log(`regress/${name}: invoking ${PSQL_COMMAND} ${args.join(' ')} 2>&1`);
+    // Upstream pg_regress invokes `psql 2>&1` so stderr is interleaved
+    // into stdout at the OS level — each write call is atomic on the
+    // shared pipe. spawnSync can't merge child stderr into stdout
+    // directly, so we run the whole thing under `sh -c` and let the
+    // shell do the `2>&1` redirect. The shell-quoting safety bar is
+    // low here: we control every arg (no user input).
+    const quote = (a: string): string => `'${a.replace(/'/g, "'\\''")}'`;
+    const cmdline = [PSQL_COMMAND, ...args].map(quote).join(' ') + ' 2>&1';
+    const result = spawnSync('sh', ['-c', cmdline], {
       input: sql,
       env: { ...process.env, PGPASSWORD: conn.password, LC_ALL: 'C' },
       encoding: 'utf8',
@@ -109,18 +117,11 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
       throw new Error(`spawn error: ${result.error.message}`);
     }
 
+    // With `sh -c "... 2>&1"`, all output lands in stdout in the order
+    // the child wrote it; stderr is empty (or holds shell errors only).
     const stdout = result.stdout ?? '';
     const stderr = result.stderr ?? '';
-
-    // Upstream pg_regress drives psql with `2>&1`, so the .out file is the
-    // interleaved stream. spawnSync can't preserve interleave, but most
-    // regress .out files don't intermix tightly enough for that to matter.
-    // Appending stderr after stdout is close enough for diff purposes —
-    // crucially, error messages psql writes to stderr (e.g. "invalid value
-    // for AUTOCOMMIT") now end up in the comparison instead of being
-    // silently dropped.
-    const combined = stderr ? `${stdout}${stderr}` : stdout;
-    const actual = normalize(combined);
+    const actual = normalize(stdout);
 
     if (actual === expected) {
       expect(actual).toBe(expected);
