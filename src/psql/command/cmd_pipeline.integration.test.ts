@@ -72,11 +72,17 @@ describe.skipIf(!RUN)('cmd_pipeline / extended-query — integration', () => {
     expect(results[2].rows[0]?.[0]).toBe('3');
   });
 
-  it('prepare + bind + execute round-trip works', async () => {
+  it('prepare + bindAndExecute round-trip works', async () => {
+    // NOTE: real servers destroy the unnamed portal at each Sync, so a
+    // separate `bind()` + `execute()` (each ending with its own Sync)
+    // cannot share the "" portal. `bindAndExecute` keeps Bind + Execute
+    // in one extended-protocol batch ahead of Sync — see the contract
+    // documented on `PreparedStatement.bindAndExecute` in
+    // src/psql/types/connection.ts, and the matching call site in
+    // src/psql/command/cmd_io.ts (\bind_named).
     const stmt = await conn.prepare('addone', 'SELECT $1::int + 1', [23]);
     expect(stmt.paramTypes).toEqual([23]);
-    await stmt.bind(['41']);
-    const rs = await stmt.execute();
+    const rs = await stmt.bindAndExecute(['41']);
     expect(rs.rows).toEqual([['42']]);
     await stmt.close();
   });
