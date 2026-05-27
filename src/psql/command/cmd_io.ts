@@ -804,14 +804,24 @@ export const cmdWrite: BackslashCmdSpec = {
         });
       });
     } catch (err) {
-      // Best-effort drain before propagating the write error.
-      try {
-        await entry.close();
-      } catch {
-        // ignore
+      // On pipe targets a fast-exiting child (e.g. `| false` or a
+      // command-not-found shell exit) closes its stdin before we finish
+      // writing, surfacing as EPIPE. Linux fires this reliably; macOS
+      // sometimes races it past us. In either case the child's exit
+      // status is what we want to report, NOT the write error — so we
+      // swallow EPIPE on pipes and fall through to entry.close() which
+      // awaits the child and emits the upstream-shape wait_result_to_str.
+      const isEpipe =
+        err instanceof Error && (err as NodeJS.ErrnoException).code === 'EPIPE';
+      if (!entry.isPipe || !isEpipe) {
+        try {
+          await entry.close();
+        } catch {
+          // ignore
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        return errResult(ctx, msg);
       }
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
     }
     // Wait for the target to drain. For pipe targets a non-zero exit /
     // killing signal is surfaced as `<fname>: <wait_result_to_str>`,
