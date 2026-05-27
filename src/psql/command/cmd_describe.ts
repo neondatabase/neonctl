@@ -62,6 +62,7 @@ import {
   listCasts,
   listCollations,
   listConversions,
+  listDbRoleSettings,
   listDefaultACLs,
   listDomains,
   listEventTriggers,
@@ -71,6 +72,7 @@ import {
   listForeignTables,
   listLanguages,
   listLargeObjects,
+  listOperatorClasses,
   listPartitionedTables,
   listPublications,
   listSchemas,
@@ -83,7 +85,10 @@ import {
   objectDescription,
   permissionsList,
 } from '../describe/queries.js';
-import { processSQLNamePattern } from '../describe/processNamePattern.js';
+import {
+  processSQLNamePattern,
+  type NamePatternResult,
+} from '../describe/processNamePattern.js';
 
 import { writeErr } from './shared.js';
 
@@ -139,6 +144,89 @@ const runWithPattern = async (
   const result = processSQLNamePattern({ ...patternOpts, pattern });
   try {
     await runListQuery(c, query, result, process.stdout, ctx.settings.popt);
+    return { status: 'ok' };
+  } catch (err) {
+    writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
+    return { status: 'error' };
+  }
+};
+
+/**
+ * Apply two distinct {@link NamePatternResult}s to a query that emits two
+ * placeholder occurrences (one per pattern). Mirrors `applyPattern` but
+ * threads each result into a single occurrence so they can carry
+ * different column targets (e.g. `\dAc <am> <type>` filters
+ * `am.amname` first and `t.typname` second). When a slot's result
+ * carries no conditions we substitute the `true` tautology so the
+ * surrounding `AND`/`WHERE` chain stays well-formed.
+ *
+ * Returns a query string with the placeholders replaced and a unified
+ * parameter list renumbered so `$N` references stay distinct.
+ */
+const applyTwoPatterns = (
+  sql: string,
+  baseParams: unknown[],
+  results: NamePatternResult[],
+): { sql: string; params: unknown[] } => {
+  const placeholder = 'true /* TODO(WP-20): pattern matching */';
+  let rendered = sql;
+  const params = [...baseParams];
+  for (const result of results) {
+    const idx = rendered.indexOf(placeholder);
+    if (idx < 0) break;
+    const conds = [
+      ...result.schemaConditions,
+      ...result.nameConditions,
+      ...result.visibilityConditions,
+    ];
+    const slotOffset = params.length;
+    const renumbered = conds.map((c) =>
+      c.replace(/\$(\d+)/g, (_, n: string) => `$${Number(n) + slotOffset}`),
+    );
+    params.push(...result.params);
+    const replacement =
+      renumbered.length === 0 ? 'true' : `(${renumbered.join(' AND ')})`;
+    rendered =
+      rendered.slice(0, idx) +
+      replacement +
+      rendered.slice(idx + placeholder.length);
+  }
+  return { sql: rendered, params };
+};
+
+/**
+ * Run a list query with two distinct pattern slots. Builds the final
+ * SQL via {@link applyTwoPatterns}, hands it to {@link runListQuery}
+ * with an empty pattern result (so the second-pass `applyPattern` is a
+ * no-op — all placeholders are already resolved).
+ *
+ * Note: we discard the query builder's `params` because the two-pattern
+ * builders (`listOperatorClasses`, `listDbRoleSettings`) emit the raw
+ * user strings there as a courtesy for single-pattern callers. The
+ * regex-converted values come from `results[*].params` instead, so
+ * threading the originals would introduce unreferenced bind values.
+ */
+const runDualPatternList = async (
+  ctx: BackslashContext,
+  query: import('../describe/queries.js').DescribeQuery,
+  results: NamePatternResult[],
+): Promise<BackslashResult> => {
+  const c = conn(ctx);
+  if (!c) return noConn(ctx);
+  const { sql, params } = applyTwoPatterns(query.sql, [], results);
+  const finalQuery: import('../describe/queries.js').DescribeQuery = {
+    ...query,
+    sql,
+    params,
+  };
+  const empty: NamePatternResult = {
+    schemaConditions: [],
+    nameConditions: [],
+    visibilityConditions: [],
+    params: [],
+  };
+  try {
+    await runListQuery(c, finalQuery, empty, process.stdout, ctx.settings.popt);
     return { status: 'ok' };
   } catch (err) {
     writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
@@ -380,7 +468,12 @@ const cmdDescribeAggregates = (cmdName: string): BackslashCmdSpec => ({
   },
 });
 
-// ---- \dA / \dA+ ---------------------------------------------------------
+// ---- \dA / \dA+ / \dAm / \dAm+ -----------------------------------------
+// `\dAm[+]` is a Neon extension: it lists access methods with their
+// handler and description columns always present, equivalent to upstream
+// `\dA+`. Upstream psql doesn't accept this spelling; we register it as
+// an alias so users who reach for "access methods" by full name get the
+// verbose view (Name, Type, Handler, Description) by default.
 
 const cmdDescribeAccessMethods = (cmdName: string): BackslashCmdSpec => ({
   name: cmdName,
@@ -388,13 +481,56 @@ const cmdDescribeAccessMethods = (cmdName: string): BackslashCmdSpec => ({
     const pattern = ctx.nextArg('normal');
     const c = conn(ctx);
     if (!c) return noConn(ctx);
-    const { verbose } = decodeSuffix(cmdName, 'dA');
+    const isAlias = cmdName.startsWith('dAm');
+    const base = isAlias ? 'dAm' : 'dA';
+    const { verbose } = decodeSuffix(cmdName, base);
+    // `\dAm[+]` always displays the verbose columns; trailing `+` is
+    // accepted for syntactic parity but doesn't change output.
     const query = describeAccessMethods({
       pattern: pattern ?? undefined,
-      verbose,
+      verbose: isAlias ? true : verbose,
       serverVersion: c.serverVersion,
     });
     return runWithPattern(ctx, pattern, query, { namevar: 'amname' });
+  },
+});
+
+// ---- \dAc / \dAc+ ------------------------------------------------------
+// `\dAc [AM-pattern [TYPE-pattern]]` — list operator classes. Two-pattern
+// command: the first arg filters by access-method name, the second by
+// input-type schema/name. Mirrors upstream's `case 'A' / cmd[2] == 'c'`
+// dispatch in `command.c::exec_command_d`.
+
+const cmdListOperatorClasses = (cmdName: string): BackslashCmdSpec => ({
+  name: cmdName,
+  run: async (ctx) => {
+    const amPat = ctx.nextArg('normal');
+    const typePat = amPat ? ctx.nextArg('normal') : null;
+    const c = conn(ctx);
+    if (!c) return noConn(ctx);
+    const { verbose } = decodeSuffix(cmdName, 'dAc');
+    const query = listOperatorClasses({
+      amPattern: amPat ?? undefined,
+      typePattern: typePat ?? undefined,
+      verbose,
+      serverVersion: c.serverVersion,
+    });
+    const results: NamePatternResult[] = [];
+    if (amPat !== null) {
+      results.push(
+        processSQLNamePattern({ namevar: 'am.amname', pattern: amPat }),
+      );
+    }
+    if (typePat !== null) {
+      results.push(
+        processSQLNamePattern({
+          namevar: 't.typname',
+          schemavar: 'tn.nspname',
+          pattern: typePat,
+        }),
+      );
+    }
+    return runDualPatternList(ctx, query, results);
   },
 });
 
@@ -463,6 +599,87 @@ const cmdDescribeRoles = (cmdName: string): BackslashCmdSpec => ({
     return runWithPattern(ctx, pattern, query, { namevar: 'r.rolname' });
   },
 });
+
+// ---- \drds -------------------------------------------------------------
+// `\drds [role-pattern [database-pattern]]` — list role-/database-level
+// configuration settings (`pg_db_role_setting`). Two-pattern command:
+// first arg filters by role, second by database. Empty results print a
+// stderr notice ("Did not find any settings…") when not in quiet mode,
+// mirroring upstream `describe.c::listDbRoleSettings`.
+
+const cmdListDbRoleSettings: BackslashCmdSpec = {
+  name: 'drds',
+  run: async (ctx) => {
+    const rolePat = ctx.nextArg('normal');
+    const dbPat = rolePat ? ctx.nextArg('normal') : null;
+    const c = conn(ctx);
+    if (!c) return noConn(ctx);
+    const query = listDbRoleSettings({
+      pattern: rolePat ?? undefined,
+      pattern2: dbPat ?? undefined,
+      serverVersion: c.serverVersion,
+    });
+    const results: NamePatternResult[] = [];
+    if (rolePat !== null) {
+      results.push(
+        processSQLNamePattern({ namevar: 'r.rolname', pattern: rolePat }),
+      );
+    }
+    if (dbPat !== null) {
+      results.push(
+        processSQLNamePattern({ namevar: 'd.datname', pattern: dbPat }),
+      );
+    }
+    // Upstream deviates from the rest of describe.c here: when the
+    // result set is empty and we're not in --quiet, emit a stderr
+    // diagnostic instead of printing an empty table — the two-pattern
+    // shape makes confusion likely otherwise.
+    if (rolePat === null && dbPat === null) {
+      return runDualPatternList(ctx, query, results);
+    }
+    const { sql, params } = applyTwoPatterns(query.sql, [], results);
+    const finalQuery: import('../describe/queries.js').DescribeQuery = {
+      ...query,
+      sql,
+      params,
+    };
+    try {
+      const rs = await c.query(sql, params);
+      if (rs.rows.length === 0 && !ctx.settings.quiet) {
+        if (rolePat !== null && dbPat !== null) {
+          writeErr(
+            `Did not find any settings for role "${rolePat}" and database "${dbPat}".\n`,
+          );
+        } else if (rolePat !== null) {
+          writeErr(`Did not find any settings for role "${rolePat}".\n`);
+        }
+        return { status: 'ok' };
+      }
+      // Re-print via the standard runner so the title and formatting
+      // match peer list queries. We pass the already-substituted SQL
+      // and an empty pattern result so the second-pass replace is a
+      // no-op. (We accept the double-query cost on the small `\drds`
+      // path; alternatives require duplicating the printer plumbing.)
+      const empty: NamePatternResult = {
+        schemaConditions: [],
+        nameConditions: [],
+        visibilityConditions: [],
+        params: [],
+      };
+      await runListQuery(
+        c,
+        finalQuery,
+        empty,
+        process.stdout,
+        ctx.settings.popt,
+      );
+      return { status: 'ok' };
+    } catch (err) {
+      writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
+      return { status: 'error' };
+    }
+  },
+};
 
 // ---- \dn / \dn+ / \dnS --------------------------------------------------
 
@@ -988,9 +1205,12 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
     registry.register(cmdDescribeAggregates('da' + suffix));
   }
 
-  // Access methods.
+  // Access methods. `\dA[+]` is upstream; `\dAm[+]` is a Neon-friendly
+  // alias that some docs reach for. `\dAc[+]` lists operator classes.
   for (const suffix of ['', '+']) {
     registry.register(cmdDescribeAccessMethods('dA' + suffix));
+    registry.register(cmdDescribeAccessMethods('dAm' + suffix));
+    registry.register(cmdListOperatorClasses('dAc' + suffix));
   }
 
   // Types.
@@ -1052,6 +1272,7 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
 
   // Config / event triggers / extensions / large objects.
   registry.register(cmdDescribeConfigParams);
+  registry.register({ ...cmdDescribeConfigParams, name: 'dconfig+' });
   registry.register(cmdListEventTriggers);
   registry.register(cmdListExtensions);
   registry.register({ ...cmdListExtensions, name: 'dx+' });
@@ -1081,19 +1302,32 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
     registry.register({ ...cmdListForeignTables, name: variant });
   }
 
-  // Partitioned tables.
+  // Partitioned tables. Upstream's `\dP` accepts any concatenation of
+  // {i,t,n}: `\dPtn` lists nested partitioned tables (table + nested
+  // toggles), `\dPin` lists nested partitioned indexes, etc. We
+  // register the most common combinations explicitly; the spec's
+  // suffix-decoding loop (`includes('i'|'t'|'n')`) drives the actual
+  // `reltypes` selection at runtime.
   for (const variant of [
     'dP',
     'dP+',
     'dPi',
     'dPi+',
+    'dPin',
+    'dPin+',
     'dPt',
     'dPt+',
+    'dPtn',
+    'dPtn+',
     'dPn',
     'dPn+',
   ]) {
     registry.register({ ...cmdListPartitionedTables, name: variant });
   }
+
+  // Role-database settings.
+  registry.register(cmdListDbRoleSettings);
+  registry.register({ ...cmdListDbRoleSettings, name: 'drds+' });
 
   // Publication / subscription.
   for (const variant of ['dRp', 'dRp+']) {

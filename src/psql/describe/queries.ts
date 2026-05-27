@@ -954,10 +954,18 @@ export const listPartitionedTables = (
   sql += `ORDER BY "Schema", ${mixed ? '"Type" DESC, ' : ''}${
     showNested || pattern !== undefined ? '"Parent name" NULLS FIRST, ' : ''
   }"Name";`;
+  // Mirror upstream's `tabletitle` switch: `\dPi*` lists indexes,
+  // `\dPt*` lists tables, and any mixed/empty form lists relations.
+  const description =
+    showIndexes && !showTables
+      ? 'List of partitioned indexes'
+      : showTables && !showIndexes
+        ? 'List of partitioned tables'
+        : 'List of partitioned relations';
   return {
     sql,
     params: params(opts),
-    description: 'List of partitioned relations',
+    description,
   };
 };
 

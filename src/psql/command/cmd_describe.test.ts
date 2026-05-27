@@ -373,4 +373,142 @@ describe('cmd_describe', () => {
     const r = buildRegistry();
     expect(r.lookup('nope')).toBeUndefined();
   });
+
+  // ---------------------------------------------------------------------
+  // New \d* variants — these exercise the registration + dispatch path
+  // for the five describe-family commands added with this WP.
+  // ---------------------------------------------------------------------
+
+  it('\\dconfig+ runs describeConfigurationParameters with verbose columns', async () => {
+    const spy: QuerySpy[] = [];
+    const conn = mkConnection(
+      [
+        {
+          match: (s) => s.includes('FROM pg_catalog.pg_settings'),
+          rs: mkResultSet(['Parameter', 'Value'], []),
+        },
+      ],
+      spy,
+    );
+    const r = buildRegistry();
+    const spec = mustLookup(r, 'dconfig+');
+    expect(spec).toBeDefined();
+    const ctx = mkCtx('dconfig+', '', mkSettings(conn));
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    expect(spy[0].sql).toContain('FROM pg_catalog.pg_settings');
+    // verbose=true adds Type / Context columns to the projection.
+    expect(spy[0].sql).toContain('s.vartype AS "Type"');
+  });
+
+  it('\\dAc runs listOperatorClasses with the am-pattern filter', async () => {
+    const spy: QuerySpy[] = [];
+    const conn = mkConnection(
+      [
+        {
+          match: (s) => s.includes('FROM pg_catalog.pg_opclass'),
+          rs: mkResultSet(['AM', 'Input type'], []),
+        },
+      ],
+      spy,
+    );
+    const r = buildRegistry();
+    const spec = mustLookup(r, 'dAc');
+    expect(spec).toBeDefined();
+    const ctx = mkCtx('dAc', 'btree', mkSettings(conn));
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    expect(spy[0].sql).toContain('FROM pg_catalog.pg_opclass');
+    // The am pattern goes through processSQLNamePattern, so the
+    // regex-anchored form ends up as a bound parameter.
+    expect(spy[0].params).toContain('^(btree)$');
+  });
+
+  it('\\dAm renders the verbose access-methods columns even without a +', async () => {
+    const spy: QuerySpy[] = [];
+    const conn = mkConnection(
+      [
+        {
+          match: (s) => s.includes('FROM pg_catalog.pg_am'),
+          rs: mkResultSet(['Name', 'Type'], []),
+        },
+      ],
+      spy,
+    );
+    const r = buildRegistry();
+    const spec = mustLookup(r, 'dAm');
+    expect(spec).toBeDefined();
+    const ctx = mkCtx('dAm', '', mkSettings(conn));
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    // Verbose-mode columns Handler / Description should be present.
+    expect(spy[0].sql).toContain('"Handler"');
+    expect(spy[0].sql).toContain('"Description"');
+  });
+
+  it('\\dPtn dispatches listPartitionedTables with reltypes=tn', async () => {
+    const spy: QuerySpy[] = [];
+    const conn = mkConnection(
+      [
+        {
+          match: (s) => s.includes('FROM pg_catalog.pg_class'),
+          rs: mkResultSet(['Schema', 'Name'], []),
+        },
+      ],
+      spy,
+    );
+    const r = buildRegistry();
+    const spec = mustLookup(r, 'dPtn');
+    expect(spec).toBeDefined();
+    const ctx = mkCtx('dPtn', '', mkSettings(conn));
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    // reltypes 'tn' selects only 'p' (partitioned tables) and emits the
+    // Parent-name column because of the 'n' (nested) flag.
+    expect(spy[0].sql).toContain("c.relkind IN ('p','')");
+    expect(spy[0].sql).toContain('"Parent name"');
+  });
+
+  it('\\drds runs listDbRoleSettings with no patterns', async () => {
+    const spy: QuerySpy[] = [];
+    const conn = mkConnection(
+      [
+        {
+          match: (s) => s.includes('FROM pg_catalog.pg_db_role_setting'),
+          rs: mkResultSet(['Role', 'Database', 'Settings'], []),
+        },
+      ],
+      spy,
+    );
+    const r = buildRegistry();
+    const spec = mustLookup(r, 'drds');
+    expect(spec).toBeDefined();
+    const ctx = mkCtx('drds', '', mkSettings(conn));
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    expect(spy[0].sql).toContain('FROM pg_catalog.pg_db_role_setting');
+  });
+
+  it('\\drds <role> emits a stderr diagnostic on empty results', async () => {
+    const spy: QuerySpy[] = [];
+    const conn = mkConnection(
+      [
+        {
+          match: (s) => s.includes('FROM pg_catalog.pg_db_role_setting'),
+          rs: mkResultSet(['Role', 'Database', 'Settings'], []),
+        },
+      ],
+      spy,
+    );
+    const r = buildRegistry();
+    const spec = mustLookup(r, 'drds');
+    const settings = mkSettings(conn);
+    settings.quiet = false;
+    const ctx = mkCtx('drds', 'nosuchrole', settings);
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    expect(stderrChunks.join('')).toContain(
+      'Did not find any settings for role "nosuchrole"',
+    );
+  });
 });
