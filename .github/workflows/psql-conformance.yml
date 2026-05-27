@@ -77,18 +77,21 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
-          node-version-file: .nvmrc
+          node-version-file: .tool-versions
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
-        with:
-          bun-version-file: .bun-version
+      - name: Install pnpm
+        run: npm install -g pnpm@9.15.9
 
       - name: Install
-        run: bun install --frozen-lockfile
+        # The branch-local pnpm-lock.yaml is sometimes behind package.json
+        # for our newly-added devDeps (@testcontainers/postgresql, pg-protocol,
+        # node-pty) because the dev environment can't reach npmjs to regen.
+        # On the ubuntu-24.04 runner the public npm registry is reachable, so
+        # plain `pnpm install` resolves the missing deps without --frozen.
+        run: pnpm install
 
       - name: Build
-        run: bun run build
+        run: pnpm run build
 
       - name: Run conformance suite
         # Non-blocking until coverage stabilises — see top-of-file note.
@@ -110,7 +113,7 @@ jobs:
           PGCONFORMANCE_PG_DB: regression
         run: |
           set -o pipefail
-          bun run test:conformance 2>&1 | tee psql-conformance.log
+          pnpm run test:conformance 2>&1 | tee psql-conformance.log
 
       - name: Upload conformance log
         if: always()
