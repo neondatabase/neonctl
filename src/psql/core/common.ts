@@ -460,6 +460,51 @@ export const captureLastError = (
 const recordError = (ctx: REPLContext, err: unknown, sqlText = ''): string =>
   captureLastError(ctx.settings, err, sqlText);
 
+/**
+ * Update the per-statement diagnostic psql variables that upstream's
+ * `SetResultVariables` / `SetErrorVariables` in `src/bin/psql/common.c`
+ * maintains. Called after every dispatched statement (success and error
+ * paths) so `\echo :LAST_ERROR_MESSAGE` and friends produce the same
+ * values vanilla psql does.
+ *
+ *   - `SQLSTATE`         SQLSTATE of the *most recent* statement —
+ *                        `"00000"` on success, the server-reported code
+ *                        on error (defaults to `"XX000"` when missing).
+ *   - `ERROR`            `"true"` if the most recent statement failed,
+ *                        else `"false"`.
+ *   - `ROW_COUNT`        affected/returned row count of the most recent
+ *                        statement (from libpq's `PQcmdTuples`). `"0"`
+ *                        on error.
+ *   - `LAST_ERROR_*`     sticky — only mutated on error. Mirrors
+ *                        upstream's "preserve until the next failure"
+ *                        contract so a successful statement does not
+ *                        clobber the prior error info.
+ *
+ * Exported so mainloop's bind / pipeline paths (which bypass {@link
+ * sendQuery}) can share the same updater.
+ */
+export const refreshErrorVars = (
+  settings: PsqlSettings,
+  outcome: { kind: 'success'; rowCount?: number | null } | { kind: 'error' },
+): void => {
+  const { vars } = settings;
+  if (outcome.kind === 'error') {
+    const last = settings.lastErrorResult;
+    const code = last?.code ?? last?.sqlstate ?? 'XX000';
+    const message = last?.message ?? '';
+    vars.set('LAST_ERROR_MESSAGE', message);
+    vars.set('LAST_ERROR_SQLSTATE', code);
+    vars.set('SQLSTATE', code);
+    vars.set('ERROR', 'true');
+    vars.set('ROW_COUNT', '0');
+    return;
+  }
+  vars.set('SQLSTATE', '00000');
+  vars.set('ERROR', 'false');
+  const rc = outcome.rowCount ?? 0;
+  vars.set('ROW_COUNT', String(rc));
+};
+
 // ---------------------------------------------------------------------------
 // SINGLESTEP confirmation.
 //
@@ -585,7 +630,11 @@ const renderResultSets = async (
   ctx: REPLContext,
   results: ResultSet[],
   out: NodeJS.WritableStream,
-): Promise<{ rowsAffected: number; rowsPrinted: number }> => {
+): Promise<{
+  rowsAffected: number;
+  rowsPrinted: number;
+  lastRowCount: number | null;
+}> => {
   const printer = pickPrinter(ctx.settings);
   let rowsAffected = 0;
   let rowsPrinted = 0;
@@ -649,7 +698,20 @@ const renderResultSets = async (
       }
     }
   }
-  return { rowsAffected, rowsPrinted };
+  // libpq's `PQcmdTuples(lastResult)` semantic: ROW_COUNT mirrors the LAST
+  // result set's affected-row count (or returned-row count for tuples-
+  // producing commands). For SELECT-shaped results the wire layer doesn't
+  // populate rs.rowCount until CommandComplete arrives, but the array shape
+  // (`rs.rows.length`) is the authoritative count.
+  const lastRowCount =
+    results.length === 0
+      ? null
+      : (() => {
+          const rs = results[results.length - 1];
+          if (rs.fields.length > 0) return rs.rows.length;
+          return rs.rowCount ?? null;
+        })();
+  return { rowsAffected, rowsPrinted, lastRowCount };
 };
 
 /**
@@ -663,7 +725,11 @@ export const renderResultSet = (
   ctx: REPLContext,
   rs: ResultSet,
   out?: NodeJS.WritableStream,
-): Promise<{ rowsAffected: number; rowsPrinted: number }> => {
+): Promise<{
+  rowsAffected: number;
+  rowsPrinted: number;
+  lastRowCount: number | null;
+}> => {
   return renderResultSets(ctx, [rs], out ?? pickOut(ctx));
 };
 
@@ -739,7 +805,11 @@ const runCursorLoop = async (
   sql: string,
   fetchCount: number,
   out: NodeJS.WritableStream,
-): Promise<{ rowsAffected: number; rowsPrinted: number }> => {
+): Promise<{
+  rowsAffected: number;
+  rowsPrinted: number;
+  lastRowCount: number;
+}> => {
   if (!ctx.settings.db) throw new Error('no connection to the server');
   const db = ctx.settings.db;
 
@@ -796,7 +866,7 @@ const runCursorLoop = async (
     if (initiallyIdle) {
       await db.execSimple('COMMIT');
     }
-    return { rowsAffected, rowsPrinted };
+    return { rowsAffected, rowsPrinted, lastRowCount: rowsPrinted };
   } catch (err) {
     // Rebase the server-reported `position` from the synthetic wrapper's
     // coordinates into the user's SQL coordinates in place. Server error
@@ -853,26 +923,20 @@ export const executeAndPrint = async (
   const out = pickOut(ctx, opts.oneShotOut);
   const fetchCount = readFetchCount(ctx.settings);
 
+  let lastRowCount: number | null = null;
   try {
     if (fetchCount > 0 && isSelectCommand(sql)) {
-      const { rowsAffected, rowsPrinted } = await runCursorLoop(
-        ctx,
-        sql,
-        fetchCount,
-        out,
-      );
-      stats.rowsAffected = rowsAffected;
-      stats.rowsPrinted = rowsPrinted;
+      const r = await runCursorLoop(ctx, sql, fetchCount, out);
+      stats.rowsAffected = r.rowsAffected;
+      stats.rowsPrinted = r.rowsPrinted;
       stats.fetched = true;
+      lastRowCount = r.lastRowCount;
     } else {
       const results = await ctx.settings.db.execSimple(sql);
-      const { rowsAffected, rowsPrinted } = await renderResultSets(
-        ctx,
-        results,
-        out,
-      );
-      stats.rowsAffected = rowsAffected;
-      stats.rowsPrinted = rowsPrinted;
+      const r = await renderResultSets(ctx, results, out);
+      stats.rowsAffected = r.rowsAffected;
+      stats.rowsPrinted = r.rowsPrinted;
+      lastRowCount = r.lastRowCount;
     }
   } catch (err) {
     const message = recordError(ctx, err, sql);
@@ -884,6 +948,16 @@ export const executeAndPrint = async (
       ctx.stdout.write('\n' + formatDurationMs(stats.durationMs) + '\n');
     }
   }
+  // Mirror upstream's `SetResultVariables` / `SetErrorVariables` call at the
+  // tail of `SendQuery`: refresh the per-statement diagnostic psql vars so
+  // `\echo :SQLSTATE` and friends see the most recent outcome. ROW_COUNT
+  // tracks libpq's `PQcmdTuples` on the LAST result of a `\;` batch.
+  refreshErrorVars(
+    ctx.settings,
+    stats.hadError
+      ? { kind: 'error' }
+      : { kind: 'success', rowCount: lastRowCount },
+  );
   return stats;
 };
 
@@ -989,17 +1063,20 @@ export const sendQuery = async (
   const out = pickOut(ctx, opts.oneShotOut);
   const fetchCount = readFetchCount(ctx.settings);
 
+  let lastRowCount: number | null = null;
   try {
     if (fetchCount > 0 && isSelectCommand(sql)) {
       const r = await runCursorLoop(ctx, sql, fetchCount, out);
       stats.rowsAffected = r.rowsAffected;
       stats.rowsPrinted = r.rowsPrinted;
       stats.fetched = true;
+      lastRowCount = r.lastRowCount;
     } else {
       const results = await db.execSimple(sql);
       const r = await renderResultSets(ctx, results, out);
       stats.rowsAffected = r.rowsAffected;
       stats.rowsPrinted = r.rowsPrinted;
+      lastRowCount = r.lastRowCount;
     }
   } catch (err) {
     const message = recordError(ctx, err, sql);
@@ -1034,6 +1111,17 @@ export const sendQuery = async (
   // intentionally do not COMMIT here: that's the user's responsibility under
   // AUTOCOMMIT=off.
   void implicitBeginIssued;
+
+  // Mirror upstream's `SetResultVariables` / `SetErrorVariables` call at the
+  // tail of `SendQuery`. ROW_COUNT mirrors libpq's `PQcmdTuples` on the LAST
+  // result of a `\;` batch; SQLSTATE / ERROR reset every statement; the
+  // LAST_ERROR_* pair only changes on failure (sticky on success).
+  refreshErrorVars(
+    ctx.settings,
+    stats.hadError
+      ? { kind: 'error' }
+      : { kind: 'success', rowCount: lastRowCount },
+  );
 
   if (ctx.settings.timing) {
     stats.durationMs = performance.now() - started;

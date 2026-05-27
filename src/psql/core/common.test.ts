@@ -22,7 +22,12 @@ import type { PsqlSettings } from '../types/settings.js';
 import { createVarStore } from './variables.js';
 import { defaultSettings } from './settings.js';
 import { createCondStack } from '../command/cmd_cond.js';
-import { sendQuery, executeAndPrint, psqlExec } from './common.js';
+import {
+  refreshErrorVars,
+  sendQuery,
+  executeAndPrint,
+  psqlExec,
+} from './common.js';
 
 // ---------------------------------------------------------------------------
 // Mock Connection. Tracks calls in order; updates txStatus based on the
@@ -644,6 +649,116 @@ describe('sendQuery — errors', () => {
     expect(text).toContain('ERROR:  boom');
     expect(text).not.toContain('DETAIL');
     expect(text).not.toContain('HINT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// refreshErrorVars — built-in :SQLSTATE / :ERROR / :LAST_ERROR_* /
+// :ROW_COUNT psql variables refreshed at the tail of sendQuery /
+// executeAndPrint. Mirrors upstream `SetResultVariables`.
+// ---------------------------------------------------------------------------
+
+describe('refreshErrorVars', () => {
+  test('success path: SQLSTATE=00000, ERROR=false, ROW_COUNT mirrors rs.rowCount', () => {
+    const vars = createVarStore();
+    const settings = defaultSettings(vars);
+    refreshErrorVars(settings, { kind: 'success', rowCount: 5 });
+    expect(vars.get('SQLSTATE')).toBe('00000');
+    expect(vars.get('ERROR')).toBe('false');
+    expect(vars.get('ROW_COUNT')).toBe('5');
+  });
+
+  test('success with null rowCount falls back to "0"', () => {
+    const vars = createVarStore();
+    const settings = defaultSettings(vars);
+    refreshErrorVars(settings, { kind: 'success', rowCount: null });
+    expect(vars.get('ROW_COUNT')).toBe('0');
+  });
+
+  test('error path: LAST_ERROR_*, SQLSTATE mirror lastErrorResult; ROW_COUNT=0', () => {
+    const vars = createVarStore();
+    const settings = defaultSettings(vars);
+    settings.lastErrorResult = {
+      severity: 'ERROR',
+      code: '22012',
+      message: 'division by zero',
+    };
+    refreshErrorVars(settings, { kind: 'error' });
+    expect(vars.get('LAST_ERROR_MESSAGE')).toBe('division by zero');
+    expect(vars.get('LAST_ERROR_SQLSTATE')).toBe('22012');
+    expect(vars.get('SQLSTATE')).toBe('22012');
+    expect(vars.get('ERROR')).toBe('true');
+    expect(vars.get('ROW_COUNT')).toBe('0');
+  });
+
+  test('error path with no lastErrorResult falls back to XX000', () => {
+    const vars = createVarStore();
+    const settings = defaultSettings(vars);
+    settings.lastErrorResult = null;
+    refreshErrorVars(settings, { kind: 'error' });
+    expect(vars.get('LAST_ERROR_SQLSTATE')).toBe('XX000');
+    expect(vars.get('SQLSTATE')).toBe('XX000');
+    expect(vars.get('ERROR')).toBe('true');
+  });
+
+  test('LAST_ERROR_* are sticky across a subsequent success', () => {
+    const vars = createVarStore();
+    const settings = defaultSettings(vars);
+    settings.lastErrorResult = {
+      code: '22012',
+      message: 'division by zero',
+    };
+    refreshErrorVars(settings, { kind: 'error' });
+    expect(vars.get('LAST_ERROR_MESSAGE')).toBe('division by zero');
+    // The next statement succeeds: LAST_ERROR_* must be preserved.
+    refreshErrorVars(settings, { kind: 'success', rowCount: 1 });
+    expect(vars.get('LAST_ERROR_MESSAGE')).toBe('division by zero');
+    expect(vars.get('LAST_ERROR_SQLSTATE')).toBe('22012');
+    expect(vars.get('SQLSTATE')).toBe('00000');
+    expect(vars.get('ERROR')).toBe('false');
+    expect(vars.get('ROW_COUNT')).toBe('1');
+  });
+});
+
+describe('sendQuery — built-in :SQLSTATE / :ERROR / :ROW_COUNT vars', () => {
+  test('successful SELECT sets ROW_COUNT to rows returned', async () => {
+    const { ctx } = buildCtxWithBuffers();
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(ctx.settings.vars.get('SQLSTATE')).toBe('00000');
+    expect(ctx.settings.vars.get('ERROR')).toBe('false');
+    expect(ctx.settings.vars.get('ROW_COUNT')).toBe('1');
+  });
+
+  test('error sets LAST_ERROR_*, SQLSTATE, ERROR=true, ROW_COUNT=0', async () => {
+    const err = Object.assign(new Error('division by zero'), {
+      severity: 'ERROR',
+      code: '22012',
+    });
+    const canned = new Map<string, Canned>([['SELECT 1/0;', err]]);
+    const { ctx } = buildCtxWithBuffers({ canned });
+    await sendQuery(ctx, 'SELECT 1/0;');
+    expect(ctx.settings.vars.get('LAST_ERROR_MESSAGE')).toBe(
+      'division by zero',
+    );
+    expect(ctx.settings.vars.get('LAST_ERROR_SQLSTATE')).toBe('22012');
+    expect(ctx.settings.vars.get('SQLSTATE')).toBe('22012');
+    expect(ctx.settings.vars.get('ERROR')).toBe('true');
+    expect(ctx.settings.vars.get('ROW_COUNT')).toBe('0');
+  });
+
+  test('LAST_ERROR_* survive a subsequent successful statement', async () => {
+    const err = Object.assign(new Error('boom'), {
+      severity: 'ERROR',
+      code: '22012',
+    });
+    const canned = new Map<string, Canned>([['SELECT bad;', err]]);
+    const { ctx } = buildCtxWithBuffers({ canned });
+    await sendQuery(ctx, 'SELECT bad;');
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(ctx.settings.vars.get('LAST_ERROR_MESSAGE')).toBe('boom');
+    expect(ctx.settings.vars.get('LAST_ERROR_SQLSTATE')).toBe('22012');
+    expect(ctx.settings.vars.get('SQLSTATE')).toBe('00000');
+    expect(ctx.settings.vars.get('ERROR')).toBe('false');
   });
 });
 

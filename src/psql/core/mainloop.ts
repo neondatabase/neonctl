@@ -47,6 +47,7 @@ import { renderPromptByName, type PromptContext } from './prompt.js';
 import {
   captureLastError,
   pickOut,
+  refreshErrorVars,
   renderResultSet,
   sendQuery,
   writeQueryError,
@@ -577,22 +578,30 @@ const dispatchSendQuery = async (
         return undefined;
       })();
       ps.pending.push(exec);
+      // The enqueue succeeded; the actual result will flush at
+      // `\endpipeline` time. Mark the diagnostic vars as success-now so
+      // intervening `\echo :ERROR` sees "false" between pipeline appends.
+      refreshErrorVars(ctx.settings, { kind: 'success', rowCount: null });
       return true;
     } catch (err) {
       const message = captureLastError(ctx.settings, err, sql);
       writeQueryError(ctx, message);
+      refreshErrorVars(ctx.settings, { kind: 'error' });
       return false;
     }
   }
 
   if (bind && ctx.settings.db) {
     const started = ctx.settings.timing ? Date.now() : 0;
+    let lastRowCount: number | null = null;
+    let hadError = false;
     try {
       const rs = await ctx.settings.db.query(sql, bind.values);
       // Route the single ResultSet through the unified printer pipeline so
       // `\bind` output looks identical to a simple-query result (and honours
       // `\o FILE`, format selection, expanded mode, etc.).
-      await renderResultSet(ctx, rs, pickOut(ctx));
+      const r = await renderResultSet(ctx, rs, pickOut(ctx));
+      lastRowCount = r.lastRowCount;
       return true;
     } catch (err) {
       // Capture the full ErrorResponse payload (severity / code / position /
@@ -600,9 +609,16 @@ const dispatchSendQuery = async (
       // VERBOSITY and SHOW_CONTEXT exactly like the simple-query path.
       const message = captureLastError(ctx.settings, err, sql);
       writeQueryError(ctx, message);
+      hadError = true;
       return false;
     } finally {
       refreshConnectionVars(ctx);
+      refreshErrorVars(
+        ctx.settings,
+        hadError
+          ? { kind: 'error' }
+          : { kind: 'success', rowCount: lastRowCount },
+      );
       if (ctx.settings.timing) {
         ctx.stdout.write('\n' + formatDurationMs(Date.now() - started) + '\n');
       }
