@@ -1148,6 +1148,151 @@ describe('PgConnection', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Mid-batch COPY-FROM-STDIN / COPY-TO-STDOUT — the wire-layer path the
+  // mainloop drives for `\;`-chained simple-query batches that include
+  // `COPY ... FROM STDIN` (or `TO STDOUT`).
+  // -------------------------------------------------------------------------
+
+  test('execSimple ships queued COPY-FROM-STDIN bytes on CopyInResponse', async () => {
+    let copyInBytes: Buffer = Buffer.alloc(0);
+    let copyDoneSeen = false;
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        // Simulate the `\;`-chained batch: the COPY segment fires
+        // CopyInResponse first.
+        client.send(copyInResponse([0]));
+        return;
+      }
+      if (msg.type === 'CopyData') {
+        copyInBytes = Buffer.concat([copyInBytes, msg.data as Buffer]);
+        return;
+      }
+      if (msg.type === 'CopyDone') {
+        copyDoneSeen = true;
+        client.send(commandComplete('COPY 2'));
+        // After COPY, the rest of the chain runs — represent the
+        // "SELECT 'done'" follow-on with a tag + RfQ.
+        client.send(commandComplete('SELECT 1'));
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    (
+      conn as unknown as { queueCopyInData: (b: Buffer) => void }
+    ).queueCopyInData(Buffer.from('Moe\nSusie\n'));
+    const sets = await conn.execSimple("COPY t FROM STDIN ; SELECT 'done'");
+    expect(copyDoneSeen).toBe(true);
+    expect(copyInBytes.toString('utf8')).toBe('Moe\nSusie\n');
+    // Both COPY and the trailing SELECT segments produced ResultSets.
+    expect(sets.map((rs) => rs.command)).toEqual(['COPY', 'SELECT']);
+    await conn.close();
+  });
+
+  test('execSimple forwards CopyData to copyOutMidBatchSink on TO STDOUT', async () => {
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(copyOutResponse([0]));
+        client.send(copyDataMsg('Calvin\n'));
+        client.send(copyDataMsg('Hobbes\n'));
+        client.send(copyDoneMsg());
+        client.send(commandComplete('COPY 2'));
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    const captured: string[] = [];
+    (
+      conn as unknown as {
+        copyOutMidBatchSink: ((chunk: Buffer) => void) | null;
+      }
+    ).copyOutMidBatchSink = (chunk: Buffer): void => {
+      captured.push(chunk.toString('utf8'));
+    };
+    const sets = await conn.execSimple('COPY t TO STDOUT');
+    expect(captured.join('')).toBe('Calvin\nHobbes\n');
+    expect(sets[0]?.command).toBe('COPY');
+    await conn.close();
+  });
+
+  test('execSimple sends CopyFail when no COPY-FROM-STDIN block is queued', async () => {
+    let copyFailSeen = false;
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+        return;
+      }
+      if (msg.type === 'Query') {
+        client.send(copyInResponse([0]));
+        return;
+      }
+      if (msg.type === 'CopyFail') {
+        copyFailSeen = true;
+        // Server responds with ErrorResponse + RfQ when CopyFail arrives.
+        client.send(
+          backendMessage(
+            'E',
+            Buffer.concat([
+              Buffer.from('S'),
+              cstring('ERROR'),
+              Buffer.from('M'),
+              cstring('COPY from stdin failed'),
+              Buffer.from([0]),
+            ]),
+          ),
+        );
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    // No queueCopyInData call — the wire layer must fall back to CopyFail.
+    // The server then replies with its own ErrorResponse (which overrides
+    // the local diagnostic), so the rejection surfaces the server message.
+    await expect(conn.execSimple('COPY t FROM STDIN')).rejects.toMatchObject({
+      message: expect.stringMatching(/COPY from stdin failed/),
+    });
+    expect(copyFailSeen).toBe(true);
+    await conn.close();
+  });
+
+  // -------------------------------------------------------------------------
   // Extended protocol (WP-21).
   // -------------------------------------------------------------------------
 

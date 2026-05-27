@@ -363,6 +363,57 @@ export class PgConnection implements Connection {
   public lastCopyTag: string | null = null;
 
   /**
+   * Pre-buffered CopyData payloads keyed to the order of CopyInResponse
+   * messages we expect to see during the next `execSimple`. Used to drive
+   * `COPY ... FROM STDIN` segments that appear as part of a `\;`-chained
+   * simple-query batch — the mainloop pre-scans its input for `\.`-terminated
+   * COPY data blocks, hands the bytes in here, and the in-query dispatcher
+   * pops the head buffer when a CopyInResponse arrives. Each buffer becomes
+   * one CopyData frame followed by CopyDone (the upstream wire shape).
+   *
+   * If the queue is empty when CopyInResponse arrives, the wire layer falls
+   * back to CopyFail so the connection doesn't deadlock.
+   */
+  private copyInMidBatchQueue: Buffer[] = [];
+
+  /**
+   * Queue one COPY-FROM-STDIN data block. Call once per expected
+   * CopyInResponse, in the order they will arrive during the upcoming
+   * `execSimple`. The mainloop owns the parsing of `\.`-terminated stdin
+   * blocks; we just buffer the raw bytes and ship them when the server is
+   * ready.
+   */
+  public queueCopyInData(data: Buffer): void {
+    this.copyInMidBatchQueue.push(data);
+  }
+
+  /** Drop any queued COPY-FROM-STDIN data blocks. */
+  public clearCopyInDataQueue(): void {
+    this.copyInMidBatchQueue.length = 0;
+  }
+
+  /**
+   * Sink for COPY-TO-STDOUT mid-batch data. When `COPY ... TO STDOUT` is one
+   * segment of a `\;`-chained simple-query batch, the server pushes CopyData
+   * messages to us mid-`execSimple`. With no `startCopyOut` driver active,
+   * upstream `handleCopyOut` would write the bytes verbatim to the caller's
+   * output stream. We expose a settable sink so the mainloop can wire stdout
+   * (or any other WritableStream); if unset, the bytes are dropped (matching
+   * libpq's behaviour when `PQexec` lacks a copy handler — the data still
+   * gets consumed off the wire so the protocol stays in sync, but is
+   * silently discarded).
+   */
+  public copyOutMidBatchSink: ((chunk: Buffer) => void) | null = null;
+
+  /**
+   * Mid-batch COPY-OUT state. While `true`, CopyData/CopyDone messages
+   * arriving in `handleQueryMessage` are routed to the sink rather than
+   * triggering the "unexpected message" diagnostic. Flipped on by
+   * CopyOutResponse and off again when CopyDone arrives.
+   */
+  private copyOutMidBatchActive = false;
+
+  /**
    * Password captured at connect time, retained in memory so that `\c` can
    * reconnect without re-supplying credentials (matching libpq's behaviour,
    * which keeps the password on the live `PGconn`). `null` when no password
@@ -1710,12 +1761,28 @@ export class PgConnection implements Connection {
         }
         // CopyInResponse during execSimple (no active CopyIn driver) — the
         // common path is `COPY ... FROM STDIN` as one segment of a `\;`-chained
-        // simple-query batch. Upstream psql would pump stdin lines until `\.`;
-        // we don't have that wiring yet, but we MUST NOT just sit and wait —
-        // the server is in CopyIn state expecting CopyData/CopyDone/CopyFail
-        // and won't send another message until we do. Send CopyFail to bail
-        // out cleanly: the server replies with ErrorResponse + ReadyForQuery
-        // and execSimple finishes with an error instead of deadlocking.
+        // simple-query batch. Upstream psql pumps stdin lines until `\.`; the
+        // mainloop pre-scans its input and buffers the bytes into
+        // `copyInMidBatchQueue` before calling execSimple. We pop the head
+        // buffer and ship it as CopyData + CopyDone. If no buffer is queued
+        // (caller forgot to seed, or scan was inaccurate), CopyFail so the
+        // server returns to ReadyForQuery rather than blocking.
+        const data = this.copyInMidBatchQueue.shift();
+        if (data !== undefined) {
+          try {
+            // Empty payload still needs a CopyDone — the server transitions
+            // back to CopyIn-done state on CopyDone regardless of byte
+            // count. Wrapping a zero-length CopyData is harmless.
+            if (data.length > 0) {
+              this.socket.write(CopyData(data));
+            }
+            this.socket.write(CopyDone());
+          } catch {
+            // Write failures are surfaced via socket 'error' / 'close'
+            // handlers which will fail the pending query.
+          }
+          return;
+        }
         q.error = {
           severity: 'ERROR',
           message:
@@ -1734,10 +1801,46 @@ export class PgConnection implements Connection {
           this.abortForCopyInPipeline();
           return;
         }
+        // CopyOutResponse during execSimple (no active CopyOut driver) — the
+        // common path is `COPY ... TO STDOUT` as one segment of a `\;`-chained
+        // simple-query batch. Upstream `handleCopyOut` writes the bytes
+        // verbatim to the caller's output stream; with no sink configured we
+        // still consume the CopyData / CopyDone frames off the wire so the
+        // protocol returns to ReadyForQuery, but drop the payload silently.
+        this.copyOutMidBatchActive = true;
+        return;
+      }
+      case 'CopyData': {
+        // CopyData arrives during execSimple only when we're in the mid-batch
+        // COPY-OUT phase (CopyOutResponse flipped the flag above). Forward to
+        // the configured sink, or drop. Anything else is a protocol error.
+        if (this.copyOutMidBatchActive) {
+          if (this.copyOutMidBatchSink) {
+            try {
+              this.copyOutMidBatchSink(msg.data);
+            } catch {
+              // ignore sink-side write failures; the COPY drain itself
+              // continues so the connection returns to idle cleanly.
+            }
+          }
+          return;
+        }
         q.error = {
           severity: 'ERROR',
-          message:
-            'COPY TO STDOUT not supported via execSimple — use \\copy or startCopyOut',
+          message: 'Unexpected backend message during query: CopyData',
+        };
+        return;
+      }
+      case 'CopyDone': {
+        // Server signals end of COPY-OUT data — next message will be
+        // CommandComplete for the COPY statement, then the batch resumes.
+        if (this.copyOutMidBatchActive) {
+          this.copyOutMidBatchActive = false;
+          return;
+        }
+        q.error = {
+          severity: 'ERROR',
+          message: 'Unexpected backend message during query: CopyDone',
         };
         return;
       }

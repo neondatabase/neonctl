@@ -721,6 +721,73 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
     ctx.settings.vars.get(name);
 
   /**
+   * Strip block / line comments cheaply before scanning so a COPY-shaped
+   * comment doesn't trigger pre-buffering or sink wiring.
+   */
+  const stripSqlComments = (sql: string): string =>
+    sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '');
+
+  /**
+   * Count the number of `COPY ... FROM STDIN` segments in `sql`. Upstream
+   * `handleCopyIn` in copy.c is invoked for each one that hits the wire as
+   * a `\;`-chained simple-query batch; the mainloop must pre-buffer the
+   * `\.`-terminated data block per occurrence and hand them to the wire
+   * layer before dispatch so CopyInResponse is satisfied without a
+   * blocking callback into the REPL.
+   *
+   * The regex tolerates the optional column list (`COPY t (a, b)`) and the
+   * format clause (`COPY t FROM STDIN WITH (...)` / `... CSV ...`). False
+   * positives inside string literals / comments are possible but extremely
+   * rare in scripted workloads — and a false positive only over-consumes
+   * lines from the input, which is recoverable. The conservative regex
+   * here matches upstream `psql`'s scanner heuristics closely enough for
+   * the conformance suite (`psql.sql` lines around 1467-1476).
+   */
+  const countCopyFromStdin = (sql: string): number => {
+    const stripped = stripSqlComments(sql);
+    const re = /\bCOPY\b[\s\S]*?\bFROM\s+STDIN\b/giu;
+    let n = 0;
+    while (re.exec(stripped) !== null) n += 1;
+    return n;
+  };
+
+  /**
+   * `true` when `sql` contains at least one `COPY ... TO STDOUT` segment.
+   * The wire layer routes mid-batch CopyData into our `copyOutMidBatchSink`
+   * when it's set; we install one for the duration of a batch that mentions
+   * `TO STDOUT` so the bytes land on the active output stream.
+   */
+  const hasCopyToStdout = (sql: string): boolean =>
+    /\bCOPY\b[\s\S]*?\bTO\s+STDOUT\b/iu.test(stripSqlComments(sql));
+
+  /**
+   * Read one COPY-FROM-STDIN data block: consume lines from the reader
+   * until a bare `\.` arrives (or EOF / null). Returns the concatenated
+   * payload as a Buffer with trailing newlines preserved (the wire side
+   * sends the bytes verbatim; the server treats them as the COPY input).
+   * The `\.` terminator itself is NOT included.
+   */
+  const readCopyDataBlock = async (): Promise<Buffer> => {
+    const lines: string[] = [];
+    for (;;) {
+      const line = await reader.readLine('');
+      if (line === null) break;
+      if (line.replace(/\s+$/, '') === '\\.') break;
+      lines.push(line);
+      // ECHO=all echoes COPY data lines too (upstream `--echo-all` does
+      // the same: each non-empty input line is echoed before any
+      // protocol-level handling).
+      if (ctx.settings.echo === 'all') {
+        ctx.stdout.write(line + '\n');
+      }
+    }
+    // Each line plus a trailing newline — matches the byte stream COPY
+    // expects on its input side.
+    const text = lines.length === 0 ? '' : lines.join('\n') + '\n';
+    return Buffer.from(text, 'utf8');
+  };
+
+  /**
    * Process the assembled queryBuf+line through scanSql, dispatching the
    * boundaries it finds. Returns when we hit `incomplete`/`eof` and need
    * the next input line.
@@ -743,9 +810,63 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           // Suppressed: discard, no execution, no error.
           continue;
         }
+        // COPY ... FROM STDIN appearing as a segment of a `\;`-chained
+        // batch needs its CopyInResponse satisfied with the COPY data
+        // block(s) that follow on stdin. We pre-buffer one block per
+        // detected `FROM STDIN` occurrence and hand the bytes to the wire
+        // layer before dispatch. Mirrors upstream `handleCopyIn` in
+        // copy.c — except we pump the bytes up-front instead of via a
+        // callback into the REPL when CopyInResponse arrives.
+        const copyCount = ctx.settings.db ? countCopyFromStdin(sqlText) : 0;
+        const wantsCopyOut =
+          ctx.settings.db !== undefined && hasCopyToStdout(sqlText);
+        if (copyCount > 0 && ctx.settings.db) {
+          // The Connection type doesn't expose `queueCopyInData` (kept
+          // off the frozen interface), but the concrete PgConnection
+          // does. We duck-type the method to avoid coupling here.
+          const conn = ctx.settings.db as unknown as {
+            queueCopyInData?: (data: Buffer) => void;
+            clearCopyInDataQueue?: () => void;
+          };
+          if (typeof conn.queueCopyInData === 'function') {
+            // Drop any leftover buffers from a previous (failed) batch so
+            // we don't accidentally re-use stale data.
+            conn.clearCopyInDataQueue?.();
+            for (let i = 0; i < copyCount; i += 1) {
+              const block = await readCopyDataBlock();
+              conn.queueCopyInData(block);
+            }
+          }
+        }
+        if (wantsCopyOut && ctx.settings.db) {
+          // Wire a stdout-bound sink so the wire layer can forward
+          // mid-batch CopyData bytes verbatim (matching `handleCopyOut`).
+          // Bytes already include trailing newlines on each row, so we
+          // pass them through unchanged.
+          const conn = ctx.settings.db as unknown as {
+            copyOutMidBatchSink?: ((chunk: Buffer) => void) | null;
+          };
+          conn.copyOutMidBatchSink = (chunk: Buffer): void => {
+            ctx.stdout.write(chunk);
+          };
+        }
         sigintState.inQuery = true;
         const ok = await dispatchSendQuery(ctx, sqlText);
         sigintState.inQuery = false;
+        // Always clear any leftover queued blocks once the batch settles
+        // (success or failure) so the next dispatch starts fresh.
+        if (copyCount > 0 && ctx.settings.db) {
+          const conn = ctx.settings.db as unknown as {
+            clearCopyInDataQueue?: () => void;
+          };
+          conn.clearCopyInDataQueue?.();
+        }
+        if (wantsCopyOut && ctx.settings.db) {
+          const conn = ctx.settings.db as unknown as {
+            copyOutMidBatchSink?: ((chunk: Buffer) => void) | null;
+          };
+          conn.copyOutMidBatchSink = null;
+        }
         lastWasError = !ok;
         // After any SQL statement, the server may have closed the connection
         // (e.g. pg_terminate_backend on our own pid). Surface that once and
