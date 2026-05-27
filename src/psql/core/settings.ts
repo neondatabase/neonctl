@@ -195,6 +195,21 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
   varStore.set('LAST_ERROR_MESSAGE', '');
   varStore.set('LAST_ERROR_SQLSTATE', '00000');
 
+  // PIPELINE_SYNC_COUNT / PIPELINE_COMMAND_COUNT / PIPELINE_RESULT_COUNT —
+  // upstream `pset.piped_syncs` / `pset.piped_commands` / `pset.piped_results`
+  // are mirrored into psql variables of these names (used by `\echo
+  // :PIPELINE_*` throughout `regress/psql_pipeline.sql`). The three counters
+  // are plain string vars seeded to "0" at startup; `\startpipeline` /
+  // `\endpipeline` reset them to "0", and the pipeline driver bumps them
+  // per upstream's SendQuery / discardAbortedPipelineResults logic.
+  // Upstream installs no substitute/assign hooks on these — `\unset
+  // PIPELINE_SYNC_COUNT` actually drops the variable (verified empirically:
+  // `\echo :PIPELINE_SYNC_COUNT` then prints the literal `:NAME`). We
+  // mirror that here: plain seed, no hook.
+  varStore.set('PIPELINE_SYNC_COUNT', '0');
+  varStore.set('PIPELINE_COMMAND_COUNT', '0');
+  varStore.set('PIPELINE_RESULT_COUNT', '0');
+
   // SHOW_ALL_RESULTS defaults to 'on' — when off ('0' / 'off') the REPL only
   // prints the final result set of a multi-statement `\;`-separated batch
   // (upstream `pset.show_all_results`, set in startup.c).

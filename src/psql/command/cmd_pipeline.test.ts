@@ -31,9 +31,13 @@ import {
   cmdBindNamed,
   cmdClosePrepared,
   cmdEndPipeline,
+  cmdFlushRequest,
   cmdGdesc,
+  cmdGetResults,
   cmdParse,
+  cmdSendPipeline,
   cmdStartPipeline,
+  cmdSyncPipeline,
   consumeBindState,
   getPipelineState,
 } from './cmd_pipeline.js';
@@ -437,5 +441,178 @@ describe('\\gdesc', () => {
     const r = await run(cmdGdesc, ctx);
     expect(r.status).toBe('reset-buf');
     expect(stderr()).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PIPELINE_COMMAND_COUNT / PIPELINE_SYNC_COUNT / PIPELINE_RESULT_COUNT
+//
+// Upstream psql 18 exposes three pipeline counters as session vars. The full
+// rule set (verified empirically against vanilla psql 18.4) is documented at
+// the top of cmd_pipeline.ts; these tests pin the state transitions so any
+// future drift breaks loudly.
+// ---------------------------------------------------------------------------
+
+describe('PIPELINE_* counter variables', () => {
+  const read = (s: PsqlSettings, name: string): string =>
+    s.vars.get(name) ?? '<unset>';
+
+  test('seeded to "0" at startup before any pipeline activity', () => {
+    const s = makeSettings();
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('0');
+  });
+
+  test('\\startpipeline resets all three counters to "0"', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    // Seed non-zero values so we can prove the reset fires.
+    s.vars.set('PIPELINE_COMMAND_COUNT', '99');
+    s.vars.set('PIPELINE_SYNC_COUNT', '7');
+    s.vars.set('PIPELINE_RESULT_COUNT', '3');
+    const r = await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    expect(r.status).toBe('ok');
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('0');
+  });
+
+  test('\\sendpipeline (via the wrapped session.execute) bumps COMMAND_COUNT', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    // \bind first to set up the bind stash, then \sendpipeline consumes it
+    // and enqueues Parse/Bind/Execute on the wrapped session.
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    const r = await run(
+      cmdSendPipeline,
+      makeMockCtx('sendpipeline', '', s, 'SELECT 1'),
+    );
+    expect(r.status).toBe('reset-buf');
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('1');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('0');
+  });
+
+  test('\\parse bumps COMMAND_COUNT inside a pipeline (mirrors upstream)', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    const r = await run(cmdParse, makeMockCtx('parse', 'stm', s, 'SELECT 1'));
+    expect(r.status).toBe('reset-buf');
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('1');
+  });
+
+  test('\\parse outside a pipeline does NOT bump COMMAND_COUNT', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const r = await run(cmdParse, makeMockCtx('parse', 'stm', s, 'SELECT 1'));
+    expect(r.status).toBe('reset-buf');
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('0');
+  });
+
+  test('\\syncpipeline shifts queued commands to results and bumps SYNC_COUNT', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    // Queue two commands.
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 1'));
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 2'));
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('2');
+    // Sync flips: SYNC++, RESULT += COMMAND, COMMAND = 0.
+    const r = await run(cmdSyncPipeline, makeMockCtx('syncpipeline', '', s));
+    expect(r.status).toBe('ok');
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('1');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('2');
+  });
+
+  test('\\flushrequest shifts queued commands to results without touching SYNC_COUNT', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 1'));
+    const r = await run(cmdFlushRequest, makeMockCtx('flushrequest', '', s));
+    expect(r.status).toBe('ok');
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('1');
+  });
+
+  test('\\getresults N decrements RESULT_COUNT by N drained (SYNC unchanged on partial drain)', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    // Queue 2 commands and sync.
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 1'));
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 2'));
+    await run(cmdSyncPipeline, makeMockCtx('syncpipeline', '', s));
+    // Partial drain: RESULT 2 -> 1, SYNC stays at 1.
+    const r = await run(cmdGetResults, makeMockCtx('getresults', '1', s));
+    expect(r.status).toBe('ok');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('1');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('1');
+  });
+
+  test('full \\getresults drain resets SYNC_COUNT to 0 alongside RESULT_COUNT', async () => {
+    // Upstream behaviour: once all results have been consumed and the
+    // pipeline is "clean", piped_syncs is reset to 0 too.
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 1'));
+    await run(cmdSyncPipeline, makeMockCtx('syncpipeline', '', s));
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('1');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('1');
+    // No-arg drain consumes everything.
+    const r = await run(cmdGetResults, makeMockCtx('getresults', '', s));
+    expect(r.status).toBe('ok');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('0');
+  });
+
+  test('\\endpipeline resets all three counters to "0"', async () => {
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    // Build up some non-zero state.
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 1'));
+    await run(cmdSyncPipeline, makeMockCtx('syncpipeline', '', s));
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('1');
+    const r = await run(cmdEndPipeline, makeMockCtx('endpipeline', '', s));
+    expect(r.status).toBe('ok');
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('0');
+  });
+
+  test('multiple syncs accumulate RESULT_COUNT across boundaries', async () => {
+    // Mirrors the regress/psql_pipeline "Send multiple syncs" block: each
+    // Sync converts whatever's queued into results, so RESULT_COUNT is the
+    // sum of each pre-sync COMMAND_COUNT snapshot.
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    await run(cmdStartPipeline, makeMockCtx('startpipeline', '', s));
+    // Cycle 1: 1 command + sync -> RESULT=1, SYNC=1
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 1'));
+    await run(cmdSyncPipeline, makeMockCtx('syncpipeline', '', s));
+    // Cycle 2: 2 commands + sync -> RESULT=3, SYNC=2
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 2'));
+    await run(cmdBind, makeMockCtx('bind', '', s));
+    await run(cmdSendPipeline, makeMockCtx('sendpipeline', '', s, 'SELECT 3'));
+    await run(cmdSyncPipeline, makeMockCtx('syncpipeline', '', s));
+    expect(read(s, 'PIPELINE_COMMAND_COUNT')).toBe('0');
+    expect(read(s, 'PIPELINE_SYNC_COUNT')).toBe('2');
+    expect(read(s, 'PIPELINE_RESULT_COUNT')).toBe('3');
   });
 });

@@ -140,6 +140,90 @@ export const getPipelineState = (
 ): PipelineStash | null => stashOf(settings)[PIPELINE_KEY] ?? null;
 
 // ---------------------------------------------------------------------------
+// PIPELINE_* counter book-keeping.
+//
+// Upstream psql 18 exposes three pipeline counters as `:VAR`-interpolatable
+// session variables (initialized to "0" in `settings.ts` at startup):
+//
+//   PIPELINE_COMMAND_COUNT  number of P/B/E batches queued since last Sync
+//   PIPELINE_SYNC_COUNT     number of Syncs issued in the current pipeline
+//   PIPELINE_RESULT_COUNT   results queued server-side but not yet fetched
+//
+// The counter rules (verified empirically against vanilla psql 18.4):
+//
+//   \startpipeline    — all three reset to "0".
+//   \parse            — COMMAND_COUNT++.
+//   \sendpipeline     — COMMAND_COUNT++.
+//   ;-query in pipeline mode — COMMAND_COUNT++ (each implicit-`;` send).
+//   \syncpipeline     — SYNC_COUNT++, RESULT_COUNT += COMMAND_COUNT,
+//                       COMMAND_COUNT = 0.
+//   \flushrequest /
+//   \flush            — RESULT_COUNT += COMMAND_COUNT, COMMAND_COUNT = 0.
+//   \getresults [N]   — RESULT_COUNT -= actually-drained; if RESULT_COUNT
+//                       hits 0, SYNC_COUNT also resets to 0 (full-drain
+//                       returns the pipeline to a clean slate).
+//   \endpipeline      — all three reset to "0".
+//
+// For `;`-queries the increment fires from a wrapper installed around the
+// stashed `Pipeline.execute` in `cmdStartPipeline.run` — mainloop's
+// `dispatchSendQuery` calls `ps.session.parse/bind/execute` directly, and
+// the wrapper picks that up without mainloop having to know about the var
+// store.
+// ---------------------------------------------------------------------------
+
+const readCounter = (settings: PsqlSettings, name: string): number => {
+  const raw = settings.vars.get(name);
+  if (raw === undefined) return 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+
+const setCounter = (
+  settings: PsqlSettings,
+  name: string,
+  value: number,
+): void => {
+  settings.vars.set(name, String(Math.max(0, value)));
+};
+
+const bumpCounter = (
+  settings: PsqlSettings,
+  name: string,
+  delta: number,
+): void => {
+  setCounter(settings, name, readCounter(settings, name) + delta);
+};
+
+const resetPipelineCounters = (settings: PsqlSettings): void => {
+  setCounter(settings, 'PIPELINE_COMMAND_COUNT', 0);
+  setCounter(settings, 'PIPELINE_SYNC_COUNT', 0);
+  setCounter(settings, 'PIPELINE_RESULT_COUNT', 0);
+};
+
+/**
+ * Wrap `Pipeline.execute` so each enqueued Execute message bumps
+ * `PIPELINE_COMMAND_COUNT`. The wrapping covers both call sites:
+ *
+ *  - `cmdSendPipeline` (this file) — `\sendpipeline`.
+ *  - `dispatchSendQuery` (mainloop) — implicit `;`-queries while pipeline
+ *    is active. Mainloop calls `ps.session.execute('', 0)` so the wrapper
+ *    fires automatically without mainloop knowing about the var store.
+ *
+ * The wrapper preserves the original function's `this` binding via `apply`.
+ */
+const wrapSessionForCounters = (
+  session: Pipeline,
+  settings: PsqlSettings,
+): Pipeline => {
+  const origExecute = session.execute.bind(session);
+  session.execute = (name: string, maxRows?: number) => {
+    bumpCounter(settings, 'PIPELINE_COMMAND_COUNT', 1);
+    return origExecute(name, maxRows);
+  };
+  return session;
+};
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -249,6 +333,15 @@ export const cmdParse: BackslashCmdSpec = {
       // "ERROR: there is no parameter $1" the conformance corpus
       // expects from `SELECT $1, $2` executed without bind params.
       ctx.settings.lastQuery = sql;
+      // When pipeline mode is active, the Parse counts as one command
+      // toward PIPELINE_COMMAND_COUNT (upstream `exec_command_parse`
+      // bumps `pset.piped_commands` after the PQsendPrepare call).
+      // Outside a pipeline, this is a no-op call site — the counters are
+      // only read inside pipeline scope so the bump would be invisible
+      // anyway, but we guard explicitly for clarity.
+      if (getPipelineState(ctx.settings) !== null) {
+        bumpCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT', 1);
+      }
       return { status: 'reset-buf', newBuf: '' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -318,12 +411,18 @@ export const cmdStartPipeline: BackslashCmdSpec = {
       return Promise.resolve(errResult(ctx, 'pipeline already active'));
     }
     try {
-      const session = ctx.settings.db.pipeline();
+      const session = wrapSessionForCounters(
+        ctx.settings.db.pipeline(),
+        ctx.settings,
+      );
       stashOf(ctx.settings)[PIPELINE_KEY] = {
         session,
         pending: [],
       };
       ctx.settings.sendMode = 'extended-pipeline';
+      // Upstream `exec_command_startpipeline` calls SetVariable for the three
+      // counter vars (zeroing whatever the prior pipeline left behind).
+      resetPipelineCounters(ctx.settings);
       return Promise.resolve({ status: 'ok' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -344,6 +443,10 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       const sets = await ps.session.end();
       stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
       ctx.settings.sendMode = 'extended-query';
+      // Upstream `exec_command_endpipeline` zeroes the counters once the
+      // pipeline has drained — mirrors the empirical behaviour of vanilla
+      // psql 18.4 where `\echo :PIPELINE_*` reads "0" after `\endpipeline`.
+      resetPipelineCounters(ctx.settings);
       // Render each ResultSet through the active printer so the
       // pipeline's queued queries surface their output. Empty-result
       // sets (CREATE/INSERT/etc.) still go through so command tags
@@ -362,6 +465,10 @@ export const cmdEndPipeline: BackslashCmdSpec = {
     } catch (err) {
       stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
       ctx.settings.sendMode = 'extended-query';
+      // Even on a failed `\endpipeline` (e.g. server hung up mid-drain),
+      // mirror upstream and clear the counters — the pipeline state is
+      // gone, so any non-zero value would be misleading.
+      resetPipelineCounters(ctx.settings);
       const msg = err instanceof Error ? err.message : String(err);
       return errResult(ctx, msg);
     }
@@ -380,6 +487,16 @@ export const cmdSyncPipeline: BackslashCmdSpec = {
     if (!ps) return errResult(ctx, 'no pipeline active');
     try {
       await ps.session.sync();
+      // Upstream `exec_command_syncpipeline`:
+      //   piped_results += piped_commands;
+      //   piped_commands = 0;
+      //   piped_syncs++;
+      // The pending commands have transitioned to "queued results" on the
+      // server, and Sync is itself counted as a piped command boundary.
+      const queued = readCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT');
+      setCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT', 0);
+      bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', queued);
+      bumpCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', 1);
       return { status: 'ok' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -396,6 +513,13 @@ export const cmdFlushRequest: BackslashCmdSpec = {
     if (!ps) return errResult(ctx, 'no pipeline active');
     try {
       await ps.session.flush();
+      // Upstream `exec_command_flushrequest`:
+      //   piped_results += piped_commands;
+      //   piped_commands = 0;
+      // The pending commands move to "queued results" but SYNC isn't issued.
+      const queued = readCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT');
+      setCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT', 0);
+      bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', queued);
       return { status: 'ok' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -480,6 +604,16 @@ export const cmdGetResults: BackslashCmdSpec = {
     const drained = ps.pending.splice(0, n);
     try {
       await Promise.all(drained);
+      // Upstream `exec_command_getresults` decrements `pset.piped_results`
+      // by the number of results actually consumed. When the queue empties,
+      // upstream also resets `pset.piped_syncs` to 0 (the pipeline is back
+      // to "no Sync outstanding") — verified empirically: a full drain
+      // makes SYNC=0 even when there were multiple prior Syncs, but a
+      // partial drain leaves SYNC unchanged.
+      bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', -drained.length);
+      if (readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT') === 0) {
+        setCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', 0);
+      }
       return { status: 'ok' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

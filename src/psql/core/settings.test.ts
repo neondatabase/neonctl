@@ -743,6 +743,12 @@ describe('defaultSettings — special-variable hooks', () => {
       ['HIDE_TABLEAM', 'off'],
       ['AUTOCOMMIT', 'on'],
       ['SHOW_ALL_RESULTS', 'on'],
+      // PIPELINE_* counters — seeded to "0" so they're visible in `\set`
+      // output at startup (mirrors vanilla psql 18 SetVariable() in
+      // startup.c). Cmd_pipeline owns the per-transition bumps.
+      ['PIPELINE_COMMAND_COUNT', '0'],
+      ['PIPELINE_SYNC_COUNT', '0'],
+      ['PIPELINE_RESULT_COUNT', '0'],
     ])('%s = %s', (name, expected) => {
       const v = createVarStore();
       defaultSettings(v);
