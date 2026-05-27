@@ -253,6 +253,75 @@ describe('provisionPostgres — concurrent-create race', () => {
   });
 });
 
+describe('provisionPostgres — role selection', () => {
+  it('rejects branches where every role is `protected: true` (no user role)', async () => {
+    // Security-adjacent: a regression that picks roles[0] regardless of
+    // `protected` would silently put a Neon system/superuser role into
+    // the user's DATABASE_URL. The CONFIG_ERROR path must fire.
+    const api = makeApi({
+      listings: [
+        [
+          {
+            id: 'br_1',
+            name: 'main',
+            current_state: 'ready',
+            default: true,
+          },
+        ],
+      ],
+      endpoints: DEFAULT_ENDPOINTS,
+      // Every role is protected — no user-owned role exists.
+      roles: [
+        { name: 'cloud_admin', protected: true },
+        { name: 'neon_superuser', protected: true },
+      ],
+      databases: DEFAULT_DBS,
+    });
+    await expect(
+      provisionPostgres({
+        api: api as any,
+        projectId: 'prj_1',
+        spec: { name: 'main' },
+        resourceFqn: 'db',
+      }),
+    ).rejects.toThrowError(
+      expect.objectContaining({
+        exitCode: ExitCode.CONFIG_ERROR,
+        message: expect.stringMatching(/no user-owned role/i),
+      }),
+    );
+  });
+
+  it('picks the first non-protected role and ignores protected ones', async () => {
+    const api = makeApi({
+      listings: [
+        [
+          {
+            id: 'br_1',
+            name: 'main',
+            current_state: 'ready',
+            default: true,
+          },
+        ],
+      ],
+      endpoints: DEFAULT_ENDPOINTS,
+      // Protected role listed FIRST to catch a regression to `roles[0]`.
+      roles: [
+        { name: 'cloud_admin', protected: true },
+        { name: 'app_user', protected: false },
+      ],
+      databases: DEFAULT_DBS,
+    });
+    const result = await provisionPostgres({
+      api: api as any,
+      projectId: 'prj_1',
+      spec: { name: 'main' },
+      resourceFqn: 'db',
+    });
+    expect(result.role).toBe('app_user');
+  });
+});
+
 describe('pollOpsTerminal — diagnostic preservation', () => {
   beforeEach(() => {
     vi.useFakeTimers();

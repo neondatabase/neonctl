@@ -430,35 +430,69 @@ export function startLocalCommand(opts: {
     ready = buildReadiness(spec.readiness, child, subscribeLines);
   }
 
+  // SIGTERM → SIGKILL escalation. Without this, a child that traps
+  // SIGTERM and ignores it leaves `await handle.exited` pending forever
+  // — observable as a "wedged" launch in CI where the user can't Ctrl-C.
+  // Five seconds is generous enough for a well-behaved dev server to
+  // run a graceful shutdown but short enough to keep teardown bounded.
+  const KILL_ESCALATION_MS = 5_000;
   const kill = (): Promise<void> => {
     if (child.killed || child.exitCode !== null) return Promise.resolve();
-    if (!detached) {
-      // Either Windows (no process groups) or inherit-mode (we declined to
-      // detach to keep the TTY behavior — the child shares our group, so
-      // the OS already delivers SIGINT on Ctrl-C and child.kill reaches
-      // the shell. Grandchildren may not get the signal in this mode;
-      // they're the price of `stdio: 'inherit'`).
-      child.kill('SIGTERM');
-      return Promise.resolve();
-    }
-    // Unix + detached: kill the whole process group (-pid). The shell was
-    // spawned as its own group leader, so the dev server / grandchildren
-    // receive the signal too. Swallow all errors here — kill() is
-    // declared `Promise<void>`, callers loop over multiple handles with
-    // `void h.kill()` and a sync throw would abort the loop and leak the
-    // remaining children. The common error is ESRCH (group already gone);
-    // EPERM can fire for sudo-wrapped children and we'd rather log than
-    // crash the teardown.
-    try {
-      if (child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
-    } catch (err: unknown) {
-      const code = (err as { code?: string }).code;
-      if (code !== 'ESRCH') {
-        log.info(
-          `[${resourceFqn}] kill(-${String(child.pid)}, SIGTERM) failed: ${code ?? String(err)}`,
-        );
+    const pid = child.pid;
+    const sendSignal = (sig: 'SIGTERM' | 'SIGKILL'): void => {
+      if (!detached) {
+        // Either Windows (no process groups) or inherit-mode (we declined to
+        // detach to keep the TTY behavior — the child shares our group, so
+        // the OS already delivers SIGINT on Ctrl-C and child.kill reaches
+        // the shell. Grandchildren may not get the signal in this mode;
+        // they're the price of `stdio: 'inherit'`).
+        try {
+          child.kill(sig);
+        } catch (err: unknown) {
+          const code = (err as { code?: string }).code;
+          if (code !== 'ESRCH') {
+            log.info(
+              `[${resourceFqn}] child.kill('${sig}') failed: ${code ?? String(err)}`,
+            );
+          }
+        }
+        return;
       }
-    }
+      // Unix + detached: kill the whole process group (-pid). The shell was
+      // spawned as its own group leader, so the dev server / grandchildren
+      // receive the signal too. Swallow all errors here — kill() is
+      // declared `Promise<void>`, callers loop over multiple handles with
+      // `void h.kill()` and a sync throw would abort the loop and leak the
+      // remaining children. The common error is ESRCH (group already gone);
+      // EPERM can fire for sudo-wrapped children and we'd rather log than
+      // crash the teardown.
+      try {
+        if (pid !== undefined) process.kill(-pid, sig);
+      } catch (err: unknown) {
+        const code = (err as { code?: string }).code;
+        if (code !== 'ESRCH') {
+          log.info(
+            `[${resourceFqn}] kill(-${String(pid)}, ${sig}) failed: ${code ?? String(err)}`,
+          );
+        }
+      }
+    };
+    sendSignal('SIGTERM');
+    // Schedule SIGKILL escalation, but cancel it if the child exits
+    // gracefully first so a normal teardown doesn't keep the timer
+    // (and hence the event loop) alive.
+    const escalation = setTimeout(() => {
+      if (child.exitCode === null && !child.killed) {
+        log.info(
+          `[${resourceFqn}] still alive ${KILL_ESCALATION_MS}ms after SIGTERM — escalating to SIGKILL.`,
+        );
+        sendSignal('SIGKILL');
+      }
+    }, KILL_ESCALATION_MS);
+    escalation.unref?.();
+    child.once('exit', () => {
+      clearTimeout(escalation);
+    });
     return Promise.resolve();
   };
 

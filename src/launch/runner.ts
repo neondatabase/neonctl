@@ -115,15 +115,24 @@ function newRuntime(): Runtime {
  * vars or a stale shell `NEON_PROJECT_ID` would silently override an
  * explicit `--project-id`.
  */
-function getCliProjectIdFromArgv(argv: string[]): string | undefined {
+export function getCliProjectIdFromArgv(argv: string[]): string | undefined {
+  const nonEmpty = (v: string | undefined): string | undefined =>
+    v !== undefined && v !== '' ? v : undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--project-id' || a === '--projectId') return argv[i + 1];
+    if (a === '--project-id' || a === '--projectId') {
+      const next = argv[i + 1];
+      // Skip the next arg if it starts with `--` — that's the next flag,
+      // not this flag's value. Without this, `--project-id --analytics`
+      // would silently use `'--analytics'` as the project id.
+      if (next?.startsWith('--')) return undefined;
+      return nonEmpty(next);
+    }
     const eq = '=';
     if (a.startsWith(`--project-id${eq}`))
-      return a.slice(`--project-id${eq}`.length);
+      return nonEmpty(a.slice(`--project-id${eq}`.length));
     if (a.startsWith(`--projectId${eq}`))
-      return a.slice(`--projectId${eq}`.length);
+      return nonEmpty(a.slice(`--projectId${eq}`.length));
   }
   return undefined;
 }
@@ -233,19 +242,27 @@ async function resolveEnv(
  * `next dev` / `vite` shortcuts. Constraints (any one of these falls back
  * to 'prefixed'):
  *
- *   1. logMatch readiness needs captured stdout — can't share the TTY.
- *   2. Another local-command in the same stage would interleave on the
+ *   1. The parent's stdout is not a TTY (supervisor / pipe / no terminal).
+ *      In that environment, the supervisor (docker, k8s, systemd) sends
+ *      SIGTERM to the parent only — not to the process group — so
+ *      inherit-mode + non-detached leaves the dev-server grandchild as
+ *      an orphan holding the port. Force 'prefixed' (detached) so the
+ *      kill cascade reaches the group via `process.kill(-pid, ...)`.
+ *      Also: no TTY means inherit's main UX win (interactive shortcuts)
+ *      doesn't apply.
+ *   2. logMatch readiness needs captured stdout — can't share the TTY.
+ *   3. Another local-command in the same stage would interleave on the
  *      TTY — prefixed serializes line output.
- *   3. The node has dependents — downstream stage teardown will call
+ *   4. The node has dependents — downstream stage teardown will call
  *      `kill()` on this handle. In inherit mode `detached` is false to
  *      preserve TTY control, so `kill()` signals only the wrapping
  *      `sh -c` — the dev-server grandchild survives, re-parents to init,
  *      and keeps holding its port. Prefixed (detached) lets the kill
  *      cascade reach the grandchild's process group.
- *   4. ANY sibling resource is in the same stage (postgres, vercel-
+ *   5. ANY sibling resource is in the same stage (postgres, vercel-
  *      deployment, or another local-command). Sibling failure triggers
  *      a fast-cancel kill of every live local-command — including this
- *      one — and the same grandchild-leak in (3) applies. The only stage
+ *      one — and the same grandchild-leak in (4) applies. The only stage
  *      where inherit is safe is one where this is the ONLY node.
  *      TTY Ctrl-C still works in prefixed mode because the kernel
  *      signals the whole foreground group.
@@ -255,7 +272,9 @@ export function pickStdioMode(
   localCmdCount: number,
   hasDependents: boolean,
   stageSize: number,
+  isTty = Boolean(process.stdout.isTTY),
 ): StdioMode {
+  if (!isTty) return 'prefixed';
   if (stageSize > 1) return 'prefixed';
   if (localCmdCount !== 1) return 'prefixed';
   const spec = node.spec as { readiness?: { logMatch?: RegExp } };

@@ -75,6 +75,24 @@ export function wrapTeam(path: string, ctx: VercelClientCtx): string {
 const VERCEL_RETRY_ATTEMPTS = 3;
 const VERCEL_BASE_DELAY_MS = 500;
 
+/**
+ * Parse the `Retry-After` header per RFC 9110 §10.2.3. The header may be
+ * delta-seconds OR an HTTP-date — `Number('Wed, 21 Oct …')` is `NaN`, so
+ * a naive `Number(header)` silently misses the date form. Returns the
+ * delay in milliseconds, or undefined if absent / unparseable / negative.
+ */
+function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const asSeconds = Number(header);
+  if (Number.isFinite(asSeconds) && asSeconds > 0) return asSeconds * 1_000;
+  const asDate = Date.parse(header);
+  if (Number.isFinite(asDate)) {
+    const delta = asDate - Date.now();
+    if (delta > 0) return delta;
+  }
+  return undefined;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -104,11 +122,21 @@ async function vercelFetch<T>(
         `[neon launch] Vercel ${init?.method ?? 'GET'} ${path} returned ${res.status}: ${body}`,
       );
     }
-    const retryAfter = Number(res.headers.get('Retry-After'));
+    const retryAfter = parseRetryAfter(res.headers.get('Retry-After'));
+    const exponentialDelay = VERCEL_BASE_DELAY_MS * 2 ** (attempt - 1);
+    // Cap Retry-After to bounded delays. Vercel's own @vercel/client
+    // applies the same min/max (RETRY_DELAY_MIN_MS = 5s, MAX = 60s) —
+    // a misconfigured edge response of `Retry-After: 7200` would
+    // otherwise burn 2 hours of the user's launch budget per attempt.
+    const VERCEL_MIN_DELAY_MS = 5_000;
+    const VERCEL_MAX_DELAY_MS = 60_000;
     const delay =
-      Number.isFinite(retryAfter) && retryAfter > 0
-        ? retryAfter * 1_000
-        : VERCEL_BASE_DELAY_MS * 2 ** (attempt - 1);
+      retryAfter !== undefined
+        ? Math.min(
+            VERCEL_MAX_DELAY_MS,
+            Math.max(VERCEL_MIN_DELAY_MS, retryAfter),
+          )
+        : exponentialDelay;
     log.info(
       `[vercel] retrying ${init?.method ?? 'GET'} ${path} after ${res.status} (attempt ${attempt}/${VERCEL_RETRY_ATTEMPTS - 1}, ${delay}ms)`,
     );
@@ -138,13 +166,26 @@ export async function resolveProject(
 
 /**
  * Resolve a team slug to a `team_xxx` id. Call once, persist result.
+ *
+ * Validates the response shape: if Vercel ever returns the list-shaped
+ * `{ teams: [...] }` envelope (the alternate "List Teams" endpoint lives
+ * at the same `/v2/teams` path) or null/empty id, surfaces a clear error
+ * instead of letting `teamId=undefined` propagate through every
+ * subsequent Vercel call.
  */
 export async function resolveTeamSlug(
   slug: string,
   token: string,
 ): Promise<string> {
-  type Resp = { id: string };
+  type Resp = { id?: unknown };
   const resp = await vercelFetch<Resp>(VERCEL_API.teamBySlug(slug), { token });
+  if (typeof resp?.id !== 'string' || resp.id === '') {
+    throw new Error(
+      `[neon launch] Vercel team slug '${slug}' did not resolve to a team id ` +
+        `(response missing or empty 'id' field). Set VERCEL_TEAM_ID explicitly ` +
+        `or check that your VERCEL_TOKEN has access to the team.`,
+    );
+  }
   return resp.id;
 }
 
@@ -183,10 +224,39 @@ export async function upsertEnvVars(opts: {
       gitBranch: opts.gitBranch,
     };
   });
-  await vercelFetch(VERCEL_API.envUpsert(opts.projectId), opts.ctx, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  // Vercel returns `200` with a partial-result envelope: `{ created, failed }`.
+  // Per-variable failures (name collisions in another target, validation
+  // rejections) land in `failed[]` with the HTTP request still succeeding.
+  // If we don't inspect `failed`, the next deployment boots without the
+  // intended env vars and the user sees a runtime crash in production
+  // instead of a configuration error here. Source:
+  // https://vercel.com/docs/rest-api/projects/create-one-or-more-environment-variables
+  type UpsertEnvResponse = {
+    created?: unknown;
+    failed?: {
+      key?: string;
+      error?: { code?: string; message?: string };
+    }[];
+  };
+  const resp = await vercelFetch<UpsertEnvResponse>(
+    VERCEL_API.envUpsert(opts.projectId),
+    opts.ctx,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+  if (resp.failed && resp.failed.length > 0) {
+    const summary = resp.failed
+      .map((f) => {
+        const key = f.key ?? '?';
+        const code = f.error?.code ?? 'unknown';
+        const msg = f.error?.message ?? '(no message)';
+        return `${key} [${code}]: ${msg}`;
+      })
+      .join('; ');
+    throw new Error(
+      `[neon launch] Vercel env-var upsert partially failed: ${summary}. ` +
+        `Aborting before the deployment trigger — re-running with the conflict resolved is safe.`,
+    );
+  }
 }
 
 // =============================================================================
@@ -264,21 +334,36 @@ export async function createDeployment(opts: {
   //   - PROD success: 'alias-assigned' resolves with the canonical
   //     domain. 'ready' fires earlier but `payload.url` is still the
   //     per-deploy host at that point; aliases haven't been wired yet.
-  //   - Failures: 'error', 'canceled', 'checks-v2-failed',
-  //     'checks-conclusion-failed', 'checks-conclusion-canceled'.
+  //   - Hard failures: 'error', 'canceled', 'checks-v2-failed'.
+  //     These are the events `@vercel/client` itself uses `return yield`
+  //     for in check-deployment-status.js — i.e. they actually terminate
+  //     the upstream iterator.
+  //   - Soft failures (log-and-continue): 'checks-conclusion-failed' /
+  //     'checks-conclusion-canceled'. These fire even for non-blocking
+  //     checks; the upstream SDK yields them without returning, and
+  //     deploys with non-blocking-check failures still proceed to
+  //     'ready' + 'alias-assigned'. Treating them as terminal failures
+  //     would fail deployments Vercel itself promotes.
   //
-  // Outer timeout via Promise.race: if the underlying stream goes
+  // Outer timeout via setTimeout flag: if the underlying stream goes
   // silent (Vercel edge partial outage holding the connection open
   // without emitting events), the `for await` blocks indefinitely on
-  // the iterator's `next()` promise — checking the deadline inside
-  // the loop body would never fire. The race kicks the timeout
-  // independent of stream activity.
+  // the iterator's `next()` promise. We flip a flag from the timer and
+  // call `iterator.return?.()` to break out cleanly — that lets the
+  // `for await` exit normally (its internal `.return()` path runs), so
+  // the underlying HTTP connection + SDK state are released instead of
+  // leaking across library-mode re-invocations.
   const DEPLOY_TIMEOUT_MS = 15 * 60 * 1_000;
   const iterator = vercelCreateDeployment(
     clientOpts as Parameters<typeof vercelCreateDeployment>[0],
     deploymentOpts as Parameters<typeof vercelCreateDeployment>[1],
   );
-  const walk = async (): Promise<VercelDeploymentResult> => {
+  let timedOut = false;
+  const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+    timedOut = true;
+    void iterator.return?.(undefined);
+  }, DEPLOY_TIMEOUT_MS);
+  try {
     let aliasedUrl: string | undefined;
     for await (const event of iterator) {
       const payload = event.payload as {
@@ -299,35 +384,39 @@ export async function createDeployment(opts: {
       if (
         event.type === 'error' ||
         event.type === 'canceled' ||
-        event.type === 'checks-v2-failed' ||
-        event.type === 'checks-conclusion-failed' ||
-        event.type === 'checks-conclusion-canceled'
+        event.type === 'checks-v2-failed'
       ) {
         throw new Error(
           `[neon launch] Vercel deployment ${event.type}: ${extractEventMessage(event.type, event.payload)}`,
         );
       }
+      if (
+        event.type === 'checks-conclusion-failed' ||
+        event.type === 'checks-conclusion-canceled'
+      ) {
+        // Non-blocking check failed/canceled — the deploy may still
+        // succeed. Log so the user knows, but keep polling.
+        log.info(
+          `[vercel:${opts.projectName}] ${event.type}: ${extractEventMessage(event.type, event.payload)} — continuing to wait for terminal event.`,
+        );
+      }
+    }
+    // Loop exit. If the iterator was force-returned by the timeout,
+    // surface that; otherwise surface the last-seen status.
+    if (timedOut) {
+      throw new Error(
+        `[neon launch] Vercel deployment exceeded ${DEPLOY_TIMEOUT_MS / 60_000}min timeout (last status: ${status ?? 'unknown'}).`,
+      );
     }
     throw new Error(
       `[neon launch] Vercel deployment stream ended without a terminal event (last status: ${status ?? 'unknown'}).`,
     );
-  };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      walk(),
-      new Promise<VercelDeploymentResult>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(
-            new Error(
-              `[neon launch] Vercel deployment exceeded ${DEPLOY_TIMEOUT_MS / 60_000}min timeout (last status: ${status ?? 'unknown'}).`,
-            ),
-          );
-        }, DEPLOY_TIMEOUT_MS);
-      }),
-    ]);
   } finally {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
+    // Defensive: if we exited via return (success) or via a `throw`
+    // from within the for-await, make sure the iterator is closed so a
+    // lingering SDK fetch doesn't hold the event loop in library mode.
+    void iterator.return?.(undefined);
   }
 }
 
@@ -352,6 +441,17 @@ export async function createDeployment(opts: {
 function extractEventMessage(eventType: string, payload: unknown): string {
   if (payload instanceof Error) return payload.message;
   if (typeof payload === 'string') return payload;
+  // Array-shaped payloads (Vercel batches multiple validation issues
+  // into a single error event). Recurse so each entry's message is
+  // surfaced rather than falling through to "no detail".
+  if (Array.isArray(payload)) {
+    return (
+      payload
+        .map((p) => extractEventMessage(eventType, p))
+        .filter((s) => s && s !== 'no detail provided by Vercel')
+        .join('; ') || 'no detail provided by Vercel'
+    );
+  }
   if (payload !== null && typeof payload === 'object') {
     const p = payload as {
       message?: unknown;

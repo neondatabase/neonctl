@@ -31,8 +31,24 @@ import {
 // Neon branch names accept [a-z0-9_-] but not '/' or other separators
 // most git branches contain (`feature/foo`, `dependabot/npm_and_yarn/...`).
 // Slugify on the way in so the launcher doesn't 4xx on a feature branch.
-const slugifyBranch = (b: string) =>
-  b.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'main';
+//
+// Throws on empty input. Without this, an empty `ctx.gitBranch` (no git
+// repo, no --branch, no env override) would slugify to '' and the
+// launcher's `findBranchByName` would silently return the project's
+// default Neon branch (typically the production branch named `main` or
+// `production`) — and the launcher would run migrations + dev traffic
+// against production data. Fail fast instead.
+const slugifyBranch = (b: string) => {
+  const slug = b.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+  if (!slug) {
+    throw new Error(
+      '[neon-launch-vercel] No git branch detected and no --branch flag passed. ' +
+        'Pass `--branch <name>` explicitly so the per-PR Neon branch does not collide ' +
+        "with the project's default branch.",
+    );
+  }
+  return slug;
+};
 
 export default stack({
   spec: (_, { gitBranch, flags }) => {

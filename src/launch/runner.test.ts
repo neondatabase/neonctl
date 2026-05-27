@@ -17,7 +17,11 @@ import type { Plan, PlanNode } from './plan.js';
 // that only exists in the built dist/.
 vi.mock('../pkg.ts', () => ({ default: { version: '0.0.0' } }));
 
-import { groupStages, pickStdioMode } from './runner.js';
+import {
+  getCliProjectIdFromArgv,
+  groupStages,
+  pickStdioMode,
+} from './runner.js';
 
 // -----------------------------------------------------------------------------
 // PlanNode fixtures
@@ -123,20 +127,27 @@ describe('pickStdioMode', () => {
     readiness: { logMatch: /ready/ },
   });
 
-  it("single leaf node alone in its stage → 'inherit'", () => {
-    expect(pickStdioMode(cmdNoReadiness, 1, false, 1)).toBe('inherit');
+  // Each test explicitly passes `isTty` so the result doesn't depend on
+  // the environment vitest runs in (CI runs without a TTY; locally
+  // typically with one). The non-TTY case is covered separately below.
+
+  it("single leaf node alone in its stage with TTY → 'inherit'", () => {
+    expect(pickStdioMode(cmdNoReadiness, 1, false, 1, true)).toBe('inherit');
   });
 
   it("logMatch readiness forces 'prefixed' (needs captured stdout)", () => {
-    expect(pickStdioMode(cmdLogMatch, 1, false, 1)).toBe('prefixed');
+    expect(pickStdioMode(cmdLogMatch, 1, false, 1, true)).toBe('prefixed');
   });
 
   it("having dependents forces 'prefixed' (kill cascade must reach grandchildren)", () => {
-    expect(pickStdioMode(cmdNoReadiness, 1, true, 1)).toBe('prefixed');
+    expect(pickStdioMode(cmdNoReadiness, 1, true, 1, true)).toBe('prefixed');
   });
 
   it("more than one local-command in the stage forces 'prefixed' (no TTY interleave)", () => {
-    expect(pickStdioMode(cmdNoReadiness, 2, false, 2)).toBe('prefixed');
+    // Isolate the localCmdCount check by keeping stageSize === 1 so the
+    // sibling-count rule doesn't fire first. (Realistic in production
+    // these would match, but the test should pin one condition at a time.)
+    expect(pickStdioMode(cmdNoReadiness, 2, false, 1, true)).toBe('prefixed');
   });
 
   it("any sibling in the same stage forces 'prefixed' (sibling failure → kill cascade)", () => {
@@ -145,6 +156,80 @@ describe('pickStdioMode', () => {
     // 4xx's the fast-cancel will kill this node. In inherit mode that
     // signals only the wrapping shell — the dev-server grandchild
     // survives and holds its port.
-    expect(pickStdioMode(cmdNoReadiness, 1, false, 2)).toBe('prefixed');
+    expect(pickStdioMode(cmdNoReadiness, 1, false, 2, true)).toBe('prefixed');
+  });
+
+  it("non-TTY parent (supervisor / pipe) forces 'prefixed' regardless of other checks", () => {
+    // Otherwise inherit-mode + non-detached means SIGTERM from
+    // docker/k8s/systemd only reaches the wrapping shell, leaving the
+    // dev-server grandchild as an orphan holding the port.
+    expect(pickStdioMode(cmdNoReadiness, 1, false, 1, false)).toBe('prefixed');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// getCliProjectIdFromArgv — load-bearing for the CLI > env > middleware
+// precedence chain. The middleware path (silent neon-context write) makes
+// this scanner the only way to tell "user explicitly passed --project-id"
+// from "middleware filled it in". A regression here can destructively
+// provision against the wrong project.
+// -----------------------------------------------------------------------------
+
+describe('getCliProjectIdFromArgv', () => {
+  it('returns undefined when no flag is present', () => {
+    expect(
+      getCliProjectIdFromArgv(['node', 'cli.js', 'launch']),
+    ).toBeUndefined();
+  });
+
+  it('parses space-separated --project-id', () => {
+    expect(
+      getCliProjectIdFromArgv(['cli', 'launch', '--project-id', 'prj_abc']),
+    ).toBe('prj_abc');
+  });
+
+  it('parses space-separated --projectId (camelCase)', () => {
+    expect(
+      getCliProjectIdFromArgv(['cli', 'launch', '--projectId', 'prj_abc']),
+    ).toBe('prj_abc');
+  });
+
+  it('parses --project-id=value form', () => {
+    expect(
+      getCliProjectIdFromArgv(['cli', 'launch', '--project-id=prj_abc']),
+    ).toBe('prj_abc');
+  });
+
+  it('parses --projectId=value form (camelCase)', () => {
+    expect(
+      getCliProjectIdFromArgv(['cli', 'launch', '--projectId=prj_abc']),
+    ).toBe('prj_abc');
+  });
+
+  it('empty space-separated value → undefined (env fallback can take over)', () => {
+    expect(
+      getCliProjectIdFromArgv(['cli', 'launch', '--project-id', '']),
+    ).toBeUndefined();
+  });
+
+  it('empty --project-id= value → undefined', () => {
+    expect(
+      getCliProjectIdFromArgv(['cli', 'launch', '--project-id=']),
+    ).toBeUndefined();
+  });
+
+  it('next-arg starting with -- is NOT consumed as the value', () => {
+    // Without this guard, `neon launch --project-id --analytics` would
+    // silently use `'--analytics'` as the project id and the downstream
+    // API call would 4xx with a confusing message.
+    expect(
+      getCliProjectIdFromArgv(['cli', 'launch', '--project-id', '--analytics']),
+    ).toBeUndefined();
+  });
+
+  it('end-of-args yields undefined (no next value)', () => {
+    expect(
+      getCliProjectIdFromArgv(['cli', 'launch', '--project-id']),
+    ).toBeUndefined();
   });
 });

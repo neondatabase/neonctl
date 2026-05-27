@@ -18,6 +18,8 @@ import { readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { parse as parseEnvFile, stringify as stringifyEnvFile } from 'envfile';
 
+import { log } from '../log.js';
+
 import type { FlagValue, LaunchContext } from './config.js';
 
 export const NEON_LAUNCH_ENV_FILE = '.neon-launch.env';
@@ -131,7 +133,17 @@ export function resolveGitBranch(opts: {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch {
-    // not a git repo, or git not on PATH
+    // Not a git repo, or git not on PATH. Warn loudly: spec callbacks
+    // that derive resource names from ctx.gitBranch (e.g. the example's
+    // `slugifyBranch(gitBranch)`) will silently see '' and may collide
+    // with the project's default Neon branch. Plan-time invariants
+    // (preview-deploy gitBranch check) catch the Vercel half; nothing
+    // else is in a position to catch the postgres half generically.
+    log.warning(
+      '[neon launch] No git branch detected (not a git repo, no GITHUB_REF_NAME, no --branch). ' +
+        'Spec callbacks reading ctx.gitBranch will see an empty string. ' +
+        'Pass `--branch <name>` explicitly to avoid surprises (e.g. reusing the project default).',
+    );
     return '';
   }
 

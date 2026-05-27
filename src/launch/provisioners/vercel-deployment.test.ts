@@ -120,6 +120,47 @@ describe('upsertEnvVars body shape', () => {
     ]);
   });
 
+  it('failed[] in response is surfaced as a launch error, not silently swallowed', async () => {
+    // Replace the default 200/{} fetch with one that returns a partial
+    // failure envelope. Vercel returns HTTP 200 + `{failed: [...]}` for
+    // per-key collisions / validation errors; silently swallowing this
+    // boots the next deploy without the intended env var.
+    const stash = globalThis.fetch;
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            created: [],
+            failed: [
+              {
+                key: 'DATABASE_URL',
+                error: {
+                  code: 'ENV_ALREADY_EXISTS',
+                  message: 'Variable already exists with conflicting target',
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )) as typeof fetch;
+    try {
+      await expect(
+        upsertEnvVars({
+          projectId: 'prj_abc',
+          envs: { DATABASE_URL: 'postgres://...' },
+          production: true,
+          gitBranch: 'main',
+          ctx: { token: 't' },
+        }),
+      ).rejects.toThrow(
+        /Vercel env-var upsert partially failed.*DATABASE_URL.*ENV_ALREADY_EXISTS.*Variable already exists/,
+      );
+    } finally {
+      globalThis.fetch = stash;
+    }
+  });
+
   it('teamId is appended to the upsert URL with the right separator', async () => {
     await upsertEnvVars({
       projectId: 'prj_abc',
@@ -257,20 +298,29 @@ describe('createDeployment — terminal event routing', () => {
     );
   });
 
-  it('checks-conclusion-failed is terminal (does not hang the 15-min budget)', async () => {
+  it('checks-conclusion-failed is logged but NOT terminal — deploy can still succeed (non-blocking checks)', async () => {
+    // @vercel/client yields checks-conclusion-failed without `return`,
+    // i.e. continues polling. Non-blocking checks may fail but the
+    // deploy can still proceed to ready + alias-assigned. The launcher
+    // must NOT abort here, or it fails what Vercel itself promotes.
     mockEvents = [
       { type: 'checks-conclusion-failed', payload: { id: 'dpl_xyz' } },
+      {
+        type: 'alias-assigned',
+        payload: { url: 'abc.vercel.app', alias: ['demo.vercel.app'] },
+      },
     ];
-    await expect(
-      createDeployment({ ...baseOpts, production: true }),
-    ).rejects.toThrow(/checks-conclusion-failed: checks failed/);
+    const result = await createDeployment({ ...baseOpts, production: true });
+    expect(result.url).toBe('https://demo.vercel.app');
   });
 
-  it('checks-conclusion-canceled is terminal', async () => {
-    mockEvents = [{ type: 'checks-conclusion-canceled', payload: {} }];
-    await expect(
-      createDeployment({ ...baseOpts, production: true }),
-    ).rejects.toThrow(/checks-conclusion-canceled: checks canceled/);
+  it('checks-conclusion-canceled is logged but NOT terminal', async () => {
+    mockEvents = [
+      { type: 'checks-conclusion-canceled', payload: {} },
+      { type: 'ready', payload: { url: 'abc.vercel.app' } },
+    ];
+    const result = await createDeployment({ ...baseOpts, production: false });
+    expect(result.url).toBe('https://abc.vercel.app');
   });
 
   it('iterator ending without a terminal event surfaces the last-seen status', async () => {

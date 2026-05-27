@@ -66,7 +66,7 @@ export const builder = (argv: yargs.Argv) =>
     .option('branch-timeout', {
       type: 'number',
       describe:
-        'Per-branch poll budget in seconds (covers create-op polling AND branch-ready polling)',
+        'Per-poll-phase budget in seconds — applied independently to op polling and branch-ready polling (worst case ~2× this value)',
       default: 300,
     })
     .example('$0 launch', 'Run the stack defined in ./neon.ts')

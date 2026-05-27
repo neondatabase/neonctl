@@ -402,7 +402,14 @@ export async function provisionPostgres(opts: {
       const responseBody = isAxiosError(err)
         ? (err.response?.data as { message?: string } | undefined)
         : undefined;
-      const quotaHit = /branch.*limit|quota/i.test(responseBody?.message ?? '');
+      // Tighter regex than `/branch.*limit|quota/i`: the loose form
+      // matches any 4xx body containing the word "quota" (e.g. a generic
+      // "monthly quota exceeded for storage") and misclassifies it as
+      // branch-quota. Anchor on phrases that name the branch resource.
+      const msg = responseBody?.message ?? '';
+      const quotaHit =
+        /branch.*(limit|quota)/i.test(msg) ||
+        /(limit|quota).*branch/i.test(msg);
       if (quotaHit) {
         // Quota is a plan-level limit, not an auth failure. CONFIG_ERROR
         // matches the user-actionable framing of the message (delete
@@ -416,6 +423,20 @@ export async function provisionPostgres(opts: {
       if (status === 409 || status === 422) {
         const existing = await findBranchByName(api, projectId, spec.name);
         if (existing) {
+          // Same guard as the first-time-found path above. Without it,
+          // a concurrent operator archiving the branch between A's
+          // success and B's listing would send B into pollBranchReady
+          // and burn the full `branchTimeoutSeconds` budget.
+          if (existing.current_state === 'archived') {
+            throw new LaunchError(
+              [
+                `[neon launch] Branch '${spec.name}' is archived.`,
+                `Restore it first: \`neon branches restore ${spec.name} --project-id ${projectId}\``,
+                `or rename it in your neon.ts so the launcher creates a fresh one.`,
+              ].join('\n'),
+              ExitCode.CONFIG_ERROR,
+            );
+          }
           log.info(
             `[postgres:${resourceFqn}] create returned ${status} but branch now exists — attaching (concurrent-create race).`,
           );

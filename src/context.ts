@@ -55,6 +55,16 @@ export const enrichFromContext = (
   if (!args.projectId) {
     args.projectId = context.projectId;
   }
+  // `neon launch` interprets `args.branch` as a GIT branch name (used to
+  // name the Neon postgres branch + scope Vercel preview env vars). The
+  // .neon context file's `branchId` is a Neon API id like `br_abc123` —
+  // a completely different identifier. Writing it into `args.branch`
+  // would slugify to `br_abc123` and silently provision against the
+  // wrong Neon branch / Vercel scope. Skip the branch-id auto-fill for
+  // `launch`; it has its own `--branch` semantics.
+  if (args._[0] === 'launch') {
+    return;
+  }
   if (
     !args.branch &&
     !args.id &&
