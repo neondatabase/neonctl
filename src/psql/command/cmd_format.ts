@@ -586,8 +586,19 @@ export const cmdPset: BackslashCmdSpec = {
       return Promise.resolve({ status: 'ok' });
     }
     const value = ctx.nextArg('normal');
+    // Under `--quiet` / `\set QUIET on`, upstream `exec_command_pset`
+    // (and the printPsetInfo helper it delegates to) suppresses the
+    // confirmation lines like `Null display is "…".` and `Tuples only
+    // is on.`. Pass `silent=true` so applyPset skips the writes —
+    // errors (invalid option / bad value) still go to stderr.
     return Promise.resolve(
-      applyPset(ctx.settings.popt.topt, option, value, ctx.cmdName),
+      applyPset(
+        ctx.settings.popt.topt,
+        option,
+        value,
+        ctx.cmdName,
+        ctx.settings.quiet,
+      ),
     );
   },
 };

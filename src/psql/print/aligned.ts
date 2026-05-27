@@ -754,14 +754,29 @@ const renderHorizontal = (
       return out;
     });
     const lineCount = Math.max(1, ...colLines.map((l) => l.length));
+    // Per-cell continuation markers. For each cell on each line:
+    //   - if the cell has more lines below (li < l.length - 1),
+    //     emit `+` between content and column separator. This mirrors
+    //     upstream's `format_buf[i].lines > j+1` branch in
+    //     `print_aligned_text`.
+    // Upstream additionally uses `.` (instead of space) as the leading
+    // gutter when the FIRST cell is a wrap-continuation line; that's
+    // wrap-mode-only. In non-wrap mode `\n`-split cells keep the
+    // leading-gutter as a plain space.
     for (let li = 0; li < lineCount; li++) {
       const lineCells = colLines.map((l) => l[li] ?? '');
-      const gutters = colLines.map((l) =>
-        li > 0 && li < l.length ? '.' : ' ',
-      );
-      // In wrapped mode the leftmost gutter for continuation lines is
-      // a '.', for non-continuation it's a space.
-      const leftGutter = gutters[0] ?? ' ';
+      const continuations = colLines.map((l) => (li < l.length - 1 ? '+' : ''));
+      // Leading gutter: `.` only for wrap-continuation of column 0 (the
+      // line was synthesised by `wrapLine`, not present in the original
+      // `cell.lines`). In non-wrap mode every "extra" line for column 0
+      // came from a `\n` split, so leftGutter stays as a space and the
+      // continuation indicator lives in the cell gap as `+`.
+      const firstColWrap =
+        wrapped &&
+        li > 0 &&
+        li < colLines[0].length &&
+        colLines[0].length > (row[0]?.lines.length ?? 0);
+      const leftGutter = firstColWrap ? '.' : ' ';
       out += renderDataLine(
         lineCells,
         widths,
@@ -769,6 +784,8 @@ const renderHorizontal = (
         border,
         glyphs,
         leftGutter,
+        /* isHeader */ false,
+        continuations,
       );
       out += newline;
     }
@@ -832,6 +849,15 @@ const renderDataLine = (
   //   header: ` ?column? | ?column? ` (trailing space)
   //   data:   ` foo      | bar`        (no trailing padding/margin)
   isHeader = false,
+  // Per-cell continuation indicator placed in the gap between the cell
+  // content and the column separator. Mirrors upstream's
+  // `print_aligned_text`:
+  //   `+`  this cell has more `\n`-split lines below ("multi-line continues")
+  //   `.`  this cell line is a wrap-continuation of a too-wide source line
+  //   ``   normal cell (no indicator — emits a space).
+  // Empty array is treated as all-blank, preserving callers that don't
+  // care (header rows, vertical mode).
+  continuations: string[] = [],
 ): string => {
   const { vrule } = glyphs;
   let out = '';
@@ -855,11 +881,24 @@ const renderDataLine = (
     } else {
       out += padToWidth(cells[i], widths[i], aligns[i]);
     }
+    // Pick the gap glyph for the separator between cells. Default: a
+    // single space. Multi-line / wrap continuations replace it with
+    // `+` / `.` so the column wall looks like `+|` rather than ` |`.
+    const cont = continuations[i] ?? '';
+    const gap = cont.length > 0 ? cont : ' ';
     if (i < cells.length - 1) {
       if (border === 0) {
-        out += ' ';
+        out += gap;
       } else {
-        out += ' ' + vrule + ' ';
+        out += gap + vrule + ' ';
+      }
+    } else {
+      // Trailing edge of the last cell. For border 1 data rows with a
+      // continuation indicator we still need the marker even though
+      // there's no further separator (matches upstream: ` qux ` →
+      // ` qux+` when the cell has more lines, with no trailing margin).
+      if (cont.length > 0 && !isHeader && border === 1) {
+        out += cont;
       }
     }
   }

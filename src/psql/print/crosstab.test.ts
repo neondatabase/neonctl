@@ -179,19 +179,38 @@ describe('pivotResultSet basic', () => {
     ]);
   });
 
-  test('column ref by name is case-insensitive', () => {
+  test('unquoted name is downcased before strcmp', () => {
+    // Upstream `indexOfColumn` dequote-downcases the user-supplied arg
+    // and then exact-matches against PQfname. Unquoted `FOO` becomes
+    // `foo`, which does NOT match a field named `Foo` — the test
+    // `\crosstabview 1 2 Foo` in the regress corpus relies on this.
     const rs = makeResultSet({
-      columns: [{ name: 'Foo' }, { name: 'BAR' }, { name: 'baz' }],
+      columns: [{ name: 'foo' }, { name: 'bar' }, { name: 'baz' }],
       rows: [['x', 'a', 1]],
     });
     const r = pivotResultSet(rs, {
       colV: 'FOO',
-      colH: 'bar',
+      colH: 'BAR',
       colD: 'Baz',
     });
     expect('error' in r).toBe(false);
     if ('error' in r) return;
-    expect(r.rs.fields.map((f) => f.name)).toEqual(['Foo', 'a']);
+    expect(r.rs.fields.map((f) => f.name)).toEqual(['foo', 'a']);
+  });
+
+  test('unquoted name with capitalised field does not match', () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'Foo' }, { name: 'bar' }, { name: 'baz' }],
+      rows: [['x', 'a', 1]],
+    });
+    const r = pivotResultSet(rs, {
+      colV: 'Foo', // downcased to "foo", field is "Foo" → no match
+      colH: 'bar',
+      colD: 'baz',
+    });
+    expect('error' in r).toBe(true);
+    if (!('error' in r)) return;
+    expect(r.error).toMatch(/column name not found: "foo"/);
   });
 
   test('quoted name preserves case', () => {
@@ -350,37 +369,45 @@ describe('pivotResultSet sort', () => {
 // ---------------------------------------------------------------------------
 
 describe('pivotResultSet errors', () => {
-  test('result with fewer than two columns errors', () => {
-    const rs = makeResultSet({
+  test('result with fewer than three columns errors', () => {
+    // Upstream `crosstabview.c` requires `PQnfields >= 3` unconditionally
+    // — a 1- or 2-column result has no payload to pivot. Both arities
+    // surface the same diagnostic.
+    const oneCol = makeResultSet({
       columns: [{ name: 'only' }],
       rows: [['x']],
     });
-    const r = pivotResultSet(rs, {});
+    let r = pivotResultSet(oneCol, {});
     expect('error' in r).toBe(true);
     if (!('error' in r)) return;
-    expect(r.error).toMatch(/at least two columns/);
-  });
+    expect(r.error).toMatch(/at least three columns/);
 
-  test('two columns with no colD specified errors', () => {
-    const rs = makeResultSet({
+    const twoCol = makeResultSet({
       columns: [{ name: 'v' }, { name: 'h' }],
       rows: [['x', 'a']],
     });
-    const r = pivotResultSet(rs, {});
+    r = pivotResultSet(twoCol, {});
     expect('error' in r).toBe(true);
     if (!('error' in r)) return;
-    expect(r.error).toMatch(/data column/);
+    expect(r.error).toMatch(/at least three columns/);
   });
 
-  test('more than three columns with no colD errors', () => {
+  test('more than three columns with no colD picks first non-V/H', () => {
+    // Upstream `do_crosstabview` defaults `colD` to "first column that's
+    // neither V nor H" even when the query returns >3 columns. This lets
+    // `SELECT v,h,c,i \crosstabview` pivot `c` without an explicit arg
+    // (the trailing `i` is ignored). We mirror that behaviour.
     const rs = makeResultSet({
       columns: [{ name: 'v' }, { name: 'h' }, { name: 'd' }, { name: 'extra' }],
       rows: [['x', 'a', 1, 'z']],
     });
     const r = pivotResultSet(rs, {});
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error).toMatch(/data column must be specified/);
+    expect('error' in r).toBe(false);
+    if ('error' in r) return;
+    // Resulting field count: 1 (row header) + 1 (single H value) = 2.
+    expect(r.rs.fields).toHaveLength(2);
+    expect(r.rs.fields[1].name).toBe('a');
+    expect(r.rs.rows[0]).toEqual(['x', 1]);
   });
 
   test('duplicate (colV, colH) pair errors', () => {
@@ -451,7 +478,7 @@ describe('pivotResultSet errors', () => {
 // ---------------------------------------------------------------------------
 
 describe('pivotResultSet nulls', () => {
-  test('null colH value becomes a header column using nullPrint at display time', () => {
+  test('null colH value becomes a header column using nullPrint', () => {
     const rs = makeResultSet({
       columns: [{ name: 'v' }, { name: 'h' }, { name: 'd' }],
       rows: [
@@ -459,14 +486,22 @@ describe('pivotResultSet nulls', () => {
         ['x', null, 2],
       ],
     });
-    const r = pivotResultSet(rs, {});
-    expect('error' in r).toBe(false);
-    if ('error' in r) return;
-    // Null header collapses to empty-string field name (the nullPrint
-    // substitution at print time is owned by the aligned printer for
-    // null cell values; field.name is just a string).
-    expect(r.rs.fields.map((f) => f.name)).toEqual(['v', 'a', '']);
-    expect(r.rs.rows[0]).toEqual(['x', 1, 2]);
+    // No nullPrint supplied → empty string (matches the default
+    // `\pset null ''`).
+    const rDefault = pivotResultSet(rs, {});
+    expect('error' in rDefault).toBe(false);
+    if ('error' in rDefault) return;
+    expect(rDefault.rs.fields.map((f) => f.name)).toEqual(['v', 'a', '']);
+    expect(rDefault.rs.rows[0]).toEqual(['x', 1, 2]);
+
+    // Supplying a nullPrint (the active `\pset null` value) renders the
+    // null H header inline at pivot time — matches the conformance
+    // expectation that the column header reads `#null#` after
+    // `\pset null '#null#'`.
+    const rTagged = pivotResultSet(rs, {}, '#null#');
+    expect('error' in rTagged).toBe(false);
+    if ('error' in rTagged) return;
+    expect(rTagged.rs.fields.map((f) => f.name)).toEqual(['v', 'a', '#null#']);
   });
 
   test('null colV value forms its own row', () => {

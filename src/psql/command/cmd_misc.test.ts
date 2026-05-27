@@ -158,15 +158,58 @@ describe('cmdCrosstabview', () => {
     const ctx = makeCtx(settingsWithConn(null), 'SELECT 1', '');
     const r = await cmdCrosstabview.run(ctx);
     expect(r.status).toBe('error');
+    expect(r.errorWritten).toBe(true);
     expect(stderrChunks.join('')).toMatch(/no connection/);
   });
 
-  test('empty SQL buffer → error', async () => {
+  test('empty SQL buffer with no lastQuery → error', async () => {
     const { conn } = makeMockConn({});
     const ctx = makeCtx(settingsWithConn(conn), '', '');
     const r = await cmdCrosstabview.run(ctx);
     expect(r.status).toBe('error');
+    expect(r.errorWritten).toBe(true);
     expect(stderrChunks.join('')).toMatch(/no SQL/);
+  });
+
+  test('empty SQL buffer falls back to settings.lastQuery', async () => {
+    // Mirrors upstream `do_crosstabview` / `\g` empty-buffer behaviour:
+    // when the buffer is empty (the SELECT terminated with `;` so
+    // mainloop already flushed it), re-run the most recent query.
+    const result = makeResultSet({
+      columns: [{ name: 'v' }, { name: 'h' }, { name: 'd' }],
+      rows: [['x', 'a', 1]],
+    });
+    const { conn, calls } = makeMockConn({ results: [result] });
+    const settings = settingsWithConn(conn);
+    settings.lastQuery = 'SELECT v,h,d FROM t';
+    const ctx = makeCtx(settings, '', '');
+    const r = await cmdCrosstabview.run(ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(calls).toEqual(['SELECT v,h,d FROM t']);
+    expect(stdoutChunks.join('')).toMatch(/x\s+\|\s+1/);
+  });
+
+  test('comment-only buffer falls back to settings.lastQuery', async () => {
+    // The SQL scanner accumulates `-- foo` into queryBuf verbatim, so a
+    // trailing comment between the prior `;` and `\crosstabview` leaves
+    // a non-empty buffer that has nothing executable. Treat that like
+    // empty for the fallback (matches upstream's
+    // `psql_scan_buffer_is_empty` heuristic).
+    const result = makeResultSet({
+      columns: [{ name: 'v' }, { name: 'h' }, { name: 'd' }],
+      rows: [['x', 'a', 1]],
+    });
+    const { conn, calls } = makeMockConn({ results: [result] });
+    const settings = settingsWithConn(conn);
+    settings.lastQuery = 'SELECT v,h,d FROM t';
+    const ctx = makeCtx(
+      settings,
+      '  -- a trailing comment line\n  /* and a /* nested */ block */  \n',
+      '',
+    );
+    const r = await cmdCrosstabview.run(ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(calls).toEqual(['SELECT v,h,d FROM t']);
   });
 
   test('renders pivot from canned ResultSet', async () => {

@@ -30,7 +30,11 @@ import { writeErr } from './shared.js';
 const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
   ctx.settings.lastErrorResult = { message };
   writeErr(`\\${ctx.cmdName}: ${message}\n`);
-  return { status: 'error' };
+  // Mark the diagnostic as already-emitted so the mainloop's fallback
+  // does not double-print `psql: ERROR:  <msg>`. Matches the pattern
+  // used by `cmd_io.ts::errResult` for the same reason. The conformance
+  // expected output has one error line per failure, not two.
+  return { status: 'error', errorWritten: true };
 };
 
 /**
@@ -48,6 +52,59 @@ const parseColRef = (raw: string): string | number => {
     return parseInt(trimmed, 10);
   }
   return trimmed;
+};
+
+/**
+ * Return `true` when `text` is just whitespace and SQL comments (no
+ * executable statement). Our SQL scanner accumulates comments into
+ * `queryBuf` verbatim so a line like `-- foo\n` followed by `\crosstabview`
+ * leaves a non-empty buffer that nonetheless has nothing to send. This
+ * mirrors upstream's `psql_scan_buffer_is_empty` heuristic used by
+ * `do_crosstabview` / `\g`-family commands to decide whether to fall
+ * back to `pset.last_query`.
+ *
+ * Strips `--` line comments and C-style block comments (with nesting),
+ * leaves quoted-string content alone (so a comment-looking sequence inside
+ * a string still counts as executable). If anything non-whitespace remains,
+ * returns `false`.
+ */
+const isCommentOnly = (text: string): boolean => {
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const c = text[i];
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+      i++;
+      continue;
+    }
+    if (c === '-' && text[i + 1] === '-') {
+      // Skip to end-of-line.
+      i += 2;
+      while (i < n && text[i] !== '\n' && text[i] !== '\r') i++;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      // Skip nested block comment (PG extends C-style comments with nesting).
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (text[i] === '/' && text[i + 1] === '*') {
+          depth++;
+          i += 2;
+          continue;
+        }
+        if (text[i] === '*' && text[i + 1] === '/') {
+          depth--;
+          i += 2;
+          continue;
+        }
+        i++;
+      }
+      continue;
+    }
+    return false;
+  }
+  return true;
 };
 
 // ---------------------------------------------------------------------------
@@ -82,7 +139,15 @@ export const cmdCrosstabview: BackslashCmdSpec = {
       return errResult(ctx, 'no connection to the server');
     }
 
-    const sql = ctx.queryBuf.trim();
+    // Source SQL is the active query buffer; when that's effectively
+    // empty (whitespace + comments only — the common shape after a
+    // semicolon-terminated query followed by a trailing `-- comment`
+    // line), fall back to `pset.last_query` which upstream re-executes
+    // for both `\g`-family commands and `\crosstabview`.
+    let sql = ctx.queryBuf.trim();
+    if (sql.length === 0 || isCommentOnly(sql)) {
+      sql = ctx.settings.lastQuery.trim();
+    }
     if (sql.length === 0) {
       return errResult(ctx, 'no SQL command');
     }

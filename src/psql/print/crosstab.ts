@@ -26,18 +26,13 @@
  *
  * Error cases (text matches `pg_log_error` strings from crosstabview.c):
  *
- *   - "query must return at least three columns" (relaxed to two here since
- *     a colD-defaulted single-data-column pivot is still useful in scripting
- *     — see {@link CrosstabError} for the exact wording),
+ *   - "query must return at least three columns",
  *   - "vertical and horizontal headers must be different columns",
  *   - "column number N is out of range 1..M",
  *   - "column name not found: \"…\"",
  *   - "ambiguous column name: \"…\"",
+ *   - "maximum number of columns (1600) exceeded",
  *   - "query result contains multiple data values for row \"…\", column \"…\"".
- *
- * We do NOT enforce upstream's `CROSSTABVIEW_MAX_COLUMNS` cap (1600) here:
- * JavaScript object keys are O(distinct values) and there's no fixed array
- * preallocation to overflow. If a caller wants the cap they can wrap.
  */
 
 import type { FieldDescription, ResultSet } from '../types/connection.js';
@@ -164,28 +159,34 @@ const indexOfColumn = (
     return { ok: true, index: n - 1, sign };
   }
 
-  // Name lookup: psql dequotes & downcases the arg, then compares verbatim
-  // against PQfname. We extend that with a case-insensitive fallback ONLY
-  // when the user gave us an unquoted name (no `"…"` segments in the raw
-  // arg). Quoted names — even partially quoted like `Fo"o"` — require an
-  // exact strcmp against the field name, so a quoted `"Foo"` resolves to
-  // a field named `Foo` and never to a sibling `foo`.
-  const { value: needle, hadQuotes } = dequoteDowncase(str);
+  // Name lookup: upstream `indexOfColumn` dequotes & downcases the arg
+  // in place, then runs `strcmp(arg, PQfname(res, i))` against the raw
+  // field name. The field name is NOT itself downcased, so:
+  //   - unquoted `B` → "b" → matches field `b` only (not `B`);
+  //   - unquoted `Foo` → "foo" → does NOT match field `Foo`;
+  //   - quoted `"B"` → "B" → matches field `B` only;
+  //   - quoted `"Foo"` → "Foo" → matches field `Foo`.
+  // No case-insensitive fallback — that mismatched the
+  // "need to quote name" test in the conformance corpus.
+  const { value: needle } = dequoteDowncase(str);
   let found = -1;
   for (let i = 0; i < fields.length; i++) {
-    const fname = fields[i].name;
-    const matches = hadQuotes
-      ? fname === needle
-      : fname === needle || fname.toLowerCase() === needle.toLowerCase();
-    if (matches) {
+    if (fields[i].name === needle) {
       if (found >= 0) {
-        return { ok: false, error: `ambiguous column name: "${str}"` };
+        // Upstream's `indexOfColumn` formats the dequoted/downcased name
+        // in the error message, not the raw arg with its leading
+        // quotes. Matches `pg_log_error("ambiguous column name: \"%s\"")`
+        // after the in-place `dequote_downcase_identifier(arg)` mutation.
+        return { ok: false, error: `ambiguous column name: "${needle}"` };
       }
       found = i;
     }
   }
   if (found === -1) {
-    return { ok: false, error: `column name not found: "${str}"` };
+    // Same convention as the ambiguous-name branch: format the
+    // dequoted/downcased name so quoted `"B"` reads as `"B"` and
+    // unquoted `Foo` reads as `"foo"`.
+    return { ok: false, error: `column name not found: "${needle}"` };
   }
   return { ok: true, index: found, sign };
 };
@@ -320,10 +321,21 @@ export type PivotResult = { rs: ResultSet };
 export const pivotResultSet = (
   rs: ResultSet,
   opts: CrosstabOptions,
+  /**
+   * Substitution string for `null` header values when synthesising the
+   * pivoted FieldDescription.name. Upstream's `\crosstabview` formats a
+   * NULL horizontal header using the current `\pset null` setting (an
+   * empty string by default). Callers that don't care can omit; tests
+   * that drive the function in isolation can supply a sentinel.
+   */
+  nullPrint = '',
 ): PivotResult | CrosstabError => {
-  // (1) Field resolution.
-  if (rs.fields.length < 2) {
-    return { error: 'query must return at least two columns' };
+  // (1) Field resolution. Upstream `crosstabview.c` requires PQnfields >= 3
+  // unconditionally — pivoting two columns is degenerate (V × H with no
+  // payload). Match the error text verbatim so the conformance test sees
+  // the same line.
+  if (rs.fields.length < 3) {
+    return { error: 'query must return at least three columns' };
   }
 
   const colV = opts.colV ?? 1;
@@ -342,21 +354,10 @@ export const pivotResultSet = (
 
   let dataIdx: number;
   if (opts.colD === undefined) {
-    if (rs.fields.length === 2) {
-      // No third column to default to. Upstream requires >= 3 cols; we
-      // permit the 2-col degenerate case but it means there's literally
-      // no data column to pivot.
-      return {
-        error:
-          'data column must be specified when query returns fewer than three columns',
-      };
-    }
-    if (rs.fields.length !== 3) {
-      return {
-        error:
-          'data column must be specified when query returns more than three columns',
-      };
-    }
+    // With exactly three columns and no explicit `colD`, the data column
+    // is the remaining one. With more than three, upstream picks the
+    // first non-V/H column too — we mirror that here so `SELECT v,h,c,i`
+    // pivots `c` by default.
     let candidate = -1;
     for (let i = 0; i < rs.fields.length; i++) {
       if (i !== vRes.index && i !== hRes.index) {
@@ -414,6 +415,13 @@ export const pivotResultSet = (
 
     let hEntry = hHeaders.get(hk);
     if (!hEntry) {
+      // Upstream `crosstabview.c` caps distinct horizontal-header values
+      // at `CROSSTABVIEW_MAX_COLUMNS` (1600). Past that, the synthesised
+      // result wouldn't be printable in a reasonable width anyway, so
+      // we mirror the cap and the error text verbatim.
+      if (hHeaders.size >= 1600) {
+        return { error: 'maximum number of columns (1600) exceeded' };
+      }
       hEntry = {
         key: hk,
         value: hVal,
@@ -437,6 +445,11 @@ export const pivotResultSet = (
   // (3) Sort horizontal headers if requested. We stable-sort by capturing
   // the original rank to break ties (and by using Array.prototype.sort
   // which is stable in V8/Node).
+  //
+  // We deliberately DO NOT mutate `HeaderEntry.rank` here — the matrix is
+  // keyed by `${vRank}|${origHRank}` and changing `hArr[i].rank` to the
+  // post-sort position would desynchronise lookups in step 5. Display
+  // order is carried implicitly by the array index.
   const hArr = Array.from(hHeaders.values());
   if (sortIdx >= 0) {
     hArr.sort((a, b) => {
@@ -445,15 +458,17 @@ export const pivotResultSet = (
       // Tie-break on first-appearance rank to keep ordering deterministic.
       return a.rank - b.rank;
     });
-    for (let i = 0; i < hArr.length; i++) hArr[i].rank = i;
   }
 
   const vArr = Array.from(vHeaders.values()).sort((a, b) => a.rank - b.rank);
 
-  // (4) Build the synthetic ResultSet.
-  const nullPrint = ''; // pivot stage emits "" for null headers; the aligned
-  // printer will substitute opts.nullPrint later via its
-  // null-cell branch.
+  // (4) Build the synthetic ResultSet. Use the caller-supplied
+  // `nullPrint` for any horizontal header whose source value was NULL —
+  // upstream `do_crosstabview` calls `PQgetvalue(res, …)` which returns
+  // the empty string for null, but then formats the header through
+  // `popt.nullPrint` when the source cell was actually null. Pass the
+  // active `\pset null` string in so `--null='#null#'` lights up the
+  // last column header on a pivot with a NULL H value.
   const newFields: FieldDescription[] = [
     {
       ...rs.fields[vRes.index],
@@ -516,7 +531,12 @@ export const printCrosstab = async (
   printOpts: PrintQueryOpts,
   out: NodeJS.WritableStream,
 ): Promise<CrosstabError | undefined> => {
-  const result = pivotResultSet(rs, opts);
+  // Thread the active `\pset null` value through so a NULL horizontal
+  // header renders as e.g. `#null#` in the column header row (mirroring
+  // the way the aligned printer would otherwise render it for a body
+  // cell). Without this, the synthetic FieldDescription.name comes out
+  // as the empty string and the column header is just whitespace.
+  const result = pivotResultSet(rs, opts, printOpts.topt.nullPrint);
   if ('error' in result) return result;
   await alignedPrinter.printQuery(result.rs, printOpts, out);
   return undefined;
