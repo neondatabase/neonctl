@@ -56,7 +56,7 @@ Prerequisites:
 
    …and the minimal `drizzle.config.ts` / `schema.ts` from the [Drizzle quickstart](https://orm.drizzle.team/docs/get-started-postgresql). The migration step can be any one-shot that exits 0 — `psql -f schema.sql`, a custom `node` script, anything; we use Drizzle here because it's the most common choice.
 
-4. **A Vercel project** (only for `--preview` / `--prod`). Create one at <https://vercel.com/new>, then **edit `spec.project` in `neon.ts`** (currently `'CHANGE-ME-IN-NEON-TS'`) to match its name. `VERCEL_PROJECT_ID` is a _cache_ of the resolved id, not a bypass — the launcher still reads `spec.project` and validates it against the cache before skipping the API lookup.
+4. **A Vercel project** (only for `--preview` / `--prod`). Create one at <https://vercel.com/new>, then **edit the `vercelProject` constant in `neon.ts`** (currently `'CHANGE-ME-IN-NEON-TS'`) to match its name. `VERCEL_PROJECT_ID` is a _cache_ of the resolved id, not a bypass — the launcher still reads `vercelProject` and validates it against the cache before skipping the API lookup.
 
 Then:
 
@@ -79,6 +79,11 @@ Branch policy: the Neon branch name is derived from your current git branch (slu
 `drizzle-kit` and Next.js auto-load `.env.local` / `.env` via their own dotenv plumbing. If you commit a `DATABASE_URL` to one of those files it will override the one `neon launch` injects on the child process. Let the launcher own `DATABASE_URL`; keep `.env*` files for other config.
 
 ## CI (GitHub Actions)
+
+> The example's `"neonctl": "file:../../dist"` only resolves inside the
+> neonctl checkout — `npm ci` in your own repo cannot follow that path.
+> Replace the `file:` reference with a pinned `neonctl@^X.Y.Z` (once
+> released) before checking this workflow into your repo.
 
 ```yaml
 name: preview

@@ -30,12 +30,21 @@ export function isCliShutdownInFlight(): boolean {
 export function setCliShutdownInFlight(): void {
   cliShutdownInFlight = true;
 }
+/**
+ * Reset the latch — called from `runLaunch`'s finally so a library
+ * caller running a second `runLaunch` after a SIGINT-handled first
+ * invocation doesn't see a stale flag and park forever in the catch.
+ */
+export function resetCliShutdownInFlight(): void {
+  cliShutdownInFlight = false;
+}
 
 export const ExitCode = {
   SUCCESS: 0,
   RESOURCE_FAILED: 1,
   CONFIG_ERROR: 2,
   AUTH_MISSING: 3,
+  SIGHUP: 129,
   SIGINT: 130,
   SIGTERM: 143,
 } as const;

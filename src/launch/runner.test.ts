@@ -118,7 +118,7 @@ describe('groupStages', () => {
 // -----------------------------------------------------------------------------
 
 describe('pickStdioMode', () => {
-  const cmdNoReadiness = node('dev', 'local-command', [], {
+  const cmdHttpReadiness = node('dev', 'local-command', [], {
     command: 'next dev',
     readiness: { httpGet: { url: 'http://localhost:3000' } },
   });
@@ -132,7 +132,7 @@ describe('pickStdioMode', () => {
   // typically with one). The non-TTY case is covered separately below.
 
   it("single leaf node alone in its stage with TTY → 'inherit'", () => {
-    expect(pickStdioMode(cmdNoReadiness, 1, false, 1, true)).toBe('inherit');
+    expect(pickStdioMode(cmdHttpReadiness, 1, false, 1, true)).toBe('inherit');
   });
 
   it("logMatch readiness forces 'prefixed' (needs captured stdout)", () => {
@@ -140,14 +140,14 @@ describe('pickStdioMode', () => {
   });
 
   it("having dependents forces 'prefixed' (kill cascade must reach grandchildren)", () => {
-    expect(pickStdioMode(cmdNoReadiness, 1, true, 1, true)).toBe('prefixed');
+    expect(pickStdioMode(cmdHttpReadiness, 1, true, 1, true)).toBe('prefixed');
   });
 
   it("more than one local-command in the stage forces 'prefixed' (no TTY interleave)", () => {
     // Isolate the localCmdCount check by keeping stageSize === 1 so the
     // sibling-count rule doesn't fire first. (Realistic in production
     // these would match, but the test should pin one condition at a time.)
-    expect(pickStdioMode(cmdNoReadiness, 2, false, 1, true)).toBe('prefixed');
+    expect(pickStdioMode(cmdHttpReadiness, 2, false, 1, true)).toBe('prefixed');
   });
 
   it("any sibling in the same stage forces 'prefixed' (sibling failure → kill cascade)", () => {
@@ -156,14 +156,16 @@ describe('pickStdioMode', () => {
     // 4xx's the fast-cancel will kill this node. In inherit mode that
     // signals only the wrapping shell — the dev-server grandchild
     // survives and holds its port.
-    expect(pickStdioMode(cmdNoReadiness, 1, false, 2, true)).toBe('prefixed');
+    expect(pickStdioMode(cmdHttpReadiness, 1, false, 2, true)).toBe('prefixed');
   });
 
   it("non-TTY parent (supervisor / pipe) forces 'prefixed' regardless of other checks", () => {
     // Otherwise inherit-mode + non-detached means SIGTERM from
     // docker/k8s/systemd only reaches the wrapping shell, leaving the
     // dev-server grandchild as an orphan holding the port.
-    expect(pickStdioMode(cmdNoReadiness, 1, false, 1, false)).toBe('prefixed');
+    expect(pickStdioMode(cmdHttpReadiness, 1, false, 1, false)).toBe(
+      'prefixed',
+    );
   });
 });
 

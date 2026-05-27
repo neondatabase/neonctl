@@ -79,7 +79,10 @@ export const builder = (argv: yargs.Argv) =>
       'CI preview deploy — branch flows into Neon branch name + Vercel preview scoping',
     )
     .epilogue(
-      'See https://github.com/neondatabase/neonctl/tree/main/examples/neon-launch-vercel for a runnable example.',
+      [
+        'Unknown flags (e.g. `--preview`, `--prod`, or anything app-specific) are forwarded to your stack via `ctx.flags`.',
+        'See https://github.com/neondatabase/neonctl/tree/main/examples/neon-launch-vercel for a `--preview`/`--prod` topology.',
+      ].join('\n'),
     )
     .check((args) => {
       // `--output=json` is a global flag that callers expect to make the

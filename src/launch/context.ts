@@ -58,6 +58,19 @@ export async function writeNeonLaunchEnv(
   repoRoot: string,
   updates: Record<string, string>,
 ): Promise<void> {
+  // `envfile`'s parser strips quotes (`.replace(/['"]+/g, '')`) and its
+  // stringify does no escaping, so persisted values must be quote-free
+  // and newline-free for a clean round-trip. Today we only persist
+  // resolved Vercel ids and project names; reject anything that won't
+  // survive the cycle. A new persisted key with a richer alphabet
+  // should switch to a properly-escaping dotenv lib before lifting this.
+  for (const [k, v] of Object.entries(updates)) {
+    if (/['"\n\r]/.test(v)) {
+      throw new Error(
+        `[neon launch] Internal: refusing to persist ${k} to .neon-launch.env — value contains quote / newline (envfile would round-trip lossily). Sanitize at the call site.`,
+      );
+    }
+  }
   const path = join(repoRoot, NEON_LAUNCH_ENV_FILE);
   const prev = writeLocks.get(path) ?? Promise.resolve();
   const next = prev.then(() => {

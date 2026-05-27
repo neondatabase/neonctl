@@ -21,10 +21,17 @@ import { ExitCode, LaunchError, vercelTokenMissingMessage } from '../errors.js';
 
 const VERCEL_API = {
   base: 'https://api.vercel.com',
-  /** Find a project by id or name. */
-  projectGet: (idOrName: string) => `/v9/projects/${idOrName}`,
-  /** Create or upsert env vars for a project (array body). */
-  envUpsert: (id: string) => `/v10/projects/${id}/env?upsert=true`,
+  /** Find a project by id or name. URL-encode so user-supplied names with
+   * URL-special chars (`?`, `#`, `/`, space) don't inject query / path
+   * segments — Vercel would still 404 but the diagnostic would point at
+   * the wrong endpoint. */
+  projectGet: (idOrName: string) =>
+    `/v9/projects/${encodeURIComponent(idOrName)}`,
+  /** Create or upsert env vars for a project (array body). Vercel-issued
+   * project ids are URL-safe; encode defensively in case a future caller
+   * passes a name through this path. */
+  envUpsert: (id: string) =>
+    `/v10/projects/${encodeURIComponent(id)}/env?upsert=true`,
   /** Resolve a team by slug. Vercel's `/v2/teams/{teamId}` accepts `slug=`
    *  as an alternate addressing mode when the path id is omitted. */
   teamBySlug: (slug: string) => `/v2/teams?slug=${encodeURIComponent(slug)}`,
@@ -522,16 +529,36 @@ export async function provisionVercelDeployment(opts: {
    */
   cachedProjectId?: string;
   cachedProjectName?: string;
+  /**
+   * Slug recorded alongside the cached VERCEL_TEAM_ID. If `spec.team`
+   * differs from this slug, the cached id is stale (user changed the
+   * team binding) and we must re-resolve — otherwise the deploy would
+   * silently target the previous team.
+   */
+  cachedTeamSlug?: string;
 }): Promise<{ url: string }> {
   if (!opts.ctx.token) {
     throw new LaunchError(vercelTokenMissingMessage(), ExitCode.AUTH_MISSING);
   }
 
-  // 1. Team slug resolution + persistence.
-  let teamId = opts.ctx.teamId ?? opts.spec.teamId;
+  // 1. Team slug resolution + persistence. If the runner handed us a
+  // cached teamId but `spec.team` doesn't match the slug that produced
+  // it, drop the cached id and re-resolve. Without this, editing
+  // `spec.team` after a successful run would silently keep deploying
+  // to the previous team.
+  const staleTeamCache =
+    !!opts.spec.team &&
+    !!opts.cachedTeamSlug &&
+    opts.cachedTeamSlug !== opts.spec.team;
+  let teamId =
+    opts.spec.teamId ?? (staleTeamCache ? undefined : opts.ctx.teamId);
   if (!teamId && opts.spec.team) {
     log.info(
-      `[${opts.resourceFqn}] resolving Vercel team slug '${opts.spec.team}'…`,
+      `[${opts.resourceFqn}] resolving Vercel team slug '${opts.spec.team}'${
+        staleTeamCache
+          ? ` (cached id for '${opts.cachedTeamSlug}' invalidated)`
+          : ''
+      }…`,
     );
     teamId = await resolveTeamSlug(opts.spec.team, opts.ctx.token);
   }
@@ -559,11 +586,14 @@ export async function provisionVercelDeployment(opts: {
   }
 
   // 3. Persist resolved ids/names so the next run can skip the lookup.
+  // VERCEL_TEAM_SLUG is recorded so the next run can detect a
+  // spec.team change and invalidate the stale VERCEL_TEAM_ID.
   const persist: Record<string, string> = {
     VERCEL_PROJECT_ID: project.id,
     VERCEL_PROJECT_NAME: project.name,
   };
   if (teamId) persist.VERCEL_TEAM_ID = teamId;
+  if (opts.spec.team) persist.VERCEL_TEAM_SLUG = opts.spec.team;
   await writeNeonLaunchEnv(opts.repoRoot, persist);
 
   // 4. Env-var upsert.

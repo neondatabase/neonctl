@@ -134,12 +134,13 @@ describe('resolveGitBranch precedence', () => {
     ).toBe('env-branch');
   });
 
-  it('detached HEAD with no env / flag overrides throws an actionable error', () => {
-    // Use a non-git directory so the test is deterministic — `git rev-parse`
-    // exits non-zero, we hit the catch and warn-then-return ''. The
-    // detached-HEAD throw is exercised when git returns the literal
-    // string 'HEAD' (which we can't reliably simulate cross-platform);
-    // the catch path is the more common production failure mode.
+  it('non-git directory + no env / flag returns empty string (warn-only)', () => {
+    // The `if (fromGit === 'HEAD') throw …` branch (the *actual*
+    // detached-HEAD path) is unreachable without injecting a fake
+    // execSync; we can't simulate `git rev-parse` returning 'HEAD'
+    // cross-platform from a non-git tmpdir. This test pins the
+    // common production failure (no git repo at all → catch branch
+    // → warn + return '') — not the throw.
     const noGitDir = mkdtempSync(join(tmpdir(), 'neon-launch-nogit-'));
     expect(
       resolveGitBranch({

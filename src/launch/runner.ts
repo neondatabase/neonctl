@@ -33,6 +33,7 @@ import { isRef } from './refs.js';
 import {
   ExitCode,
   LaunchError,
+  resetCliShutdownInFlight,
   setCliShutdownInFlight,
   vercelTokenMissingMessage,
 } from './errors.js';
@@ -131,22 +132,29 @@ export async function gracefulShutdown(
     if (handles.every(isDead)) return;
     await new Promise((r) => setTimeout(r, 100));
   }
-  // Survivors: force SIGKILL directly. On Unix with a detached child we
-  // can target the process group; otherwise fall back to child.kill.
+  // Survivors: force SIGKILL directly. Two paths:
+  //   1) Detached children have their own process group; `process.kill(-pid, …)`
+  //      targets the whole group (reaches grandchildren).
+  //   2) Non-detached children share the parent's group; `process.kill(-pid, …)`
+  //      either targets a non-existent PGID (ESRCH on Linux) or errors on
+  //      Windows. We can't tell from the catch alone whether ESRCH meant
+  //      "child died between checks" or "no such PGID" — so unconditionally
+  //      follow up with `child.kill('SIGKILL')` against the child's own pid.
+  //      Both paths idempotent on an already-dead process (ESRCH swallowed).
   for (const h of handles) {
     if (isDead(h)) continue;
     try {
       if (h.child.pid !== undefined) {
         process.kill(-h.child.pid, 'SIGKILL');
       }
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code !== 'ESRCH') {
-        try {
-          h.child.kill('SIGKILL');
-        } catch {
-          /* best-effort */
-        }
+    } catch {
+      /* group kill may ESRCH on non-detached or already-gone — fine */
+    }
+    if (!isDead(h)) {
+      try {
+        h.child.kill('SIGKILL');
+      } catch {
+        /* best-effort */
       }
     }
   }
@@ -472,7 +480,10 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   // to immediate process.exit so the user can force-quit if Segment
   // wedges.
   const runtime = newRuntime();
-  const makeShutdownHandler = (signal: 'SIGINT' | 'SIGTERM', code: number) => {
+  const makeShutdownHandler = (
+    signal: 'SIGINT' | 'SIGTERM' | 'SIGHUP',
+    code: number,
+  ) => {
     return () => {
       if (runtime.shuttingDown.value) {
         // Second signal arrived during cleanup — user wants out NOW.
@@ -497,8 +508,15 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   };
   const onSigint = makeShutdownHandler('SIGINT', ExitCode.SIGINT);
   const onSigterm = makeShutdownHandler('SIGTERM', ExitCode.SIGTERM);
+  // SIGHUP: terminal close, ssh disconnect, parent shell exit. Node's
+  // default action for SIGHUP is process termination — handlers don't
+  // run unless we install one. Without this, detached children (their
+  // own process group, so the kernel's SIGHUP-to-foreground-group
+  // doesn't reach them) re-parent to init and keep holding ports.
+  const onSighup = makeShutdownHandler('SIGHUP', ExitCode.SIGHUP);
   process.on('SIGINT', onSigint);
   process.on('SIGTERM', onSigterm);
+  process.on('SIGHUP', onSighup);
 
   // Build a "this resource has at least one dependent" lookup. stdio
   // mode reads it: a node with dependents can be torn down by an
@@ -539,9 +557,13 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     await foregroundPhase(runtime, liveLocalCommands);
   } finally {
     // Match the handlers' lifecycle to this invocation so library-mode
-    // callers don't accumulate one handler per runLaunch.
+    // callers don't accumulate one handler per runLaunch. Also reset
+    // the CLI shutdown latch so a second `runLaunch` invocation in
+    // library mode doesn't see a stale "shutting down" flag.
     process.off('SIGINT', onSigint);
     process.off('SIGTERM', onSigterm);
+    process.off('SIGHUP', onSighup);
+    resetCliShutdownInFlight();
   }
 }
 
@@ -769,6 +791,7 @@ async function provisionVercelNode(args: {
     process.env.VERCEL_PROJECT_ID ?? args.neonLaunchEnv.VERCEL_PROJECT_ID;
   const cachedProjectName =
     process.env.VERCEL_PROJECT_NAME ?? args.neonLaunchEnv.VERCEL_PROJECT_NAME;
+  const cachedTeamSlug = args.neonLaunchEnv.VERCEL_TEAM_SLUG;
   const resolvedEnv = await resolveEnv(args.runtime, spec.env);
   const result = await provisionVercelDeployment({
     resourceFqn: args.node.name,
@@ -780,6 +803,7 @@ async function provisionVercelNode(args: {
     cwd: args.cwd,
     cachedProjectId,
     cachedProjectName,
+    cachedTeamSlug,
   });
   args.runtime.outputs.set(args.node.resource.__id, {
     kind: 'static',
@@ -903,17 +927,23 @@ async function foregroundPhase(
   }
   if (firstExit.code !== 0) {
     log.error(
-      `[launch] a local-command exited with code ${firstExit.code ?? 'null'} — stopping siblings.`,
+      `[launch] a local-command exited with code=${firstExit.code ?? 'null'} signal=${firstExit.signal ?? 'none'} — stopping siblings.`,
     );
-    for (const h of handles) void h.kill();
-    // allSettled so a sibling's rejection (spawn-layer failures emit
-    // `error` and reject `exited`) doesn't bubble out and skip the
-    // analytics flush — we want the crash event delivered before exit.
-    await Promise.allSettled(handles.map((h) => h.exited));
-    await closeAnalytics();
-    process.exit(ExitCode.RESOURCE_FAILED);
+    // Use the same bounded teardown as the signal handler — naked
+    // h.kill() leaves the in-handle SIGKILL escalation at 5s while
+    // closeAnalytics defaults to ~12.5s, producing a 17s "wedged"
+    // window for SIGTERM-trapping siblings. gracefulShutdown caps
+    // the wait at 2s and force-SIGKILLs survivors directly.
+    await gracefulShutdown(handles);
+    // Throw rather than process.exit so library callers (per the
+    // header comment's per-invocation-runtime contract) can catch.
+    // The CLI catch in commands/launch.ts handles the exit + flush.
+    throw new LaunchError(
+      `[neon launch] local-command exited with code=${firstExit.code ?? 'null'} signal=${firstExit.signal ?? 'none'}`,
+      ExitCode.RESOURCE_FAILED,
+    );
   }
-  // Successful exit; wait for siblings too — allSettled for the same
-  // reason as the crash path.
+  // Successful exit; wait for siblings too — allSettled so a late
+  // spawn-layer rejection doesn't take down the success path.
   await Promise.allSettled(handles.map((h) => h.exited));
 }
