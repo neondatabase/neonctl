@@ -954,9 +954,12 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
             exitRequested = true;
             return;
           }
-          if (r.handled) {
-            lastWasError = r.result?.status === 'error';
-          }
+          // Note: we intentionally do NOT update `lastWasError` for cond
+          // errors. Upstream psql exits 0 from a script whose only failure
+          // was `\endif: no matching \if` (or any other cond diagnostic) —
+          // these are printed and the loop continues, but they don't taint
+          // the terminal `lastWasError → EXIT_USER` escalation. Only
+          // ON_ERROR_STOP can escalate cond failures.
           if (
             r.handled &&
             r.result?.status === 'error' &&

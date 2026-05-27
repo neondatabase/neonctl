@@ -497,10 +497,33 @@ describe('runMainLoop — conditional dispatch', () => {
     expect(db?.calls).toEqual(['SELECT 1;']);
   });
 
-  test('\\endif without \\if writes an error', async () => {
-    const { ctx, stderr } = buildCtx({ lines: ['\\endif'] });
-    await runMainLoop(ctx);
-    expect(stderr.text()).toMatch(/\\endif: no matching \\if/);
+  test('\\endif without \\if writes a bare error to process.stderr', async () => {
+    // Cond commands emit their diagnostics BARE (no `psql: ERROR:` prefix)
+    // via `writeErr` → process.stderr — matching upstream and the regress
+    // expected output. ctx.stderr only sees the mainloop's `psql: ERROR:`
+    // fallback, which is suppressed via `errorWritten: true`. We spy on
+    // process.stderr to assert the diagnostic shape.
+    const chunks: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { ctx, stderr } = buildCtx({ lines: ['\\endif'] });
+      const code = await runMainLoop(ctx);
+      const captured = chunks.join('');
+      expect(captured).toMatch(/^\\endif: no matching \\if\n/);
+      expect(captured).not.toMatch(/psql: ERROR/);
+      // Cond errors must NOT escalate to EXIT_USER under default settings
+      // (vanilla psql exits 0 from a script whose only failure was a cond
+      // diagnostic). Only ON_ERROR_STOP can escalate.
+      expect(code).toBe(EXIT_SUCCESS);
+      // ctx.stderr stays empty for the cond diagnostic itself.
+      expect(stderr.text()).not.toMatch(/\\endif/);
+    } finally {
+      process.stderr.write = orig;
+    }
   });
 
   test('unbalanced \\if at EOF logs a warning', async () => {

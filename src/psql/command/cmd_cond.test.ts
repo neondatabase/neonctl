@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import type { BackslashContext, BackslashResult } from '../types/backslash.js';
 import type { PsqlSettings } from '../types/settings.js';
@@ -16,26 +16,65 @@ import {
   parseBool,
 } from './cmd_cond.js';
 
+/**
+ * Capture writes to `process.stderr.write` for the lifetime of `fn`. Returns
+ * the concatenated text. Used to assert cond commands emit their
+ * `unrecognized value` / `\<cmd>: <msg>` diagnostics BARE (no `psql: ERROR:`
+ * prefix — that fallback is the mainloop's job and is suppressed via
+ * `errorWritten: true`).
+ */
+const captureStderr = async (fn: () => Promise<void>): Promise<string> => {
+  const chunks: string[] = [];
+  const spy = vi
+    .spyOn(process.stderr, 'write')
+    .mockImplementation((data: string | Uint8Array): boolean => {
+      chunks.push(
+        typeof data === 'string' ? data : Buffer.from(data).toString(),
+      );
+      return true;
+    });
+  try {
+    await fn();
+  } finally {
+    spy.mockRestore();
+  }
+  return chunks.join('');
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const makeSettings = (): PsqlSettings => defaultSettings(createVarStore());
 
+/**
+ * `BackslashContext` exposes `nextArg` as a non-recordable method, so unit
+ * tests need a wrapper that lets us count calls (to verify upstream's
+ * `ignore_boolean_expression` semantics — when the cond is inactive, `\if` /
+ * `\elif` MUST NOT call `nextArg` because the slash scanner would expand
+ * backticks and `:vars` eagerly). The extra `__nextArgCalls` field is for
+ * tests only.
+ */
+type TestBackslashContext = BackslashContext & {
+  __nextArgCalls: { count: number };
+};
+
 const makeCtx = (
   settings: PsqlSettings,
   cmdName: string,
   args: string[],
-): BackslashContext => {
+): TestBackslashContext => {
   // Use a per-mode cursor list shared between calls so nextArg behaves
   // consistently. The cond commands only ask for 'normal'.
   let cursor = 0;
-  const ctx: BackslashContext = {
+  const calls = { count: 0 };
+  const ctx: TestBackslashContext = {
     settings,
     cmdName,
     queryBuf: '',
     rawArgs: args.join(' '),
     nextArg(): string | null {
+      calls.count += 1;
       if (cursor >= args.length) return null;
       const v = args[cursor];
       cursor += 1;
@@ -44,6 +83,7 @@ const makeCtx = (
     restOfLine(): string {
       return args.slice(cursor).join(' ');
     },
+    __nextArgCalls: calls,
   };
   return ctx;
 };
@@ -446,5 +486,352 @@ describe('COND_COMMAND_NAMES', () => {
     expect(COND_COMMAND_NAMES.has('else')).toBe(true);
     expect(COND_COMMAND_NAMES.has('endif')).toBe(true);
     expect(COND_COMMAND_NAMES.has('echo')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Upstream-parity scenarios (psql.sql:899-1118). Each test mirrors a
+// canonical script from the regress suite or the task brief, and asserts the
+// exact stack transitions + stderr shape vanilla psql produces.
+// ---------------------------------------------------------------------------
+
+describe('upstream parity: \\if family', () => {
+  // ─── Scenario 1: :VAR interpolation in \if condition ────────────────────
+  //
+  // Upstream feeds `\if :MYFLAG` through the slash scanner with `OT_NORMAL`,
+  // which expands `:MYFLAG` *before* the cond cmd sees the token. The fake
+  // makeCtx wrapper here passes the pre-substituted value (`'on'`) directly
+  // — mirroring what `scanSlashArgs('normal', varLookup)` would return for
+  // a `:MYFLAG` reference. The cond cmd then parses `'on'` → true.
+  test('scenario 1: :VAR interp resolves to "on" → branch active', async () => {
+    const settings = makeSettings();
+    settings.vars.set('MYFLAG', 'on');
+    const cond = createCondStack();
+    // The slash scanner expands `:MYFLAG` to `on` before nextArg returns it
+    // — we simulate that by passing the resolved value directly.
+    const ctx = makeCtx(settings, 'if', ['on']);
+    attachCondStack(ctx, cond);
+    const r = await run(cmdIf, ctx);
+    expect(r.status).toBe('ok');
+    expect(cond.top()?.state).toBe('true');
+    expect(cond.isActive()).toBe(true);
+  });
+
+  // ─── Scenario 2: integer truthiness ──────────────────────────────────────
+  //
+  // ParseVariableBool maps 1→true, 0→false (variables.c). The full chain
+  // `\if 0 \elif 1` exercises the "false branch falls through to elif"
+  // transition: FALSE → TRUE on the elif.
+  test('scenario 2: \\if 0 → false; \\elif 1 → true (full elif transition)', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    // \if 0
+    {
+      const ctx = makeCtx(settings, 'if', ['0']);
+      attachCondStack(ctx, cond);
+      const r = await run(cmdIf, ctx);
+      expect(r.status).toBe('ok');
+      expect(cond.top()?.state).toBe('false');
+    }
+    // \elif 1
+    {
+      const ctx = makeCtx(settings, 'elif', ['1']);
+      attachCondStack(ctx, cond);
+      const r = await run(cmdElif, ctx);
+      expect(r.status).toBe('ok');
+      expect(cond.top()?.state).toBe('true');
+      expect(cond.isActive()).toBe(true);
+    }
+  });
+
+  // ─── Scenario 3: backtick condition ──────────────────────────────────────
+  //
+  // The slash scanner runs the backtick *before* cmdIf sees the arg —
+  // i.e. by the time `nextArg('normal')` returns, the arg is already the
+  // backtick stdout (`'true'` or `'false'`). We simulate that here.
+  test('scenario 3: backtick output "true" → branch active', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    // Backtick has already been executed; nextArg returns its stdout.
+    const ctx = makeCtx(settings, 'if', ['true']);
+    attachCondStack(ctx, cond);
+    const r = await run(cmdIf, ctx);
+    expect(r.status).toBe('ok');
+    expect(cond.top()?.state).toBe('true');
+  });
+
+  test('scenario 3b: backtick output with whitespace → unrecognized → false', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    // `echo "true false"` would expand to "true false" — multi-token, fails
+    // parseBool. Upstream emits the unrecognized message and pushes false.
+    const ctx = makeCtx(settings, 'if', ['true', 'false']);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdIf, ctx);
+      expect(r.status).toBe('ok');
+      expect(cond.top()?.state).toBe('false');
+    });
+    expect(stderr).toBe(
+      'unrecognized value "true false" for "\\if expression": Boolean expected\n',
+    );
+  });
+
+  // ─── Scenario 4: skip-mode preserves nesting ────────────────────────────
+  //
+  // `\if 0 { \if 1 ... \endif }` → outer pushes FALSE, inner is suppressed
+  // by isActive() returning false, pushes IGNORED. \endif pops IGNORED, the
+  // outer FALSE survives. The deeply-nested \echo MUST NOT print (active
+  // branch tracking is the mainloop's job; the cond stack just bookkeeps).
+  test('scenario 4: nested \\if inside skip mode pushes IGNORED, depth tracked', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    // outer: \if 0
+    {
+      const ctx = makeCtx(settings, 'if', ['0']);
+      attachCondStack(ctx, cond);
+      await run(cmdIf, ctx);
+      expect(cond.depth()).toBe(1);
+      expect(cond.top()?.state).toBe('false');
+    }
+    // inner: \if 1 — outer is inactive, so we push IGNORED regardless of arg
+    {
+      const ctx = makeCtx(settings, 'if', ['1']);
+      attachCondStack(ctx, cond);
+      await run(cmdIf, ctx);
+      expect(cond.depth()).toBe(2);
+      expect(cond.top()?.state).toBe('ignored');
+      // Critical: ignore_boolean_expression must NOT call nextArg, otherwise
+      // upstream's "backticks not run when ignoring extra args" semantics
+      // break (psql.sql:1028).
+      expect(ctx.__nextArgCalls.count).toBe(0);
+    }
+    // inner \endif: pops IGNORED
+    {
+      const ctx = makeCtx(settings, 'endif', []);
+      attachCondStack(ctx, cond);
+      await run(cmdEndif, ctx);
+      expect(cond.depth()).toBe(1);
+      expect(cond.top()?.state).toBe('false');
+    }
+    // outer \endif
+    {
+      const ctx = makeCtx(settings, 'endif', []);
+      attachCondStack(ctx, cond);
+      await run(cmdEndif, ctx);
+      expect(cond.depth()).toBe(0);
+    }
+  });
+
+  // ─── Scenario 5: \elif after \else errors with bare diagnostic ──────────
+  test('scenario 5: \\elif after \\else emits bare error (no "psql: ERROR:")', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('else-false');
+    const ctx = makeCtx(settings, 'elif', ['1']);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdElif, ctx);
+      expect(r.status).toBe('error');
+      // errorWritten must be true so the mainloop suppresses its
+      // `psql: ERROR:  <msg>` fallback.
+      expect(r.errorWritten).toBe(true);
+      // We MUST NOT have consumed args — `\elif` after `\else` discards
+      // tokens via ignore_boolean_expression.
+      expect(ctx.__nextArgCalls.count).toBe(0);
+    });
+    expect(stderr).toBe('\\elif: cannot occur after \\else\n');
+    // Sanity: no `psql:` / `ERROR:` prefix.
+    expect(stderr).not.toMatch(/psql/);
+    expect(stderr).not.toMatch(/ERROR/);
+  });
+
+  // ─── Scenario 6: unmatched \endif at top level ──────────────────────────
+  test('scenario 6: bare \\endif on empty stack emits bare error', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'endif', []);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdEndif, ctx);
+      expect(r.status).toBe('error');
+      expect(r.errorWritten).toBe(true);
+    });
+    expect(stderr).toBe('\\endif: no matching \\if\n');
+    expect(stderr).not.toMatch(/psql/);
+  });
+
+  // ─── Scenario 7: empty \if expression ───────────────────────────────────
+  //
+  // Vanilla emits `unrecognized value "" for "\if expression": Boolean
+  // expected` (not "missing required argument" — confirmed by direct
+  // experiment against PG 18.0). The frame still gets pushed as `false`
+  // so the else branch runs.
+  test('scenario 7: \\if with no args emits unrecognized "" → pushes false', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'if', []);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdIf, ctx);
+      expect(r.status).toBe('ok');
+      expect(cond.top()?.state).toBe('false');
+    });
+    expect(stderr).toBe(
+      'unrecognized value "" for "\\if expression": Boolean expected\n',
+    );
+    expect(settings.lastErrorResult?.message).toBe(
+      'unrecognized value "" for "\\if expression": Boolean expected',
+    );
+  });
+
+  // ─── Coverage: multi-token \if arg joined with single space ─────────────
+  //
+  // Upstream `read_boolean_expression` calls the lexer in a loop, joining
+  // tokens with `" "`. Our `collectExpr` does the same. Without this the
+  // shell-style `\if abc def ghi` would spill the trailing tokens into the
+  // query buffer (catastrophic — they get executed as SQL).
+  test('multi-token expression: \\if abc def ghi → joined → unrecognized', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'if', ['abc', 'def', 'ghi']);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdIf, ctx);
+      expect(r.status).toBe('ok');
+      expect(cond.top()?.state).toBe('false');
+    });
+    expect(stderr).toBe(
+      'unrecognized value "abc def ghi" for "\\if expression": Boolean expected\n',
+    );
+  });
+
+  test('multi-token \\if true extra → unrecognized (trailing junk poisons)', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'if', ['true', 'extra']);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdIf, ctx);
+      expect(r.status).toBe('ok');
+      expect(cond.top()?.state).toBe('false');
+    });
+    expect(stderr).toBe(
+      'unrecognized value "true extra" for "\\if expression": Boolean expected\n',
+    );
+  });
+
+  // ─── Coverage: \elif evalExpr emits "\elif expression" key ──────────────
+  test('elif: unrecognized arg emits "\\elif expression" diagnostic', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('false');
+    const ctx = makeCtx(settings, 'elif', ['invalid', 'expr']);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdElif, ctx);
+      expect(r.status).toBe('ok');
+      expect(cond.top()?.state).toBe('false');
+    });
+    expect(stderr).toBe(
+      'unrecognized value "invalid expr" for "\\elif expression": Boolean expected\n',
+    );
+  });
+
+  test('elif: empty arg emits unrecognized "" with elif expression key', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('false');
+    const ctx = makeCtx(settings, 'elif', []);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdElif, ctx);
+      expect(r.status).toBe('ok');
+      expect(cond.top()?.state).toBe('false');
+    });
+    expect(stderr).toBe(
+      'unrecognized value "" for "\\elif expression": Boolean expected\n',
+    );
+  });
+
+  // ─── Coverage: cmdIf in inactive branch SKIPS arg expansion ─────────────
+  //
+  // Direct unit-level proof that the upstream `ignore_boolean_expression`
+  // contract holds: when the outer is inactive, cmdIf never calls
+  // `nextArg`, so the slash scanner never expands backticks.
+  test('cmdIf in inactive branch never calls nextArg (backticks/vars suppressed)', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('false'); // outer inactive
+    const ctx = makeCtx(settings, 'if', ['anything']);
+    attachCondStack(ctx, cond);
+    await run(cmdIf, ctx);
+    expect(ctx.__nextArgCalls.count).toBe(0);
+    expect(cond.top()?.state).toBe('ignored');
+  });
+
+  test('cmdElif in TRUE branch never calls nextArg (already-taken → IGNORED)', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('true');
+    const ctx = makeCtx(settings, 'elif', ['anything']);
+    attachCondStack(ctx, cond);
+    await run(cmdElif, ctx);
+    expect(ctx.__nextArgCalls.count).toBe(0);
+    expect(cond.top()?.state).toBe('ignored');
+  });
+
+  test('cmdElif in IGNORED branch never calls nextArg', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('ignored');
+    const ctx = makeCtx(settings, 'elif', ['anything']);
+    attachCondStack(ctx, cond);
+    await run(cmdElif, ctx);
+    expect(ctx.__nextArgCalls.count).toBe(0);
+    expect(cond.top()?.state).toBe('ignored');
+  });
+
+  // ─── Coverage: all error paths are bare ─────────────────────────────────
+  test('\\else: cannot occur after \\else emits bare error', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('else-true');
+    const ctx = makeCtx(settings, 'else', []);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdElse, ctx);
+      expect(r.status).toBe('error');
+      expect(r.errorWritten).toBe(true);
+    });
+    expect(stderr).toBe('\\else: cannot occur after \\else\n');
+  });
+
+  test('\\else: no matching \\if (empty stack) emits bare error', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'else', []);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdElse, ctx);
+      expect(r.status).toBe('error');
+      expect(r.errorWritten).toBe(true);
+    });
+    expect(stderr).toBe('\\else: no matching \\if\n');
+  });
+
+  test('\\elif: no matching \\if (empty stack) emits bare error', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'elif', ['true']);
+    attachCondStack(ctx, cond);
+    const stderr = await captureStderr(async () => {
+      const r = await run(cmdElif, ctx);
+      expect(r.status).toBe('error');
+      expect(r.errorWritten).toBe(true);
+      // Even on the error path, we don't consume args (ignore_boolean_expression).
+      expect(ctx.__nextArgCalls.count).toBe(0);
+    });
+    expect(stderr).toBe('\\elif: no matching \\if\n');
   });
 });
