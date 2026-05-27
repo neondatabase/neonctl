@@ -25,13 +25,17 @@ Branch policy lives in your `neon.ts`, not in flags the CLI invents.
 You'll need an existing Next.js + Drizzle app in this directory (not included — drop your own in here, or `npx create-next-app@latest`). Then:
 
 ```bash
+cd examples/neon-launch-vercel
+npm install                    # installs `neonctl` so jiti can resolve `neonctl/config`
+
 export NEON_API_KEY=...        # https://console.neon.tech/app/settings/api-keys
 export NEON_PROJECT_ID=...     # from your Neon project settings
 export VERCEL_TOKEN=...        # only for --preview / --prod
 
-cd examples/neon-launch-vercel
-neon launch
+npx neon launch                # or: ./node_modules/.bin/neon launch
 ```
+
+`.neon-launch.env` (where the launcher persists resolved Vercel ids and the like) is written at your git repo root, not next to this `neon.ts`. Commit it if your team shares the same Vercel project; otherwise add it to `.gitignore`.
 
 ## Heads-up: dotenv files and `DATABASE_URL`
 

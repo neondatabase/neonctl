@@ -16,7 +16,6 @@ import {
   buildLaunchContext,
   findRepoRoot,
   readNeonLaunchEnv,
-  resolveStateValue,
 } from './context.js';
 import { buildPlan, type Plan, type PlanNode } from './plan.js';
 import {
@@ -94,6 +93,28 @@ const outputs = new Map<string /* resource __id */, OutputResolver>();
 let interrupted = false;
 function isShuttingDown(): boolean {
   return interrupted;
+}
+
+/**
+ * Scan raw argv for the `--project-id` / `--projectId` CLI flag. We can't
+ * read it off `opts.argv.projectId` because the `enrichFromContext`
+ * middleware writes the `.neon` file's value into the same slot when the
+ * flag wasn't passed — making CLI and middleware values indistinguishable
+ * at the runner layer. The flag must have absolute precedence over env
+ * vars or a stale shell `NEON_PROJECT_ID` would silently override an
+ * explicit `--project-id`.
+ */
+function getCliProjectIdFromArgv(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--project-id' || a === '--projectId') return argv[i + 1];
+    const eq = '=';
+    if (a.startsWith(`--project-id${eq}`))
+      return a.slice(`--project-id${eq}`.length);
+    if (a.startsWith(`--projectId${eq}`))
+      return a.slice(`--projectId${eq}`.length);
+  }
+  return undefined;
 }
 
 async function resolveLeaf(ref: {
@@ -194,18 +215,29 @@ async function resolveEnv(
  *
  * 'inherit' passes the parent's TTY straight through — preserves Windows
  * native SIGINT routing into child prompts, lets the user interact with
- * `next dev` / `vite` shortcuts. But the child's stdout/stderr are null,
- * so logMatch readiness can never see lines. Force 'prefixed' there.
+ * `next dev` / `vite` shortcuts. Constraints:
  *
- * Also force 'prefixed' when ANOTHER local-command shares the stage —
- * they'd otherwise interleave on the same TTY. Non-local-command stage
- * members (postgres, vercel-deployment) don't write to the TTY so they
- * don't count.
+ *   1. logMatch readiness needs captured stdout — force 'prefixed'.
+ *   2. Another local-command in the stage would interleave on the TTY —
+ *      force 'prefixed'.
+ *   3. If the node HAS dependents, a sibling failure (or any non-TTY
+ *      teardown trigger) will explicitly call `kill()` on this handle.
+ *      In inherit mode `detached` is false to preserve TTY control, so
+ *      `kill()` signals only the wrapping `sh -c` — the dev-server
+ *      grandchild survives, re-parents to init, and keeps holding its
+ *      port. Force 'prefixed' (detached) so the kill cascade reaches
+ *      the grandchild's process group. TTY Ctrl-C still works because
+ *      the kernel signals the whole foreground group.
  */
-function pickStdioMode(node: PlanNode, localCmdCount: number): StdioMode {
+function pickStdioMode(
+  node: PlanNode,
+  localCmdCount: number,
+  hasDependents: boolean,
+): StdioMode {
   if (localCmdCount !== 1) return 'prefixed';
   const spec = node.spec as { readiness?: { logMatch?: RegExp } };
   if (spec.readiness && 'logMatch' in spec.readiness) return 'prefixed';
+  if (hasDependents) return 'prefixed';
   return 'inherit';
 }
 
@@ -266,25 +298,27 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     `[launch] plan: ${plan.registry.size} resources — ${[...plan.registry.values()].map((n) => `${n.name}(${n.resource.__kind})`).join(', ')}`,
   );
 
-  // 2. Resolve state values with precedence:
-  //   process.env > .neon-launch.env > .neon middleware context
-  // `enrichFromContext` (src/context.ts) writes the resolved project id to
-  // argv.projectId (camelCase); yargs also mirrors any --project-id flag to
-  // both kebab- and camelCase. Read both so set-context users actually
-  // pick up the .neon value (the error message at line 255 promises this).
+  // 2. Resolve project id with this precedence (highest first):
+  //   --project-id CLI flag > process.env > .neon-launch.env > .neon middleware context
+  //
+  // The middleware `enrichFromContext` (src/context.ts) writes the .neon
+  // file's projectId to argv.projectId IFF the CLI flag wasn't passed.
+  // That makes argv.projectId ambiguous (CLI vs. middleware) at this
+  // layer — so we scan raw process.argv to separate them. CLI explicit
+  // ALWAYS wins; a stale shell `NEON_PROJECT_ID` must not silently
+  // override an explicit `--project-id` (that path could destructively
+  // provision against the wrong project).
   const neonLaunchEnv = readNeonLaunchEnv(repoRoot);
-  const neonContext: Record<string, string | undefined> = {
-    NEON_PROJECT_ID:
-      (opts.argv.projectId as string | undefined) ??
-      (opts.argv['project-id'] as string | undefined) ??
-      undefined,
-  };
-  const projectId = resolveStateValue(
-    'NEON_PROJECT_ID',
-    process.env,
-    neonLaunchEnv,
-    neonContext,
-  );
+  const cliProjectId = getCliProjectIdFromArgv(process.argv);
+  const middlewareProjectId =
+    cliProjectId === undefined
+      ? (opts.argv.projectId as string | undefined)
+      : undefined;
+  const projectId =
+    cliProjectId ??
+    process.env.NEON_PROJECT_ID ??
+    neonLaunchEnv.NEON_PROJECT_ID ??
+    middlewareProjectId;
   if (!projectId) {
     throw new LaunchError(
       [
@@ -327,34 +361,69 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   const stages = groupStages(plan);
   const liveLocalCommands: LocalCommandHandle[] = [];
 
-  // Register the SIGINT handler BEFORE provisioning starts. Without this,
-  // Ctrl-C during a slow branch-create or Vercel deploy lets Node's default
-  // SIGINT exit immediately, leaving any local-commands spawned in an
-  // earlier stage as orphans (compounded by the detached-shell process
-  // group on Unix). We kill them explicitly here, then exit 130. The
-  // `interrupted` flag is also read by foregroundPhase so it can defer
-  // to the handler's exit instead of racing it with a misleading
-  // "exited with code null" error.
+  // Register shutdown handlers BEFORE provisioning starts. Without this,
+  // a signal during a slow branch-create or Vercel deploy lets Node's
+  // default action exit immediately, leaving any local-commands
+  // spawned in an earlier stage as orphans (compounded by the
+  // detached-shell process group on Unix). We kill them explicitly,
+  // then exit with the signal's conventional code. The `interrupted`
+  // flag is also read by foregroundPhase so it can defer to the
+  // handler's exit instead of racing it with a misleading "exited with
+  // code null" error.
+  //
+  // Both SIGINT (interactive Ctrl-C) and SIGTERM (process supervisors:
+  // systemd, k8s, docker stop, pm2, ...) are handled. A second signal
+  // of the SAME kind during the analytics-flush window short-circuits
+  // to immediate process.exit so the user can force-quit if Segment
+  // wedges.
   interrupted = false; // reset for this invocation (module-scoped)
   outputs.clear(); // ditto — would otherwise leak refs across re-invocations
-  const onSigint = () => {
-    if (interrupted) return;
-    interrupted = true;
-    log.info('[launch] SIGINT — stopping any running local commands.');
-    for (const h of liveLocalCommands) void h.kill();
-    // Flush analytics before exit so the SIGINT event isn't dropped.
-    // Tight timeout so an unreachable Segment endpoint doesn't hang
-    // Ctrl-C for the SDK's ~12.5s default — at-most-once delivery is
-    // acceptable on the interactive shutdown path.
-    void closeAnalytics({ timeoutMs: 1_500 }).finally(() => {
-      process.exit(ExitCode.SIGINT);
-    });
+  let secondSignalFires = 0;
+  const makeShutdownHandler = (signal: 'SIGINT' | 'SIGTERM', code: number) => {
+    return () => {
+      if (interrupted) {
+        // Second signal arrived during cleanup — user wants out NOW.
+        secondSignalFires += 1;
+        if (secondSignalFires >= 1) {
+          log.info(`[launch] ${signal} again — force-exiting.`);
+          process.exit(code);
+        }
+        return;
+      }
+      interrupted = true;
+      log.info(`[launch] ${signal} — stopping any running local commands.`);
+      for (const h of liveLocalCommands) void h.kill();
+      // Flush analytics before exit so the shutdown event isn't dropped.
+      // Tight timeout so an unreachable Segment endpoint doesn't hang
+      // Ctrl-C for the SDK's ~12.5s default — at-most-once delivery is
+      // acceptable on the interactive shutdown path.
+      void closeAnalytics({ timeoutMs: 1_500 }).finally(() => {
+        process.exit(code);
+      });
+    };
   };
+  const onSigint = makeShutdownHandler('SIGINT', ExitCode.SIGINT);
+  const onSigterm = makeShutdownHandler('SIGTERM', ExitCode.SIGTERM);
   process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+
+  // Build a "this resource has at least one dependent" lookup. stdio
+  // mode reads it: a node with dependents can be torn down by an
+  // explicit kill (sibling failure, stage teardown) rather than by TTY
+  // Ctrl-C — and the kill cascade only reaches grandchildren when we
+  // detach (i.e. prefixed mode). Terminal nodes (no dependents) keep
+  // 'inherit' so the user can interact with `next dev` / `vite`.
+  const dependedOnFqns = new Set<string>();
+  for (const node of plan.registry.values()) {
+    for (const dep of node.deps) {
+      if (dep !== '') dependedOnFqns.add(dep);
+    }
+  }
 
   try {
     await provisionStages({
       stages,
+      dependedOnFqns,
       api,
       projectId,
       repoRoot,
@@ -375,14 +444,17 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     }
     await foregroundPhase(liveLocalCommands);
   } finally {
-    // Match the handler's lifecycle to this invocation so library-mode
+    // Match the handlers' lifecycle to this invocation so library-mode
     // callers don't accumulate one handler per runLaunch.
     process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
   }
 }
 
 type StagesArgs = {
   stages: PlanNode[][];
+  /** FQNs of every node that some other node lists in `dependsOn`. */
+  dependedOnFqns: Set<string>;
   api: ApiClient;
   projectId: string;
   repoRoot: string;
@@ -396,6 +468,7 @@ type StagesArgs = {
 async function provisionStages(args: StagesArgs): Promise<void> {
   const {
     stages,
+    dependedOnFqns,
     api,
     projectId,
     repoRoot,
@@ -428,7 +501,11 @@ async function provisionStages(args: StagesArgs): Promise<void> {
           cwd,
           gitBranch,
           branchTimeoutSeconds,
-          stdioMode: pickStdioMode(node, localCmdCount),
+          stdioMode: pickStdioMode(
+            node,
+            localCmdCount,
+            dependedOnFqns.has(node.name),
+          ),
           liveLocalCommands,
           neonLaunchEnv,
         }),
@@ -628,31 +705,29 @@ async function foregroundPhase(handles: LocalCommandHandle[]): Promise<void> {
   // by racing the first NON-ZERO exit if that pattern lands.
   const firstExit = await Promise.race(handles.map((h) => h.exited));
 
-  // Defer to the SIGINT handler ONLY when we have positive evidence the
-  // parent is shutting down. Two cases:
+  // Defer to the shutdown handlers ONLY when we have positive evidence
+  // the parent is shutting down. Two cases:
   //   1. `isShuttingDown()` true — handler already ran (set interrupted).
-  //   2. Child exited with signal 'SIGINT' AND the parent's handler is
-  //      about to run (TTY Ctrl-C delivered to whole foreground group).
-  //      The handler runs in the same process tick as the signal; yield
-  //      with setImmediate so it has a chance to set `interrupted`, then
-  //      re-check. If still not shutting down after the yield, the
-  //      SIGINT was delivered only to the child (external `kill -INT
-  //      <child-pid>`, debugger, etc.) — fall through and treat as a
-  //      sibling crash rather than parking forever.
-  // SIGTERM is never used as a deferral signal — external supervisors
-  // SIGTERM children all the time and we have no business hanging the
-  // parent for that.
+  //   2. Child exited with signal 'SIGINT' or 'SIGTERM' AND the parent's
+  //      handler is about to run (TTY Ctrl-C / supervisor SIGTERM
+  //      delivered to whole foreground group). The handler runs in the
+  //      same process tick as the signal; yield with setImmediate so
+  //      it has a chance to set `interrupted`, then re-check. If still
+  //      not shutting down after the yield, the signal was delivered
+  //      only to the child (external `kill -INT/-TERM <child-pid>`,
+  //      debugger, etc.) — fall through and treat as a sibling crash
+  //      rather than parking forever.
   if (isShuttingDown()) {
     await new Promise(() => undefined);
     return;
   }
-  if (firstExit.signal === 'SIGINT') {
+  if (firstExit.signal === 'SIGINT' || firstExit.signal === 'SIGTERM') {
     await new Promise((r) => setImmediate(r));
     if (isShuttingDown()) {
       await new Promise(() => undefined);
       return;
     }
-    // Stray SIGINT to the child only — fall through to the crash branch.
+    // Stray signal to the child only — fall through to the crash branch.
   }
   if (firstExit.code !== 0) {
     log.error(

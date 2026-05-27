@@ -15,6 +15,7 @@ export const ExitCode = {
   CONFIG_ERROR: 2,
   AUTH_MISSING: 3,
   SIGINT: 130,
+  SIGTERM: 143,
 } as const;
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
 
