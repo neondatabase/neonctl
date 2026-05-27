@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { createHash, createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import type { BackslashContext, BackslashCmdSpec } from '../types/backslash.js';
@@ -11,6 +12,7 @@ import type { PsqlSettings } from '../types/settings.js';
 
 import { createVarStore } from '../core/variables.js';
 import { defaultSettings } from '../core/settings.js';
+import { createScramClient } from '../wire/sasl.js';
 
 import {
   cmdConnect,
@@ -609,6 +611,88 @@ describe('scramSha256Verifier', () => {
     expect(v8.startsWith('SCRAM-SHA-256$8192:')).toBe(true);
     expect(v4).not.toBe(v8);
   });
+
+  test('verifier authenticates the original password (SCRAM round-trip)', () => {
+    // End-to-end proof that the verifier we'd store on the server is valid:
+    // run a SCRAM-SHA-256 handshake where the "server" only knows the
+    // verifier (salt, iterations, StoredKey, ServerKey) and the client
+    // knows the cleartext. If the verifier is sound the client's proof
+    // must validate and the server's signature must be accepted.
+    const password = 'correct horse battery staple';
+    const salt = Buffer.from('0102030405060708090a0b0c0d0e0f10', 'hex');
+    const verifier = scramSha256Verifier(password, salt);
+
+    // Parse: SCRAM-SHA-256$<iter>:<b64salt>$<b64storedKey>:<b64serverKey>
+    const m = /^SCRAM-SHA-256\$(\d+):([^$]+)\$([^:]+):(.+)$/.exec(verifier);
+    if (!m) throw new Error(`bad verifier: ${verifier}`);
+    const iterations = parseInt(m[1], 10);
+    const verifierSalt = Buffer.from(m[2], 'base64');
+    const storedKey = Buffer.from(m[3], 'base64');
+    const serverKey = Buffer.from(m[4], 'base64');
+
+    // Salt/iterations round-trip cleanly.
+    expect(verifierSalt.equals(salt)).toBe(true);
+    expect(iterations).toBe(4096);
+
+    // Drive a real SCRAM client against a fake server that only ever uses
+    // the verifier-derived material.
+    const clientNonce = Buffer.from(
+      '000102030405060708090a0b0c0d0e0f1011',
+      'hex',
+    );
+    const client = createScramClient({
+      user: 'user',
+      password,
+      mechanisms: ['SCRAM-SHA-256'],
+      randomBytes: () => clientNonce,
+    });
+    const { clientFirstMessage } = client.start();
+
+    // Reconstruct the gs2-less client-first-bare and assemble server-first.
+    const cfStr = clientFirstMessage.toString('utf8');
+    const nIdx = cfStr.indexOf('n=');
+    const clientFirstBare = cfStr.substring(nIdx);
+    const rIdx = cfStr.indexOf(',r=');
+    const clientNonceB64 = cfStr.substring(rIdx + 3);
+    const serverNonceSuffix = 'serverNoncePart';
+    const combinedNonce = clientNonceB64 + serverNonceSuffix;
+    const serverFirstStr = `r=${combinedNonce},s=${verifierSalt.toString(
+      'base64',
+    )},i=${String(iterations)}`;
+    const serverFirst = Buffer.from(serverFirstStr, 'utf8');
+
+    const clientFinal = client.continue(serverFirst);
+
+    // Server verifies the proof using only StoredKey.
+    const cfinalStr = clientFinal.toString('utf8');
+    const pIdx = cfinalStr.lastIndexOf(',p=');
+    const clientFinalWithoutProof = cfinalStr.substring(0, pIdx);
+    const proof = Buffer.from(cfinalStr.substring(pIdx + 3), 'base64');
+    const authMessage = `${clientFirstBare},${serverFirstStr},${clientFinalWithoutProof}`;
+    const clientSig = createHmac('sha256', storedKey)
+      .update(authMessage)
+      .digest();
+    const reconstructedClientKey = Buffer.alloc(proof.length);
+    for (let i = 0; i < proof.length; i++) {
+      reconstructedClientKey[i] = proof[i] ^ clientSig[i];
+    }
+    const reconstructedStoredKey = createHash('sha256')
+      .update(reconstructedClientKey)
+      .digest();
+    expect(reconstructedStoredKey.equals(storedKey)).toBe(true);
+
+    // Server-final is HMAC(ServerKey, authMessage).
+    const serverSig = createHmac('sha256', serverKey)
+      .update(authMessage)
+      .digest();
+    const serverFinal = Buffer.from(
+      `v=${serverSig.toString('base64')}`,
+      'utf8',
+    );
+    expect(() => {
+      client.finish(serverFinal);
+    }).not.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -630,7 +714,7 @@ describe('\\password', () => {
     expect(stderr()).toMatch(/not connected/);
   });
 
-  test('issues ALTER ROLE with a SCRAM verifier', async () => {
+  test('issues ALTER USER with a SCRAM verifier', async () => {
     const s = defaultSettings(createVarStore());
     const fake = makeFakeConnection();
     s.db = fake;
@@ -644,8 +728,19 @@ describe('\\password', () => {
     const r = await run(cmdPassword, makeMockCtx('password', 'alice', s));
     expect(r.status).toBe('ok');
     const sql = fake.lastExecSql ?? '';
-    expect(sql).toMatch(/^ALTER ROLE "alice" PASSWORD /);
+    // Matches libpq's PQchangePassword: `ALTER USER <id> PASSWORD <lit>`.
+    expect(sql).toMatch(/^ALTER USER "alice" PASSWORD /);
     expect(sql).toMatch(/SCRAM-SHA-256\$4096:/);
+  });
+
+  test('refuses with "not in interactive mode" when settings.notty is true', async () => {
+    const s = defaultSettings(createVarStore());
+    s.db = makeFakeConnection();
+    s.notty = true;
+    // No `readLine` mock — the cmd should reject before prompting.
+    const r = await run(cmdPassword, makeMockCtx('password', 'alice', s));
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/not in interactive mode/);
   });
 
   test('mismatched passwords error out', async () => {
@@ -694,6 +789,6 @@ describe('\\password', () => {
 
     const r = await run(cmdPassword, makeMockCtx('password', '', s));
     expect(r.status).toBe('ok');
-    expect(fake.lastExecSql ?? '').toMatch(/^ALTER ROLE "carol" PASSWORD /);
+    expect(fake.lastExecSql ?? '').toMatch(/^ALTER USER "carol" PASSWORD /);
   });
 });

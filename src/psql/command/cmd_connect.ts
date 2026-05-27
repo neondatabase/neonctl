@@ -26,10 +26,13 @@
  *     `SET client_encoding TO …` on the live connection so the backend
  *     ParameterStatus stays in sync with `settings.popt.topt.encoding`.
  *   - `\password` — prompts for a password (twice), encodes it as a
- *     SCRAM-SHA-256 verifier (RFC 5803 / PG's `ALTER ROLE … PASSWORD`
- *     format), and issues the ALTER ROLE on the live connection. The
+ *     SCRAM-SHA-256 verifier (RFC 5803 / PG's `ALTER USER … PASSWORD`
+ *     format), and issues the ALTER USER on the live connection. The
  *     encoder lives in {@link scramSha256Verifier}; tests call it directly
  *     with a fixed salt so we don't have to mock crypto.randomBytes.
+ *     Refuses to prompt when `settings.notty` is true (matches the spirit
+ *     of upstream — we don't yet wire `/dev/tty`, so notty would otherwise
+ *     fight the mainloop's stdin reader).
  *
  * What this module does NOT own:
  *
@@ -714,6 +717,17 @@ export const cmdPassword: BackslashCmdSpec = {
       return { status: 'error' };
     }
 
+    // Refuse to prompt for a password when stdin is not a TTY. Upstream uses
+    // /dev/tty as a fallback so it works even with piped stdin; we don't yet
+    // wire that path, so notty is a hard error (it would otherwise corrupt
+    // the mainloop's own readline iterator on stdin). Tests mock the prompt
+    // via `readLine` and run with `notty: false`, the `defaultSettings`
+    // default.
+    if (ctx.settings.notty) {
+      writeErr(`\\${ctx.cmdName}: not in interactive mode\n`);
+      return { status: 'error' };
+    }
+
     const userArg = ctx.nextArg('sql-id');
     let user = userArg;
     if (user === null) {
@@ -755,10 +769,13 @@ export const cmdPassword: BackslashCmdSpec = {
       return { status: 'error' };
     }
 
+    // Match upstream's PQchangePassword: `ALTER USER <id> PASSWORD <lit>`.
+    // (ALTER USER and ALTER ROLE are synonyms in PG, but we follow the
+    // libpq spelling for byte-for-byte parity with vanilla psql.)
     const salt = currentDeps.randomBytes(16);
     const verifier = scramSha256Verifier(pw1, salt);
     const sql =
-      'ALTER ROLE ' +
+      'ALTER USER ' +
       db.escapeIdentifier(user) +
       ' PASSWORD ' +
       db.escapeLiteral(verifier);
