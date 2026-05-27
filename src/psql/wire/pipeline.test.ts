@@ -74,6 +74,18 @@ const makeHost = (): { host: PipelineHost; rec: Recorded } => {
       rec.describes.push(d);
       return d.promise;
     },
+    enqueueDescribePortalIntoNextExecute: () => {
+      // execute() pipes the resolved fields onto the next pending execute
+      // op; for the mock we auto-resolve so PipelineSession.pending settles
+      // when end() awaits it. The real wire side resolves on RowDescription
+      // / NoData; in the unit test we don't drive those messages, so the
+      // synchronous resolution stands in for that path. Fields are
+      // discarded.
+      const d = defer<FieldDescription[]>();
+      rec.describes.push(d);
+      d.resolve([]);
+      return d.promise.then(() => undefined);
+    },
     enqueueDescribeStatement: () => {
       const d = defer<{ paramOids: number[]; fields: FieldDescription[] }>();
       // Re-wrap as the simpler shape used here; tests only need describePortal.
@@ -130,11 +142,13 @@ describe('PipelineSession', () => {
     await p;
   });
 
-  test('execute() writes an E frame and surfaces the result via end()', async () => {
+  test('execute() writes D + E frames and surfaces the result via end()', async () => {
     const { host, rec } = makeHost();
     const pipe = new PipelineSession(host);
     const exec1 = pipe.execute('', 0);
-    expect(rec.frames).toEqual(['E']);
+    // Pipeline execute emits Describe('P') + Execute so RowDescription
+    // arrives and the ResultSet carries field metadata.
+    expect(rec.frames).toEqual(['D', 'E']);
     rec.executes[0].resolve(fakeResult([['a']]));
     await exec1;
 

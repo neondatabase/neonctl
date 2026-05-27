@@ -61,7 +61,7 @@ import {
   cmdIf,
 } from '../command/cmd_cond.js';
 import { consumeNext as consumeQueuedInput } from '../command/inputQueue.js';
-import { consumeBindState } from '../command/cmd_pipeline.js';
+import { consumeBindState, getPipelineState } from '../command/cmd_pipeline.js';
 import {
   appendHistory,
   defaultHistoryPath,
@@ -521,6 +521,38 @@ const dispatchSendQuery = async (
   // Always consume the bind stash up-front so it's cleared regardless of which
   // branch runs (and regardless of success / failure on the bind path).
   const bind = consumeBindState(ctx.settings);
+
+  // Pipeline-active routing: when `\startpipeline` is in effect, a
+  // semicolon-terminated SQL must be appended to the pipeline as
+  // Parse/Bind/Describe/Execute (no Sync). Sending it as a simple Query
+  // would corrupt the pipeline — the in-flight extended-protocol replies
+  // would land in `handleQueryMessage` and the pipeline's ResultSet
+  // promises would never settle, leaving `\endpipeline` hung.
+  //
+  // Mirrors upstream psql: `SendQuery` checks `PQpipelineStatus` and routes
+  // through `PQsendQueryParams`/`PQsendQuery` accordingly. We use the
+  // session helper so the wire enqueueing matches `\sendpipeline`.
+  const ps = getPipelineState(ctx.settings);
+  if (ps && ctx.settings.db) {
+    try {
+      // Pipeline-mode `;`-queries: empty parameter list, anonymous prepared
+      // statement, anonymous portal. The result will surface later through
+      // `\endpipeline` / `\getresults`.
+      await ps.session.parse('', sql, []);
+      await ps.session.bind('', bind?.values ?? []);
+      const exec = (async () => {
+        await ps.session.execute('', 0);
+        return undefined;
+      })();
+      ps.pending.push(exec);
+      return true;
+    } catch (err) {
+      const message = captureLastError(ctx.settings, err, sql);
+      writeQueryError(ctx, message);
+      return false;
+    }
+  }
+
   if (bind && ctx.settings.db) {
     const started = ctx.settings.timing ? Date.now() : 0;
     try {
