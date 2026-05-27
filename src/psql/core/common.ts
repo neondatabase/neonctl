@@ -621,8 +621,10 @@ const renderResultSets = async (
         // Non-tuples-producing commands (INSERT/UPDATE/DELETE/DDL) — emit the
         // CommandComplete tag instead of running the table printer (which
         // would render an empty `(0 rows)` block). Suppressed in tuples-only
-        // mode (`\t`) to match upstream.
-        if (shouldEmit && !tuplesOnly) {
+        // mode (`\t`) and in `--quiet` mode to match upstream
+        // (PSQLexec calls SetResultVariables which only prints the tag
+        // when !pset.quiet).
+        if (shouldEmit && !tuplesOnly && !ctx.settings.quiet) {
           const tag = formatCommandTag(rs);
           if (tag.length > 0) sink.write(`${tag}\n`);
         }
