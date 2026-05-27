@@ -269,6 +269,11 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
       settings.onErrorRollback = parsed;
     }),
   );
+  // Seed ON_ERROR_ROLLBACK to "off" (upstream default — `pset.on_error_rollback
+  // = PSQL_ERROR_ROLLBACK_OFF`). Without this, `\echo :ON_ERROR_ROLLBACK`
+  // emits the literal `:ON_ERROR_ROLLBACK` token instead of the substituted
+  // value, which the regress harness diffs against.
+  varStore.set('ON_ERROR_ROLLBACK', 'off');
 
   // VERBOSITY — upstream `verbosity_substitute_hook` (empty → "default")
   // + `verbosity_assign_hook`. Accepts default | verbose | terse | sqlstate.
