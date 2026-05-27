@@ -14,6 +14,10 @@
 // `setupPg()` to call from globalSetup, and `getPgConn()` to call
 // from individual test files.
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { log } from './util-log.js';
 
 export type PgConn = {
@@ -25,6 +29,27 @@ export type PgConn = {
 };
 
 const PG_IMAGE_DEFAULT = 'postgres:18.0';
+
+// Path to the minimal subset of upstream src/test/regress/sql/test_setup.sql
+// that we run against the booted container before any vendored regress
+// script. Upstream pg_regress runs the full test_setup.sql first, which
+// creates a number of tables that every per-test script (psql.sql,
+// psql_pipeline.sql, etc.) assumes already exist. We only need `onek` and
+// `tenk1` — see test_setup_minimal.sql for the rationale.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SEED_SCRIPT_HOST_PATH = join(
+  HERE,
+  '..',
+  'vendor',
+  'postgres-18.0',
+  'src',
+  'test',
+  'regress',
+  'sql',
+  'test_setup_minimal.sql',
+);
+const SEED_SCRIPT_CONTAINER_PATH =
+  '/tmp/psql-conformance/test_setup_minimal.sql';
 
 type StoppableContainer = { stop(): Promise<unknown> };
 
@@ -132,6 +157,17 @@ async function bootTestcontainer(): Promise<PgConn> {
   // The package's surface is intentionally typed loosely here so the
   // file compiles whether or not the package is installed in
   // node_modules — see the README "Setup" section.
+  type ContentToCopy = {
+    content: string;
+    target: string;
+    mode?: number;
+  };
+  type ExecResult = {
+    output: string;
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+  };
   type ContainerCtor = new (image: string) => {
     start(): Promise<StartedContainer>;
   };
@@ -142,6 +178,11 @@ async function bootTestcontainer(): Promise<PgConn> {
     getDatabase(): string;
     getUsername(): string;
     getPassword(): string;
+    exec(
+      command: string | string[],
+      opts?: { workingDir?: string; user?: string },
+    ): Promise<ExecResult>;
+    copyContentToContainer(contents: ContentToCopy[]): Promise<void>;
   };
   const ctor = mod.PostgreSqlContainer as ContainerCtor | undefined;
   if (typeof ctor !== 'function') {
@@ -154,6 +195,43 @@ async function bootTestcontainer(): Promise<PgConn> {
   log(`pg-fixture: booting ${image} via @testcontainers/postgresql...`);
   const started = await new ctor(image).start();
   containerRef = started;
+
+  // Seed the regression-test infrastructure once the container is up.
+  // The vendored psql.sql references upstream tables (`onek`, `tenk1`)
+  // that upstream pg_regress creates via test_setup.sql before running
+  // the per-test scripts. We don't bring in the full upstream script
+  // because it depends on `regresslib` (a C library built only as part
+  // of the regression suite, not shipped in `postgres:<ver>` images);
+  // the minimal script trims everything except the `onek` and `tenk1`
+  // table definitions, which are the only ones our vendored scripts
+  // reach for.
+  const seedSql = readFileSync(SEED_SCRIPT_HOST_PATH, 'utf8');
+  log(`pg-fixture: seeding regression-test tables (${SEED_SCRIPT_HOST_PATH})`);
+  await started.copyContentToContainer([
+    {
+      content: seedSql,
+      target: SEED_SCRIPT_CONTAINER_PATH,
+      mode: 0o644,
+    },
+  ]);
+  const seedResult = await started.exec([
+    'psql',
+    '-v',
+    'ON_ERROR_STOP=1',
+    '-U',
+    started.getUsername(),
+    '-d',
+    started.getDatabase(),
+    '-f',
+    SEED_SCRIPT_CONTAINER_PATH,
+  ]);
+  if (seedResult.exitCode !== 0) {
+    throw new Error(
+      `pg-fixture: seed script failed (exit ${seedResult.exitCode}):\n` +
+        seedResult.output,
+    );
+  }
+
   const conn: PgConn = {
     host: started.getHost(),
     port: started.getPort(),
