@@ -96,15 +96,14 @@ describe('groupStages', () => {
     expect(stages[2].map((n) => n.name)).toEqual(['web']);
   });
 
-  it('no-progress (would-be-cycle) throws internal error', () => {
-    // Both nodes claim a dep that the other side doesn't declare —
-    // an inconsistent registry, e.g. if a future cycle check is bypassed.
+  it('cycle that slipped past the cycle check throws an internal error', () => {
+    // Construct a real 2-node cycle (a → b → a). plan.ts rejects this at
+    // build time, but groupStages is the second line of defense — if a
+    // future refactor bypasses the cycle check, the runner must still
+    // refuse to silently spin.
     expect(() =>
       groupStages(
-        plan([
-          node('a', 'postgres', ['missing']),
-          node('b', 'local-command', ['missing']),
-        ]),
+        plan([node('a', 'postgres', ['b']), node('b', 'local-command', ['a'])]),
       ),
     ).toThrowError(/stage grouping made no progress/);
   });

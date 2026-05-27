@@ -102,7 +102,7 @@ describe('upsertEnvVars body shape', () => {
     ]);
   });
 
-  it('teamId is appended to the request URL', async () => {
+  it('teamId is appended to the upsert URL with the right separator', async () => {
     await upsertEnvVars({
       projectId: 'prj_abc',
       envs: { DATABASE_URL: 'postgres://...' },
@@ -110,6 +110,10 @@ describe('upsertEnvVars body shape', () => {
       gitBranch: 'main',
       ctx: { token: 't', teamId: 'team_xyz' },
     });
-    expect(capturedUrl).toContain('teamId=team_xyz');
+    // Anchor the separator: the endpoint already has `?upsert=true`, so
+    // the team id MUST join with `&`. A regression in wrapTeam that
+    // always emits `?` would produce `?upsert=true?teamId=…` (invalid)
+    // and slip past a loose `toContain('teamId=team_xyz')`.
+    expect(capturedUrl).toContain('?upsert=true&teamId=team_xyz');
   });
 });
