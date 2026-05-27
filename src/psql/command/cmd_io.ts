@@ -1231,7 +1231,8 @@ export const cmdGset: BackslashCmdSpec = {
     for (let i = 0; i < rs.fields.length; i++) {
       const fieldName = rs.fields[i].name;
       const name = `${prefix}${fieldName}`;
-      const value = formatCell(row[i]);
+      const cell = row[i];
+      const isNull = cell === null || cell === undefined;
       // Upstream skips assignments where the target maps to a "specially
       // treated" variable (one with a substitute / assign hook installed)
       // whose value would be rejected by the hook. The non-special columns
@@ -1252,6 +1253,21 @@ export const cmdGset: BackslashCmdSpec = {
         );
         continue;
       }
+      // Upstream `StoreQueryTuple` in src/bin/psql/common.c:
+      //
+      //   if (PQgetisnull(result, 0, i))
+      //       UnsetVariable(pset.vars, varname);
+      //   else if (!SetVariable(pset.vars, varname, PQgetvalue(...))) { ... }
+      //
+      // i.e. a NULL cell unsets the target variable (so a subsequent
+      // `:var` interpolates to the literal `:var` via the scanner's
+      // unset-var passthrough) rather than setting it to the empty
+      // string. Mirror that semantics here.
+      if (isNull) {
+        ctx.settings.vars.unset(name);
+        continue;
+      }
+      const value = formatCell(cell);
       if (!ctx.settings.vars.set(name, value)) {
         // Bare `invalid variable name: "<name>"` (no `\gset:` prefix) —
         // matches upstream psql.out wording for `\gset` exactly.

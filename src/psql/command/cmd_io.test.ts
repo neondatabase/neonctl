@@ -565,6 +565,34 @@ describe('\\gset', () => {
     expect(s.vars.get('foo_y')).toBe('42');
   });
 
+  test('unsets the target variable when the column value is NULL', async () => {
+    // Upstream `StoreQueryTuple` calls `UnsetVariable` when PQgetisnull
+    // reports the cell is NULL, so a subsequent `:var` in `\echo`
+    // interpolates as the literal `:var` (via the scanner's unset-var
+    // passthrough). Mirror by exercising both the unset-on-NULL path and
+    // the unset-overrides-prior-value path.
+    const conn = makeMockConn();
+    conn.reply = () => [rs(['var2', 'var3'], [[null, 'kept']])];
+    const s = makeSettings(conn);
+    // Seed `var2` with a prior value to prove the NULL cell unsets it
+    // (not just "leaves it absent").
+    s.vars.set('var2', 'preset');
+    expect(s.vars.has('var2')).toBe(true);
+    const ctx = makeMockCtx(
+      'gset',
+      '',
+      s,
+      "select NULL as var2, 'kept' as var3",
+    );
+    const r = await run(cmdGset, ctx);
+    expect(r.status).toBe('reset-buf');
+    // NULL → unset (not '').
+    expect(s.vars.has('var2')).toBe(false);
+    expect(s.vars.get('var2')).toBeUndefined();
+    // Non-NULL sibling is still set.
+    expect(s.vars.get('var3')).toBe('kept');
+  });
+
   test('errors with bare `no rows returned for \\gset` when zero rows', async () => {
     const conn = makeMockConn();
     conn.reply = () => [rs(['x'], [])];
