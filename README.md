@@ -142,17 +142,19 @@ Global options are supported with any Neon CLI command.
 
 ## Contribute
 
+This repo uses [pnpm](https://pnpm.io). The required version is pinned in `.tool-versions` and `package.json`'s `packageManager` field. The simplest way to get the right version is [mise](https://mise.jdx.dev): `mise install` reads `.tool-versions` and installs Node and pnpm. Alternatives: `npm install -g pnpm@9.15.9`, or [Corepack](https://nodejs.org/api/corepack.html) (`corepack enable pnpm`).
+
 To run the CLI locally, execute the build command after making changes:
 
 ```shell
-bun install
-bun run build
+pnpm install
+pnpm run build
 ```
 
 To develop continuously:
 
 ```shell
-bun run watch
+pnpm run watch
 ```
 
 To run commands from the local build, replace the `neonctl` command with `node dist`; for example:
