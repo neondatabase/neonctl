@@ -14,7 +14,14 @@
 // `setupPg()` to call from globalSetup, and `getPgConn()` to call
 // from individual test files.
 
-import { readFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -26,16 +33,24 @@ export type PgConn = {
   db: string;
   user: string;
   password: string;
+  /**
+   * Per-run temp dir the vendored regress scripts use as
+   * `abs_builddir` / `PG_ABS_BUILDDIR`. Created on the host BEFORE the
+   * container starts and bind-mounted into the container at the same
+   * path, so server-side reads (e.g. `COPY reload_output(line) FROM
+   * :'g_out_file'`) see the same file that the client wrote with
+   * `\g :'g_out_file'`.
+   *
+   * `null` when the fixture is hydrated from `PGCONFORMANCE_PG_HOST`
+   * (the GHA-service path): there's no testcontainer to bind-mount
+   * into and the caller is expected to share its own filesystem with
+   * the PG server.
+   */
+  absBuilddir: string | null;
 };
 
 const PG_IMAGE_DEFAULT = 'postgres:18.0';
 
-// Path to the minimal subset of upstream src/test/regress/sql/test_setup.sql
-// that we run against the booted container before any vendored regress
-// script. Upstream pg_regress runs the full test_setup.sql first, which
-// creates a number of tables that every per-test script (psql.sql,
-// psql_pipeline.sql, etc.) assumes already exist. We only need `onek` and
-// `tenk1` — see test_setup_minimal.sql for the rationale.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SEED_SCRIPT_HOST_PATH = join(
   HERE,
@@ -55,6 +70,14 @@ type StoppableContainer = { stop(): Promise<unknown> };
 
 let cached: PgConn | null = null;
 let containerRef: StoppableContainer | null = null;
+/**
+ * The host-side abs_builddir we created in {@link bootTestcontainer}.
+ * Stored separately from `cached` because we still want to clean it up
+ * even if the connection was hydrated from env vars on a different
+ * code path (it shouldn't happen — only the fixture owns its own dir
+ * — but defending against future plumbing changes is cheap).
+ */
+let ownedAbsBuilddir: string | null = null;
 
 /**
  * Boot or attach to postgres. Idempotent within a process.
@@ -71,6 +94,7 @@ export async function setupPg(): Promise<PgConn> {
       db: process.env.PGCONFORMANCE_PG_DB ?? 'postgres',
       user: process.env.PGCONFORMANCE_PG_USER ?? 'postgres',
       password: process.env.PGCONFORMANCE_PG_PASSWORD ?? 'postgres',
+      absBuilddir: process.env.PGCONFORMANCE_ABS_BUILDDIR ?? null,
     };
     log(
       `pg-fixture: using $PGCONFORMANCE_PG_HOST=${cached.host}:${cached.port}`,
@@ -101,6 +125,7 @@ export function getPgConn(): PgConn {
       db: process.env.PGCONFORMANCE_PG_DB ?? 'postgres',
       user: process.env.PGCONFORMANCE_PG_USER ?? 'postgres',
       password: process.env.PGCONFORMANCE_PG_PASSWORD ?? 'postgres',
+      absBuilddir: process.env.PGCONFORMANCE_ABS_BUILDDIR ?? null,
     };
     return cached;
   }
@@ -119,6 +144,14 @@ export async function teardownPg(): Promise<void> {
   if (containerRef) {
     await containerRef.stop();
     containerRef = null;
+  }
+  if (ownedAbsBuilddir) {
+    try {
+      rmSync(ownedAbsBuilddir, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+    ownedAbsBuilddir = null;
   }
   cached = null;
 }
@@ -157,19 +190,25 @@ async function bootTestcontainer(): Promise<PgConn> {
   // The package's surface is intentionally typed loosely here so the
   // file compiles whether or not the package is installed in
   // node_modules — see the README "Setup" section.
+  type BindMount = {
+    source: string;
+    target: string;
+    mode?: 'rw' | 'ro' | 'z' | 'Z';
+  };
   type ContentToCopy = {
     content: string;
     target: string;
     mode?: number;
+  };
+  type Builder = {
+    withBindMounts(mounts: BindMount[]): Builder;
+    start(): Promise<StartedContainer>;
   };
   type ExecResult = {
     output: string;
     stdout: string;
     stderr: string;
     exitCode: number;
-  };
-  type ContainerCtor = new (image: string) => {
-    start(): Promise<StartedContainer>;
   };
   type StartedContainer = {
     stop(): Promise<void>;
@@ -184,6 +223,7 @@ async function bootTestcontainer(): Promise<PgConn> {
     ): Promise<ExecResult>;
     copyContentToContainer(contents: ContentToCopy[]): Promise<void>;
   };
+  type ContainerCtor = new (image: string) => Builder;
   const ctor = mod.PostgreSqlContainer as ContainerCtor | undefined;
   if (typeof ctor !== 'function') {
     throw new Error(
@@ -191,9 +231,36 @@ async function bootTestcontainer(): Promise<PgConn> {
         'export PostgreSqlContainer — your version is incompatible.',
     );
   }
+
+  // Allocate the per-run abs_builddir BEFORE the container starts so we
+  // can bind-mount the same path into the container. This pairs the
+  // client (host) and server (container) views of the directory: when
+  // the regress script does `\g :'g_out_file'` (client writes) and
+  // `COPY reload_output(line) FROM :'g_out_file'` (server reads), both
+  // see the same bytes.
+  //
+  // The mkdtemp prefix matches the historical name in normalize.ts so
+  // the existing path-scrub rule continues to fire when the path leaks
+  // into output (e.g. error messages). The bind-mount uses identical
+  // host and container paths so :abs_builddir resolves to a real path
+  // on both sides without any rewriting.
+  const absBuilddir = mkdtempSync(join(tmpdir(), 'psql-conformance-regress-'));
+  // mkdtemp creates 0o700; widen so the bind-mount is reachable by the
+  // `postgres` user (UID 999) inside the container. The dir lives under
+  // tmpdir() so the wider perms don't expose anything sensitive.
+  chmodSync(absBuilddir, 0o755);
+  mkdirSync(join(absBuilddir, 'results'), { recursive: true, mode: 0o777 });
+  ownedAbsBuilddir = absBuilddir;
+
   const image = process.env.PGCONFORMANCE_PG_IMAGE ?? PG_IMAGE_DEFAULT;
-  log(`pg-fixture: booting ${image} via @testcontainers/postgresql...`);
-  const started = await new ctor(image).start();
+  log(
+    `pg-fixture: booting ${image} via @testcontainers/postgresql ` +
+      `(bind-mount abs_builddir=${absBuilddir})...`,
+  );
+  const builder = new ctor(image).withBindMounts([
+    { source: absBuilddir, target: absBuilddir, mode: 'rw' },
+  ]);
+  const started = await builder.start();
   containerRef = started;
 
   // Seed the regression-test infrastructure once the container is up.
@@ -238,7 +305,11 @@ async function bootTestcontainer(): Promise<PgConn> {
     db: started.getDatabase(),
     user: started.getUsername(),
     password: started.getPassword(),
+    absBuilddir,
   };
-  log(`pg-fixture: ready at ${conn.host}:${conn.port} (db=${conn.db})`);
+  log(
+    `pg-fixture: ready at ${conn.host}:${conn.port} (db=${conn.db}, ` +
+      `abs_builddir=${absBuilddir})`,
+  );
   return conn;
 }

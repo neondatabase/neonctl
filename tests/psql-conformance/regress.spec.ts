@@ -43,19 +43,42 @@ type RegressCase = (typeof REGRESS_CASES)[number];
 // silently unsets the psql variable, the file path resolves to junk
 // (`/results/psql-output1`), and `\g` fails to open it.
 //
-// We allocate a per-run isolated temp dir under tmpdir() with the
-// `results/` subdir pre-created. abs_srcdir is read-only and points at
-// the vendored sql dir for completeness (no current vendored script
-// actually reads abs_srcdir, but upstream pg_regress sets both so we
-// mirror the contract).
+// The temp dir is now allocated by pg-fixture.ts BEFORE the container
+// starts so the fixture can bind-mount the same path into the
+// container — that pairs the client-side `\g :'g_out_file'` (writes
+// from the harness on the host) with the server-side `COPY ... FROM
+// :'g_out_file'` (reads from postgres inside the container). The
+// fixture passes the path back through `PGCONFORMANCE_ABS_BUILDDIR`.
+//
+// When the fixture is bypassed (PGCONFORMANCE_PG_HOST set — see the
+// GHA-service path in pg-fixture.ts), we fall back to a host-local
+// mkdtemp so the suite still works against an externally-managed PG
+// that shares a filesystem with us.
+//
+// abs_srcdir is read-only and points at the vendored sql dir for
+// completeness (no current vendored script actually reads abs_srcdir,
+// but upstream pg_regress sets both so we mirror the contract).
 //
 // Cleanup is best-effort via `afterAll` — mkdtempSync collisions are
 // impossible, and leaving the dir behind on crash is harmless.
-const REGRESS_TMP = mkdtempSync(join(tmpdir(), 'psql-conformance-regress-'));
-mkdirSync(join(REGRESS_TMP, 'results'), { recursive: true });
+const REGRESS_TMP = (() => {
+  const fromFixture = process.env.PGCONFORMANCE_ABS_BUILDDIR;
+  if (fromFixture) {
+    // The fixture already created this and the `results/` subdir.
+    return fromFixture;
+  }
+  const tmp = mkdtempSync(join(tmpdir(), 'psql-conformance-regress-'));
+  mkdirSync(join(tmp, 'results'), { recursive: true });
+  return tmp;
+})();
+const REGRESS_TMP_OWNED_BY_SPEC = !process.env.PGCONFORMANCE_ABS_BUILDDIR;
 const REGRESS_ABS_SRCDIR = join(VENDOR_ROOT, 'src', 'test', 'regress');
 
 afterAll(() => {
+  // Only this file is allowed to remove the dir it created. When the
+  // fixture owns the tmp dir, globalTeardown handles cleanup so worker
+  // teardown doesn't pull the rug out from under other workers.
+  if (!REGRESS_TMP_OWNED_BY_SPEC) return;
   try {
     rmSync(REGRESS_TMP, { recursive: true, force: true });
   } catch {

@@ -21,6 +21,13 @@ export default async function setup(): Promise<() => Promise<void>> {
   process.env.PGCONFORMANCE_PG_DB = conn.db;
   process.env.PGCONFORMANCE_PG_USER = conn.user;
   process.env.PGCONFORMANCE_PG_PASSWORD = conn.password;
+  // abs_builddir is allocated by the fixture (so it can be bind-mounted
+  // into the container before postgres starts). regress.spec.ts reads
+  // it back via this env var and seeds it into psql via `-v
+  // abs_builddir=...` / `$PG_ABS_BUILDDIR`.
+  if (conn.absBuilddir !== null) {
+    process.env.PGCONFORMANCE_ABS_BUILDDIR = conn.absBuilddir;
+  }
   return async () => {
     await teardownPg();
   };
