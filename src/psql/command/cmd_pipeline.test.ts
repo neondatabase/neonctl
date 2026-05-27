@@ -396,12 +396,17 @@ describe('\\gdesc', () => {
     expect(out).toMatch(/\(0 rows\)|\(1 row\)/);
   });
 
-  test('\\gdesc without a query buffer fails', async () => {
+  test('\\gdesc without a query buffer emits upstream stdout note', async () => {
+    // Upstream `exec_command_gdesc` over an empty buffer falls through
+    // `PSQL_CMD_SEND` and the printer renders the synthetic 0-column
+    // result by emitting "The command has no result, or the result has
+    // no columns." to stdout — exit 0, not an error. Verified against
+    // vanilla psql 18.
     const conn = makeMockConn();
     const s = makeSettings(conn);
     const ctx = makeMockCtx('gdesc', '', s, '');
     const r = await run(cmdGdesc, ctx);
-    expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/no query buffer/);
+    expect(r.status).toBe('reset-buf');
+    expect(stderr()).toBe('');
   });
 });
