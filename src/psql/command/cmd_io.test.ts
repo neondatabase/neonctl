@@ -421,6 +421,30 @@ describe('\\g', () => {
     expect(r.status).toBe('reset-buf');
     expect(stderr()).toBe('');
   });
+
+  test('renders server errors in upstream 3-line shape (not `\\g:`)', async () => {
+    const conn = makeMockConn();
+    conn.execSimple = () => {
+      const err = Object.assign(new Error('there is no parameter $1'), {
+        severity: 'ERROR',
+        code: '42P02',
+        position: '8',
+      });
+      return Promise.reject(err);
+    };
+    const s = makeSettings(conn);
+    // Trailing whitespace before `\g` is preserved in the LINE re-print
+    // (vanilla psql sends the buffer verbatim to the server, so the LINE
+    // includes the trailing space).
+    const ctx = makeMockCtx('g', '', s, 'SELECT $1, $2 ');
+    const r = await run(cmdG, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/^ERROR: {2}there is no parameter \$1/m);
+    expect(stderr()).toMatch(/^LINE 1: SELECT \$1, \$2 /m);
+    expect(stderr()).not.toMatch(/\\g:/);
+    expect(s.vars.get('SQLSTATE')).toBe('42P02');
+    expect(s.vars.get('LAST_ERROR_MESSAGE')).toBe('there is no parameter $1');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -462,14 +486,28 @@ describe('\\gset', () => {
     expect(s.vars.get('foo_y')).toBe('42');
   });
 
-  test('errors when the result has zero rows', async () => {
+  test('errors with bare `no rows returned for \\gset` when zero rows', async () => {
     const conn = makeMockConn();
     conn.reply = () => [rs(['x'], [])];
     const s = makeSettings(conn);
     const ctx = makeMockCtx('gset', '', s, 'select x where false');
     const r = await run(cmdGset, ctx);
     expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/expected one row/);
+    // Match upstream wording — bare `no rows returned for \gset` (no
+    // `\gset:` prefix). Verified against vanilla psql 18.
+    expect(stderr()).toMatch(/^no rows returned for \\gset/);
+    expect(stderr()).not.toMatch(/\\gset:/);
+  });
+
+  test('non-tuples result (DDL) is a no-op, not an error', async () => {
+    const conn = makeMockConn();
+    // CREATE TABLE returns PGRES_COMMAND_OK with no fields.
+    conn.reply = () => [rs([], [], 'CREATE TABLE')];
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('gset', '', s, 'create temp table t (x int)');
+    const r = await run(cmdGset, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(stderr()).toBe('');
   });
 
   test('errors when more than one row returned', async () => {
@@ -479,8 +517,67 @@ describe('\\gset', () => {
     const ctx = makeMockCtx('gset', '', s, 'select x');
     const r = await run(cmdGset, ctx);
     expect(r.status).toBe('error');
-    // Match upstream wording — `more than one row returned for \gset`.
-    expect(stderr()).toMatch(/more than one row returned for \\gset/);
+    // Match upstream wording — bare `more than one row returned for \gset`
+    // (no `\gset:` prefix). Verified against vanilla psql 18.
+    expect(stderr()).toMatch(/^more than one row returned for \\gset/);
+    expect(stderr()).not.toMatch(/\\gset:/);
+  });
+
+  test('emits bare `invalid variable name: "X"` (no \\gset: prefix)', async () => {
+    const conn = makeMockConn();
+    // Column name with a space is rejected by the var name regex.
+    conn.reply = () => [rs(['bad name'], [['hello']])];
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('gset', '', s, 'select 10 as "bad name"');
+    const r = await run(cmdGset, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/^invalid variable name: "bad name"/);
+    expect(stderr()).not.toMatch(/\\gset:/);
+  });
+
+  test('skips specially treated variables with the upstream warning and continues', async () => {
+    const conn = makeMockConn();
+    // Two columns: EOF (with prefix IGNORE → IGNOREEOF, specially
+    // treated) and _foo (→ IGNORE_foo, not special).
+    conn.reply = () => [rs(['EOF', '_foo'], [[97, 'ok']])];
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx(
+      'gset',
+      'IGNORE',
+      s,
+      'select 97 as "EOF", \'ok\' as _foo',
+    );
+    const r = await run(cmdGset, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(stderr()).toMatch(
+      /attempt to \\gset into specially treated variable "IGNOREEOF" ignored/,
+    );
+    // Non-special column was still assigned.
+    expect(s.vars.get('IGNORE_foo')).toBe('ok');
+  });
+
+  test('renders server errors in upstream 3-line shape (not `\\gset:`)', async () => {
+    const conn = makeMockConn();
+    conn.execSimple = () => {
+      // Synthesise the ErrorResponse shape our wire layer attaches to
+      // thrown errors.
+      const err = Object.assign(new Error('relation "nope" does not exist'), {
+        severity: 'ERROR',
+        code: '42P01',
+        position: '15',
+      });
+      return Promise.reject(err);
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('gset', '', s, 'SELECT * FROM nope');
+    const r = await run(cmdGset, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/^ERROR: {2}relation "nope" does not exist/m);
+    expect(stderr()).toMatch(/^LINE 1: SELECT \* FROM nope/m);
+    expect(stderr()).not.toMatch(/\\gset:/);
+    // Diagnostic vars refreshed by formatServerError.
+    expect(s.vars.get('SQLSTATE')).toBe('42P01');
+    expect(s.vars.get('ERROR')).toBe('true');
   });
 });
 
@@ -527,6 +624,31 @@ describe('\\gexec', () => {
     const r = await run(cmdGexec, ctx);
     expect(r.status).toBe('reset-buf');
     expect(conn.history).toEqual(['select stmt', 'select 1']);
+  });
+
+  test('renders nested statement errors in upstream 3-line shape (not `\\gexec:`)', async () => {
+    const conn = makeMockConn();
+    let phase = 0;
+    conn.execSimple = (sql) => {
+      conn.history.push(sql);
+      phase += 1;
+      if (phase === 1) {
+        return Promise.resolve([rs(['stmt'], [['BROKEN_SQL']])]);
+      }
+      const err = Object.assign(
+        new Error('syntax error at or near "BROKEN_SQL"'),
+        { severity: 'ERROR', code: '42601', position: '1' },
+      );
+      return Promise.reject(err);
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('gexec', '', s, 'select stmt');
+    const r = await run(cmdGexec, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(
+      /^ERROR: {2}syntax error at or near "BROKEN_SQL"/m,
+    );
+    expect(stderr()).not.toMatch(/\\gexec:/);
   });
 });
 
@@ -1141,12 +1263,15 @@ describe('\\gdesc', () => {
     expect(out).toMatch(/integer/);
   });
 
-  test('errors when the query buffer is empty', async () => {
+  test('emits upstream "no result, no columns" stdout note when buffer is empty', async () => {
     const s = makeSettings(makeMockConn());
     const ctx = makeMockCtx('gdesc', '', s, '');
     const r = await run(cmdGdesc, ctx);
-    expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/no query buffer/);
+    expect(r.status).toBe('reset-buf');
+    expect(stdout()).toMatch(
+      /^The command has no result, or the result has no columns/,
+    );
+    expect(stderr()).toBe('');
   });
 
   test('surfaces Parse failures', async () => {

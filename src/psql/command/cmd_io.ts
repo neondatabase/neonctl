@@ -109,7 +109,7 @@ import {
   lookupPrepared,
   stagedNamedBindPresent,
 } from './cmd_pipeline.js';
-import { captureLastError } from '../core/common.js';
+import { captureLastError, refreshErrorVars } from '../core/common.js';
 
 // ---------------------------------------------------------------------------
 // Query-output (queryFout) stash.
@@ -211,6 +211,100 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
   // it would also write a `psql: ERROR:  <msg>` fallback, producing a stray
   // duplicate that breaks the `\errverbose` ordering check on tests like
   // `SELECT error\gdesc\n\errverbose`.
+  return { status: 'error', errorWritten: true };
+};
+
+/**
+ * Set of psql variables upstream marks as "specially treated" — i.e. names
+ * that have a substitute / assign hook installed in `startup.c`'s
+ * `EstablishVariableSpace`. Used by `\gset` to reject assignments into
+ * those names (matching upstream `StoreQueryTuple`'s `VariableHasHook`
+ * check). We mirror the upstream list directly so a `\gset IGNORE` into
+ * `IGNOREEOF` produces the conformance-expected warning even though our
+ * settings.ts hasn't installed the IGNOREEOF / HISTFILE hooks yet — that
+ * gap is tracked separately and harmless because the values are read-only
+ * for us.
+ */
+const UPSTREAM_SPECIAL_VAR_NAMES: ReadonlySet<string> = new Set([
+  'AUTOCOMMIT',
+  'COMP_KEYWORD_CASE',
+  'ECHO',
+  'ECHO_HIDDEN',
+  'FETCH_COUNT',
+  'HIDE_TABLEAM',
+  'HIDE_TOAST_COMPRESSION',
+  'HISTCONTROL',
+  'HISTFILE',
+  'HISTSIZE',
+  'IGNOREEOF',
+  'ON_ERROR_ROLLBACK',
+  'ON_ERROR_STOP',
+  'PROMPT1',
+  'PROMPT2',
+  'PROMPT3',
+  'QUIET',
+  'SHOW_ALL_RESULTS',
+  'SHOW_CONTEXT',
+  'SINGLELINE',
+  'SINGLESTEP',
+  'VERBOSITY',
+]);
+
+/**
+ * True when `name` is a psql variable that `\gset` must skip with an
+ * "attempt to \gset into specially treated variable" message. Combines the
+ * registered-hook check (so future hook installations are automatically
+ * covered) with the upstream-canonical list above (so cases like
+ * IGNOREEOF that aren't hooked in our settings.ts still match upstream's
+ * `\gset` behaviour exactly).
+ */
+const isSpeciallyTreatedVar = (settings: PsqlSettings, name: string): boolean =>
+  settings.vars.hasSubstituteHook(name) || UPSTREAM_SPECIAL_VAR_NAMES.has(name);
+
+/**
+ * Render a server-side error in upstream psql's 3-line shape (severity +
+ * message, then `LINE N:` / `^` re-print) and refresh the `:LAST_ERROR_*`
+ * diagnostic variables so a subsequent `\errverbose` sees the rich payload.
+ *
+ * Mirrors the path that `core/common.ts::writeQueryError` takes for top-level
+ * statement errors: capture full ErrorResponse fields onto
+ * `settings.lastErrorResult`, render via `formatErrorReport` (honouring
+ * VERBOSITY + SHOW_CONTEXT), prefix only the leading severity line with
+ * `psql:[<file>:<n>]:`, and update the per-statement diagnostic vars via
+ * `refreshErrorVars`.
+ *
+ * Used by `\g`, `\gx`, `\gset`, `\gdesc`, and `\gexec` so a server-rejected
+ * statement dispatched through them renders the same shape vanilla psql
+ * produces, instead of the legacy `\<cmd>: <message>` one-liner.
+ */
+const formatServerError = (
+  ctx: BackslashContext,
+  err: unknown,
+  sql: string,
+): BackslashResult => {
+  // Stash full ErrorResponse payload so `\errverbose` can re-render later.
+  const msg = captureLastError(ctx.settings, err, sql);
+  const e = ctx.settings.lastErrorResult;
+  if (e) {
+    const lines = formatErrorReport(
+      e,
+      ctx.settings.verbosity,
+      ctx.settings.showContext,
+    );
+    const prefix = psqlErrorPrefix(ctx.settings);
+    const prefixed = [prefix + lines[0], ...lines.slice(1)];
+    writeErr(prefixed.join('\n') + '\n');
+  } else {
+    // Defensive fallback — captureLastError always sets lastErrorResult,
+    // but if a future caller bypasses it, surface at least the message.
+    const prefix = psqlErrorPrefix(ctx.settings);
+    writeErr(`${prefix}ERROR:  ${msg}\n`);
+  }
+  // Refresh `:SQLSTATE`, `:ERROR`, `:LAST_ERROR_*`, `:ROW_COUNT` so the
+  // following `\echo :LAST_ERROR_MESSAGE` and `\errverbose` see the new
+  // outcome. Matches upstream's `SetErrorVariables` call after every
+  // failed dispatch.
+  refreshErrorVars(ctx.settings, { kind: 'error' });
   return { status: 'error', errorWritten: true };
 };
 
@@ -718,7 +812,7 @@ const runGCore = async (
   // Execute against it.
   const bindState = consumeBindState(ctx.settings);
 
-  let execError: string | null = null;
+  let execError: unknown = null;
   try {
     const out = pickOut(ctx.settings, oneShot?.stream ?? null);
     if (bindState?.byName) {
@@ -728,7 +822,13 @@ const runGCore = async (
       // statement slot.
       const ps = lookupPrepared(ctx.settings, bindState.name);
       if (!ps) {
-        execError = `prepared statement "${bindState.name}" does not exist`;
+        // Synthesise a thrown-Error-like object so formatServerError can
+        // render the same `ERROR:  <msg>` shape vanilla emits for the
+        // server's `prepared statement "X" does not exist` error.
+        execError = Object.assign(
+          new Error(`prepared statement "${bindState.name}" does not exist`),
+          { severity: 'ERROR', code: '26000' },
+        );
       } else {
         // Bind + Execute MUST go in one extended-protocol batch: the
         // anonymous portal is implicitly closed at the next Sync, so a
@@ -751,7 +851,7 @@ const runGCore = async (
       }
     }
   } catch (err) {
-    execError = err instanceof Error ? err.message : String(err);
+    execError = err;
   } finally {
     // Restore the pre-query topt verbatim — covers both the `\gx`
     // `expanded = 'on'` swap and any `\g (...)` pset overrides, so a
@@ -787,7 +887,15 @@ const runGCore = async (
   }
 
   if (execError !== null) {
-    return errResult(ctx, execError);
+    // Render in upstream's `ERROR:  <msg>\nLINE N: ...\n        ^` shape
+    // by funnelling through `formatServerError` — same path top-level
+    // statement errors take in `core/common.ts::writeQueryError`. The
+    // `\<cmd>:` prefix is reserved for client-side I/O / parse errors
+    // (e.g. `\g: no connection`), not server-side ErrorResponse-shaped
+    // failures. Pass the raw (un-trimmed) queryBuf so the `LINE N:`
+    // re-print preserves any trailing whitespace upstream emits (e.g.
+    // `LINE 1: SELECT $1, $2 ` with the space before `\g`).
+    return formatServerError(ctx, execError, ctx.queryBuf);
   }
   if (pipeError !== null) {
     return errResult(ctx, pipeError);
@@ -836,11 +944,18 @@ export const cmdGset: BackslashCmdSpec = {
   name: 'gset',
   helpKey: 'gset',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
-    const sql = ctx.queryBuf.trim();
+    const bufSql = ctx.queryBuf.trim();
     const prefix = ctx.nextArg('normal') ?? '';
 
+    // Empty buffer behaviour mirrors upstream `exec_command_gset`'s
+    // `PSQL_CMD_SEND` return: the dispatch loop sends the active
+    // `pset.last_query` (or nothing). Upstream does NOT emit an error
+    // — it's a silent no-op when there's no buffer AND no prior query.
+    // We mirror via `settings.lastQuery`, populated in `sendQuery` before
+    // dispatch.
+    const sql = bufSql.length > 0 ? bufSql : ctx.settings.lastQuery.trim();
     if (sql.length === 0) {
-      return errResult(ctx, 'no query buffer');
+      return { status: 'reset-buf', newBuf: '' };
     }
     if (!ctx.settings.db) {
       return errResult(ctx, 'no connection to the server');
@@ -850,33 +965,88 @@ export const cmdGset: BackslashCmdSpec = {
     try {
       results = await ctx.settings.db.execSimple(sql);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      // Server-side ErrorResponse — render in upstream's 3-line shape
+      // (severity + message + LINE N / caret) instead of `\gset: <msg>`.
+      // Pass the raw queryBuf so the `LINE N:` re-print preserves any
+      // trailing whitespace before `\gset`. When the buffer was empty,
+      // fall back to the re-run SQL — the user wants to see WHICH
+      // statement failed.
+      return formatServerError(
+        ctx,
+        err,
+        bufSql.length > 0 ? ctx.queryBuf : sql,
+      );
     }
 
     // Use the last result that returned rows. Upstream uses the most-recent
     // tuples-producing statement; results without a row descriptor (e.g.
     // pure DDL) are skipped.
-    const tupled = results.filter((r) => r.fields.length > 0);
-    if (tupled.length === 0) {
-      return errResult(ctx, 'query did not return any rows');
+    // Upstream `StoreQueryTuple` only runs against the LAST PGresult and
+    // only when that result is `PGRES_TUPLES_OK` (a tuples-producing
+    // statement). Non-tuples results (DDL, INSERT/UPDATE without RETURNING)
+    // fall through to a plain status print — `\gset` is a no-op there, NOT
+    // an error. Mirror that here: pick the last result; if it isn't
+    // tuples-producing, skip the variable-assignment step entirely.
+    const lastRs = results[results.length - 1];
+    if (!lastRs || lastRs.fields.length === 0) {
+      return { status: 'reset-buf', newBuf: '' };
     }
-    const rs = tupled[tupled.length - 1];
+    const rs = lastRs;
+    if (rs.rows.length === 0) {
+      // Bare `no rows returned for \gset` (no `\gset:` prefix) — matches
+      // upstream psql's `pg_log_error("no rows returned for \\gset")`.
+      ctx.settings.lastErrorResult = {
+        message: 'no rows returned for \\gset',
+      };
+      const errPrefix = psqlErrorPrefix(ctx.settings);
+      writeErr(`${errPrefix}no rows returned for \\gset\n`);
+      return { status: 'error', errorWritten: true };
+    }
     if (rs.rows.length > 1) {
       // Match upstream psql's exact wording from `exec_command_gset` —
-      // `\gset: more than one row returned for \gset`. The wrapping
-      // `errResult` prepends the `\gset:` prefix so we keep only the tail.
-      return errResult(ctx, 'more than one row returned for \\gset');
-    }
-    if (rs.rows.length === 0) {
-      return errResult(ctx, 'expected one row, got 0');
+      // bare `more than one row returned for \gset` (no `\gset:` prefix).
+      // Verified against vanilla psql; vendored psql.out emits it bare.
+      ctx.settings.lastErrorResult = {
+        message: 'more than one row returned for \\gset',
+      };
+      const errPrefix = psqlErrorPrefix(ctx.settings);
+      writeErr(`${errPrefix}more than one row returned for \\gset\n`);
+      return { status: 'error', errorWritten: true };
     }
     const row = rs.rows[0];
     for (let i = 0; i < rs.fields.length; i++) {
-      const name = `${prefix}${rs.fields[i].name}`;
+      const fieldName = rs.fields[i].name;
+      const name = `${prefix}${fieldName}`;
       const value = formatCell(row[i]);
+      // Upstream skips assignments where the target maps to a "specially
+      // treated" variable (one with a substitute / assign hook installed)
+      // whose value would be rejected by the hook. The non-special columns
+      // continue to be assigned: only the offending one is skipped, with
+      // an informational stderr line. See psql.out line ~240:
+      //   attempt to \gset into specially treated variable "IGNOREEOF" ignored
+      if (isSpeciallyTreatedVar(ctx.settings, name)) {
+        // The target maps to a "specially treated" variable (one with a
+        // substitute / assign hook installed). Upstream skips just this
+        // assignment with an informational stderr line; other columns
+        // are still processed. We don't actually call the hook — even a
+        // value that the hook would accept must be rejected per upstream:
+        // see `exec_command_gset` and `VariableHasHook`.
+        const errPrefix = psqlErrorPrefix(ctx.settings);
+        writeErr(
+          `${errPrefix}attempt to \\gset into specially treated variable ` +
+            `"${name}" ignored\n`,
+        );
+        continue;
+      }
       if (!ctx.settings.vars.set(name, value)) {
-        return errResult(ctx, `invalid variable name "${name}"`);
+        // Bare `invalid variable name: "<name>"` (no `\gset:` prefix) —
+        // matches upstream psql.out wording for `\gset` exactly.
+        ctx.settings.lastErrorResult = {
+          message: `invalid variable name: "${fieldName}"`,
+        };
+        const errPrefix = psqlErrorPrefix(ctx.settings);
+        writeErr(`${errPrefix}invalid variable name: "${fieldName}"\n`);
+        return { status: 'error', errorWritten: true };
       }
     }
     return { status: 'reset-buf', newBuf: '' };
@@ -975,7 +1145,15 @@ export const cmdGdesc: BackslashCmdSpec = {
   async run(ctx: BackslashContext): Promise<BackslashResult> {
     const sql = ctx.queryBuf.trim();
     if (sql.length === 0) {
-      return errResult(ctx, 'no query buffer');
+      // Upstream `\gdesc` with no buffer falls through `PSQL_CMD_SEND` to
+      // the printer which renders the synthetic 0-column result via
+      // `PrintQueryStatus`'s "The command has no result, or the result
+      // has no columns." line. Stdout, exit 0 — not an error. Verified
+      // against vanilla psql 18.
+      process.stdout.write(
+        'The command has no result, or the result has no columns.\n',
+      );
+      return { status: 'reset-buf', newBuf: '' };
     }
     if (!ctx.settings.db) {
       return errResult(ctx, 'no connection to the server');
@@ -992,36 +1170,26 @@ export const cmdGdesc: BackslashCmdSpec = {
         // ignore
       }
     } catch (err) {
-      // Capture the full ErrorResponse-shaped payload (severity / code /
-      // position / file / line / routine) onto `settings.lastErrorResult`
-      // so a subsequent `\errverbose` can re-render the error with the
-      // LINE / `^` caret / LOCATION footer. Without this, `\errverbose`
-      // would only see `{ message }` and skip the rich layers.
-      const msg = captureLastError(ctx.settings, err, sql);
-      const e = ctx.settings.lastErrorResult;
-      if (e) {
-        // First report: emit the verbosity-aware error report, prefixed
-        // with `psql:[<file>:<n>]:` on the leading severity line — the
-        // same shape upstream's `pg_log_error` produces from
-        // `ExecQueryAndProcessResults` when Parse fails. Subsequent
-        // layers (LINE / caret / DETAIL / HINT / LOCATION) follow
-        // unprefixed to match libpq's `PQresultErrorMessage`.
-        const lines = formatErrorReport(
-          e,
-          ctx.settings.verbosity,
-          ctx.settings.showContext,
-        );
-        const prefix = psqlErrorPrefix(ctx.settings);
-        const prefixed = [prefix + lines[0], ...lines.slice(1)];
-        writeErr(prefixed.join('\n') + '\n');
-      } else {
-        const prefix = psqlErrorPrefix(ctx.settings);
-        writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
-      }
-      // We've already written the full error report; signal that to the
-      // mainloop so it doesn't add a duplicate `psql: ERROR:  <msg>` line
-      // between the LINE/`^` block and a subsequent `\errverbose` render.
-      return { status: 'error', errorWritten: true };
+      // Capture + render the full ErrorResponse-shaped payload in upstream's
+      // 3-line shape (severity + message + LINE N / caret), refresh the
+      // diagnostic vars, and signal `errorWritten` to the mainloop so the
+      // `\errverbose` re-render after `\gdesc` sees the rich layers. Pass
+      // the raw queryBuf so the LINE re-print preserves trailing whitespace
+      // upstream emits before `\gdesc`.
+      return formatServerError(ctx, err, ctx.queryBuf);
+    }
+
+    // When the prepared statement describes back zero columns (DDL, empty
+    // SELECT list, etc.), upstream `exec_command_gdesc` prints the
+    // pg_log_info "The command has no result, or the result has no
+    // columns." line to stdout and skips the synthetic-table render.
+    // Verified against vanilla psql 18: `SELECT \gdesc` and
+    // `CREATE TABLE bububu(a int) \gdesc` both produce that text.
+    if (fields.length === 0) {
+      process.stdout.write(
+        'The command has no result, or the result has no columns.\n',
+      );
+      return { status: 'reset-buf', newBuf: '' };
     }
 
     // Resolve canonical type names via a follow-up round trip when we have
@@ -1065,9 +1233,13 @@ export const cmdGexec: BackslashCmdSpec = {
   name: 'gexec',
   helpKey: 'gexec',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
-    const sql = ctx.queryBuf.trim();
+    const bufSql = ctx.queryBuf.trim();
+    // Upstream `\gexec` with no buffer falls through `PSQL_CMD_SEND` and
+    // re-runs `pset.last_query` (or nothing). Silent on empty + no prior
+    // query — exit 0, no message. Verified against vanilla psql 18.
+    const sql = bufSql.length > 0 ? bufSql : ctx.settings.lastQuery.trim();
     if (sql.length === 0) {
-      return errResult(ctx, 'no query buffer');
+      return { status: 'reset-buf', newBuf: '' };
     }
     if (!ctx.settings.db) {
       return errResult(ctx, 'no connection to the server');
@@ -1077,8 +1249,10 @@ export const cmdGexec: BackslashCmdSpec = {
     try {
       firstPass = await ctx.settings.db.execSimple(sql);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      // Render the first-pass server error in upstream's 3-line shape.
+      // Pass the raw queryBuf so the LINE re-print preserves trailing
+      // whitespace upstream emits before `\gexec`.
+      return formatServerError(ctx, err, ctx.queryBuf);
     }
 
     const tupled = firstPass.filter((r) => r.fields.length > 0);
@@ -1101,11 +1275,10 @@ export const cmdGexec: BackslashCmdSpec = {
               }
             }
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            ctx.settings.lastErrorResult = { message: msg };
-            const prefix = psqlErrorPrefix(ctx.settings);
-            writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
-            return { status: 'error', errorWritten: true };
+            // Each iteration is its own statement; surface the per-statement
+            // server error in upstream's 3-line shape against the offending
+            // synthesised SQL (so LINE / caret are positioned correctly).
+            return formatServerError(ctx, err, statement);
           }
         }
       }
@@ -1483,11 +1656,13 @@ export const cmdWatch: BackslashCmdSpec = {
             }
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          ctx.settings.lastErrorResult = { message: msg };
-          const prefix = psqlErrorPrefix(ctx.settings);
-          writeErr(`${prefix}\\${ctx.cmdName}: ${msg}\n`);
-          return { status: 'error', errorWritten: true };
+          // Surface in upstream's 3-line ErrorResponse shape (severity +
+          // message + LINE / caret) — same path top-level statement errors
+          // take. The `\watch:` prefix is reserved for client-side
+          // argument-parsing errors (e.g. `incorrect interval value "-10"`).
+          // Pass the raw queryBuf so the LINE re-print preserves trailing
+          // whitespace upstream emits before `\watch`.
+          return formatServerError(ctx, err, ctx.queryBuf);
         }
         // Stop if `c=` reached the configured iteration cap, OR if `m=`
         // was set and the previous result returned FEWER than `min_rows`
