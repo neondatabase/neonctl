@@ -188,13 +188,39 @@ describe('defaultSettings — special-variable hooks', () => {
       expect(s.fetchCount).toBe(42);
     });
 
-    test('empty value resets fetchCount to 0', () => {
+    test('empty value is rejected (vanilla psql 18 parity)', () => {
+      // Upstream `fetch_count_substitute_hook` only handles NULL; empty
+      // `\set FETCH_COUNT` reaches `fetch_count_hook` →
+      // `ParseVariableNum("")` which fails with the "integer expected"
+      // diagnostic. The prior value is preserved.
       const v = createVarStore();
       const s = defaultSettings(v);
       v.set('FETCH_COUNT', '10');
       expect(s.fetchCount).toBe(10);
-      v.set('FETCH_COUNT', '');
+      const r = v.trySet('FETCH_COUNT', '');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error: 'invalid value "" for "FETCH_COUNT": integer expected',
+      });
+      expect(s.fetchCount).toBe(10);
+      expect(v.get('FETCH_COUNT')).toBe('10');
+    });
+
+    test('unset substitutes to "0" (fetch_count_substitute_hook parity)', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('FETCH_COUNT', '42');
+      expect(s.fetchCount).toBe(42);
+      v.unset('FETCH_COUNT');
+      expect(v.get('FETCH_COUNT')).toBe('0');
       expect(s.fetchCount).toBe(0);
+    });
+
+    test('seeds FETCH_COUNT to "0" on startup', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.get('FETCH_COUNT')).toBe('0');
     });
   });
 
@@ -365,6 +391,289 @@ describe('defaultSettings — special-variable hooks', () => {
       v.set('ON_ERROR_STOP', '');
       expect(v.get('ON_ERROR_STOP')).toBe('on');
       expect(s.onErrorStop).toBe(true);
+    });
+  });
+
+  describe('QUIET', () => {
+    test('seeded "off" on startup via bool_substitute_hook', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      expect(v.get('QUIET')).toBe('off');
+      expect(s.quiet).toBe(false);
+    });
+
+    test('accepts boolean and mirrors into settings.quiet', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      v.set('QUIET', 'on');
+      expect(s.quiet).toBe(true);
+      v.set('QUIET', 'off');
+      expect(s.quiet).toBe(false);
+    });
+
+    test('rejects non-boolean with upstream wording', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('QUIET', 'maybe');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error: 'unrecognized value "maybe" for "QUIET": Boolean expected',
+      });
+    });
+  });
+
+  describe('SINGLELINE', () => {
+    test('seeded "off" on startup; reflects on settings.singleline', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      expect(v.get('SINGLELINE')).toBe('off');
+      expect(s.singleline).toBe(false);
+      v.set('SINGLELINE', 'on');
+      expect(s.singleline).toBe(true);
+    });
+  });
+
+  describe('SINGLESTEP', () => {
+    test('seeded "off" on startup; reflects on settings.singlestep', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      expect(v.get('SINGLESTEP')).toBe('off');
+      expect(s.singlestep).toBe(false);
+      v.set('SINGLESTEP', 'on');
+      expect(s.singlestep).toBe(true);
+    });
+  });
+
+  describe('HIDE_TOAST_COMPRESSION', () => {
+    test('seeded "off" on startup; reflects on settings.hideCompression', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      expect(v.get('HIDE_TOAST_COMPRESSION')).toBe('off');
+      expect(s.hideCompression).toBe(false);
+      v.set('HIDE_TOAST_COMPRESSION', 'on');
+      expect(s.hideCompression).toBe(true);
+    });
+  });
+
+  describe('HIDE_TABLEAM', () => {
+    test('seeded "off" on startup; reflects on settings.hideTableam', () => {
+      const v = createVarStore();
+      const s = defaultSettings(v);
+      expect(v.get('HIDE_TABLEAM')).toBe('off');
+      expect(s.hideTableam).toBe(false);
+      v.set('HIDE_TABLEAM', 'on');
+      expect(s.hideTableam).toBe(true);
+    });
+  });
+
+  describe('HISTSIZE', () => {
+    test('seeded "500" on startup (histsize_substitute_hook parity)', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.get('HISTSIZE')).toBe('500');
+    });
+
+    test('accepts integer values', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.set('HISTSIZE', '1000')).toBe(true);
+      expect(v.get('HISTSIZE')).toBe('1000');
+    });
+
+    test('rejects non-integer with "integer expected" wording', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('HISTSIZE', 'foo');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error: 'invalid value "foo" for "HISTSIZE": integer expected',
+      });
+    });
+
+    test('empty value rejected; preserves prior value', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      v.set('HISTSIZE', '750');
+      const r = v.trySet('HISTSIZE', '');
+      expect(r.ok).toBe(false);
+      expect(v.get('HISTSIZE')).toBe('750');
+    });
+
+    test('unset substitutes to "500"', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      v.set('HISTSIZE', '1234');
+      v.unset('HISTSIZE');
+      expect(v.get('HISTSIZE')).toBe('500');
+    });
+  });
+
+  describe('WATCH_INTERVAL', () => {
+    test('seeded "2" on startup via watch_interval_substitute_hook', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.get('WATCH_INTERVAL')).toBe('2');
+    });
+
+    test('accepts non-negative numeric values', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.set('WATCH_INTERVAL', '0')).toBe(true);
+      expect(v.set('WATCH_INTERVAL', '1.5')).toBe(true);
+      expect(v.set('WATCH_INTERVAL', '999999')).toBe(true);
+    });
+
+    test('empty value emits invalid-syntax error', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('WATCH_INTERVAL', '');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error: 'invalid input syntax for variable "WATCH_INTERVAL"',
+      });
+    });
+
+    test('junk emits invalid-value error without range suffix', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('WATCH_INTERVAL', 'on');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error: 'invalid value "on" for variable "WATCH_INTERVAL"',
+      });
+    });
+
+    test('negative values emit "must be greater than 0.00" suffix', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('WATCH_INTERVAL', '-1');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error:
+          'invalid value "-1" for variable "WATCH_INTERVAL": must be greater than 0.00',
+      });
+    });
+
+    test('over-max values emit "must be less than 1000000.00" suffix', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      const r = v.trySet('WATCH_INTERVAL', '2000000');
+      expect(r).toEqual({
+        ok: false,
+        reason: 'hook-veto',
+        error:
+          'invalid value "2000000" for variable "WATCH_INTERVAL": must be less than 1000000.00',
+      });
+    });
+
+    test('unset substitutes to "2"', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      v.set('WATCH_INTERVAL', '7');
+      v.unset('WATCH_INTERVAL');
+      expect(v.get('WATCH_INTERVAL')).toBe('2');
+    });
+  });
+
+  describe('\\unset substitute-on-null round-trips (vanilla psql 18 parity)', () => {
+    // Each row below: variable name, expected value after `\unset NAME`.
+    // Variables matching upstream's `bool_substitute_hook` (null → "off")
+    // are the bulk; enum substitute hooks return their canonical defaults.
+    // Verified empirically against vanilla psql 18 on 2026-05-27. The
+    // pattern is `\unset NAME; \echo :NAME` — vanilla prints the
+    // substituted default (not the literal `:NAME` token).
+    test.each([
+      // bool_substitute_hook variants
+      ['ON_ERROR_STOP', 'off'],
+      ['QUIET', 'off'],
+      ['SINGLELINE', 'off'],
+      ['SINGLESTEP', 'off'],
+      ['ECHO_HIDDEN', 'off'],
+      ['ON_ERROR_ROLLBACK', 'off'],
+      ['SHOW_ALL_RESULTS', 'off'],
+      ['HIDE_TOAST_COMPRESSION', 'off'],
+      ['HIDE_TABLEAM', 'off'],
+      // AUTOCOMMIT default = "on", but `\unset AUTOCOMMIT` → "off" via
+      // bool_substitute_hook (vanilla parity)
+      ['AUTOCOMMIT', 'off'],
+      // enum substitute hooks
+      ['VERBOSITY', 'default'],
+      ['SHOW_CONTEXT', 'errors'],
+      ['ECHO', 'none'],
+      ['COMP_KEYWORD_CASE', 'preserve-upper'],
+      ['HISTCONTROL', 'none'],
+      // numeric / per-variable substitute hooks
+      ['FETCH_COUNT', '0'],
+      ['HISTSIZE', '500'],
+      ['WATCH_INTERVAL', '2'],
+    ])('\\unset %s substitutes to "%s"', (name, expected) => {
+      const v = createVarStore();
+      defaultSettings(v);
+      // Set to a non-default value first so we know the substitute fires.
+      v.set(name, name === 'WATCH_INTERVAL' ? '7' : 'on');
+      v.unset(name);
+      expect(v.get(name)).toBe(expected);
+    });
+
+    // PROMPT1/2/3 and HISTFILE use NULL substitute hooks upstream — `\unset`
+    // genuinely clears the slot; `\echo :NAME` prints the literal token.
+    test.each([['PROMPT1'], ['PROMPT2'], ['PROMPT3'], ['HISTFILE']])(
+      '\\unset %s genuinely clears the slot',
+      (name) => {
+        const v = createVarStore();
+        defaultSettings(v);
+        v.set(name, 'value');
+        v.unset(name);
+        expect(v.has(name)).toBe(false);
+      },
+    );
+
+    // TIMING has no hook upstream — initial value is literal `:TIMING`,
+    // unset clears the slot. We deliberately do not register a hook so
+    // `\echo :TIMING` matches vanilla's behavior.
+    test('TIMING has no hook (literal :TIMING token initially)', () => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.has('TIMING')).toBe(false);
+      expect(v.get('TIMING')).toBeUndefined();
+    });
+  });
+
+  describe('startup default values match vanilla psql 18 \\echo output', () => {
+    // Mirrors `\echo :NAME` immediately after psql starts. The values come
+    // from the substitute hook firing on `SetVariableHooks` registration
+    // (upstream) / `addHook` (us). Variables not in this list either:
+    //   - have no hook (TIMING, HISTFILE → :NAME literal), or
+    //   - have an explicit `SetVariable*Bool` (AUTOCOMMIT, SHOW_ALL_RESULTS
+    //     → "on") that overrides the substitute.
+    test.each([
+      ['VERBOSITY', 'default'],
+      ['SHOW_CONTEXT', 'errors'],
+      ['ECHO', 'none'],
+      ['ECHO_HIDDEN', 'off'],
+      ['COMP_KEYWORD_CASE', 'preserve-upper'],
+      ['HISTCONTROL', 'none'],
+      ['FETCH_COUNT', '0'],
+      ['HISTSIZE', '500'],
+      ['WATCH_INTERVAL', '2'],
+      ['ON_ERROR_STOP', 'off'],
+      ['ON_ERROR_ROLLBACK', 'off'],
+      ['QUIET', 'off'],
+      ['SINGLELINE', 'off'],
+      ['SINGLESTEP', 'off'],
+      ['HIDE_TOAST_COMPRESSION', 'off'],
+      ['HIDE_TABLEAM', 'off'],
+      ['AUTOCOMMIT', 'on'],
+      ['SHOW_ALL_RESULTS', 'on'],
+    ])('%s = %s', (name, expected) => {
+      const v = createVarStore();
+      defaultSettings(v);
+      expect(v.get(name)).toBe(expected);
     });
   });
 });

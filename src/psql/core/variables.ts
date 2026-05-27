@@ -225,9 +225,27 @@ export class VarStore implements VarStoreType {
       this.hooks.set(name, [hook]);
     }
     // Replay the current value so the hook can sync immediately, matching
-    // upstream `SetVariableHooks` semantics.
+    // upstream `SetVariableHooks`:
+    //   if (shook) current->value = (*shook)(current->value);
+    //   if (ahook) (void) (*ahook)(current->value);
+    // Our hooks combine substitute + assign in a single callback. If the
+    // initial replay returns a `{substitute}` (the bool_substitute_hook /
+    // verbosity_substitute_hook etc. pattern), persist that and re-run the
+    // hook so derived state (settings.verbosity, settings.echo, ...) syncs
+    // to the substituted value. This is how upstream seeds defaults like
+    // `ON_ERROR_STOP=off`, `VERBOSITY=default`, `QUIET=off` etc. simply
+    // from `SetVariableHooks` — no explicit `SetVariable("…", "off")` call
+    // is needed for variables whose default matches the unset substitute.
     const current = this.values.get(name);
-    hook(current ?? null);
+    const result = hook(current ?? null);
+    if (
+      typeof result === 'object' &&
+      result !== null &&
+      'substitute' in result
+    ) {
+      this.values.set(name, result.substitute);
+      hook(result.substitute);
+    }
   }
 
   entries(): IterableIterator<[string, string]> {

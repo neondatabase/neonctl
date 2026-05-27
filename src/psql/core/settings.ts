@@ -63,6 +63,11 @@ const DEFAULT_COMP_CASE: CompCase = 'preserve-upper';
 const DEFAULT_SEND_MODE: SendMode = 'extended-query';
 const DEFAULT_HIST_CONTROL: HistControl = 'none';
 
+/** Upstream `DEFAULT_WATCH_INTERVAL` from settings.h (psql 18). */
+const DEFAULT_WATCH_INTERVAL = '2';
+/** Upstream `DEFAULT_WATCH_INTERVAL_MAX` (1e6 seconds). */
+const WATCH_INTERVAL_MAX = 1000000;
+
 /**
  * Build the psql `PrintQueryOpts` with the same defaults as upstream's
  * pset.popt initialization (see `startup.c` after the `pset.db = NULL`
@@ -191,31 +196,26 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
   // in upstream startup.c / common.c.
   varStore.set('ENCODING', 'UTF8');
 
-  // WATCH_INTERVAL validation hook. Upstream `assign_watch_interval_hook`
-  // (in `startup.c`) rejects non-numeric, negative, or out-of-range values
-  // with a "WATCH_INTERVAL ... is out of range" diagnostic. The hook
-  // returns `false` to veto the set; the surrounding `\set` plumbing
-  // reports the failure.
+  // WATCH_INTERVAL — upstream `watch_interval_substitute_hook` (null →
+  // DEFAULT_WATCH_INTERVAL "2") + `watch_interval_hook` which calls
+  // `ParseVariableDouble("WATCH_INTERVAL", ..., 0, DEFAULT_WATCH_INTERVAL_MAX)`.
+  // Empty value reaches ParseVariableDouble which short-circuits with
+  // "invalid input syntax for variable \"WATCH_INTERVAL\"" without
+  // substituting; the previous value is preserved by `trySet`.
   varStore.addHook('WATCH_INTERVAL', (newValue) => {
-    if (newValue === null) return true; // unset is always allowed
-    const ok = isValidWatchInterval(newValue);
-    if (!ok) {
-      process.stderr.write(
-        `\\set: WATCH_INTERVAL "${newValue}" is out of range\n`,
-      );
-      return false;
+    if (newValue === null) {
+      // `\unset WATCH_INTERVAL` re-seeds the default. The substitute also
+      // runs once on `addHook` registration so `\echo :WATCH_INTERVAL`
+      // prints "2" before the user touches it (no explicit seed needed).
+      return { substitute: DEFAULT_WATCH_INTERVAL };
     }
+    if (newValue === '') {
+      return `invalid input syntax for variable "WATCH_INTERVAL"`;
+    }
+    const range = validateWatchInterval(newValue);
+    if (range !== null) return range;
     return true;
   });
-  // Upstream seeds WATCH_INTERVAL to "2" (DEFAULT_WATCH_INTERVAL, see
-  // settings.h) during pset initialization so `\echo :WATCH_INTERVAL`
-  // and `\watch` (without an explicit interval) both observe the
-  // documented default. After `\unset WATCH_INTERVAL`, upstream
-  // re-substitutes the same default via its substitute hook; we accept
-  // the simpler "set on init" model — `\unset` removes the value, but
-  // `\watch` itself falls back to DEFAULT_WATCH_INTERVAL when the
-  // variable is unset (see `resolveWatchIntervalDefault` in cmd_io.ts).
-  varStore.set('WATCH_INTERVAL', '2');
 
   // ON_ERROR_STOP assign hook. Upstream `bool_substitute_hook` /
   // `on_error_stop_assign_hook` (startup.c) keep `pset.on_error_stop` in
@@ -237,19 +237,16 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
   // Seed AUTOCOMMIT to "on" (upstream default; pset.autocommit = true).
   varStore.set('AUTOCOMMIT', 'on');
 
-  // FETCH_COUNT assign hook — upstream `fetch_count_assign_hook`. Empty /
-  // missing → 0 (the upstream "off" sentinel). Non-integer → reject with
-  // `invalid value "<value>" for "FETCH_COUNT": integer expected`. Stores
-  // the parsed value on `settings.fetchCount` so the SendQuery cursor
-  // path can read it without re-parsing.
+  // FETCH_COUNT — upstream `fetch_count_substitute_hook` (null → "0") +
+  // `fetch_count_assign_hook` which delegates to `ParseVariableNum`. Empty
+  // `\set FETCH_COUNT` reaches ParseVariableNum which fails with
+  // `invalid value "" for "FETCH_COUNT": integer expected`, preserving
+  // the prior value. The substitute fires on addHook registration so
+  // `\echo :FETCH_COUNT` prints "0" before the user touches it.
   varStore.addHook('FETCH_COUNT', (newValue) => {
     if (newValue === null) {
       settings.fetchCount = 0;
-      return true;
-    }
-    if (newValue === '') {
-      settings.fetchCount = 0;
-      return true;
+      return { substitute: '0' };
     }
     const n = parseIntOrNull(newValue);
     if (n === null) {
@@ -260,21 +257,17 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
   });
 
   // ON_ERROR_ROLLBACK assign hook — upstream `on_error_rollback_substitute_hook`
-  // (empty → "on") + `on_error_rollback_assign_hook`. Tri-state: on, off,
-  // interactive. Non-matching values get the multi-line diagnostic
+  // (null → "off", empty → "on") + `on_error_rollback_assign_hook`. Tri-state:
+  // on, off, interactive. Non-matching values get the multi-line diagnostic
   // `unrecognized value "<value>" for "ON_ERROR_ROLLBACK"\nAvailable values
-  // are: on, off, interactive.`.
+  // are: on, off, interactive.`. The substitute on addHook seeds "off" so
+  // `\echo :ON_ERROR_ROLLBACK` works without explicit init.
   varStore.addHook(
     'ON_ERROR_ROLLBACK',
     makeOnErrorRollbackHook((parsed) => {
       settings.onErrorRollback = parsed;
     }),
   );
-  // Seed ON_ERROR_ROLLBACK to "off" (upstream default — `pset.on_error_rollback
-  // = PSQL_ERROR_ROLLBACK_OFF`). Without this, `\echo :ON_ERROR_ROLLBACK`
-  // emits the literal `:ON_ERROR_ROLLBACK` token instead of the substituted
-  // value, which the regress harness diffs against.
-  varStore.set('ON_ERROR_ROLLBACK', 'off');
 
   // VERBOSITY — upstream `verbosity_substitute_hook` (empty → "default")
   // + `verbosity_assign_hook`. Accepts default | verbose | terse | sqlstate.
@@ -365,6 +358,72 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
   // `show_all_results_assign_hook`. Strict boolean; empty → "on".
   varStore.addHook('SHOW_ALL_RESULTS', makeBoolHook('SHOW_ALL_RESULTS'));
 
+  // QUIET — upstream `bool_substitute_hook` + `quiet_hook`. Mirrors into
+  // `pset.quiet`. Default ("off") matches the unset substitute, so addHook
+  // registration seeds it via the substitute.
+  varStore.addHook(
+    'QUIET',
+    makeBoolHook('QUIET', (parsed) => {
+      settings.quiet = parsed;
+    }),
+  );
+
+  // SINGLELINE — upstream `bool_substitute_hook` + `singleline_hook`.
+  // Mirrors into `pset.singleline`.
+  varStore.addHook(
+    'SINGLELINE',
+    makeBoolHook('SINGLELINE', (parsed) => {
+      settings.singleline = parsed;
+    }),
+  );
+
+  // SINGLESTEP — upstream `bool_substitute_hook` + `singlestep_hook`.
+  // Mirrors into `pset.singlestep`.
+  varStore.addHook(
+    'SINGLESTEP',
+    makeBoolHook('SINGLESTEP', (parsed) => {
+      settings.singlestep = parsed;
+    }),
+  );
+
+  // HIDE_TOAST_COMPRESSION — upstream `bool_substitute_hook` +
+  // `hide_compression_hook`. Mirrors into `pset.hide_compression` (our
+  // `settings.hideCompression`). Note: the upstream variable name is
+  // HIDE_TOAST_COMPRESSION, not HIDE_COMPRESSION.
+  varStore.addHook(
+    'HIDE_TOAST_COMPRESSION',
+    makeBoolHook('HIDE_TOAST_COMPRESSION', (parsed) => {
+      settings.hideCompression = parsed;
+    }),
+  );
+
+  // HIDE_TABLEAM — upstream `bool_substitute_hook` + `hide_tableam_hook`.
+  // Mirrors into `pset.hide_tableam` (our `settings.hideTableam`).
+  varStore.addHook(
+    'HIDE_TABLEAM',
+    makeBoolHook('HIDE_TABLEAM', (parsed) => {
+      settings.hideTableam = parsed;
+    }),
+  );
+
+  // HISTSIZE — upstream `histsize_substitute_hook` (null → "500") +
+  // `histsize_hook` which calls `ParseVariableNum`. Empty `\set HISTSIZE`
+  // reaches ParseVariableNum and fails with the "integer expected" message,
+  // preserving the prior value. We don't drive a derived settings field
+  // (readline isn't implemented), but we still install the hook so the
+  // variable surface matches vanilla: `\echo :HISTSIZE` prints "500" on
+  // startup, accepts integer values, rejects junk.
+  varStore.addHook('HISTSIZE', (newValue) => {
+    if (newValue === null) {
+      return { substitute: '500' };
+    }
+    const n = parseIntOrNull(newValue);
+    if (n === null) {
+      return `invalid value "${newValue}" for "HISTSIZE": integer expected`;
+    }
+    return true;
+  });
+
   return settings;
 };
 
@@ -409,15 +468,19 @@ const makeBoolHook = (
 };
 
 /**
- * Build an enum-style hook with upstream's substitute / assign pair:
+ * Build an enum-style hook with upstream's substitute / assign pair (the
+ * VERBOSITY / SHOW_CONTEXT / ECHO / COMP_KEYWORD_CASE / HISTCONTROL pattern):
  *
- *   - empty / null → substitute the supplied `defaultValue`
+ *   - null → substitute the supplied `defaultValue` (matches
+ *     `verbosity_substitute_hook` etc. — `\unset NAME` re-stores the default)
  *   - exact-match (case-insensitive) against `allowed` → accepted
- *   - anything else → reject with `unrecognized value "<value>" for
- *     "<name>"\nAvailable values are: a, b, c.`
+ *   - empty / unrecognized → reject with `unrecognized value "<value>" for
+ *     "<name>"\nAvailable values are: a, b, c.` (the substitute hooks only
+ *     handle NULL upstream — empty falls through to the assign hook's
+ *     PsqlVarEnumError path, preserving the prior value)
  *
  * `apply` is invoked with the canonical lowercase spelling whenever the
- * variable is set (including the default-on-empty path).
+ * variable is set (including the default-on-null path).
  */
 const makeEnumHook = <T extends string>(
   name: string,
@@ -428,10 +491,6 @@ const makeEnumHook = <T extends string>(
   const list = allowed.join(', ');
   return (newValue) => {
     if (newValue === null) {
-      apply?.(defaultValue);
-      return true;
-    }
-    if (newValue === '') {
       apply?.(defaultValue);
       return { substitute: defaultValue };
     }
@@ -478,19 +537,21 @@ const makeOnErrorRollbackHook = (
 };
 
 /**
- * ECHO_HIDDEN tri-state: `on` / `off` / `noexec`. Empty → "on" via
- * upstream's `bool_substitute_hook` (which only knows about boolean
- * keywords; `noexec` is matched in `echo_hidden_assign_hook`). Anything
- * else gets the upstream "unrecognized value" line with the three-element
- * list.
+ * ECHO_HIDDEN tri-state: `on` / `off` / `noexec`. Upstream uses
+ * `bool_substitute_hook` (null → "off", empty → "on") plus
+ * `echo_hidden_hook` which accepts `noexec` or falls back to
+ * `ParseVariableBool`. Anything else gets the upstream "unrecognized
+ * value" line with the three-element list.
  */
 const makeEchoHiddenHook = (
   apply: (parsed: EchoHidden) => void,
 ): ((newValue: string | null) => VarHookResult) => {
   return (newValue) => {
     if (newValue === null) {
+      // Match `bool_substitute_hook(NULL)` → "off". On addHook registration
+      // this seeds `\echo :ECHO_HIDDEN` → "off" (parity with vanilla).
       apply('off');
-      return true;
+      return { substitute: 'off' };
     }
     if (newValue === '') {
       apply('on');
@@ -542,19 +603,37 @@ const parseOnOffBool = (raw: string): boolean | null => {
 };
 
 /**
- * Strict validation for `WATCH_INTERVAL`. Mirrors the `\watch` parser:
- * non-negative finite float, capped at a sensible upper bound to catch
- * `1e500` (Infinity) and similar overflows.
+ * Strict validation for non-empty `WATCH_INTERVAL` values. Mirrors
+ * upstream's `ParseVariableDouble(name, ..., 0, DEFAULT_WATCH_INTERVAL_MAX)`
+ * three distinct error paths:
+ *
+ *   - junk (strtod doesn't consume it) → `invalid value "<value>" for
+ *     variable "WATCH_INTERVAL"`
+ *   - parses but value < 0 → `must be greater than 0.00`
+ *   - parses but value > 1000000 → `must be less than 1000000.00`
+ *
+ * Returns `null` if the value is valid; otherwise returns the upstream
+ * error string (sent through `trySet`'s hook-veto channel so the prior
+ * value is preserved).
  */
-const WATCH_INTERVAL_MAX_SECONDS = 100 * 3600;
-const isValidWatchInterval = (raw: string): boolean => {
-  if (raw.length === 0) return false;
-  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(raw)) return false;
+const validateWatchInterval = (raw: string): string | null => {
+  // strtod-style parse: leading whitespace + sign + (digits[.digits]|.digits)
+  // [(eE)±digits]. We're stricter than strtod (no hex/inf), matching the
+  // ParseVariableDouble syntax check.
+  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(raw)) {
+    return `invalid value "${raw}" for variable "WATCH_INTERVAL"`;
+  }
   const value = parseFloat(raw);
-  if (!Number.isFinite(value)) return false;
-  if (value < 0) return false;
-  if (value > WATCH_INTERVAL_MAX_SECONDS) return false;
-  return true;
+  if (!Number.isFinite(value)) {
+    return `invalid value "${raw}" for variable "WATCH_INTERVAL"`;
+  }
+  if (value < 0) {
+    return `invalid value "${raw}" for variable "WATCH_INTERVAL": must be greater than 0.00`;
+  }
+  if (value > WATCH_INTERVAL_MAX) {
+    return `invalid value "${raw}" for variable "WATCH_INTERVAL": must be less than ${WATCH_INTERVAL_MAX.toFixed(2)}`;
+  }
+  return null;
 };
 
 /**

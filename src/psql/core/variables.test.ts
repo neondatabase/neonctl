@@ -139,6 +139,59 @@ describe('VarStore — hooks', () => {
     v.addHook('1bad', hook);
     expect(hook).not.toHaveBeenCalled();
   });
+
+  test('addHook consumes substitute on initial null replay (upstream SetVariableHooks parity)', () => {
+    // Upstream `SetVariableHooks` runs the substitute hook immediately:
+    //   `current->value = (*shook)(current->value)`. For variables whose
+    // substitute returns a non-null default on null input
+    // (`bool_substitute_hook`, `verbosity_substitute_hook`, ...), the
+    // initial value gets seeded so `\echo :NAME` shows the default token
+    // rather than the literal `:NAME` string.
+    const v = createVarStore();
+    const hook = vi.fn((newValue: string | null) => {
+      if (newValue === null) return { substitute: 'off' as const };
+      return true;
+    });
+    v.addHook('X', hook);
+    expect(v.get('X')).toBe('off');
+    // The hook is re-run with the substituted value so derived state
+    // (e.g. settings.onErrorStop) can be applied off the canonical
+    // post-substitute string. That re-run pattern mirrors upstream's
+    // `(void)(*ahook)(current->value)` right after the substitute.
+    expect(hook).toHaveBeenCalledWith(null);
+    expect(hook).toHaveBeenCalledWith('off');
+  });
+
+  test('addHook does not seed when substitute returns null/true', () => {
+    // Variables with NULL substitute hooks upstream (PROMPT1/2/3, HISTFILE)
+    // leave the slot empty until explicitly set; our hook that returns
+    // `true` (no substitute) on null replay reproduces that.
+    const v = createVarStore();
+    const hook = vi.fn(() => true);
+    v.addHook('X', hook);
+    expect(v.has('X')).toBe(false);
+  });
+
+  test('unset re-stores substitute and re-notifies hook (existing behavior preserved)', () => {
+    // The unset → substitute → re-store path landed in commit 5bd6100.
+    // After the addHook fix that consumes the initial-replay substitute,
+    // this path is exercised on every `\unset` for substitute-aware vars.
+    const v = createVarStore();
+    const hook = vi.fn((newValue: string | null) => {
+      if (newValue === null) return { substitute: 'default' as const };
+      return true;
+    });
+    v.addHook('X', hook);
+    v.set('X', 'custom');
+    expect(v.get('X')).toBe('custom');
+    hook.mockClear();
+    v.unset('X');
+    expect(v.get('X')).toBe('default');
+    // Hook called with null first (substitute returned), then with the
+    // substituted value to let derived state sync.
+    expect(hook).toHaveBeenNthCalledWith(1, null);
+    expect(hook).toHaveBeenNthCalledWith(2, 'default');
+  });
 });
 
 describe('VarStore — asBool', () => {
