@@ -112,9 +112,11 @@ export const runListQuery = async (
   const { sql, params } = applyPattern(query.sql, patternResult, query.params);
   const rs = await conn.query(sql, params);
   const coerced = coerceResultSet(rs);
+  const titleOverride = query.description ?? popt.title;
   const opts: PrintQueryOpts = {
     ...popt,
-    title: query.description ?? popt.title,
+    title: titleOverride,
+    topt: { ...popt.topt, title: titleOverride ?? popt.topt.title },
     footers:
       rs.rows.length === 0
         ? popt.footers
@@ -308,7 +310,7 @@ export const describeOneTableDetails = async (
   };
   await alignedPrinter.printQuery(
     coerceResultSet(colsResult),
-    { ...popt, title, footers: null },
+    { ...popt, title, topt: { ...popt.topt, title }, footers: null },
     out,
   );
 
@@ -1052,7 +1054,7 @@ export const describeOneSequence = async (
   const title = `Sequence "${schema}.${name}"`;
   await alignedPrinter.printQuery(
     coerceResultSet(rs),
-    { ...popt, title, footers: null },
+    { ...popt, title, topt: { ...popt.topt, title }, footers: null },
     out,
   );
 

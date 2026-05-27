@@ -139,9 +139,14 @@ const runLoList = async (
         ),
       ),
     };
+    const titleOverride = query.description ?? ctx.settings.popt.title;
     const opts = {
       ...ctx.settings.popt,
-      title: query.description ?? ctx.settings.popt.title,
+      title: titleOverride,
+      topt: {
+        ...ctx.settings.popt.topt,
+        title: titleOverride ?? ctx.settings.popt.topt.title,
+      },
     };
     await alignedPrinter.printQuery(coerced, opts, process.stdout);
     return { status: 'ok' };

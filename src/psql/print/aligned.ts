@@ -700,8 +700,8 @@ const renderHorizontal = (
   let out = '';
   const newline = '\n';
 
-  if (!tuplesOnly && opts.title) {
-    out += opts.title + newline;
+  if (!tuplesOnly && topt.title) {
+    out += topt.title + newline;
   }
 
   // Top rule: emitted when border == 2 or 3.
@@ -930,8 +930,8 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
   let out = '';
   const newline = '\n';
 
-  if (!tuplesOnly && opts.title) {
-    out += opts.title + newline;
+  if (!tuplesOnly && topt.title) {
+    out += topt.title + newline;
   }
 
   if (rs.rows.length === 0) {
@@ -1132,7 +1132,7 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
   const aligns = rs.fields.map(() => 'center' as Alignment);
 
   let out = '';
-  if (!tuplesOnly && opts.title) out += opts.title + '\n';
+  if (!tuplesOnly && topt.title) out += topt.title + '\n';
   if (!tuplesOnly && (border === 2 || border === 3)) {
     out += buildRule(widths, border, glyphs, 'top') + '\n';
   }
