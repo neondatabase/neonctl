@@ -282,7 +282,7 @@ export const cmdSet: BackslashCmdSpec = {
       if (a === null) break;
       values.push(a);
     }
-    const value = values.join(' ');
+    const value = values.join('');
     const result = ctx.settings.vars.trySet(name, value);
     if (!result.ok) {
       const prefix = psqlErrorPrefix(ctx.settings);
@@ -321,12 +321,6 @@ export const cmdUnset: BackslashCmdSpec = {
   },
 };
 
-/**
- * `\getenv varname envvar`
- *
- * Read `process.env[envvar]` and store it under the psql variable `varname`.
- * An undefined env var unsets the psql variable.
- */
 export const cmdGetenv: BackslashCmdSpec = {
   name: 'getenv',
   helpKey: 'getenv',
@@ -339,7 +333,6 @@ export const cmdGetenv: BackslashCmdSpec = {
     }
     const value = process.env[envname];
     if (value === undefined) {
-      ctx.settings.vars.unset(varname);
       return Promise.resolve({ status: 'ok' });
     }
     if (!ctx.settings.vars.set(varname, value)) {

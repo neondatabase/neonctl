@@ -239,12 +239,12 @@ describe('\\set', () => {
     expect(settings.vars.get('X')).toBe('');
   });
 
-  test('multiple args join with space', async () => {
+  test('multiple args concatenate with no separator (upstream parity)', async () => {
     const settings = defaultSettings(createVarStore());
     const ctx = makeMockCtx('set', 'X Y Z W', settings);
     const r = await run(cmdSet, ctx);
     expect(r.status).toBe('ok');
-    expect(settings.vars.get('X')).toBe('Y Z W');
+    expect(settings.vars.get('X')).toBe('YZW');
   });
 
   test('invalid name errors with upstream "invalid variable name" wording', async () => {
@@ -334,13 +334,14 @@ describe('\\getenv', () => {
     expect(r.status).toBe('error');
   });
 
-  test('unsets when env undefined', async () => {
+  test('preserves prior value when env undefined (upstream parity)', async () => {
     const settings = defaultSettings(createVarStore());
     settings.vars.set('X', 'old');
     delete process.env.DEFINITELY_NOT_SET_VAR_XYZ;
     const ctx = makeMockCtx('getenv', 'X DEFINITELY_NOT_SET_VAR_XYZ', settings);
-    await run(cmdGetenv, ctx);
-    expect(settings.vars.has('X')).toBe(false);
+    const r = await run(cmdGetenv, ctx);
+    expect(r.status).toBe('ok');
+    expect(settings.vars.get('X')).toBe('old');
   });
 });
 
