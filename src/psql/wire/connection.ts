@@ -1660,8 +1660,7 @@ export class PgConnection implements Connection {
         }
         return;
       }
-      case 'CopyInResponse':
-      case 'CopyOutResponse': {
+      case 'CopyInResponse': {
         // PG 17 added pipeline + COPY support but libpq still rejects the
         // combination ("COPY in a pipeline is not supported, aborting
         // connection"). Upstream psql surfaces that diagnostic and tears down
@@ -1671,10 +1670,36 @@ export class PgConnection implements Connection {
           this.abortForCopyInPipeline();
           return;
         }
+        // CopyInResponse during execSimple (no active CopyIn driver) — the
+        // common path is `COPY ... FROM STDIN` as one segment of a `\;`-chained
+        // simple-query batch. Upstream psql would pump stdin lines until `\.`;
+        // we don't have that wiring yet, but we MUST NOT just sit and wait —
+        // the server is in CopyIn state expecting CopyData/CopyDone/CopyFail
+        // and won't send another message until we do. Send CopyFail to bail
+        // out cleanly: the server replies with ErrorResponse + ReadyForQuery
+        // and execSimple finishes with an error instead of deadlocking.
         q.error = {
           severity: 'ERROR',
           message:
-            'COPY without an active CopyIn/CopyOut driver — call startCopyIn/startCopyOut instead of execSimple',
+            'COPY FROM STDIN not supported via execSimple — use \\copy or startCopyIn',
+        };
+        try {
+          this.socket.write(CopyFail('COPY FROM STDIN not driven by client'));
+        } catch {
+          // Write failures are surfaced via socket 'error' / 'close' handlers
+          // which will fail the pending query — nothing to do here.
+        }
+        return;
+      }
+      case 'CopyOutResponse': {
+        if (this._extPipelineActive) {
+          this.abortForCopyInPipeline();
+          return;
+        }
+        q.error = {
+          severity: 'ERROR',
+          message:
+            'COPY TO STDOUT not supported via execSimple — use \\copy or startCopyOut',
         };
         return;
       }
