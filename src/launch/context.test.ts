@@ -189,6 +189,34 @@ describe('writeNeonLaunchEnv', () => {
     const dir = mkdtempSync(join(tmpdir(), 'neon-launch-env-absent-'));
     expect(readNeonLaunchEnv(dir)).toEqual({});
   });
+
+  // The R16 quote/newline guard pins a real silent-corruption bug:
+  // `envfile`'s parser does `value.replace(/['"]+/g, '')` on read and
+  // its stringify does no escaping, so any persisted value containing
+  // a quote or newline round-trips lossily. Today we only persist
+  // Vercel ids + names + slug, but adding a richer key later without
+  // changing the envfile lib would corrupt silently. The guard
+  // catches it at write time.
+  it('rejects values containing single quotes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'neon-launch-env-quote-'));
+    await expect(
+      writeNeonLaunchEnv(dir, { VERCEL_TEAM_SLUG: `o'brien` }),
+    ).rejects.toThrow(/quote.*newline|envfile would round-trip lossily/i);
+  });
+
+  it('rejects values containing double quotes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'neon-launch-env-dquote-'));
+    await expect(
+      writeNeonLaunchEnv(dir, { VERCEL_PROJECT_NAME: 'has"quote' }),
+    ).rejects.toThrow(/quote.*newline|envfile would round-trip lossily/i);
+  });
+
+  it('rejects values containing newlines', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'neon-launch-env-newline-'));
+    await expect(
+      writeNeonLaunchEnv(dir, { VERCEL_PROJECT_NAME: 'line1\nline2' }),
+    ).rejects.toThrow(/quote.*newline|envfile would round-trip lossily/i);
+  });
 });
 
 describe('resolveStateValue precedence chain', () => {

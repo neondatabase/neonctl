@@ -104,6 +104,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Per-attempt fetch timeout. Vercel hangs on the project / team /
+// env-upsert endpoints (rare but observed during edge outages) would
+// otherwise wedge the launcher indefinitely — none of these calls are
+// gated by the deploy-iterator timeout. 30s is generous for normal
+// latency + transient slowness while still bounded against the worst-case.
+const VERCEL_FETCH_TIMEOUT_MS = 30_000;
+
+// Network-level transient error codes (node:undici / built-in fetch).
+// HTTP-response retries cover 429/5xx; these cover the underlying
+// transport (DNS failure, connection reset mid-stream, idle timeout).
+// CI environments commonly hit these via NAT idle-eviction.
+const TRANSIENT_FETCH_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EPIPE',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+function isTransientFetchError(err: unknown): boolean {
+  const code = (err as { code?: string; cause?: { code?: string } }).code;
+  if (code && TRANSIENT_FETCH_ERROR_CODES.has(code)) return true;
+  const causeCode = (err as { cause?: { code?: string } }).cause?.code;
+  if (causeCode && TRANSIENT_FETCH_ERROR_CODES.has(causeCode)) return true;
+  return false;
+}
+
 async function vercelFetch<T>(
   path: string,
   ctx: VercelClientCtx,
@@ -115,7 +146,29 @@ async function vercelFetch<T>(
   headers.set('Content-Type', 'application/json');
   let attempt = 0;
   while (true) {
-    const res = await fetch(url, { ...init, headers });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        headers,
+        signal: AbortSignal.timeout(VERCEL_FETCH_TIMEOUT_MS),
+      });
+    } catch (err) {
+      // Network-level rejection (no Response received). Treat known
+      // transient codes the same way we treat HTTP 5xx — retry with
+      // backoff up to the attempt budget. Non-transient (or bumped past
+      // budget) rethrows so callers see the original error.
+      attempt += 1;
+      if (!isTransientFetchError(err) || attempt >= VERCEL_RETRY_ATTEMPTS) {
+        throw err;
+      }
+      const delay = VERCEL_BASE_DELAY_MS * 2 ** (attempt - 1);
+      log.info(
+        `[vercel] retrying ${init?.method ?? 'GET'} ${path} after network error (${(err as { code?: string }).code ?? 'unknown'}; attempt ${attempt}/${VERCEL_RETRY_ATTEMPTS - 1}, ${delay}ms)`,
+      );
+      await sleep(delay);
+      continue;
+    }
     if (res.ok) return (await res.json()) as T;
     // Retry on 429 (honor Retry-After if present) and 5xx. Non-idempotent
     // POSTs are retried too: env-upsert is idempotent server-side (the
@@ -538,18 +591,25 @@ export async function provisionVercelDeployment(opts: {
   cachedTeamSlug?: string;
 }): Promise<{ url: string }> {
   if (!opts.ctx.token) {
-    throw new LaunchError(vercelTokenMissingMessage(), ExitCode.AUTH_MISSING);
+    throw new LaunchError(
+      vercelTokenMissingMessage({ resourceFqn: opts.resourceFqn }),
+      ExitCode.AUTH_MISSING,
+    );
   }
 
-  // 1. Team slug resolution + persistence. If the runner handed us a
-  // cached teamId but `spec.team` doesn't match the slug that produced
-  // it, drop the cached id and re-resolve. Without this, editing
-  // `spec.team` after a successful run would silently keep deploying
-  // to the previous team.
+  // 1. Team slug resolution + persistence. If `spec.team` is set and
+  // the cached slug doesn't match (either because it's undefined — the
+  // env-only-VERCEL_TEAM_ID-from-CI case — or because the user edited
+  // `spec.team` since the last run), drop any inherited teamId and
+  // re-resolve via the slug. spec.teamId (explicit id) still wins.
+  //
+  // Falsifier this guards against: CI sets `VERCEL_TEAM_ID=team_a` AND
+  // user's neon.ts has `spec.team: 'b-slug'`. The runner's precedence
+  // chain hands us teamId=team_a in ctx. Without this widened check
+  // (R16 required `!!opts.cachedTeamSlug` so missing slug was a no-op),
+  // we'd silently deploy to team_a instead of resolving 'b-slug'.
   const staleTeamCache =
-    !!opts.spec.team &&
-    !!opts.cachedTeamSlug &&
-    opts.cachedTeamSlug !== opts.spec.team;
+    !!opts.spec.team && opts.cachedTeamSlug !== opts.spec.team;
   let teamId =
     opts.spec.teamId ?? (staleTeamCache ? undefined : opts.ctx.teamId);
   if (!teamId && opts.spec.team) {

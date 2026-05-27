@@ -83,10 +83,14 @@ export async function writeNeonLaunchEnv(
     writeFileSync(tmp, body, 'utf8');
     renameSync(tmp, path);
   });
-  writeLocks.set(
-    path,
-    next.catch(() => undefined),
-  );
+  const lock = next.catch(() => undefined);
+  writeLocks.set(path, lock);
+  // Drop the entry once this write settles AND no later writer has
+  // chained onto it. Without this, library callers iterating over
+  // many repo roots accumulate Map entries forever.
+  void lock.then(() => {
+    if (writeLocks.get(path) === lock) writeLocks.delete(path);
+  });
   return next;
 }
 

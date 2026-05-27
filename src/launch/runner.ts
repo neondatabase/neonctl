@@ -123,13 +123,21 @@ export async function gracefulShutdown(
   handles: LocalCommandHandle[],
   termGraceMs = 2_000,
 ): Promise<void> {
-  if (handles.length === 0) return;
-  for (const h of handles) void h.kill();
-  const start = Date.now();
+  // Snapshot on entry: the caller's array (e.g. `liveLocalCommands`)
+  // may be spliced by provisionLocalCommandNode's catch path or the
+  // fast-cancel teardown while we're awaiting the grace window.
+  // Mid-iteration mutation would let a handle escape the SIGKILL
+  // escalation. The snapshot preserves "kill everything that was
+  // live when this teardown started" semantics regardless of caller
+  // bookkeeping changes.
+  const snapshot = [...handles];
+  if (snapshot.length === 0) return;
+  for (const h of snapshot) void h.kill();
+  const start = performance.now();
   const isDead = (h: LocalCommandHandle): boolean =>
     h.child.exitCode !== null || h.child.signalCode !== null;
-  while (Date.now() - start < termGraceMs) {
-    if (handles.every(isDead)) return;
+  while (performance.now() - start < termGraceMs) {
+    if (snapshot.every(isDead)) return;
     await new Promise((r) => setTimeout(r, 100));
   }
   // Survivors: force SIGKILL directly. Two paths:
@@ -141,7 +149,7 @@ export async function gracefulShutdown(
   //      "child died between checks" or "no such PGID" — so unconditionally
   //      follow up with `child.kill('SIGKILL')` against the child's own pid.
   //      Both paths idempotent on an already-dead process (ESRCH swallowed).
-  for (const h of handles) {
+  for (const h of snapshot) {
     if (isDead(h)) continue;
     try {
       if (h.child.pid !== undefined) {
@@ -663,9 +671,13 @@ async function provisionStages(args: StagesArgs): Promise<void> {
     // rejection' racing the user-facing error in commands/launch.ts).
     await Promise.allSettled(tasks);
     if (firstReject !== undefined) {
-      // Catch any local-commands that came up between the abort and the
-      // final settle (defensive — should be empty by now).
-      await Promise.all(liveLocalCommands.map((h) => h.kill()));
+      // Bounded SIGTERM→SIGKILL teardown — same discipline as the
+      // signal handler + foregroundPhase crash. Naked h.kill() schedules
+      // its in-handle 5s SIGKILL escalation, but the parent's CLI catch
+      // calls closeAnalytics with default ~12.5s timeout, and a fast
+      // analytics flush would let the parent exit before the in-handle
+      // timer fires — leaking SIGTERM-trapping grandchildren.
+      await gracefulShutdown(liveLocalCommands);
       throw firstReject.reason as Error;
     }
   }
@@ -770,7 +782,10 @@ async function provisionVercelNode(args: {
   const spec = args.node.spec as VercelDeploymentSpec;
   const token = process.env.VERCEL_TOKEN ?? '';
   if (!token)
-    throw new LaunchError(vercelTokenMissingMessage(), ExitCode.AUTH_MISSING);
+    throw new LaunchError(
+      vercelTokenMissingMessage({ resourceFqn: args.node.name }),
+      ExitCode.AUTH_MISSING,
+    );
   // Precedence: spec.teamId (explicit user intent) > process.env >
   // .neon-launch.env. If the user types a `teamId: 'team_xyz'` into
   // their neon.ts that disagrees with a cached `VERCEL_TEAM_ID`, the
@@ -812,7 +827,7 @@ async function provisionVercelNode(args: {
   log.info(`[vercel-deployment:${args.node.name}] ready — ${result.url}`);
 }
 
-async function provisionLocalCommandNode(args: {
+export async function provisionLocalCommandNode(args: {
   runtime: Runtime;
   node: PlanNode;
   cwd: string;
@@ -862,6 +877,21 @@ async function provisionLocalCommandNode(args: {
     typeof spec.readiness === 'object' &&
     spec.readiness !== null &&
     'onExit' in spec.readiness;
+  // Race the child's exit event against a short delay so a child that
+  // dies right after readiness fires (e.g. logMatch matched on the
+  // final stdout line before the OS reaped the process) is detected
+  // deterministically. Without this race, the `exitCode` check below
+  // is event-loop-scheduling-dependent: sometimes the exit event has
+  // landed, sometimes not. 200ms is enough for a real exit to surface
+  // and small enough to not noticeably slow launch.
+  const POST_READINESS_PROBE_MS = 200;
+  await Promise.race([
+    handle.exited.then(
+      () => undefined,
+      () => undefined,
+    ),
+    new Promise<void>((r) => setTimeout(r, POST_READINESS_PROBE_MS)),
+  ]);
   if (handle.child.exitCode !== null || handle.child.signalCode !== null) {
     const idx = args.liveLocalCommands.indexOf(handle);
     if (idx >= 0) args.liveLocalCommands.splice(idx, 1);

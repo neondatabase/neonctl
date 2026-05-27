@@ -19,6 +19,12 @@ const RECOGNIZED_FLAGS = new Set([
   'branch-timeout',
   'branchTimeout',
   'output',
+  // Analytics middleware (src/analytics.ts) writes these onto argv
+  // before commands run. They're identity/auth metadata, not user
+  // intent — must NOT leak into spec callbacks via `ctx.flags`.
+  'accountId',
+  'authMethod',
+  'authData',
   // yargs-injected globals from src/index.ts (every global option + its
   // camelCase alias + the apiClient internal yargs hangs off argv):
   'api-host',
@@ -61,7 +67,8 @@ export const builder = (argv: yargs.Argv) =>
     })
     .option('branch', {
       type: 'string',
-      describe: 'Override the git branch passed in ctx (default: from git)',
+      describe:
+        'Git branch name — used to name the Neon branch and (for --preview) to scope Vercel env vars (default: current git branch)',
     })
     .option('branch-timeout', {
       type: 'number',
@@ -116,7 +123,10 @@ export const handler = async (argv: LaunchArgs): Promise<void> => {
       `neon launch requires Node 22 or newer (current: ${process.versions.node}). ` +
         `The rest of neonctl continues to work on Node 18+; only this command requires the bump.`,
     );
-    process.exit(1);
+    // Config-error (host config mismatch) — exit 2, not RESOURCE_FAILED (1) —
+    // so CI policies that gate "fixable" vs "transient" exits read this
+    // correctly as "user action required".
+    process.exit(ExitCode.CONFIG_ERROR);
     return;
   }
 

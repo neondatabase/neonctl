@@ -37,24 +37,34 @@ Prerequisites:
 
 1. **Node 22+** (`node --version`). `neon launch` uses `jiti`'s native TS support, which requires Node 22.
 2. **A git repo or an explicit `--branch` flag.** The example reads `ctx.gitBranch` to name the per-PR Neon branch. If you copy this example outside a git tree, either run `git init && git checkout -b dev` first, or always pass `--branch <name>`.
-3. **A Next.js + Drizzle app in this directory.** This example is config-only; the migrations and dev server come from your own app. The fastest way to get one:
+3. **A Next.js + Drizzle app alongside this config.** This directory is config-only — `neon.ts` + `package.json` (carrying `"neonctl": "file:../../dist"`) are the only files that matter for the launcher; the migrations and dev server come from your own app. `create-next-app .` would overwrite the shipped `package.json` and drop the neonctl devDep, so scaffold in a sibling directory and copy the launcher files over:
 
    ```bash
-   cd examples/neon-launch-vercel
-   npx create-next-app@latest . --typescript --no-eslint --no-tailwind --app --no-src-dir --no-import-alias
+   # scaffold your Next.js app in a sibling temp dir (any name)
+   cd /tmp
+   npx create-next-app@latest neon-launch-demo --typescript --no-eslint --no-tailwind --app --no-src-dir --no-import-alias
+   cd neon-launch-demo
    npm install drizzle-orm drizzle-kit pg
+
+   # bring the launcher config + devDep over (merging package.json by hand)
+   cp <neonctl-checkout>/examples/neon-launch-vercel/neon.ts .
+   # add "neonctl": "file:<neonctl-checkout>/dist" to your package.json's devDependencies
+   # add the scripts below to your package.json
    ```
 
-   Then add to your `package.json`:
+   Required `package.json` additions:
 
    ```json
    "scripts": {
      "dev": "next dev",
      "db:migrate": "drizzle-kit migrate"
+   },
+   "devDependencies": {
+     "neonctl": "file:/absolute/path/to/neonctl/dist"
    }
    ```
 
-   …and the minimal `drizzle.config.ts` / `schema.ts` from the [Drizzle quickstart](https://orm.drizzle.team/docs/get-started-postgresql). The migration step can be any one-shot that exits 0 — `psql -f schema.sql`, a custom `node` script, anything; we use Drizzle here because it's the most common choice.
+   …plus the minimal `drizzle.config.ts` / `schema.ts` from the [Drizzle quickstart](https://orm.drizzle.team/docs/get-started-postgresql). The migration step can be any one-shot that exits 0 — `psql -f schema.sql`, a custom `node` script, anything; we use Drizzle here because it's the most common choice.
 
 4. **A Vercel project** (only for `--preview` / `--prod`). Create one at <https://vercel.com/new>, then **edit the `vercelProject` constant in `neon.ts`** (currently `'CHANGE-ME-IN-NEON-TS'`) to match its name. `VERCEL_PROJECT_ID` is a _cache_ of the resolved id, not a bypass — the launcher still reads `vercelProject` and validates it against the cache before skipping the API lookup.
 

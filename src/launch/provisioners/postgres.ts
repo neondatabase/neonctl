@@ -45,6 +45,20 @@ const TERMINAL_OP_STATUSES = new Set(['finished', 'skipped', 'cancelled']);
 const FIVE_XX_RETRY_ATTEMPTS = 3;
 const FIVE_XX_BASE_DELAY_MS = 500;
 
+// Network-level transient codes that warrant retry alongside HTTP 5xx.
+// Common in CI under NAT idle-eviction or DNS flake — without this
+// retry a single mid-poll ECONNRESET fails an otherwise-successful
+// 5-minute branch-create.
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
+
 async function with5xxRetry<T>(fn: () => Promise<T>): Promise<T> {
   let attempt = 0;
   while (true) {
@@ -52,12 +66,23 @@ async function with5xxRetry<T>(fn: () => Promise<T>): Promise<T> {
       return await fn();
     } catch (err) {
       const status = isAxiosError(err) ? err.response?.status : undefined;
-      const transient = status !== undefined && status >= 500 && status < 600;
+      const httpTransient =
+        status !== undefined && status >= 500 && status < 600;
+      // axios `err.code` is set for transport-level failures (no response
+      // received). `err.response === undefined` is the discriminator that
+      // distinguishes "got 5xx" from "got nothing back."
+      const errCode = isAxiosError(err) ? err.code : undefined;
+      const networkTransient =
+        isAxiosError(err) &&
+        err.response === undefined &&
+        errCode !== undefined &&
+        TRANSIENT_NETWORK_CODES.has(errCode);
+      const transient = httpTransient || networkTransient;
       attempt += 1;
       if (!transient || attempt >= FIVE_XX_RETRY_ATTEMPTS) throw err;
       const delay = FIVE_XX_BASE_DELAY_MS * 2 ** (attempt - 1);
       log.info(
-        `[postgres] retrying after ${status} (attempt ${attempt}/${FIVE_XX_RETRY_ATTEMPTS - 1}, ${delay}ms)`,
+        `[postgres] retrying after ${status ?? errCode ?? 'transport error'} (attempt ${attempt}/${FIVE_XX_RETRY_ATTEMPTS - 1}, ${delay}ms)`,
       );
       await sleep(delay);
     }

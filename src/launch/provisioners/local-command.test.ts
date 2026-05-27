@@ -215,3 +215,83 @@ describe('startLocalCommand — kill', () => {
     expect(result.signal === 'SIGTERM' || result.code === 143).toBe(true);
   });
 });
+
+import { provisionLocalCommandNode } from '../runner.js';
+import type { PlanNode } from '../plan.js';
+
+// -----------------------------------------------------------------------------
+// Post-readiness-exit detection — R15 fix that previously had no test.
+// A non-onExit readiness mode (httpGet/portListening/logMatch) firing
+// and then the child crashing in the microsecond window before the
+// runner records it as ready must surface as a crash, not be treated
+// as a one-shot. Otherwise dependent stages race a dead resource.
+// -----------------------------------------------------------------------------
+
+function planNodeFor(spec: object, name = 'cmd'): PlanNode {
+  return {
+    name,
+    localKey: name,
+    resource: {
+      __kind: 'local-command',
+      __id: name,
+      __spec: () => spec,
+      __dependsOn: {},
+    } as any,
+    spec,
+    parentFqn: null,
+    deps: [],
+  };
+}
+
+function fakeRuntime() {
+  return {
+    outputs: new Map(),
+    shuttingDown: { value: false },
+  } as any;
+}
+
+describe('provisionLocalCommandNode — post-readiness-exit detection', () => {
+  it('logMatch fires then child exits → throws (dependents would race dead resource)', async () => {
+    // Child prints READY then exits 0 immediately. logMatch readiness
+    // fires on READY; by the time provisionLocalCommandNode reaches
+    // the post-readiness check, child.exitCode is non-null. The runner
+    // must throw, NOT silently splice the handle as if it were a
+    // one-shot.
+    const spec = {
+      command: `node -e "console.log('READY'); process.exit(0);"`,
+      readiness: { logMatch: /READY/ },
+    };
+    const node = planNodeFor(spec, 'matches-then-dies');
+    await expect(
+      provisionLocalCommandNode({
+        runtime: fakeRuntime(),
+        node,
+        cwd: process.cwd(),
+        stdioMode: 'prefixed',
+        liveLocalCommands: [],
+      }),
+    ).rejects.toThrow(
+      /local-command.*matches-then-dies.*exited.*immediately after readiness fired/,
+    );
+  });
+
+  it('onExit:0 + clean exit → no throw (one-shot semantics preserved)', async () => {
+    // onExit IS readiness — when the child exits 0 the readiness fires.
+    // The post-readiness check sees an exited child but recognizes the
+    // onExit case and splices the handle without throwing.
+    const spec = {
+      command: `node -e "process.exit(0);"`,
+      readiness: { onExit: 0 },
+    };
+    const node = planNodeFor(spec, 'one-shot');
+    await expect(
+      provisionLocalCommandNode({
+        runtime: fakeRuntime(),
+        node,
+        cwd: process.cwd(),
+        stdioMode: 'prefixed',
+        liveLocalCommands: [],
+      }),
+    ).resolves.toBeUndefined();
+  });
+});

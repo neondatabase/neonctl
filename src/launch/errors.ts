@@ -177,10 +177,15 @@ export function branchQuotaMessage(opts: {
 // Vercel token missing
 // =============================================================================
 
-export function vercelTokenMissingMessage(): string {
+export function vercelTokenMissingMessage(opts?: {
+  resourceFqn?: string;
+}): string {
+  const trigger = opts?.resourceFqn
+    ? `\n(Triggered because resource '${opts.resourceFqn}' is a vercelDeployment in your stack. Remove it, or run without --preview/--prod if your spec gates the Vercel path on those flags.)`
+    : '';
   return [
     `[neon launch] VERCEL_TOKEN is required when a vercelDeployment is in scope.`,
-    `Create one at https://vercel.com/account/tokens and re-run.`,
+    `Create one at https://vercel.com/account/tokens and re-run.${trigger}`,
   ].join('\n');
 }
 
@@ -205,10 +210,14 @@ export function stackSpecNotRecordMessage(opts: {
     '',
     `  export default stack({`,
     `    spec: (_, { gitBranch }) => {`,
-    `      const db = postgres({ spec: () => ({ name: gitBranch || 'main' }) });`,
+    `      if (!gitBranch) throw new Error('--branch required outside a git repo');`,
+    `      const db = postgres({ spec: () => ({ name: gitBranch }) });`,
     `      return { db };`,
     `    },`,
     `  });`,
+    '',
+    `Avoid \`name: gitBranch || 'main'\` — an empty gitBranch silently provisions`,
+    `against the project's default branch (typically production).`,
   ].join('\n');
 }
 
