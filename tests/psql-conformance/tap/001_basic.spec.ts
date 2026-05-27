@@ -177,12 +177,26 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
   let paths: LauncherPaths;
   let uri: string;
   let workdir: string;
+  let serverMajor = 0;
 
   beforeAll(async () => {
     await ensureFixture();
     paths = makeLauncher('001-basic-spec');
     uri = buildUri();
     workdir = mkdtempSync(join(tmpdir(), '001-basic-work-'));
+
+    // Probe server version so PG-version-gated subtests can skip when
+    // the feature under test isn't supported by the running server
+    // (e.g. CSV DEFAULT was added in PG 17 — pre-17 servers reject the
+    // option entirely, so the upstream-shaped match would never apply).
+    const verProbe = await runChild({
+      launcher: paths.launcher,
+      argv: [uri, '-X', '-A', '-t', '-c', 'SHOW server_version_num'],
+    });
+    if (verProbe.exitCode === 0) {
+      const n = Number.parseInt(verProbe.stdout.trim(), 10);
+      if (Number.isFinite(n)) serverMajor = Math.floor(n / 10000);
+    }
 
     // Server-side setup mirrors lines 65-73 of the upstream TAP file:
     //   - `wal_level = logical`, `max_wal_senders = 4` etc. — these are
@@ -636,6 +650,11 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
   // -------------------------------------------------------------------------
 
   it('\\copy from CSV with DEFAULT option (lines 345-367)', async () => {
+    // CSV DEFAULT is a server-side COPY option added in PG 17 — pre-17
+    // servers reject the option entirely with `option "default" not
+    // recognized`, so the upstream-shaped row-folding test has no
+    // meaning against older majors.
+    if (serverMajor > 0 && serverMajor < 17) return;
     // Create the destination table.
     const setup = await runChild({
       launcher: paths.launcher,
