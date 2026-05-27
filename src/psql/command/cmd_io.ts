@@ -128,12 +128,23 @@ type QueryFoutEntry = {
    * Closer used by `\o` rebinds to drain the previous target.
    *
    * For pipe targets the resolved object carries the spawned program's
-   * exit status (`exitCode`, `null` if the child died from a signal).
-   * `\g | program` uses this so a non-zero exit propagates an error back
-   * to the REPL, matching upstream `do_g` semantics. File targets resolve
-   * with an object whose `exitCode` is omitted.
+   * exit status (`exitCode`, `null` if the child died from a signal) and
+   * the terminating signal name when applicable. `\w | program` uses these
+   * to render an upstream-style `wait_result_to_str` message; `\g |
+   * program` is silent and only consults them for SHELL_ERROR/
+   * SHELL_EXIT_CODE bookkeeping (future WP). File targets resolve with an
+   * object whose pipe fields are omitted.
+   *
+   * `isPipe` lets callers distinguish file targets from pipe targets
+   * cheaply — the file branch resolves `exitCode=undefined` and we'd
+   * otherwise be unable to tell that apart from a successful pipe exit
+   * (`exitCode=0`).
    */
-  close: () => Promise<{ exitCode?: number | null }>;
+  isPipe: boolean;
+  close: () => Promise<{
+    exitCode?: number | null;
+    signal?: NodeJS.Signals | null;
+  }>;
 };
 
 type FoutStash = Record<symbol, unknown> & {
@@ -208,9 +219,9 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
  *
  * `target` of the form `|cmd` spawns `sh -c cmd` and pipes to its stdin.
  * The returned closer waits for the child to exit and resolves to its
- * status so callers (`\g | program`) can propagate a non-zero exit.
- *
- * Any other string is treated as a file path; the file is truncated.
+ * status + terminating signal (if any) so callers can render
+ * `wait_result_to_str`-style errors. Any other string is treated as a
+ * file path; the file is truncated.
  */
 const openWriter = (target: string): QueryFoutEntry => {
   if (target.startsWith('|')) {
@@ -230,21 +241,30 @@ const openWriter = (target: string): QueryFoutEntry => {
     });
     return {
       stream: child.stdin,
+      isPipe: true,
       close: () =>
-        new Promise<{ exitCode: number | null }>((resolve) => {
+        new Promise<{
+          exitCode: number | null;
+          signal: NodeJS.Signals | null;
+        }>((resolve) => {
           let settled = false;
-          const finish = (code: number | null): void => {
+          const finish = (
+            code: number | null,
+            signal: NodeJS.Signals | null,
+          ): void => {
             if (settled) return;
             settled = true;
-            resolve({ exitCode: code });
+            resolve({ exitCode: code, signal });
           };
-          child.once('close', (code) => {
-            finish(code);
+          child.once('close', (code, signal) => {
+            finish(code, signal);
           });
           child.once('error', () => {
             // spawn failure or stdio glitch — treat as a non-zero exit so
-            // \g sees a failure.
-            finish(127);
+            // \w sees a failure. \g intentionally ignores this, mirroring
+            // upstream `CloseGOutput` which only sets SHELL_ERROR /
+            // SHELL_EXIT_CODE.
+            finish(127, null);
           });
           // Half-close stdin so the child sees EOF and exits.
           if (!child.stdin.destroyed) {
@@ -256,6 +276,7 @@ const openWriter = (target: string): QueryFoutEntry => {
   const stream = createWriteStream(target, { encoding: 'utf8' });
   return {
     stream,
+    isPipe: false,
     close: () =>
       new Promise<Record<string, never>>((resolve, reject) => {
         stream.end((err?: Error | null) => {
@@ -264,6 +285,35 @@ const openWriter = (target: string): QueryFoutEntry => {
         });
       }),
   };
+};
+
+/**
+ * Format a child process exit code + signal into upstream psql's
+ * `wait_result_to_str` style. Mirrors the C helper in
+ * `src/common/wait_error.c`:
+ *
+ *   - exit code 127  → `command not found`
+ *   - exit code 126  → `command was not executable`
+ *   - any other code → `child process exited with exit code N`
+ *   - terminated by signal S → `child process was terminated by
+ *     signal N: <SIG>`
+ *
+ * Returns null when the child exited cleanly (code 0, no signal).
+ */
+const formatChildWaitResult = (
+  exitCode: number | null | undefined,
+  signal: NodeJS.Signals | null | undefined,
+): string | null => {
+  if (signal) {
+    // Node doesn't expose the numeric signal number; surface the name as
+    // upstream's `pg_strsignal` would, with a stable prefix.
+    return `child process was terminated by signal: ${signal}`;
+  }
+  if (exitCode === null || exitCode === undefined) return null;
+  if (exitCode === 0) return null;
+  if (exitCode === 127) return 'command not found';
+  if (exitCode === 126) return 'command was not executable';
+  return `child process exited with exit code ${String(exitCode)}`;
 };
 
 /**
@@ -455,15 +505,55 @@ export const cmdWrite: BackslashCmdSpec = {
     if (arg === null || arg.length === 0) {
       return errResult(ctx, 'missing required argument');
     }
+    let entry: QueryFoutEntry;
     try {
-      const entry = openWriter(arg);
+      entry = openWriter(arg);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+    try {
       await new Promise<void>((resolve, reject) => {
         entry.stream.write(ctx.queryBuf, (err) => {
           if (err) reject(err);
           else resolve();
         });
       });
-      await entry.close();
+    } catch (err) {
+      // Best-effort drain before propagating the write error.
+      try {
+        await entry.close();
+      } catch {
+        // ignore
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return errResult(ctx, msg);
+    }
+    // Wait for the target to drain. For pipe targets a non-zero exit /
+    // killing signal is surfaced as `<fname>: <wait_result_to_str>`,
+    // mirroring upstream `exec_command_write`:
+    //
+    //   pg_log_error("%s: %s", fname, wait_result_to_str(result));
+    //
+    // Note that upstream's `fname` retains the leading `|`, and the
+    // message does NOT carry the `\w:` cmd-prefix that the other
+    // backslash-command errors use — `pg_log_error` writes the bare
+    // formatted message (under terse mode, which is the conformance
+    // harness setup). We bypass `errResult` to match that shape exactly.
+    try {
+      const result = await entry.close();
+      if (entry.isPipe) {
+        const msg = formatChildWaitResult(result.exitCode, result.signal);
+        if (msg !== null) {
+          // `arg` still has the leading `|`; emit it verbatim so the
+          // text reads `| program: child process exited with exit code 1`.
+          const line = `${arg}: ${msg}`;
+          ctx.settings.lastErrorResult = { message: line };
+          const prefix = psqlErrorPrefix(ctx.settings);
+          writeErr(`${prefix}${line}\n`);
+          return { status: 'error', errorWritten: true };
+        }
+      }
       return { status: 'ok' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -670,16 +760,27 @@ const runGCore = async (
   }
 
   // Close the one-shot writer regardless of execution success so any
-  // partial output is flushed; capture the child's exit status (for the
-  // pipe form) so a non-zero exit becomes our error.
+  // partial output is flushed.
+  //
+  // Note: a non-zero exit from `\g | program` is intentionally NOT
+  // surfaced as an error. Upstream `CloseGOutput` (src/bin/psql/common.c)
+  // only feeds the wait status to `SetShellResultVariables`, which sets
+  // `SHELL_ERROR` / `SHELL_EXIT_CODE` for user inspection — no
+  // `pg_log_error` call. This matches `\g | false` in vanilla psql:
+  // silent, exit code 0, the next command (`\echo after`) prints
+  // normally. Bookkeeping for the SHELL_* vars is a follow-up; what
+  // matters here is that we don't emit a stray "program exited" line
+  // that the conformance harness would diff against an empty upstream
+  // stderr.
+  //
+  // The only failure we still surface from a pipe target is a synchronous
+  // `close()` rejection (e.g. EPIPE escaping the swallow above), which
+  // would indicate a genuine bug in our wiring rather than the child
+  // program's exit code.
   let pipeError: string | null = null;
   if (oneShot) {
     try {
-      const result = await oneShot.close();
-      const code = result.exitCode;
-      if (code !== null && code !== undefined && code !== 0) {
-        pipeError = `program exited with status ${String(code)}`;
-      }
+      await oneShot.close();
     } catch (err) {
       pipeError = err instanceof Error ? err.message : String(err);
     }
@@ -1093,9 +1194,11 @@ const parseStrictNonNegativeInt = (raw: string): number | null => {
 
 /**
  * Default `\watch` interval (seconds). Mirrors upstream
- * `DEFAULT_WATCH_INTERVAL`.
+ * `DEFAULT_WATCH_INTERVAL`. Exported so `defaultSettings` can substitute
+ * it when the user unsets the `WATCH_INTERVAL` variable — upstream's
+ * `watch_interval_substitute_hook` reseeds the value to `2` on null.
  */
-const DEFAULT_WATCH_INTERVAL = 2;
+export const DEFAULT_WATCH_INTERVAL = '2';
 
 /**
  * Render `\watch`'s per-iteration timestamp in upstream psql's
@@ -1153,8 +1256,12 @@ const WATCH_INTERVAL_MAX_SECONDS = 100 * 3600;
 const resolveWatchIntervalDefault = (
   settings: PsqlSettings,
 ): { value: number } | { error: string } => {
-  const raw = settings.vars.get('WATCH_INTERVAL');
-  if (raw === undefined) return { value: DEFAULT_WATCH_INTERVAL };
+  // The variable is seeded to `DEFAULT_WATCH_INTERVAL` by `defaultSettings`
+  // (and re-seeded on `\unset`), so it's typically a string at use time.
+  // If a future code path leaves it undefined we fall back to the same
+  // documented default — upstream's `ParseVariableDouble` substitutes
+  // `DEFAULT_WATCH_INTERVAL` when the var slot is empty.
+  const raw = settings.vars.get('WATCH_INTERVAL') ?? DEFAULT_WATCH_INTERVAL;
   const parsed = parseStrictNonNegativeFloat(raw);
   if (parsed === null || parsed > WATCH_INTERVAL_MAX_SECONDS) {
     return {
@@ -1176,21 +1283,29 @@ type WatchPagerHandle = {
  * Spawn the `\watch` pager for the full duration of the polling loop.
  *
  * Upstream `do_watch` wraps the loop in a single `popen` of
- * `PSQL_WATCH_PAGER` (falling back to `$PAGER`); every iteration writes
- * into the pager's stdin and the pager only exits when the loop ends.
- * We mirror that here with a single `sh -c <pager>` spawn — using the
- * shell lets the user set the variable to a full command string
- * (`less -R`, `tee /tmp/log`, …) without the caller having to tokenise
- * it. EPIPE on the stdin pipe is swallowed for the same reason as in
- * `openWriter`: the user may quit `less` while we still have writes
- * pending in the next iteration.
+ * `PSQL_WATCH_PAGER`. It deliberately ignores `PSQL_PAGER` and `$PAGER`:
  *
- * Returns `null` when neither `PSQL_WATCH_PAGER` nor `PAGER` is set
- * (or both are whitespace-only — matching upstream's "no pager" rule),
- * so the caller can fall back to its normal output target.
+ *   > we ignore the regular PSQL_PAGER or PAGER environment variables,
+ *   > because traditional pagers probably won't be very useful for
+ *   > showing a stream of results.
+ *
+ * Mirror that here. Reading from `$PAGER` would silently hijack
+ * `\watch` output for any user whose shell sets `PAGER=less` (the
+ * common default), which makes the loop's output disappear into a
+ * subprocess that diff harnesses can't capture.
+ *
+ * We use a single `sh -c <pager>` spawn so the user can set the
+ * variable to a full command string (`less -R`, `tee /tmp/log`, …)
+ * without the caller having to tokenise it. EPIPE on the stdin pipe is
+ * swallowed for the same reason as in `openWriter`: the user may quit
+ * `less` while we still have writes pending in the next iteration.
+ *
+ * Returns `null` when `PSQL_WATCH_PAGER` is unset or whitespace-only
+ * (upstream's "no pager" rule), so the caller falls back to the normal
+ * output target.
  */
 const openWatchPager = (): WatchPagerHandle | null => {
-  const cmd = process.env.PSQL_WATCH_PAGER ?? process.env.PAGER ?? '';
+  const cmd = process.env.PSQL_WATCH_PAGER ?? '';
   if (cmd.trim().length === 0) return null;
 
   const child = spawn('sh', ['-c', cmd], {
@@ -1386,7 +1501,20 @@ export const cmdWatch: BackslashCmdSpec = {
         if (iterSet && iter >= iterMax) break;
         if (minRowsSet && lastRowCount < minRows) break;
         if (controller.signal.aborted) break;
-        await sleepCancellable(intervalMs, controller.signal);
+        // sleep_ms == 0 is upstream's "tight loop, no wait needed" — skip
+        // the timer round-trip entirely so we don't queue a setTimeout(0)
+        // for every iteration. Matches `do_watch`'s `if (sleep_ms == 0)
+        // continue;` branch.
+        if (intervalMs > 0) {
+          await sleepCancellable(intervalMs, controller.signal);
+        }
+      }
+      // Upstream `do_watch` injects a trailing newline AFTER the loop
+      // ends when no pager is attached, to clear the cursor after a
+      // possible `^C` echo. Mirror that here so the conformance output
+      // shape (`...\n(N rows)\n\n\n`) matches vanilla psql.
+      if (!pager) {
+        out.write('\n');
       }
       return { status: 'reset-buf', newBuf: '' };
     } finally {

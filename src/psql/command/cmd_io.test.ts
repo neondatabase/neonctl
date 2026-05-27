@@ -258,6 +258,46 @@ describe('\\w / \\write', () => {
     const written = await fs.readFile(sink, 'utf8');
     expect(written).toBe('hello world\n');
   });
+
+  test('pipe form surfaces non-zero exit with wait_result_to_str wording', async () => {
+    const s = makeSettings();
+    // `false` exits 1. Upstream `exec_command_write` prints
+    // `pg_log_error("%s: %s", fname, wait_result_to_str(result))`,
+    // which formats wait_result==1 as
+    // `child process exited with exit code 1`. The leading `|` is part
+    // of `fname` in upstream — we keep it verbatim so the conformance
+    // diff is empty.
+    const ctx = makeMockCtx('w', `'|false'`, s, 'select 1');
+    const r = await run(cmdWrite, ctx);
+    expect(r.status).toBe('error');
+    // The mock scanner above keeps the `|` glued to `false` because it
+    // strips the surrounding quotes; vanilla psql preserves the literal
+    // arg the user typed (`| false`). Match on the trailing portion to
+    // stay tolerant of either spelling.
+    expect(stderr()).toMatch(
+      /^\|\s?false: child process exited with exit code 1\n$/,
+    );
+    // And no `\w:` cmd-prefix — `pg_log_error` writes the bare message
+    // under terse mode (the conformance harness setup).
+    expect(stderr()).not.toMatch(/\\w:/);
+  });
+
+  test('pipe form maps exit 127 to "command not found"', async () => {
+    const s = makeSettings();
+    // Upstream `wait_result_to_str` special-cases 127/126 to match
+    // shell conventions. Our `formatChildWaitResult` mirrors that so
+    // `\w | nonexistent-binary` produces the same error wording as
+    // vanilla psql.
+    const ctx = makeMockCtx(
+      'w',
+      `'|nonexistent_program_xyz_neonctl'`,
+      s,
+      'select 1',
+    );
+    const r = await run(cmdWrite, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/command not found/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -366,15 +406,20 @@ describe('\\g', () => {
     expect(written).toMatch(/neon/);
   });
 
-  test('pipe form propagates a non-zero program exit code', async () => {
+  test('pipe form is silent when the program exits non-zero', async () => {
     const conn = makeMockConn();
     conn.reply = () => [rs(['a'], [[1]])];
     const s = makeSettings(conn);
-    // `false` always exits 1 — \g must surface this as an error.
+    // `false` always exits 1. Upstream `CloseGOutput` only feeds the
+    // wait status to SetShellResultVariables (SHELL_ERROR /
+    // SHELL_EXIT_CODE) — no `pg_log_error` call — so `\g | false` is
+    // expected to return success with empty stderr. Vanilla psql
+    // confirms this: `printf 'SELECT 1 \\g | false\n\\echo after\n' |
+    // psql` prints `after` and exits 0.
     const ctx = makeMockCtx('g', `'|false'`, s, 'select 1');
     const r = await run(cmdG, ctx);
-    expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/program exited with status 1/);
+    expect(r.status).toBe('reset-buf');
+    expect(stderr()).toBe('');
   });
 });
 
@@ -696,6 +741,60 @@ describe('\\watch', () => {
     );
   });
 
+  test('injects a trailing newline after the loop ends (matches upstream `fprintf(stdout, "\\n")`)', async () => {
+    // Upstream `do_watch` writes a final `\n` to stdout when the loop
+    // exits and no pager is attached. We mirror that so the output shape
+    // `...\n(N rows)\n\n\n` matches vanilla psql. Without this, the
+    // conformance harness sees one fewer trailing newline than the
+    // reference psql_pipe captures and the diff hunk grows by a line.
+    const conn = makeMockConn();
+    const controller = new AbortController();
+    WATCH_TEST_CONTROLLER.ref = controller;
+    conn.reply = () => {
+      controller.abort();
+      return [rs(['n'], [[1]])];
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'c=1 i=0.001', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('reset-buf');
+    const out = stdout();
+    // The very last character is the injected `\n`. Anything before it
+    // is the per-iteration `(1 row)\n\n` footer, so we look for exactly
+    // three newlines at the end.
+    expect(out.endsWith('\n\n\n')).toBe(true);
+  });
+
+  test('does NOT inject a trailing newline when piping through a pager', async () => {
+    // Upstream skips the trailing `\n` when a pager is in play (the
+    // pager will reset the cursor on exit). Mirror that here so the
+    // pager-captured output is identical to vanilla psql's.
+    const conn = makeMockConn();
+    const controller = new AbortController();
+    WATCH_TEST_CONTROLLER.ref = controller;
+    conn.reply = () => {
+      controller.abort();
+      return [rs(['n'], [[1]])];
+    };
+    const sink = tmpFile('watch-pager-trailing.out');
+    const prev = process.env.PSQL_WATCH_PAGER;
+    process.env.PSQL_WATCH_PAGER = `cat > ${sink}`;
+    try {
+      const s = makeSettings(conn);
+      const ctx = makeMockCtx('watch', 'c=1 i=0.001', s, 'select 1');
+      const r = await run(cmdWatch, ctx);
+      expect(r.status).toBe('reset-buf');
+    } finally {
+      if (prev === undefined) delete process.env.PSQL_WATCH_PAGER;
+      else process.env.PSQL_WATCH_PAGER = prev;
+    }
+    const written = await fs.readFile(sink, 'utf8');
+    // Only two trailing newlines — the per-iteration `(1 row)\n\n`
+    // footer, with no extra `\n` added by the watch-loop epilogue.
+    expect(written.endsWith('\n\n')).toBe(true);
+    expect(written.endsWith('\n\n\n')).toBe(false);
+  });
+
   test('PSQL_WATCH_PAGER pipes the whole watch session through the pager', async () => {
     const conn = makeMockConn();
     const controller = new AbortController();
@@ -770,33 +869,55 @@ describe('WATCH_INTERVAL variable hook', () => {
 
   test('rejects 1e500 (overflows to Infinity)', () => {
     const s = makeSettings();
-    expect(s.vars.set('WATCH_INTERVAL', '1e500')).toBe(false);
-    // Veto leaves the previous value (the documented default "2") intact.
+    // The hook returns an upstream-shaped diagnostic string; `trySet`
+    // surfaces it via the `error` field on the result. The slot keeps
+    // its prior value (the documented default "2"). The exact wording
+    // comes from `validateWatchInterval` in `core/settings.ts`, which
+    // mirrors upstream `ParseVariableDouble`'s three error paths
+    // (junk / negative / out-of-range).
+    const r = s.vars.trySet('WATCH_INTERVAL', '1e500');
+    expect(r.ok).toBe(false);
+    if (r.ok || r.reason !== 'hook-veto') throw new Error('unreachable');
+    expect(r.error).toMatch(
+      /invalid value "1e500" for variable "WATCH_INTERVAL"/,
+    );
     expect(s.vars.get('WATCH_INTERVAL')).toBe('2');
-    expect(stderr()).toMatch(/WATCH_INTERVAL "1e500" is out of range/);
   });
 
   test('rejects a non-numeric value', () => {
     const s = makeSettings();
-    expect(s.vars.set('WATCH_INTERVAL', 'banana')).toBe(false);
-    expect(stderr()).toMatch(/WATCH_INTERVAL "banana" is out of range/);
+    const r = s.vars.trySet('WATCH_INTERVAL', 'banana');
+    expect(r.ok).toBe(false);
+    if (r.ok || r.reason !== 'hook-veto') throw new Error('unreachable');
+    expect(r.error).toMatch(
+      /invalid value "banana" for variable "WATCH_INTERVAL"/,
+    );
   });
 
   test('rejects a negative value', () => {
     const s = makeSettings();
-    expect(s.vars.set('WATCH_INTERVAL', '-5')).toBe(false);
-    expect(stderr()).toMatch(/WATCH_INTERVAL "-5" is out of range/);
+    const r = s.vars.trySet('WATCH_INTERVAL', '-5');
+    expect(r.ok).toBe(false);
+    if (r.ok || r.reason !== 'hook-veto') throw new Error('unreachable');
+    // Upstream's third path: `must be greater than 0.00`.
+    expect(r.error).toMatch(/invalid value "-5" for variable "WATCH_INTERVAL"/);
   });
 
-  test('allows unsetting (null) without producing an error', () => {
+  test('unset re-seeds the default "2" (upstream substitute hook)', () => {
+    // Upstream `watch_interval_substitute_hook` re-seeds the variable to
+    // `DEFAULT_WATCH_INTERVAL` ("2") when the user `\unset`s it. Our
+    // hook returns `{ substitute: DEFAULT_WATCH_INTERVAL }` from the
+    // null branch, which `VarStore.unset` honours by re-storing the
+    // substituted value. The conformance test echoes `:WATCH_INTERVAL`
+    // after `\unset` and expects `2` — see
+    // `tests/psql-conformance/vendor/postgres-18.0/.../001_basic.pl`
+    // around the `WATCH_INTERVAL variable is set and updated` block.
     const s = makeSettings();
     s.vars.set('WATCH_INTERVAL', '5');
     stderrChunks.length = 0;
     s.vars.unset('WATCH_INTERVAL');
     expect(stderr()).toBe('');
-    // After unset, the variable is gone from the store; `\watch` falls
-    // back to DEFAULT_WATCH_INTERVAL (2) at use time, mirroring upstream.
-    expect(s.vars.get('WATCH_INTERVAL')).toBeUndefined();
+    expect(s.vars.get('WATCH_INTERVAL')).toBe('2');
   });
 });
 
