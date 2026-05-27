@@ -121,6 +121,14 @@ describe('VarStore — hooks', () => {
     expect(v.has('X')).toBe(false);
   });
 
+  test('hasSubstituteHook is true after addHook, false for unhooked names', () => {
+    const v = createVarStore();
+    expect(v.hasSubstituteHook('X')).toBe(false);
+    v.addHook('X', () => true);
+    expect(v.hasSubstituteHook('X')).toBe(true);
+    expect(v.hasSubstituteHook('Y')).toBe(false);
+  });
+
   test('hooks survive unset and apply on re-set', () => {
     const v = createVarStore();
     const hook = vi.fn().mockReturnValue(true);

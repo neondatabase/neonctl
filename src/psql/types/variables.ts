@@ -51,6 +51,14 @@ export type VarStore = {
   unset(name: string): boolean;
   has(name: string): boolean;
   addHook(name: string, hook: VarHook): void;
+  /**
+   * Whether `name` has any registered hook. Mirrors upstream psql's
+   * "specially treated variable" predicate, which is exactly the set of
+   * variables that have a substitute / assign hook installed (see
+   * `exec_command_gset`'s "attempt to \gset into specially treated
+   * variable" branch — upstream checks via `PsqlVarHook` and friends).
+   */
+  hasSubstituteHook(name: string): boolean;
   entries(): IterableIterator<[string, string]>;
   asBool(name: string, defaultValue?: boolean): boolean;
   asTriple(

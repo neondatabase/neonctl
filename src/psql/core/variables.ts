@@ -215,6 +215,11 @@ export class VarStore implements VarStoreType {
     return this.values.has(name);
   }
 
+  hasSubstituteHook(name: string): boolean {
+    const hooks = this.hooks.get(name);
+    return hooks !== undefined && hooks.length > 0;
+  }
+
   addHook(name: string, hook: VarHook): void {
     if (!VALID_NAME_RE.test(name)) return;
 
