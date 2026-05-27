@@ -78,7 +78,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { promises as fsPromises, createWriteStream } from 'node:fs';
+import { promises as fsPromises, createWriteStream, openSync } from 'node:fs';
 import * as path from 'node:path';
 
 import type {
@@ -433,7 +433,23 @@ const openWriter = (target: string): QueryFoutEntry => {
         }),
     };
   }
-  const stream = createWriteStream(target, { encoding: 'utf8' });
+  // Open the file synchronously up-front so a bad path (ENOENT,
+  // EACCES, EISDIR, …) throws here — before any write — instead of
+  // emitting an asynchronous `'error'` event on the lazily-opened
+  // WriteStream that Node would then re-raise as an unhandled
+  // exception and kill the process. Upstream psql calls `fopen()`
+  // synchronously and reports the failure via `pg_log_error` while
+  // continuing to read the next command, which is the behaviour we
+  // need to mirror for `\g FILE`, `\o FILE`, `\w FILE` and friends.
+  //
+  // Wrapping the resulting fd in `createWriteStream({ fd })` retains
+  // the streaming write interface the rest of the code expects.
+  const fd = openSync(target, 'w');
+  const stream = createWriteStream(target, {
+    encoding: 'utf8',
+    fd,
+    autoClose: true,
+  });
   return {
     stream,
     isPipe: false,
@@ -445,6 +461,99 @@ const openWriter = (target: string): QueryFoutEntry => {
         });
       }),
   };
+};
+
+/**
+ * Map a Node.js errno (`err.code`) to the libc `strerror()` string
+ * upstream psql renders in its `pg_log_error("%s: %m", fname)` path.
+ *
+ * Falls back to `err.message` (with the verbose `ENOENT: ...` prefix
+ * stripped if present) so unmapped errno values still surface
+ * meaningful text instead of a cryptic Node-internal phrasing.
+ */
+const errnoToStrerror = (err: NodeJS.ErrnoException): string => {
+  switch (err.code) {
+    case 'ENOENT':
+      return 'No such file or directory';
+    case 'EACCES':
+      return 'Permission denied';
+    case 'EISDIR':
+      return 'Is a directory';
+    case 'ENOTDIR':
+      return 'Not a directory';
+    case 'EEXIST':
+      return 'File exists';
+    case 'EROFS':
+      return 'Read-only file system';
+    case 'ELOOP':
+      return 'Too many levels of symbolic links';
+    case 'ENAMETOOLONG':
+      return 'File name too long';
+    case 'ENOSPC':
+      return 'No space left on device';
+    case 'EMFILE':
+      return 'Too many open files';
+    case 'ENFILE':
+      return 'Too many open files in system';
+    case 'EIO':
+      return 'Input/output error';
+    case 'EFBIG':
+      return 'File too large';
+    case 'EDQUOT':
+      return 'Disk quota exceeded';
+    case 'EPERM':
+      return 'Operation not permitted';
+    case 'EINVAL':
+      return 'Invalid argument';
+    default: {
+      // Strip Node's `ENOENT: no such file or directory, open '/x'`
+      // prefix when present so the fallback at least looks like the
+      // libc form. The leading `/, ` slice keeps the human-readable
+      // phrase ("no such file or directory") if Node's message
+      // mirrors the `strerror` text but lowercases it.
+      const m = /^[A-Z]+: ([^,]+)/.exec(err.message);
+      return m ? m[1] : err.message;
+    }
+  }
+};
+
+/**
+ * Emit a file-open failure for `\g FILE`, `\o FILE`, `\w FILE` in the
+ * exact shape vanilla psql produces: a bare `<path>: <strerror>` line
+ * on stderr, no `\<cmd>:` prefix (matches `pg_log_error` under terse
+ * mode, which is what `psql -X` uses).
+ *
+ * The leading `psql:[<file>:<n>]:` tag is still applied when we're
+ * reading SQL from a `\i FILE` include — `psqlErrorPrefix` returns ''
+ * for stdin so the line stays bare for the interactive / harness case.
+ *
+ * Returns an `error` envelope with `errorWritten: true` so the mainloop
+ * doesn't write a duplicate `psql: ERROR:` fallback.
+ */
+const reportFileOpenFailure = (
+  ctx: BackslashContext,
+  target: string,
+  err: unknown,
+): BackslashResult => {
+  const errno = err as NodeJS.ErrnoException;
+  const phrase = errnoToStrerror(errno);
+  const line = `${target}: ${phrase}`;
+  ctx.settings.lastErrorResult = { message: line };
+  const prefix = psqlErrorPrefix(ctx.settings);
+  writeErr(`${prefix}${line}\n`);
+  return { status: 'error', errorWritten: true };
+};
+
+/**
+ * True when `err` was thrown by our synchronous `openSync` in
+ * {@link openWriter} (i.e. has an errno `code`) and the caller should
+ * render it via {@link reportFileOpenFailure} rather than the generic
+ * `\<cmd>: <msg>` path.
+ */
+const isFileOpenFailure = (err: unknown): boolean => {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as NodeJS.ErrnoException;
+  return typeof e.code === 'string' && e.code.startsWith('E');
 };
 
 /**
@@ -646,6 +755,14 @@ export const cmdOut: BackslashCmdSpec = {
       setQueryFout(ctx.settings, entry);
       return { status: 'ok' };
     } catch (err) {
+      // File targets fail synchronously in `openWriter` via `openSync`;
+      // surface them in upstream's `<path>: <strerror>` shape (bare,
+      // no `\o:` prefix) and continue with the loop so a follow-up
+      // `SELECT` still executes. Pipe spawn failures (which lack an
+      // errno code) fall through to the generic `\o: <msg>` path.
+      if (!arg.startsWith('|') && isFileOpenFailure(err)) {
+        return reportFileOpenFailure(ctx, arg, err);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       return errResult(ctx, msg);
     }
@@ -669,6 +786,13 @@ export const cmdWrite: BackslashCmdSpec = {
     try {
       entry = openWriter(arg);
     } catch (err) {
+      // Same upstream-shape pivot as `\o`: a missing / unwritable file
+      // path errors out as a bare `<path>: <strerror>` line and the
+      // shim keeps reading commands. Pipe spawn failures still use
+      // the generic `\w: <msg>` envelope.
+      if (!arg.startsWith('|') && isFileOpenFailure(err)) {
+        return reportFileOpenFailure(ctx, arg, err);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       return errResult(ctx, msg);
     }
@@ -851,6 +975,16 @@ const runGCore = async (
     try {
       oneShot = openWriter(target);
     } catch (err) {
+      // A `\g FILE` whose path is unopenable (ENOENT, EACCES, EISDIR,
+      // …) — typically because an unresolved `:VAR` substitution left
+      // a literal `:VAR` in the path — must NOT crash the process the
+      // way Node's lazy WriteStream `'error'` event would. Render in
+      // upstream's bare `<path>: <strerror>` shape and continue so the
+      // next command in the script still executes. Pipe spawn
+      // failures retain the generic `\g: <msg>` envelope.
+      if (!target.startsWith('|') && isFileOpenFailure(err)) {
+        return reportFileOpenFailure(ctx, target, err);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       return errResult(ctx, msg);
     }

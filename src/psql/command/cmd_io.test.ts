@@ -298,6 +298,23 @@ describe('\\w / \\write', () => {
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/command not found/);
   });
+
+  test('unopenable FILE emits `<path>: No such file or directory` and does not crash', async () => {
+    // Regression: a `\w` whose path can't be opened (e.g. an
+    // unresolved `:VAR` substitution leaving a literal path) used to
+    // crash the whole Node process because `createWriteStream`'s
+    // lazy open emitted an unhandled `'error'` event. Now we open
+    // synchronously and surface the upstream `<path>: <strerror>`
+    // shape so the shim continues with the next command.
+    const s = makeSettings();
+    const missing = path.join(tmpDir, 'missing-dir', 'no-such.txt');
+    const ctx = makeMockCtx('w', missing, s, 'select 1');
+    const r = await run(cmdWrite, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toBe(`${missing}: No such file or directory\n`);
+    // No `\w:` prefix — matches vanilla's bare `pg_log_error` shape.
+    expect(stderr()).not.toMatch(/\\w:/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -343,6 +360,21 @@ describe('\\o / \\out', () => {
     await run(cmdOut, makeMockCtx('o', '', s));
     expect(await fs.readFile(file1, 'utf8')).toBe('first\n');
     expect(await fs.readFile(file2, 'utf8')).toBe('second\n');
+  });
+
+  test('unopenable FILE emits `<path>: No such file or directory` and does not crash', async () => {
+    // Regression: synchronous open guard. Without it, `\o /no/such`
+    // would crash the process via the WriteStream's lazy `'error'`
+    // event.
+    const s = makeSettings();
+    const missing = path.join(tmpDir, 'missing-dir', 'no-such.txt');
+    const ctx = makeMockCtx('o', missing, s);
+    const r = await run(cmdOut, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toBe(`${missing}: No such file or directory\n`);
+    // No prior stash should be left behind.
+    expect(getQueryFout(s)).toBeNull();
+    expect(stderr()).not.toMatch(/\\o:/);
   });
 });
 
@@ -471,6 +503,26 @@ describe('\\g', () => {
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/^LINE 1: SELECT foo /m);
     expect(stderr()).not.toMatch(/LINE 3:/);
+  });
+
+  test('unopenable FILE target emits `<path>: <strerror>` and does not crash', async () => {
+    // Regression: a `\g :unresolved/path` (e.g. left behind by an
+    // unsubstituted variable) used to crash the entire Node process
+    // because the lazy `createWriteStream` open failure surfaced as
+    // an unhandled `'error'` event. We now open synchronously and
+    // emit the upstream `<path>: No such file or directory` shape,
+    // and the connection is NEVER touched (no query is dispatched
+    // when the redirect can't be set up).
+    const conn = makeMockConn();
+    conn.reply = () => [rs(['a'], [[1]])];
+    const s = makeSettings(conn);
+    const missing = path.join(tmpDir, 'missing-dir', 'no-such.txt');
+    const ctx = makeMockCtx('g', missing, s, 'select 1');
+    const r = await run(cmdG, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toBe(`${missing}: No such file or directory\n`);
+    expect(conn.history).toEqual([]);
+    expect(stderr()).not.toMatch(/\\g:/);
   });
 });
 
