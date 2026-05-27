@@ -11,10 +11,17 @@
 // or `it.skip("reason")` (out of scope) in their spec file.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, it, expect } from 'vitest';
+import { afterAll, describe, it, expect } from 'vitest';
 import { normalize } from './harness/normalize.js';
 import { getPgConn } from './harness/pg-fixture.js';
 import { log } from './harness/util-log.js';
@@ -27,6 +34,34 @@ const EXPECTED_DIR = join(VENDOR_ROOT, 'src', 'test', 'regress', 'expected');
 
 const REGRESS_CASES = ['psql', 'psql_crosstab', 'psql_pipeline'] as const;
 type RegressCase = (typeof REGRESS_CASES)[number];
+
+// Seed the `abs_builddir` / `abs_srcdir` psql variables the way upstream
+// pg_regress does. Vendored scripts (e.g. regress/psql.sql) rely on them
+// via `\getenv abs_builddir PG_ABS_BUILDDIR` followed by
+// `\set g_out_file :abs_builddir '/results/psql-output1'`, then write to
+// that file with `\g :g_out_file`. If the env var is missing, `\getenv`
+// silently unsets the psql variable, the file path resolves to junk
+// (`/results/psql-output1`), and `\g` fails to open it.
+//
+// We allocate a per-run isolated temp dir under tmpdir() with the
+// `results/` subdir pre-created. abs_srcdir is read-only and points at
+// the vendored sql dir for completeness (no current vendored script
+// actually reads abs_srcdir, but upstream pg_regress sets both so we
+// mirror the contract).
+//
+// Cleanup is best-effort via `afterAll` — mkdtempSync collisions are
+// impossible, and leaving the dir behind on crash is harmless.
+const REGRESS_TMP = mkdtempSync(join(tmpdir(), 'psql-conformance-regress-'));
+mkdirSync(join(REGRESS_TMP, 'results'), { recursive: true });
+const REGRESS_ABS_SRCDIR = join(VENDOR_ROOT, 'src', 'test', 'regress');
+
+afterAll(() => {
+  try {
+    rmSync(REGRESS_TMP, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+});
 
 // Resolve the psql binary the harness drives:
 //
@@ -80,6 +115,15 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
       '-X',
       '-v',
       'ON_ERROR_STOP=0',
+      // Seed abs_builddir / abs_srcdir even though the vendored scripts
+      // pull them from PG_ABS_BUILDDIR / PG_ABS_SRCDIR via `\getenv`.
+      // The `-v` form is the upstream pg_regress contract and is
+      // belt-and-suspenders against any script that uses `:abs_builddir`
+      // without a prior `\getenv`.
+      '-v',
+      `abs_builddir=${REGRESS_TMP}`,
+      '-v',
+      `abs_srcdir=${REGRESS_ABS_SRCDIR}`,
       '-h',
       conn.host,
       '-p',
@@ -101,7 +145,15 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
     const cmdline = [PSQL_COMMAND, ...args].map(quote).join(' ') + ' 2>&1';
     const result = spawnSync('sh', ['-c', cmdline], {
       input: sql,
-      env: { ...process.env, PGPASSWORD: conn.password, LC_ALL: 'C' },
+      env: {
+        ...process.env,
+        PGPASSWORD: conn.password,
+        LC_ALL: 'C',
+        // `\getenv abs_builddir PG_ABS_BUILDDIR` reads these from the
+        // child's environment — see vendor/.../regress/sql/psql.sql.
+        PG_ABS_BUILDDIR: REGRESS_TMP,
+        PG_ABS_SRCDIR: REGRESS_ABS_SRCDIR,
+      },
       encoding: 'utf8',
       maxBuffer: 1024 * 1024 * 64,
       // Hard kill if a buggy psql impl hangs (e.g., COPY-FROM-STDIN

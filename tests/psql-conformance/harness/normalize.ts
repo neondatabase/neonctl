@@ -79,6 +79,20 @@ export const defaultRules: readonly NormalizeRule[] = [
       /(?:\/usr\/local\/pgsql\/share|\/usr\/share\/postgresql(?:\/\d+)?|\/Library\/PostgreSQL\/\d+\/share|\/opt\/homebrew\/share\/postgresql(?:@\d+)?|\/opt\/local\/share\/postgresql\d*)/g,
     replacement: 'PGSHAREDIR',
   },
+  // Per-run mkdtemp directory the regress harness seeds into
+  // `abs_builddir` / `PG_ABS_BUILDDIR`. The exact prefix differs by
+  // platform (`/tmp/`, `/var/folders/.../T/`, `C:\Users\...\Local\Temp\`)
+  // and the mkdtemp suffix is random, so without this rule the diff
+  // would drift per run whenever the temp path leaks into error
+  // messages or `\g`/`\copy` failure text. Once the underlying scanner
+  // fix (`:'VAR'` interpolation + space-trim) lands the path stops
+  // appearing in successful output, but error paths still benefit.
+  {
+    name: 'regress-abs-builddir',
+    pattern:
+      /(?:[A-Za-z]:)?[\\/](?:[^\s/\\]+[\\/])*psql-conformance-regress-[A-Za-z0-9]+/g,
+    replacement: 'ABS_BUILDDIR',
+  },
 ];
 
 /**
