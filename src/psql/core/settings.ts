@@ -385,13 +385,16 @@ const makeBoolHook = (
 ): ((newValue: string | null) => VarHookResult) => {
   return (newValue) => {
     if (newValue === null) {
+      // Upstream `bool_substitute_hook`: on `\unset NAME`, re-store "off"
+      // so `\echo :NAME` shows the boolean default instead of the literal
+      // `:NAME` token. Verified empirically against vanilla psql 18:
+      // `\unset AUTOCOMMIT; \echo :AUTOCOMMIT` prints "off".
       apply?.(false);
-      return true;
+      return { substitute: 'off' };
     }
     if (newValue === '') {
-      // Substitute the empty-set form (`\set NAME`) to the upstream
-      // default "on". The substituted value lands in the store and on
-      // any future read through `vars.get(NAME)`.
+      // `\set NAME` (empty value) substitutes "on". Verified empirically:
+      // `\set AUTOCOMMIT; \echo :AUTOCOMMIT` prints "on".
       apply?.(true);
       return { substitute: 'on' };
     }
@@ -452,8 +455,13 @@ const makeOnErrorRollbackHook = (
 ): ((newValue: string | null) => VarHookResult) => {
   return (newValue) => {
     if (newValue === null) {
+      // Upstream `on_error_rollback_substitute_hook`:
+      //   if (newval == NULL) newval = pg_strdup("off");
+      // — `\unset ON_ERROR_ROLLBACK` re-stores "off" so a follow-on
+      // `\echo :ON_ERROR_ROLLBACK` shows the default rather than the
+      // literal `:NAME` token.
       apply('off');
-      return true;
+      return { substitute: 'off' };
     }
     if (newValue === '') {
       apply('on');

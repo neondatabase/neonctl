@@ -187,12 +187,26 @@ export class VarStore implements VarStoreType {
     const had = this.values.delete(name);
     const hooks = this.hooks.get(name);
     if (hooks) {
-      // Notify hooks of deletion so they can clear derived state. Hook
-      // return values are ignored on unset — deletion is unconditional.
-      // A hook may return a string here; we still treat the unset as
-      // successful (upstream behaviour: assign hooks are notified, but
-      // the slot is gone).
-      for (const hook of hooks) hook(null);
+      // Notify hooks of deletion so they can clear derived state.
+      // Upstream substitute hooks (e.g. `on_error_rollback_substitute_hook`,
+      // `bool_substitute_hook`) re-inject a default when `newval == NULL` —
+      // so `\unset ON_ERROR_ROLLBACK` actually re-stores "off",
+      // `\unset AUTOCOMMIT` re-stores "on", etc. Honor the substitute by
+      // re-storing the value the hook returns. Plain `true` / `false` /
+      // error-string returns mean "no substitute" and the slot stays empty.
+      let substituted: string | null = null;
+      for (const hook of hooks) {
+        const r = hook(null);
+        if (typeof r === 'object' && r !== null && 'substitute' in r) {
+          substituted = r.substitute;
+        }
+      }
+      if (substituted !== null) {
+        this.values.set(name, substituted);
+        // Re-notify hooks with the substituted value so derived state
+        // (settings.onErrorRollback, etc.) gets the correct default.
+        for (const hook of hooks) hook(substituted);
+      }
     }
     return had;
   }
