@@ -190,6 +190,30 @@ describe('writeNeonLaunchEnv', () => {
     expect(readNeonLaunchEnv(dir)).toEqual({});
   });
 
+  it('null in updates deletes the key (delete sentinel)', async () => {
+    // Required by the spec.team → spec.teamId pivot fix. When a user
+    // alternates from `spec.team: 'team-a'` to `spec.teamId: 'team_b_id'`,
+    // the persisted VERCEL_TEAM_SLUG=team-a must be CLEARED — otherwise
+    // a future flip back to `spec.team: 'team-a'` reads the stale slug,
+    // matches it against spec.team, skips re-resolution, and deploys
+    // to the wrong team. Falsifier for this test: changing
+    // `if (v === null) delete merged[k]` to a no-op leaves the slug
+    // and the cross-team corruption returns.
+    const dir = mkdtempSync(join(tmpdir(), 'neon-launch-env-del-'));
+    await writeNeonLaunchEnv(dir, {
+      VERCEL_TEAM_SLUG: 'team-a',
+      VERCEL_TEAM_ID: 'team_a_id',
+    });
+    expect(readNeonLaunchEnv(dir).VERCEL_TEAM_SLUG).toBe('team-a');
+    await writeNeonLaunchEnv(dir, {
+      VERCEL_TEAM_SLUG: null,
+      VERCEL_TEAM_ID: 'team_b_id',
+    });
+    const after = readNeonLaunchEnv(dir);
+    expect(after.VERCEL_TEAM_SLUG).toBeUndefined();
+    expect(after.VERCEL_TEAM_ID).toBe('team_b_id');
+  });
+
   // The R16 quote/newline guard pins a real silent-corruption bug:
   // `envfile`'s parser does `value.replace(/['"]+/g, '')` on read and
   // its stringify does no escaping, so any persisted value containing

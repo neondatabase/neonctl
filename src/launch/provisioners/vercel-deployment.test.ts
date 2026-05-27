@@ -26,6 +26,7 @@ vi.mock('@vercel/client', () => ({
 
 import {
   createDeployment,
+  isTeamCacheStale,
   parseRetryAfter,
   upsertEnvVars,
   wrapTeam,
@@ -57,6 +58,31 @@ describe('wrapTeam', () => {
     expect(
       wrapTeam('/v9/projects/foo', { token: 't', teamId: 'team a&b' }),
     ).toBe('/v9/projects/foo?teamId=team%20a%26b');
+  });
+});
+
+describe('isTeamCacheStale — R17 widening', () => {
+  // R17 widened the condition from `!!cachedSlug && cachedSlug !== specTeam`
+  // to `!!specTeam && cachedSlug !== specTeam`. Each row pins one
+  // branch — falsifier table for the boolean expression.
+
+  it('no spec.team → never stale (id-only binding)', () => {
+    expect(isTeamCacheStale(undefined, undefined)).toBe(false);
+    expect(isTeamCacheStale(undefined, 'cached-anything')).toBe(false);
+  });
+
+  it('spec.team set, no cached slug → STALE (R17 widening: catches CI case)', () => {
+    // Falsifier: reverting to `!!cachedSlug && …` makes this false and
+    // the CI-only-VERCEL_TEAM_ID case skips re-resolution → cross-team deploy.
+    expect(isTeamCacheStale('team-b', undefined)).toBe(true);
+  });
+
+  it('spec.team set, cached slug matches → not stale (fast path)', () => {
+    expect(isTeamCacheStale('team-a', 'team-a')).toBe(false);
+  });
+
+  it('spec.team set, cached slug differs → stale (user changed binding)', () => {
+    expect(isTeamCacheStale('team-b', 'team-a')).toBe(true);
   });
 });
 

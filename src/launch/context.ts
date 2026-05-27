@@ -56,7 +56,7 @@ const writeLocks = new Map<string, Promise<void>>();
  */
 export async function writeNeonLaunchEnv(
   repoRoot: string,
-  updates: Record<string, string>,
+  updates: Record<string, string | null>,
 ): Promise<void> {
   // `envfile`'s parser strips quotes (`.replace(/['"]+/g, '')`) and its
   // stringify does no escaping, so persisted values must be quote-free
@@ -64,7 +64,9 @@ export async function writeNeonLaunchEnv(
   // resolved Vercel ids and project names; reject anything that won't
   // survive the cycle. A new persisted key with a richer alphabet
   // should switch to a properly-escaping dotenv lib before lifting this.
+  // `null` is a delete sentinel (drops the key from the persisted file).
   for (const [k, v] of Object.entries(updates)) {
+    if (v === null) continue;
     if (/['"\n\r]/.test(v)) {
       throw new Error(
         `[neon launch] Internal: refusing to persist ${k} to .neon-launch.env — value contains quote / newline (envfile would round-trip lossily). Sanitize at the call site.`,
@@ -75,7 +77,12 @@ export async function writeNeonLaunchEnv(
   const prev = writeLocks.get(path) ?? Promise.resolve();
   const next = prev.then(() => {
     const existing = readNeonLaunchEnv(repoRoot);
-    const merged = { ...existing, ...updates };
+    const merged: Record<string, string> = { ...existing };
+    for (const [k, v] of Object.entries(updates)) {
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+      if (v === null) delete merged[k];
+      else merged[k] = v;
+    }
     const body = stringifyEnvFile(merged);
     // randomUUID for collision-proof tmp names — process.pid + Date.now()
     // can collide across same-tick concurrent calls in the same process.
@@ -148,6 +155,11 @@ export function resolveGitBranch(opts: {
       cwd: opts.cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      // Bound the subprocess so a network-mount, fsmonitor hang, or
+      // borked /usr/bin/git can't deadlock plan-time. 5s is comfortably
+      // above the local-fs p99 (single-digit ms) while still catching
+      // a wedge fast enough for the user to notice and ctrl-C.
+      timeout: 5_000,
     }).trim();
   } catch {
     // Not a git repo, or git not on PATH. Warn loudly: spec callbacks

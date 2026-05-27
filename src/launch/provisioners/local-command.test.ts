@@ -62,7 +62,10 @@ describe('startLocalCommand — onExit readiness', () => {
       resolvedEnv: {},
       stdioMode: 'prefixed',
     });
-    await expect(handle.ready).rejects.toThrow(/code 7/);
+    // FQN must be in the message so a multi-resource failure points
+    // at the right command. Falsifier: dropping `'${resourceFqn}'` in
+    // awaitOnExit would still satisfy /code 7/ but lose the FQN signal.
+    await expect(handle.ready).rejects.toThrow(/one-shot-fail.*code 7/);
   });
 });
 
@@ -273,6 +276,32 @@ describe('provisionLocalCommandNode — post-readiness-exit detection', () => {
     ).rejects.toThrow(
       /local-command.*matches-then-dies.*exited.*immediately after readiness fired/,
     );
+  });
+
+  it('refuses to spawn when shutdown is already in flight (race fix)', async () => {
+    // If SIGINT arrives while we're waiting on a dependency, the
+    // shutdown handler has already iterated liveLocalCommands and
+    // moved on. Spawning now would leak the child — gracefulShutdown
+    // won't see it. The fix: refuse at the top of the provisioner.
+    const spec = {
+      command: `node -e "console.log('READY'); setTimeout(() => {}, 60_000);"`,
+      readiness: { logMatch: /READY/ },
+    };
+    const node = planNodeFor(spec, 'race-victim');
+    const live: any[] = [];
+    const runtime = fakeRuntime();
+    runtime.shuttingDown.value = true;
+    await expect(
+      provisionLocalCommandNode({
+        runtime,
+        node,
+        cwd: process.cwd(),
+        stdioMode: 'prefixed',
+        liveLocalCommands: live,
+      }),
+    ).rejects.toThrow(/shutdown in flight/);
+    // Critical: nothing pushed into the live list — we never spawned.
+    expect(live).toHaveLength(0);
   });
 
   it('onExit:0 + clean exit → no throw (one-shot semantics preserved)', async () => {

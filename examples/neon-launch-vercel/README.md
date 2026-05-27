@@ -68,7 +68,7 @@ Prerequisites:
 
 4. **A Vercel project** (only for `--preview` / `--prod`). Create one at <https://vercel.com/new>, then **edit the `vercelProject` constant in `neon.ts`** (currently `'CHANGE-ME-IN-NEON-TS'`) to match its name. `VERCEL_PROJECT_ID` is a _cache_ of the resolved id, not a bypass — the launcher still reads `vercelProject` and validates it against the cache before skipping the API lookup.
 
-Then:
+Then, from the scaffolded `neon-launch-demo` directory (the cwd where you ran `cp neon.ts .` above) — NOT from the original `examples/neon-launch-vercel` checkout, whose `file:../../dist` path only resolves inside the neonctl repo:
 
 ```bash
 npm install                    # picks up neonctl from `file:../../dist` (local build output)

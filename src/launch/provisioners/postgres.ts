@@ -379,7 +379,8 @@ export async function provisionPostgres(opts: {
       throw new LaunchError(
         [
           `[neon launch] Branch '${spec.name}' is archived.`,
-          `Restore it first: \`neon branches restore ${spec.name} --project-id ${projectId}\``,
+          `Archived branches auto-restore when first accessed; if you'd rather skip the wait,`,
+          `restore via the console at https://console.neon.tech/app/projects/${projectId}/branches`,
           `or rename it in your neon.ts so the launcher creates a fresh one.`,
         ].join('\n'),
         ExitCode.CONFIG_ERROR,

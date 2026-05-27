@@ -565,13 +565,19 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
     await foregroundPhase(runtime, liveLocalCommands);
   } finally {
     // Match the handlers' lifecycle to this invocation so library-mode
-    // callers don't accumulate one handler per runLaunch. Also reset
-    // the CLI shutdown latch so a second `runLaunch` invocation in
-    // library mode doesn't see a stale "shutting down" flag.
+    // callers don't accumulate one handler per runLaunch.
     process.off('SIGINT', onSigint);
     process.off('SIGTERM', onSigterm);
     process.off('SIGHUP', onSighup);
-    resetCliShutdownInFlight();
+    // Reset the CLI shutdown latch ONLY when this invocation didn't
+    // initiate the shutdown. Resetting unconditionally here defeats
+    // the latch's purpose: the rejected promise from our killed
+    // children reaches commands/launch.ts BEFORE the signal handler
+    // exits the process, and the CLI catch reads `isCliShutdownInFlight()`
+    // — if we've already reset it, the catch races the handler with
+    // its own closeAnalytics+process.exit and the wrong exit code wins.
+    // Library mode still gets a clean reset on normal completion.
+    if (!runtime.shuttingDown.value) resetCliShutdownInFlight();
   }
 }
 
@@ -835,6 +841,16 @@ export async function provisionLocalCommandNode(args: {
   liveLocalCommands: LocalCommandHandle[];
 }): Promise<void> {
   const spec = args.node.spec as LocalCommandSpec;
+  // Spawn-after-signal race: if SIGINT arrived while we were waiting
+  // on dependencies, the shutdown handler already iterated
+  // liveLocalCommands and walked away. Spawning now would leak the
+  // child — gracefulShutdown won't see it. Refuse to spawn instead.
+  if (args.runtime.shuttingDown.value) {
+    throw new LaunchError(
+      `local-command '${args.node.name}': shutdown in flight; refusing to spawn`,
+      ExitCode.SIGINT,
+    );
+  }
   const resolvedEnv = await resolveEnv(args.runtime, spec.env);
   const handle = startLocalCommand({
     resourceFqn: args.node.name,
@@ -851,10 +867,14 @@ export async function provisionLocalCommandNode(args: {
   try {
     await handle.ready;
   } catch (err) {
-    await handle.kill();
+    // Bounded SIGTERM→SIGKILL teardown instead of naked kill(): a
+    // SIGTERM-trapping child's in-handle 5s SIGKILL escalation timer
+    // would be killed by the parent's process.exit (after at most ~1.5s
+    // analytics flush) BEFORE escalating — orphaning the grandchild.
+    // gracefulShutdown caps at 2s and force-SIGKILLs survivors directly.
+    await gracefulShutdown([handle]);
     // Splice the dead handle so the stage-level catch + later teardowns
-    // don't iterate over already-killed entries (idempotent today, but
-    // avoids a landmine if kill() ever grows side effects).
+    // don't iterate over already-killed entries.
     const idx = args.liveLocalCommands.indexOf(handle);
     if (idx >= 0) args.liveLocalCommands.splice(idx, 1);
     throw err;

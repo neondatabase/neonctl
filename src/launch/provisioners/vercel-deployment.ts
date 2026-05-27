@@ -79,6 +79,27 @@ export function wrapTeam(path: string, ctx: VercelClientCtx): string {
   return `${path}${sep}teamId=${encodeURIComponent(ctx.teamId)}`;
 }
 
+/**
+ * Is the cached VERCEL_TEAM_ID stale given the current `spec.team`?
+ *
+ * Stale when the user has a slug-based binding (`spec.team` set) and
+ * either no cached slug was recorded (R17 widening — covers the
+ * CI-only-VERCEL_TEAM_ID case) OR the cached slug doesn't match
+ * the current spec. In both cases the cached id may belong to a
+ * different team and re-resolution via the slug is required.
+ *
+ * R17 widened the condition from `!!cachedSlug && cachedSlug !== specTeam`
+ * to `!!specTeam && cachedSlug !== specTeam`. Falsifier: reverting the
+ * widening makes the CI case (env-only VERCEL_TEAM_ID, no cached slug
+ * yet) skip the re-resolution and silently deploy to the wrong team.
+ */
+export function isTeamCacheStale(
+  specTeam: string | undefined,
+  cachedTeamSlug: string | undefined,
+): boolean {
+  return !!specTeam && cachedTeamSlug !== specTeam;
+}
+
 const VERCEL_RETRY_ATTEMPTS = 3;
 const VERCEL_BASE_DELAY_MS = 500;
 
@@ -382,9 +403,18 @@ export async function createDeployment(opts: {
   const deploymentOpts = {
     name: opts.projectName,
     target: opts.production ? 'production' : undefined,
-    gitMetadata: commitSha
-      ? { commitRef: opts.gitBranch, commitSha }
-      : undefined,
+    // Both commitRef and commitSha are independently optional in the
+    // Vercel GitMetadata type (node_modules/@vercel/client/dist/types.d.ts:152).
+    // Send whichever we have so the dashboard at least labels the branch
+    // when the SHA is unavailable (e.g. an explicit --branch flag inside
+    // a non-git working directory, or a shallow clone with no HEAD ref).
+    gitMetadata:
+      opts.gitBranch || commitSha
+        ? {
+            ...(opts.gitBranch ? { commitRef: opts.gitBranch } : {}),
+            ...(commitSha ? { commitSha } : {}),
+          }
+        : undefined,
   };
 
   // Terminal-event handling:
@@ -608,8 +638,7 @@ export async function provisionVercelDeployment(opts: {
   // chain hands us teamId=team_a in ctx. Without this widened check
   // (R16 required `!!opts.cachedTeamSlug` so missing slug was a no-op),
   // we'd silently deploy to team_a instead of resolving 'b-slug'.
-  const staleTeamCache =
-    !!opts.spec.team && opts.cachedTeamSlug !== opts.spec.team;
+  const staleTeamCache = isTeamCacheStale(opts.spec.team, opts.cachedTeamSlug);
   let teamId =
     opts.spec.teamId ?? (staleTeamCache ? undefined : opts.ctx.teamId);
   if (!teamId && opts.spec.team) {
@@ -647,13 +676,18 @@ export async function provisionVercelDeployment(opts: {
 
   // 3. Persist resolved ids/names so the next run can skip the lookup.
   // VERCEL_TEAM_SLUG is recorded so the next run can detect a
-  // spec.team change and invalidate the stale VERCEL_TEAM_ID.
-  const persist: Record<string, string> = {
+  // spec.team change and invalidate the stale VERCEL_TEAM_ID. When the
+  // user pivots from `spec.team` to `spec.teamId` (no slug), we MUST
+  // clear the stale slug — otherwise a future flip back to `spec.team`
+  // would match the cached slug and reuse a teamId that belongs to a
+  // different team. Falsifier: drop the `: null` branch and the
+  // VERCEL_TEAM_SLUG/VERCEL_TEAM_ID pairing aliases across runs.
+  const persist: Record<string, string | null> = {
     VERCEL_PROJECT_ID: project.id,
     VERCEL_PROJECT_NAME: project.name,
+    VERCEL_TEAM_SLUG: opts.spec.team ?? null,
   };
   if (teamId) persist.VERCEL_TEAM_ID = teamId;
-  if (opts.spec.team) persist.VERCEL_TEAM_SLUG = opts.spec.team;
   await writeNeonLaunchEnv(opts.repoRoot, persist);
 
   // 4. Env-var upsert.

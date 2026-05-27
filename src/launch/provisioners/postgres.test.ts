@@ -150,6 +150,38 @@ describe('provisionPostgres — archived branch', () => {
     expect(api.getProjectBranch).not.toHaveBeenCalled();
     expect(api.createProjectBranch).not.toHaveBeenCalled();
   });
+
+  it('does NOT suggest `neon branches restore` (that command requires a <source> positional and is for PITR, not archive recovery)', async () => {
+    // Falsifier: the prior message named `neon branches restore <name>
+    // --project-id <id>` — a command that yargs rejects because
+    // restore's usage is `<target-id|name> <source>[@(timestamp|lsn)]`.
+    // Pinning this so a future "helpful" rewrite doesn't reintroduce
+    // the non-runnable command.
+    const api = makeApi({
+      listings: [
+        [
+          {
+            id: 'br_archived',
+            name: 'main',
+            current_state: 'archived',
+            default: true,
+          },
+        ],
+      ],
+    });
+    await expect(
+      provisionPostgres({
+        api: api as any,
+        projectId: 'prj_1',
+        spec: { name: 'main' },
+        resourceFqn: 'db',
+      }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        message: expect.not.stringMatching(/neon branches restore/),
+      }),
+    );
+  });
 });
 
 describe('provisionPostgres — concurrent-create race', () => {

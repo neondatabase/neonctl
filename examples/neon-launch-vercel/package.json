@@ -6,11 +6,6 @@
   "engines": {
     "node": ">=22"
   },
-  "scripts": {
-    "launch": "neonctl launch",
-    "launch:preview": "neonctl launch --preview",
-    "launch:prod": "neonctl launch --prod"
-  },
   "devDependencies": {
     "neonctl": "file:../../dist"
   }

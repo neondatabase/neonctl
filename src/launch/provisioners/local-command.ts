@@ -127,6 +127,7 @@ function awaitOnExit(
   child: ChildProcess,
   expectedCode: number,
   budgetMs: number,
+  resourceFqn: string,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -136,7 +137,7 @@ function awaitOnExit(
         else
           reject(
             new Error(
-              `local-command exited with code ${code} (expected ${expectedCode}).`,
+              `local-command '${resourceFqn}' exited with code ${code} (expected ${expectedCode}).`,
             ),
           );
       });
@@ -385,6 +386,16 @@ export function startLocalCommand(opts: {
       stderrTail = lines.pop() ?? '';
       for (const line of lines) pumpLine(line);
     });
+    // Node Readable streams emit 'error' on FD-level failures (EPIPE
+    // during a partial read, etc.). With no listener attached, Node
+    // would surface it as an uncaught exception and crash the parent.
+    // Log instead so the launcher exits via its own error paths.
+    child.stdout.on('error', (err: Error) => {
+      log.info(`[${resourceFqn}] stdout stream error: ${err.message}`);
+    });
+    child.stderr.on('error', (err: Error) => {
+      log.info(`[${resourceFqn}] stderr stream error: ${err.message}`);
+    });
     // Flush any final un-newlined fragment when the streams close.
     // Without this, a child that does `process.stdout.write('READY')`
     // and exits drops the last line — logMatch readiness would never
@@ -443,7 +454,7 @@ export function startLocalCommand(opts: {
     // Plan-time invariant rejects undefined-readiness on a command with deps.
     ready = Promise.resolve();
   } else {
-    ready = buildReadiness(spec.readiness, child, subscribeLines);
+    ready = buildReadiness(spec.readiness, child, subscribeLines, resourceFqn);
   }
 
   // SIGTERM → SIGKILL escalation. Without this, a child that traps
@@ -525,9 +536,15 @@ function buildReadiness(
   readiness: LocalCommandReadiness,
   child: ChildProcess,
   subscribeLines: (cb: (line: string) => void) => () => void,
+  resourceFqn: string,
 ): Promise<void> {
   if ('onExit' in readiness) {
-    return awaitOnExit(child, readiness.onExit, DEFAULT_ON_EXIT_BUDGET_MS);
+    return awaitOnExit(
+      child,
+      readiness.onExit,
+      DEFAULT_ON_EXIT_BUDGET_MS,
+      resourceFqn,
+    );
   }
   if ('portListening' in readiness) {
     return awaitPortListening(
