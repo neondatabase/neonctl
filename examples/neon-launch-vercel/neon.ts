@@ -24,6 +24,12 @@ import {
   vercelDeployment,
 } from 'neonctl/config';
 
+// Neon branch names accept [a-z0-9_-] but not '/' or other separators
+// most git branches contain (`feature/foo`, `dependabot/npm_and_yarn/...`).
+// Slugify on the way in so the launcher doesn't 4xx on a feature branch.
+const slugifyBranch = (b: string) =>
+  b.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'main';
+
 export default stack({
   spec: (_, { gitBranch, flags }) => {
     const db = postgres({
@@ -31,7 +37,7 @@ export default stack({
         // Per-branch Neon branch named after the git branch — the launcher
         // reuses it across runs, or forks from the project's default
         // branch on first run.
-        name: gitBranch || 'main',
+        name: slugifyBranch(gitBranch),
         compute: { minCu: 0.25, maxCu: 1 },
       }),
     });

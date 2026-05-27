@@ -8,6 +8,7 @@
  *   3. Deps-in-tree (every dependsOn value is in the registry)
  *   4. No cycles (Kahn topo-sort)
  *   5. localCommand with dependents must define `readiness`
+ *   6. Preview vercel-deployment requires non-empty ctx.gitBranch
  *
  * Cycle detection runs before the readiness check so users in a cyclic
  * graph see the more fundamental error first.
@@ -317,6 +318,40 @@ function enforceDepsInTree(registry: Map<string, PlanNode>): void {
  * dependents; here we enforce that it's required when other resources
  * depend on this command.
  */
+/**
+ * When the user runs `--preview` (vercelDeployment with `production: false`)
+ * the launcher passes `ctx.gitBranch` to Vercel as the env-var scoping key
+ * and as `gitMetadata.commitRef`. An empty `gitBranch` (non-git directory,
+ * detached HEAD with no `--branch` flag, etc.) makes Vercel 400 with a
+ * deep error message. Catch it at plan time with launcher-level guidance.
+ */
+function enforceGitBranchForPreviewDeploys(
+  registry: Map<string, PlanNode>,
+  ctx: LaunchContext,
+): void {
+  if (ctx.gitBranch) return;
+  for (const node of registry.values()) {
+    if (node.resource.__kind !== 'vercel-deployment') continue;
+    const spec = node.spec as { production?: boolean };
+    if (spec.production === true) continue;
+    throw new LaunchError(
+      [
+        `[neon launch] vercelDeployment '${node.name}' is a preview deploy`,
+        `(production:false / default) but ctx.gitBranch is empty. Vercel`,
+        `requires a non-empty branch for preview scoping; without it`,
+        `the env-var upsert + deployment trigger will fail with a 400.`,
+        '',
+        `Pass --branch <name> on the command line, or run from a git`,
+        `repo where the current branch can be detected automatically.`,
+        '',
+        `In GitHub Actions on pull_request events, the checkout is`,
+        `detached so you need --branch "$\{{ github.head_ref }}".`,
+      ].join('\n'),
+      ExitCode.CONFIG_ERROR,
+    );
+  }
+}
+
 function enforceLocalCommandReadiness(registry: Map<string, PlanNode>): void {
   const dependedOn = new Set<string>();
   for (const node of registry.values()) {
@@ -454,6 +489,22 @@ export async function buildPlan(
     );
   }
 
+  // Root stack with `dependsOn` is a footgun — the walker passes `{}` as
+  // the root spec's deps record, so a callback that destructures
+  // `({ shared }) => …` crashes with "Cannot read properties of
+  // undefined". Reject explicitly at plan time.
+  if (Object.keys(def.__dependsOn).length > 0) {
+    throw new LaunchError(
+      [
+        `[neon launch] The root stack cannot have \`dependsOn\`.`,
+        `Move the dependency into the resources returned by the root spec`,
+        `(each resource declares its own \`dependsOn\` independently), or`,
+        `wrap your stack in a function and inject deps that way.`,
+      ].join('\n'),
+      ExitCode.CONFIG_ERROR,
+    );
+  }
+
   // Walk the tree. Dup-key check fires during the walk.
   const registry = walkTree(def, ctx);
 
@@ -472,6 +523,7 @@ export async function buildPlan(
   enforceDepsInTree(registry);
   const order = topoOrder(registry);
   enforceLocalCommandReadiness(registry);
+  enforceGitBranchForPreviewDeploys(registry, ctx);
 
   return { registry, order, ctx };
 }

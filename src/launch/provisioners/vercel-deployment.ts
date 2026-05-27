@@ -13,7 +13,7 @@ import { execSync } from 'node:child_process';
 import { log } from '../../log.js';
 import type { VercelDeploymentSpec } from '../config.js';
 import { writeNeonLaunchEnv } from '../context.js';
-import { vercelTokenMissingMessage } from '../errors.js';
+import { ExitCode, LaunchError, vercelTokenMissingMessage } from '../errors.js';
 
 // =============================================================================
 // Endpoint versions (locked, do not change without re-checking)
@@ -73,6 +73,13 @@ function wrapTeam(path: string, ctx: VercelClientCtx): string {
   return `${path}${sep}teamId=${encodeURIComponent(ctx.teamId)}`;
 }
 
+const VERCEL_RETRY_ATTEMPTS = 3;
+const VERCEL_BASE_DELAY_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function vercelFetch<T>(
   path: string,
   ctx: VercelClientCtx,
@@ -82,14 +89,32 @@ async function vercelFetch<T>(
   const headers = new Headers(init?.headers);
   headers.set('Authorization', `Bearer ${ctx.token}`);
   headers.set('Content-Type', 'application/json');
-  const res = await fetch(url, { ...init, headers });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(
-      `[neon launch] Vercel ${init?.method ?? 'GET'} ${path} returned ${res.status}: ${body}`,
+  let attempt = 0;
+  while (true) {
+    const res = await fetch(url, { ...init, headers });
+    if (res.ok) return (await res.json()) as T;
+    // Retry on 429 (honor Retry-After if present) and 5xx. Non-idempotent
+    // POSTs are retried too: env-upsert is idempotent server-side (the
+    // `upsert=true` query param), project/team lookups are GET.
+    const transient =
+      res.status === 429 || (res.status >= 500 && res.status < 600);
+    attempt += 1;
+    if (!transient || attempt >= VERCEL_RETRY_ATTEMPTS) {
+      const body = await res.text();
+      throw new Error(
+        `[neon launch] Vercel ${init?.method ?? 'GET'} ${path} returned ${res.status}: ${body}`,
+      );
+    }
+    const retryAfter = Number(res.headers.get('Retry-After'));
+    const delay =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1_000
+        : VERCEL_BASE_DELAY_MS * 2 ** (attempt - 1);
+    log.info(
+      `[vercel] retrying ${init?.method ?? 'GET'} ${path} after ${res.status} (attempt ${attempt}/${VERCEL_RETRY_ATTEMPTS - 1}, ${delay}ms)`,
     );
+    await sleep(delay);
   }
-  return (await res.json()) as T;
 }
 
 // =============================================================================
@@ -175,6 +200,10 @@ function gitHeadSha(cwd: string): string | undefined {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      // Timeout so a hung git (LFS waiting on creds, FS issue) doesn't
+      // block the provisioner indefinitely. Missing the commit SHA
+      // just drops the `gitMetadata` annotation on the Vercel deploy.
+      timeout: 5_000,
     }).trim();
   } catch {
     return undefined;
@@ -231,24 +260,47 @@ export async function createDeployment(opts: {
 
   // The client iterator emits 'ready' BEFORE 'alias-assigned'. At 'ready'
   // the deployment is live but `payload.url` is the immutable per-deploy
-  // <id>.vercel.app host and aliases haven't been wired — so returning
-  // there gives the wrong URL for prod deploys (the user expects the
-  // production domain). 'alias-assigned' is the actual terminal success.
-  // 'checks-v2-failed' is a terminal yield-and-return failure that would
-  // otherwise look like "stream ended" with no diagnostic.
+  // <id>.vercel.app host and aliases haven't been wired.
+  //   - PROD: wait for 'alias-assigned' so we return the canonical
+  //     production domain (the user expects vercel.app or their custom
+  //     domain, not <id>.vercel.app).
+  //   - PREVIEW: 'alias-assigned' may NEVER fire — git-connected
+  //     branch-aliased URLs are a property of git-connected projects;
+  //     file-upload deploys against non-git-connected projects have no
+  //     alias to assign. Resolve at 'ready' with the immutable URL,
+  //     which IS the correct URL for that case.
+  // 'checks-v2-failed' is a terminal yield-and-return failure.
+  // Overall timeout guards against builds that never error and never
+  // emit a terminal event (rare but observed; reviewer flagged it).
+  const DEPLOY_TIMEOUT_MS = 15 * 60 * 1_000;
+  const deadline = Date.now() + DEPLOY_TIMEOUT_MS;
   let aliasedUrl: string | undefined;
-  for await (const event of vercelCreateDeployment(
+  const iterator = vercelCreateDeployment(
     clientOpts as Parameters<typeof vercelCreateDeployment>[0],
     deploymentOpts as Parameters<typeof vercelCreateDeployment>[1],
-  )) {
+  );
+  for await (const event of iterator) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `[neon launch] Vercel deployment exceeded ${DEPLOY_TIMEOUT_MS / 60_000}min timeout (last status: ${status ?? 'unknown'}).`,
+      );
+    }
     const payload = event.payload as {
       url?: string;
       alias?: string[];
       readyState?: string;
+      // Vercel error shapes vary: `deploymentUpdate.error.message` (poll
+      // path), `deploymentUpdate.aliasError.message` (alias path), and
+      // `deploymentUpdate.errorMessage` (top-level on failed deploys).
+      message?: string;
       errorMessage?: string;
     };
     if (payload.url) url = `https://${payload.url}`;
     if (payload.readyState) status = payload.readyState;
+    if (event.type === 'ready' && !opts.production) {
+      // Preview: the per-deploy URL is what the user gets; resolve here.
+      return { url: url ?? '', status: 'READY' };
+    }
     if (event.type === 'alias-assigned') {
       // Prefer the canonical alias (production domain or branch alias)
       // when present; fall back to the per-deploy URL.
@@ -264,7 +316,9 @@ export async function createDeployment(opts: {
       const msg =
         event.payload instanceof Error
           ? event.payload.message
-          : (payload.errorMessage ?? JSON.stringify(event.payload));
+          : (payload.message ??
+            payload.errorMessage ??
+            JSON.stringify(event.payload));
       throw new Error(`[neon launch] Vercel deployment ${event.type}: ${msg}`);
     }
   }
@@ -299,9 +353,17 @@ export async function provisionVercelDeployment(opts: {
   gitBranch: string;
   repoRoot: string;
   cwd: string;
+  /**
+   * Resolved project ids+names from a previous run (process.env or
+   * .neon-launch.env). When `spec.project` matches the cached id or
+   * name, we skip the `/v9/projects/{idOrName}` lookup — saves a Vercel
+   * API round-trip on every subsequent run.
+   */
+  cachedProjectId?: string;
+  cachedProjectName?: string;
 }): Promise<{ url: string }> {
   if (!opts.ctx.token) {
-    throw new Error(vercelTokenMissingMessage());
+    throw new LaunchError(vercelTokenMissingMessage(), ExitCode.AUTH_MISSING);
   }
 
   // 1. Team slug resolution + persistence.
@@ -315,15 +377,33 @@ export async function provisionVercelDeployment(opts: {
 
   const ctx: VercelClientCtx = { token: opts.ctx.token, teamId };
 
-  // 2. Project id + name resolution (spec.project may be an id or a name —
-  // the Vercel deployment endpoint requires the NAME).
-  log.info(`[${opts.resourceFqn}] resolving Vercel project…`);
-  const project = await resolveProject(opts.spec.project, ctx);
+  // 2. Project id + name resolution. spec.project may be an id or a name;
+  // the deployment endpoint requires the NAME, env-upsert requires the ID.
+  // Skip the lookup if a previous run cached both AND spec.project still
+  // matches one of them.
+  let project: { id: string; name: string };
+  if (
+    opts.cachedProjectId &&
+    opts.cachedProjectName &&
+    (opts.spec.project === opts.cachedProjectId ||
+      opts.spec.project === opts.cachedProjectName)
+  ) {
+    project = { id: opts.cachedProjectId, name: opts.cachedProjectName };
+    log.info(
+      `[${opts.resourceFqn}] using cached Vercel project ${project.name} (${project.id}).`,
+    );
+  } else {
+    log.info(`[${opts.resourceFqn}] resolving Vercel project…`);
+    project = await resolveProject(opts.spec.project, ctx);
+  }
 
-  // 3. Persist resolved ids.
-  const persist: Record<string, string> = { VERCEL_PROJECT_ID: project.id };
+  // 3. Persist resolved ids/names so the next run can skip the lookup.
+  const persist: Record<string, string> = {
+    VERCEL_PROJECT_ID: project.id,
+    VERCEL_PROJECT_NAME: project.name,
+  };
   if (teamId) persist.VERCEL_TEAM_ID = teamId;
-  writeNeonLaunchEnv(opts.repoRoot, persist);
+  await writeNeonLaunchEnv(opts.repoRoot, persist);
 
   // 4. Env-var upsert.
   const production = opts.spec.production === true;

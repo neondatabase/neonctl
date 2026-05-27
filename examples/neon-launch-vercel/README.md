@@ -10,13 +10,15 @@ The interesting file is [`neon.ts`](./neon.ts). It declares three resources:
 
 Two unknown CLI flags drive the topology:
 
-| Invocation              | What it provisions                                                               |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| `neon launch`           | `db` → `migrate` → `dev`. Foreground until you Ctrl-C.                           |
-| `neon launch --preview` | `db` → `migrate` → a Vercel **preview** deploy scoped to the current git branch. |
-| `neon launch --prod`    | `db` → `migrate` → a Vercel **production** deploy.                               |
+| Invocation              | What it provisions                                                                                                                 |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `neon launch`           | `db` → `migrate` → `dev`. Foreground until you Ctrl-C.                                                                             |
+| `neon launch --preview` | `db` → `migrate` → a Vercel **preview** deployment. Env vars upserted with `target: ['preview']` scoped to the current git branch. |
+| `neon launch --prod`    | `db` → `migrate` → a Vercel **production** deployment. Env vars upserted with `target: ['production']`.                            |
 
 `migrate` runs in every flow so the Neon branch is at the right schema before any code reads it (Vercel deploys against an unmigrated branch would crash on first request).
+
+The deploy URLs returned are the deployment's own immutable `<id>.vercel.app` host (production deploys may have their canonical custom domain alias auto-assigned). The Vercel dashboard's "per-branch preview" aliases (`<project>-git-<branch>.vercel.app`) are a property of **git-connected** Vercel projects; this example uses Vercel's file-upload deployment API so those aliases won't appear unless you've also wired your repo to the Vercel project on the dashboard side.
 
 Branch policy lives in your `neon.ts`, not in flags the CLI invents.
 
@@ -62,5 +64,7 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           # VERCEL_TEAM_ID:  ${{ secrets.VERCEL_TEAM_ID }}  # only for team projects
 ```
+
+`neonctl` must be a `devDependency` in your repo so `npx neonctl` resolves under `node_modules/.bin`. If it isn't, swap `npx neonctl` for `npx neonctl@latest` (slower per-job cold start, but no install required).
 
 The detached-HEAD `pull_request` checkout requires `--branch "${{ github.head_ref }}"`; the launcher reads the branch from there.

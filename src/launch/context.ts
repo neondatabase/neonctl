@@ -13,6 +13,7 @@
  * can't beat a properly-injected GH Actions secret.
  */
 import { execSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { parse as parseEnvFile, stringify as stringifyEnvFile } from 'envfile';
@@ -39,20 +40,39 @@ export function readNeonLaunchEnv(repoRoot: string): Record<string, string> {
 }
 
 /**
- * Atomically write `.neon-launch.env` (temp + rename). Merges with existing
- * values — caller passes only the keys they want to set/update.
+ * Per-path async lock so two concurrent `writeNeonLaunchEnv` calls
+ * serialize their read-merge-write. Without this, two vercel-deployment
+ * provisioners writing concurrently could both read {A=1}, merge their
+ * own keys, and have the second write clobber the first's keys.
  */
-export function writeNeonLaunchEnv(
+const writeLocks = new Map<string, Promise<void>>();
+
+/**
+ * Atomically write `.neon-launch.env` (temp + rename) and merge with
+ * existing values — caller passes only the keys they want to set/update.
+ * Serialized per file path so concurrent callers don't lose updates.
+ */
+export async function writeNeonLaunchEnv(
   repoRoot: string,
   updates: Record<string, string>,
-): void {
+): Promise<void> {
   const path = join(repoRoot, NEON_LAUNCH_ENV_FILE);
-  const existing = readNeonLaunchEnv(repoRoot);
-  const merged = { ...existing, ...updates };
-  const body = stringifyEnvFile(merged);
-  const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
-  writeFileSync(tmp, body, 'utf8');
-  renameSync(tmp, path);
+  const prev = writeLocks.get(path) ?? Promise.resolve();
+  const next = prev.then(() => {
+    const existing = readNeonLaunchEnv(repoRoot);
+    const merged = { ...existing, ...updates };
+    const body = stringifyEnvFile(merged);
+    // randomUUID for collision-proof tmp names — process.pid + Date.now()
+    // can collide across same-tick concurrent calls in the same process.
+    const tmp = `${path}.tmp.${process.pid}.${randomUUID()}`;
+    writeFileSync(tmp, body, 'utf8');
+    renameSync(tmp, path);
+  });
+  writeLocks.set(
+    path,
+    next.catch(() => undefined),
+  );
+  return next;
 }
 
 /**
@@ -167,13 +187,26 @@ export function buildLaunchContext(opts: {
       continue;
     }
     if (typeof v === 'string') {
-      // Normalize the two boolean-string forms the parser hands us when
-      // the user writes `--prod=true` or `--prod=false` (vs. `--prod` /
+      // Normalize common boolean-string forms the parser hands us for
+      // `--prod=true` / `--prod=1` / `--prod=yes` etc. (vs. `--prod` /
       // `--no-prod`, which already arrive as proper booleans). Without
-      // this, spec callers would have to special-case both `true` and
-      // `'true'` themselves — a leaky parser-implementation detail.
-      if (v === 'true') flags[k] = true;
-      else if (v === 'false') flags[k] = false;
+      // this, spec callers would have to special-case each form — a
+      // leaky parser-implementation detail.
+      const lower = v.toLowerCase();
+      if (
+        lower === 'true' ||
+        lower === '1' ||
+        lower === 'yes' ||
+        lower === 'on'
+      )
+        flags[k] = true;
+      else if (
+        lower === 'false' ||
+        lower === '0' ||
+        lower === 'no' ||
+        lower === 'off'
+      )
+        flags[k] = false;
       else flags[k] = v;
       continue;
     }

@@ -49,7 +49,8 @@ const RECOGNIZED_FLAGS = new Set([
 ]);
 
 export const command = 'launch';
-export const describe = 'Launch the stack defined in your neon.ts';
+export const describe =
+  'Launch the stack defined in your neon.ts (requires Node 22+)';
 
 export const builder = (argv: yargs.Argv) =>
   argv

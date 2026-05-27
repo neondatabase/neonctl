@@ -32,9 +32,10 @@ import type { Ref } from './refs.js';
  *
  * The parser hands the launcher booleans for bare `--preview`, strings
  * for `--key=value`, arrays for repeated keys, and numbers for numeric
- * strings. The launcher additionally normalizes the literal strings
- * `'true'` and `'false'` to booleans, so `--prod` (bare) and
- * `--prod=true` are indistinguishable on `ctx.flags`.
+ * strings. The launcher additionally normalizes common boolean-string
+ * forms to booleans — `--prod`, `--prod=true`, `--prod=1`, `--prod=yes`,
+ * `--prod=on` all arrive as `true`; the negative counterparts arrive
+ * as `false`. Any other string passes through verbatim.
  */
 export type FlagValue = string | string[] | number | boolean;
 
@@ -211,11 +212,12 @@ export type LocalCommandSpec = {
 /**
  * Local commands don't expose outputs in v1. Use `readiness: { onExit: 0 }`
  * to gate dependents — the command's exit code itself is not available
- * as a Ref. The type is an empty object (vs. `never`, which `stack` uses)
- * so `Resource<'local-command', LocalCommandOutputs>` stays
- * object-shaped, matching the other resource kinds for consistency.
+ * as a Ref. The type is an exact empty object so TS catches accidental
+ * `deps.migrate.something` reads at compile time (vs. silently typing
+ * them as `never` which the runtime would then have to throw on).
  */
-export type LocalCommandOutputs = Record<string, never>;
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export type LocalCommandOutputs = {};
 
 // =============================================================================
 // Internal resource representation

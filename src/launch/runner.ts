@@ -361,15 +361,17 @@ export async function runLaunch(opts: LaunchRunOptions): Promise<void> {
   const stages = groupStages(plan);
   const liveLocalCommands: LocalCommandHandle[] = [];
 
-  // Register shutdown handlers BEFORE provisioning starts. Without this,
-  // a signal during a slow branch-create or Vercel deploy lets Node's
-  // default action exit immediately, leaving any local-commands
-  // spawned in an earlier stage as orphans (compounded by the
-  // detached-shell process group on Unix). We kill them explicitly,
-  // then exit with the signal's conventional code. The `interrupted`
-  // flag is also read by foregroundPhase so it can defer to the
-  // handler's exit instead of racing it with a misleading "exited with
-  // code null" error.
+  // Register shutdown handlers before STAGE 1 provisioning starts.
+  // Signals received during plan loading or auth resolution (the steps
+  // above this line) take Node's default action; that's fine because
+  // no children are spawned yet — there's nothing to leak. Signals
+  // received once provisioning is in flight kill any local-commands
+  // spawned in an earlier stage (which would otherwise become orphans,
+  // compounded by the detached-shell process group on Unix), then exit
+  // with the signal's conventional code. The `interrupted` flag is
+  // also read by foregroundPhase so it can defer to the handler's
+  // exit instead of racing it with a misleading "exited with code
+  // null" error.
   //
   // Both SIGINT (interactive Ctrl-C) and SIGTERM (process supervisors:
   // systemd, k8s, docker stop, pm2, ...) are handled. A second signal
@@ -624,6 +626,12 @@ async function provisionVercelNode(args: {
     args.neonLaunchEnv.VERCEL_TEAM_ID ??
     spec.teamId ??
     undefined;
+  // Cached project id/name from a previous run let us skip the
+  // `/v9/projects/{idOrName}` lookup. Same env > .neon-launch.env order.
+  const cachedProjectId =
+    process.env.VERCEL_PROJECT_ID ?? args.neonLaunchEnv.VERCEL_PROJECT_ID;
+  const cachedProjectName =
+    process.env.VERCEL_PROJECT_NAME ?? args.neonLaunchEnv.VERCEL_PROJECT_NAME;
   const resolvedEnv = await resolveEnv(spec.env);
   const result = await provisionVercelDeployment({
     resourceFqn: args.node.name,
@@ -633,6 +641,8 @@ async function provisionVercelNode(args: {
     gitBranch: args.gitBranch,
     repoRoot: args.repoRoot,
     cwd: args.cwd,
+    cachedProjectId,
+    cachedProjectName,
   });
   outputs.set(args.node.resource.__id, {
     kind: 'static',

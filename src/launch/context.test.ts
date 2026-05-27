@@ -39,12 +39,16 @@ describe('buildLaunchContext flag normalization', () => {
     expect(ctx({ prod: false }).flags.prod).toBe(false);
   });
 
-  it("string 'true' normalizes to boolean true", () => {
-    expect(ctx({ prod: 'true' }).flags.prod).toBe(true);
+  it("strings 'true' / '1' / 'yes' / 'on' all normalize to boolean true", () => {
+    for (const v of ['true', '1', 'yes', 'on', 'TRUE', 'Yes']) {
+      expect(ctx({ prod: v }).flags.prod).toBe(true);
+    }
   });
 
-  it("string 'false' normalizes to boolean false", () => {
-    expect(ctx({ prod: 'false' }).flags.prod).toBe(false);
+  it("strings 'false' / '0' / 'no' / 'off' all normalize to boolean false", () => {
+    for (const v of ['false', '0', 'no', 'off', 'FALSE', 'No']) {
+      expect(ctx({ prod: v }).flags.prod).toBe(false);
+    }
   });
 
   it('non-boolean strings pass through unchanged', () => {

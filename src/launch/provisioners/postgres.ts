@@ -26,7 +26,7 @@ import { isAxiosError } from 'axios';
 import { retryOnLock } from '../../api.js';
 import { log } from '../../log.js';
 import type { PostgresSpec } from '../config.js';
-import { branchQuotaMessage } from '../errors.js';
+import { ExitCode, LaunchError, branchQuotaMessage } from '../errors.js';
 
 // =============================================================================
 // Defaults
@@ -123,8 +123,9 @@ async function resolveBranchFromId(
   if (branchFrom !== undefined) {
     const match = await findBranchByName(api, projectId, branchFrom);
     if (!match) {
-      throw new Error(
+      throw new LaunchError(
         `[neon launch] branchFrom='${branchFrom}' was specified but no branch with that name exists in project ${projectId}.`,
+        ExitCode.CONFIG_ERROR,
       );
     }
     return { id: match.id, name: match.name };
@@ -132,8 +133,9 @@ async function resolveBranchFromId(
   for await (const branch of iterateBranches(api, projectId)) {
     if (branch.default) return { id: branch.id, name: branch.name };
   }
-  throw new Error(
+  throw new LaunchError(
     `[neon launch] Project ${projectId} has no default branch — cannot resolve branchFrom. Set branchFrom explicitly in your neon.ts.`,
+    ExitCode.CONFIG_ERROR,
   );
 }
 
@@ -338,12 +340,13 @@ export async function provisionPostgres(opts: {
     // Archived branches will never reach 'ready' without an explicit
     // restore. Polling would just burn the per-branch timeout.
     if (branch.current_state === 'archived') {
-      throw new Error(
+      throw new LaunchError(
         [
           `[neon launch] Branch '${spec.name}' is archived.`,
           `Restore it first: \`neon branches restore ${spec.name} --project-id ${projectId}\``,
           `or rename it in your neon.ts so the launcher creates a fresh one.`,
         ].join('\n'),
+        ExitCode.CONFIG_ERROR,
       );
     }
     // Reuse — poll if still in init/creating, otherwise attach immediately.
@@ -388,13 +391,25 @@ export async function provisionPostgres(opts: {
     } catch (err) {
       // Concurrent-create race: another launch beat us to it. Fall back to
       // listing + attaching if the branch now exists.
-      if (
-        isAxiosError(err) &&
-        err.response &&
-        err.response.status >= 400 &&
-        err.response.status < 500
-      ) {
-        const status = err.response.status;
+      // Only the "branch already exists" race surfaces as 409 or 422.
+      // 401/403 are auth (rethrow — the user sees the underlying axios
+      // message which already carries enough context). 4xx with other
+      // codes (rate-limited, validation) shouldn't trigger a fallback
+      // list+attach that would itself hit the same 4xx and obscure the
+      // original diagnostic. Quota is its own special case detected
+      // from the response body even on non-409/422 4xx.
+      const status = isAxiosError(err) ? err.response?.status : undefined;
+      const responseBody = isAxiosError(err)
+        ? (err.response?.data as { message?: string } | undefined)
+        : undefined;
+      const quotaHit = /branch.*limit|quota/i.test(responseBody?.message ?? '');
+      if (quotaHit) {
+        throw new LaunchError(
+          branchQuotaMessage({ projectId }),
+          ExitCode.AUTH_MISSING,
+        );
+      }
+      if (status === 409 || status === 422) {
         const existing = await findBranchByName(api, projectId, spec.name);
         if (existing) {
           log.info(
@@ -405,13 +420,6 @@ export async function provisionPostgres(opts: {
               ? existing
               : await pollBranchReady(api, projectId, existing.id, timeoutS);
         } else {
-          // Quota? Check the message.
-          const msg =
-            (err.response.data as { message?: string } | undefined)?.message ??
-            '';
-          if (/branch.*limit|quota/i.test(msg)) {
-            throw new Error(branchQuotaMessage({ projectId }));
-          }
           throw err;
         }
       } else {
@@ -456,8 +464,9 @@ export async function provisionPostgres(opts: {
   const role = await firstNonSystemRole(api, projectId, branch.id);
   const database = await firstDatabase(api, projectId, branch.id);
   if (!database) {
-    throw new Error(
+    throw new LaunchError(
       `[neon launch] Branch ${branch.id} has no database. Create one via \`neon databases create\` or pick a branch that has one.`,
+      ExitCode.CONFIG_ERROR,
     );
   }
 
@@ -478,13 +487,14 @@ async function firstNonSystemRole(
   // shouldn't have.
   const userRole = data.roles.find((r: Role) => !r.protected);
   if (!userRole) {
-    throw new Error(
+    throw new LaunchError(
       [
         `[neon launch] Branch ${branchId} has no user-owned role.`,
         `All roles on this branch are protected (system-managed).`,
         '',
         `Create a role via \`neon roles create --name <name>\` or via the Neon console, then re-run.`,
       ].join('\n'),
+      ExitCode.CONFIG_ERROR,
     );
   }
   return userRole.name;
