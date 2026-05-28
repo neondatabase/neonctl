@@ -1732,7 +1732,25 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
   const widths = headerCells.map((c) => c.width);
 
   let out = '';
-  if (!tuplesOnly && topt.title) out += topt.title + '\n';
+  if (!tuplesOnly && topt.title) {
+    // Centre the title above the table, matching the horizontal-path
+    // logic (and upstream `print_aligned_text` `width_total` formula).
+    // Falling through with no padding when title >= width keeps left-
+    // alignment for very wide titles — `\d <wide-named-table>` typical.
+    const overhead =
+      border === 0
+        ? widths.length
+        : border === 1
+          ? widths.length * 3 - (widths.length > 0 ? 1 : 0)
+          : widths.length * 3 + 1;
+    const widthTotal = overhead + widths.reduce((a, b) => a + b, 0);
+    const titleW = displayWidth(topt.title);
+    if (titleW >= widthTotal) {
+      out += topt.title + '\n';
+    } else {
+      out += ' '.repeat((widthTotal - titleW) >> 1) + topt.title + '\n';
+    }
+  }
   if (!tuplesOnly && (border === 2 || border === 3)) {
     out += buildRule(widths, border, glyphs, 'top') + '\n';
   }
@@ -1761,5 +1779,10 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
   if (!tuplesOnly && opts.footers) {
     for (const f of opts.footers) out += f + '\n';
   }
+  // Trailing blank line between query results, mirroring the horizontal /
+  // vertical code paths (which append `\n` via `printTableCleanup`). Empty
+  // results were previously missing this separator, which made multiple
+  // back-to-back `\d`-family queries run together.
+  if (!tuplesOnly) out += '\n';
   return out;
 };
