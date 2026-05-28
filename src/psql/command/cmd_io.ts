@@ -695,6 +695,26 @@ const formatChildWaitResult = (
 };
 
 /**
+ * Compose the `CommandComplete`-tag line upstream prints for non-tuples-
+ * producing results (DDL, DML without RETURNING, COPY). Mirrors
+ * `formatCommandTag` in `core/common.ts` — duplicated to avoid the
+ * cmd_io → common import cycle. Returns an empty string when no tag is
+ * available (e.g. `EmptyQueryResponse` carries `command = ''`).
+ */
+const formatCommandTagText = (rs: ResultSet): string => {
+  const command = (rs.command || '').trim();
+  if (command.length === 0) return '';
+  if (command === 'INSERT') {
+    // INSERT is the only tag with the legacy oid in front of rowCount.
+    return `INSERT ${String(rs.oid ?? 0)} ${String(rs.rowCount ?? 0)}`;
+  }
+  if (rs.rowCount !== null && rs.rowCount !== undefined) {
+    return `${command} ${String(rs.rowCount)}`;
+  }
+  return command;
+};
+
+/**
  * Render a `ResultSet` to the supplied writable stream using the printer
  * picked from the active `\pset format`. Upstream's `do_watch`, `do_gset`,
  * `do_gexec`, and `\i` all funnel results through the standard query
@@ -702,12 +722,34 @@ const formatChildWaitResult = (
  * honours `\pset format`. Hard-coding the aligned printer here breaks the
  * conformance harness's `psql -A` runs (which expect unaligned tuples-only
  * output for things like `\watch` polled rows).
+ *
+ * Non-tuples-producing results (CommandComplete with `fields.length === 0`,
+ * which covers DDL, DML without RETURNING, and the post-CopyDone tag for
+ * `COPY ... TO STDOUT`) are rendered as a single status line instead of
+ * the printer's `(0 rows)` empty-table block — matching `renderResultSets`
+ * in `core/common.ts`. Tuples-only (`\t`) and quiet (`--quiet`) both
+ * suppress the tag entirely.
  */
 const renderResult = async (
   settings: PsqlSettings,
   rs: ResultSet,
   out: NodeJS.WritableStream,
 ): Promise<void> => {
+  if (rs.fields.length === 0) {
+    // Mirrors `renderResultSets`'s zero-fields branch: emit the tag (e.g.
+    // `COPY 1`) unless quiet / tuples-only suppresses it. Without this
+    // branch the aligned printer renders an empty header + `(0 rows)`
+    // footer for the COPY-TO-STDOUT command complete, which doesn't
+    // match upstream (where the data already streamed via the COPY-OUT
+    // sink and the tag goes to the user's status stream, not the
+    // queryFout). The regress fixture sets QUIET=true before the
+    // COPY-OUT `\g` shape so the tag stays out of the file under test.
+    if (!settings.popt.topt.tuplesOnly && !settings.quiet) {
+      const tag = formatCommandTagText(rs);
+      if (tag.length > 0) out.write(`${tag}\n`);
+    }
+    return;
+  }
   await pickActivePrinter(settings).printQuery(rs, settings.popt, out);
 };
 

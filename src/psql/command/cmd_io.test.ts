@@ -592,16 +592,71 @@ describe('\\g', () => {
       ] as ResultSet[]);
     };
     const s = makeSettings(conn);
+    // QUIET=true mirrors the conformance harness invocation (`--quiet`);
+    // upstream's renderResultSets suppresses the `COPY 1` tag in this
+    // mode, so the file ends up with `foo\n` only — no trailing tag.
+    s.quiet = true;
     const file = tmpFile();
     const ctx = makeMockCtx('g', file, s, "COPY (SELECT 'foo') TO STDOUT");
     const r = await run(cmdG, ctx);
     expect(r.status).toBe('reset-buf');
     const written = await fs.readFile(file, 'utf8');
     expect(written).toContain('foo\n');
+    // The COPY's empty-fields ResultSet must NOT render as `(0 rows)` —
+    // upstream's renderResultSets writes the command tag instead and
+    // suppresses it entirely under --quiet. Without our renderResult
+    // zero-fields branch the printer emits the empty-table shape into
+    // the file too.
+    expect(written).not.toContain('(0 rows)');
     // Sink must be cleared after dispatch so subsequent top-level batches
     // see a clean slate (mainloop reinstalls per dispatch). Otherwise the
     // next CopyData burst would try to write to the now-closed file.
     expect(installedSink).toBeNull();
+  });
+
+  test('empty-fields ResultSet renders the command tag, not the empty table', async () => {
+    // Mirrors `renderResultSets`: DDL / DML-without-RETURNING / COPY
+    // CommandComplete arrives as `fields.length === 0` with a command
+    // tag (e.g. `INSERT 0 3`, `UPDATE 5`, `COPY 1`). Upstream emits the
+    // tag verbatim and skips the printer; we do too. Quiet mode wins,
+    // tuples-only mode wins, otherwise the tag goes to the active out.
+    const conn = makeMockConn();
+    conn.reply = () => [
+      {
+        command: 'UPDATE',
+        rowCount: 5,
+        oid: null,
+        fields: [],
+        rows: [],
+        notices: [],
+      } as ResultSet,
+    ];
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('g', '', s, 'UPDATE t SET x = 1 WHERE x = 0');
+    await run(cmdG, ctx);
+    expect(stdout()).toBe('UPDATE 5\n');
+    expect(stdout()).not.toMatch(/\(0 rows\)/);
+  });
+
+  test('empty-fields ResultSet stays silent under --quiet', async () => {
+    // Verifies the quiet branch: same UPDATE 5 result but quiet on.
+    // Upstream's renderResultSets gates the tag on `!pset.quiet`.
+    const conn = makeMockConn();
+    conn.reply = () => [
+      {
+        command: 'UPDATE',
+        rowCount: 5,
+        oid: null,
+        fields: [],
+        rows: [],
+        notices: [],
+      } as ResultSet,
+    ];
+    const s = makeSettings(conn);
+    s.quiet = true;
+    const ctx = makeMockCtx('g', '', s, 'UPDATE t SET x = 1 WHERE x = 0');
+    await run(cmdG, ctx);
+    expect(stdout()).toBe('');
   });
 });
 
