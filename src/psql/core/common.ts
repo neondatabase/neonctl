@@ -1112,6 +1112,44 @@ export const sendQuery = async (
   // AUTOCOMMIT=off.
   void implicitBeginIssued;
 
+  // Mirror upstream `SendQuery` tail (common.c lines 1217-1218):
+  //
+  //   if (!OK && pset.echo == PSQL_ECHO_ERRORS)
+  //     pg_log_info("STATEMENT:  %s", query);
+  //
+  // When ECHO=errors and the dispatch failed, emit a `STATEMENT:  <sql>`
+  // line so the user can correlate the error with the input statement.
+  // `pg_log_info` writes to stderr in upstream and strips one trailing
+  // newline before tacking its own `\n` on the message — we mirror by
+  // going through ctx.stderr and the explicit trim.
+  if (stats.hadError && ctx.settings.echo === 'errors') {
+    // Strip leading whitespace + `--`-style comments from queryBuf so the
+    // STATEMENT echo matches upstream's shape. Upstream `psqlscan.l`'s
+    // `{whitespace}` rule (which includes line comments) SUPPRESSES
+    // queryBuf appends until non-whitespace content has been collected;
+    // our scanner accumulates verbatim. The server still ignores the
+    // leading noise for `LINE N:` counting, but the STATEMENT echo
+    // re-prints the buffer as we hold it. Bring them in line by
+    // stripping here. Also strip one trailing `\n` to match
+    // `pg_log_info("STATEMENT:  %s", query)` (one-newline-strip +
+    // explicit `\n` append).
+    let stmt = sql;
+
+    while (true) {
+      const before = stmt.length;
+      // Leading whitespace including form-feed (matches psqlscan's
+      // {space} = [ \t\n\r\f]).
+      stmt = stmt.replace(/^[ \t\n\r\f]+/, '');
+      // Leading `--`-style line comment, up to (but not including) the
+      // next newline. The trailing newline is then eaten by the next
+      // whitespace pass.
+      stmt = stmt.replace(/^--[^\n\r]*/, '');
+      if (stmt.length === before) break;
+    }
+    if (stmt.endsWith('\n')) stmt = stmt.slice(0, -1);
+    ctx.stderr.write(`STATEMENT:  ${stmt}\n`);
+  }
+
   // Mirror upstream's `SetResultVariables` / `SetErrorVariables` call at the
   // tail of `SendQuery`. ROW_COUNT mirrors libpq's `PQcmdTuples` on the LAST
   // result of a `\;` batch; SQLSTATE / ERROR reset every statement; the

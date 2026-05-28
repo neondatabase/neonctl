@@ -650,6 +650,86 @@ describe('sendQuery — errors', () => {
     expect(text).not.toContain('DETAIL');
     expect(text).not.toContain('HINT');
   });
+
+  // -------------------------------------------------------------------------
+  // ECHO=errors — emit `STATEMENT:  <sql>` after a failed dispatch. Mirrors
+  // upstream `SendQuery` tail (common.c lines 1217-1218):
+  //
+  //   if (!OK && pset.echo == PSQL_ECHO_ERRORS)
+  //     pg_log_info("STATEMENT:  %s", query);
+  // -------------------------------------------------------------------------
+
+  test('ECHO=errors emits STATEMENT after a failed dispatch', async () => {
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('boom')],
+    ]);
+    const { ctx, stderr } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.echo = 'errors';
+      },
+    });
+    await sendQuery(ctx, 'SELECT bad;');
+    expect(stderr.text()).toContain('STATEMENT:  SELECT bad;');
+  });
+
+  test('ECHO=errors does NOT emit STATEMENT on success', async () => {
+    const { ctx, stderr } = buildCtxWithBuffers({
+      settingsOverride: (s) => {
+        s.echo = 'errors';
+      },
+    });
+    await sendQuery(ctx, 'SELECT 1;');
+    expect(stderr.text()).not.toMatch(/STATEMENT:/);
+  });
+
+  test('ECHO=all does NOT emit STATEMENT on failure (only ECHO=errors does)', async () => {
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('boom')],
+    ]);
+    const { ctx, stderr } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.echo = 'all';
+      },
+    });
+    await sendQuery(ctx, 'SELECT bad;');
+    expect(stderr.text()).not.toMatch(/STATEMENT:/);
+  });
+
+  test('STATEMENT strips leading whitespace + line comments from queryBuf', async () => {
+    // Mainloop's queryBuf may carry leading whitespace + `--` comments
+    // (upstream's psqlscan suppresses these from query_buf until non-
+    // whitespace content arrives; our scanner accumulates verbatim).
+    // The STATEMENT echo must match upstream's bare form anyway, so the
+    // sendQuery tail strips leading whitespace + comments before printing.
+    const noisySql = '-- leading comment\n\n  -- another\nSELECT bad;\n';
+    const canned = new Map<string, Canned>([[noisySql.trim(), new Error('x')]]);
+    const { ctx, stderr } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.echo = 'errors';
+      },
+    });
+    await sendQuery(ctx, noisySql);
+    expect(stderr.text()).toMatch(/^STATEMENT: {2}SELECT bad;$/m);
+  });
+
+  test('STATEMENT strips a single trailing newline (matching pg_log_info)', async () => {
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('boom')],
+    ]);
+    const { ctx, stderr } = buildCtxWithBuffers({
+      canned,
+      settingsOverride: (s) => {
+        s.echo = 'errors';
+      },
+    });
+    await sendQuery(ctx, 'SELECT bad;\n');
+    // Exactly one newline between `STATEMENT:  SELECT bad;` and the next
+    // stderr write — no doubled trailing newline.
+    expect(stderr.text()).toMatch(/STATEMENT: {2}SELECT bad;\n$/);
+  });
 });
 
 // ---------------------------------------------------------------------------
