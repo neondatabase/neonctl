@@ -173,12 +173,44 @@ export class PipelineSession implements Pipeline {
     this.conn.startExtendedBatch();
     const p = this.conn.enqueueSync();
     this.conn.writeRaw(Sync());
-    await p;
+    // Don't propagate a non-FATAL ErrorResponse here: upstream
+    // `\syncpipeline` is silent on stderr — the server-side error
+    // surfaces at `\endpipeline` time (see expected/psql_pipeline.out
+    // line 433 where the ParseError is printed AFTER the trailing
+    // `\endpipeline` echo, not inline with `\syncpipeline`). Stash
+    // it on `_lastError` instead so the cmd layer can render it
+    // when the pipeline drains.
+    await p.catch((err: unknown): void => {
+      if (this._lastError === null) this._lastError = err;
+    });
     // Settle any per-op promises that arrived before this Sync — Parse,
     // Bind, Describe, Close, and Execute. We don't surface their results
     // here (callers consume `results` via end()), but we do need to drain
-    // any rejections so Node doesn't see them as unhandled.
-    await Promise.allSettled(this.pending.splice(0));
+    // any rejections so Node doesn't see them as unhandled. The first
+    // rejection becomes the sticky `_lastError` if Sync itself was clean.
+    const settled = await Promise.allSettled(this.pending.splice(0));
+    for (const r of settled) {
+      if (r.status === 'rejected' && this._lastError === null) {
+        this._lastError = r.reason;
+      }
+    }
+  }
+
+  /**
+   * Sticky pipeline error captured by the final Sync inside `end()`.
+   * Non-FATAL ERROR-class diagnostics (e.g. "could not determine data
+   * type of parameter $1", "bind message supplies N parameters")
+   * arrive on the wire as `ErrorResponse` and reject the Sync op, but
+   * the pipeline session must still surface the queued ResultSets so
+   * `\endpipeline` can print them. The cmd layer reads this after
+   * `end()` resolves and renders the ERROR line via `writeQueryError`.
+   *
+   * `null` until end() finishes; thereafter holds the first non-FATAL
+   * error seen, or `null` if the pipeline drained cleanly.
+   */
+  private _lastError: unknown = null;
+  public get lastError(): unknown {
+    return this._lastError;
   }
 
   public async end(): Promise<ResultSet[]> {
@@ -209,7 +241,8 @@ export class PipelineSession implements Pipeline {
     // supported, aborting connection") must surface to the caller so
     // `\endpipeline` can render the diagnostic on stderr. Plain
     // per-op errors stay swallowed so a partial pipeline still
-    // returns its successful results.
+    // returns its successful results — but we stash them on
+    // `_lastError` so the cmd layer can print them inline.
     if (fatal !== null) {
       const sev = (fatal as { severity?: string }).severity;
       if (sev === 'FATAL') {
@@ -217,6 +250,22 @@ export class PipelineSession implements Pipeline {
         const msg =
           (fatal as { message?: string }).message ?? 'pipeline aborted';
         throw Object.assign(new Error(msg), fatal as object);
+      }
+      // Non-FATAL (typically ERROR) — keep for the cmd layer.
+      this._lastError = fatal;
+    } else {
+      // Also scan the settled per-op promises: a ParseError /
+      // BindError that arrived BEFORE the final Sync rejects its own
+      // op promise but the Sync may still resolve cleanly (the
+      // server marks subsequent ops as "Pipeline aborted, command
+      // did not run" instead of erroring). The conformance corpus
+      // expects the first ErrorResponse to surface at `\endpipeline`
+      // time, so we hunt for the first rejected per-op promise.
+      for (const r of settled) {
+        if (r.status === 'rejected') {
+          this._lastError = r.reason;
+          break;
+        }
       }
     }
     return out;

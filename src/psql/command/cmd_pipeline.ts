@@ -277,6 +277,38 @@ const errorToMessage = (err: unknown): string => {
   }
 };
 
+/**
+ * Render a pipeline-collected ConnectError to stderr in the upstream
+ * shape: a `SEVERITY:  message` line, followed by optional `DETAIL:` /
+ * `HINT:` / `CONTEXT:` lines (each on its own line). Matches the
+ * subset of `formatErrorReport`-style output the conformance corpus
+ * expects from `\endpipeline` for non-FATAL pipeline errors. We
+ * inline a minimal renderer here rather than importing the full
+ * `formatErrorReport` from `cmd_meta` because we always want the
+ * "default verbosity, no LINE/caret context" form — pipeline errors
+ * arrive after the buffered query has been reset and we don't carry
+ * the originating SQL position through `session.lastError`.
+ */
+const renderPipelineError = (err: unknown): void => {
+  if (err === null || typeof err !== 'object') {
+    writeErr(`ERROR:  ${errorToMessage(err)}\n`);
+    return;
+  }
+  const e = err as {
+    severity?: string;
+    message?: string;
+    detail?: string;
+    hint?: string;
+    where?: string;
+  };
+  const severity = e.severity ?? 'ERROR';
+  const message = e.message ?? '';
+  writeErr(`${severity}:  ${message}\n`);
+  if (e.detail) writeErr(`DETAIL:  ${e.detail}\n`);
+  if (e.hint) writeErr(`HINT:  ${e.hint}\n`);
+  if (e.where) writeErr(`CONTEXT:  ${e.where}\n`);
+};
+
 const readAllArgs = (ctx: BackslashContext): string[] => {
   const out: string[] = [];
   for (;;) {
@@ -538,6 +570,21 @@ export const cmdEndPipeline: BackslashCmdSpec = {
             process.stdout,
           );
         }
+      }
+      // Surface any sticky non-FATAL pipeline error (e.g. ParseError
+      // from `SELECT $2 \parse pipeline_1` where the server can't
+      // determine `$1`'s type, or BindError from a parameter-count
+      // mismatch). Upstream's `\endpipeline` prints these via
+      // `pg_log_error` AFTER all queued ResultSets have been rendered;
+      // the conformance corpus expects the bare `ERROR:` /
+      // `DETAIL:`-prefixed lines on stderr (no `\endpipeline: `
+      // marker). We delegate the rendering to the same writeQueryError
+      // path the simple-query code uses, so VERBOSITY / SHOW_CONTEXT
+      // are honoured uniformly.
+      const session = ps.session as PipelineSession;
+      const lastErr = session.lastError;
+      if (lastErr !== null && lastErr !== undefined) {
+        renderPipelineError(lastErr);
       }
       return { status: 'ok' };
     } catch (err) {
