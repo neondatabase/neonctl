@@ -62,7 +62,6 @@ import {
   fetchTableInfo,
   fetchTablePublications,
   fetchTableSubscriptions,
-  fetchToastOwningTable,
 } from './queries.js';
 import { applyPattern, type NamePatternResult } from './processNamePattern.js';
 
@@ -343,15 +342,20 @@ export const describeOneTableDetails = async (
   // slot is conditional on the row data, not just the relkind).
   const hasAnyFdwOptions = fdwOptionsByColumn.size > 0;
 
-  // Synthesize a printable result set: Column, Type, Collation, Nullable,
-  // Default[, Storage[, Compression], Stats target, Description][, FDW options].
-  const fields = [
-    fakeField('Column'),
-    fakeField('Type'),
-    fakeField('Collation'),
-    fakeField('Nullable'),
-    fakeField('Default'),
-  ];
+  // TOAST tables show a slimmer column listing: Column + Type only, no
+  // Collation/Nullable/Default (those are uniformly empty for the three
+  // fixed columns chunk_id/chunk_seq/chunk_data). Matches upstream's
+  // `\d <toast>` output.
+  const isToast = relkind === 't';
+
+  // Synthesize a printable result set: Column, Type[, Collation, Nullable,
+  // Default[, Storage[, Compression], Stats target, Description]][, FDW options].
+  const fields = [fakeField('Column'), fakeField('Type')];
+  if (!isToast) {
+    fields.push(fakeField('Collation'));
+    fields.push(fakeField('Nullable'));
+    fields.push(fakeField('Default'));
+  }
   if (verboseCols) {
     fields.push(fakeField('Storage'));
     if (includeCompression) fields.push(fakeField('Compression'));
@@ -381,7 +385,9 @@ export const describeOneTableDetails = async (
       // STORED but without the trailing keyword.
       dflt = dflt ? `generated always as (${dflt})` : '';
     }
-    const row: unknown[] = [colName, colType, collation ?? '', nullable, dflt];
+    const row: unknown[] = isToast
+      ? [colName, colType]
+      : [colName, colType, collation ?? '', nullable, dflt];
     if (verboseCols) {
       // Slot offsets: 7 = storage, [8 = compression if PG14+], stats, desc.
       let idx = 7;
@@ -437,8 +443,20 @@ export const describeOneTableDetails = async (
     await renderPartitionOfSection(conn, oid, verbose, out);
   }
 
-  // ----- Indexes (only for tables / matviews / partitioned tables) -----
-  if (relkind === 'r' || relkind === 'm' || relkind === 'p') {
+  // ----- Owning table (TOAST tables only — printed before Indexes).
+  //       Upstream `describeOneTableDetails` adds the owning-table footer
+  //       prior to attaching the indexes footer for `RELKIND_TOASTVALUE`.
+  if (relkind === 't') {
+    await renderToastOwningTableFooter(conn, oid, out);
+  }
+
+  // ----- Indexes (tables / matviews / partitioned tables / TOAST) -----
+  if (
+    relkind === 'r' ||
+    relkind === 'm' ||
+    relkind === 'p' ||
+    relkind === 't'
+  ) {
     await renderIndexesSection(conn, oid, out);
   }
 
@@ -527,11 +545,6 @@ export const describeOneTableDetails = async (
   //       suppress access-method noise.
   if (!hideTableam && verbose && (relkind === 'r' || relkind === 'p')) {
     renderAccessMethodFooter(relInfo, out);
-  }
-
-  // ----- Owning table (TOAST tables only) -----
-  if (relkind === 't') {
-    await renderToastOwningTableFooter(conn, oid, out);
   }
 };
 
@@ -906,14 +919,19 @@ const renderIndexesSection = async (
     const isReplIdent = String(r[10]) === 't' || r[10] === true;
     const tag = isPrimary ? 'PRIMARY KEY' : isUnique ? 'UNIQUE CONSTRAINT' : '';
     let line = `    "${idxName}"`;
+    // Strip the "CREATE [UNIQUE] INDEX ... USING " prefix to get
+    // "btree (...)" tail — used when there's no pg_constraint backing
+    // (TOAST primary indexes, plain CREATE INDEX, etc.).
+    const tail = indexdef.replace(
+      /^CREATE\s+(UNIQUE\s+)?INDEX\s+\S+\s+ON\s+\S+\s+USING\s+/i,
+      '',
+    );
     if (constrDef) {
       line += `, ${tag || 'CONSTRAINT'} ${constrDef}`;
+    } else if (isPrimary) {
+      // TOAST primary index — indisprimary set but no pg_constraint row.
+      line += ` PRIMARY KEY, ${tail}`;
     } else {
-      // Strip the "CREATE [UNIQUE] INDEX ... USING " prefix to get "btree (...)" tail.
-      const tail = indexdef.replace(
-        /^CREATE\s+(UNIQUE\s+)?INDEX\s+\S+\s+ON\s+\S+\s+USING\s+/i,
-        '',
-      );
       line += isUnique ? ` UNIQUE` : '';
       line += `, ${tail}`;
     }
@@ -1112,20 +1130,33 @@ const fetchPerColumnFdwOptionsMap = async (
 };
 
 /**
- * Render `Owning table: "schema"."name"` for a TOAST relation. Matches
- * upstream's `\d <toast>` footer.
+ * Render `Owning table: "schema.name"` for a TOAST relation. Matches
+ * upstream's `\d <toast>` footer — upstream always emits the qualified
+ * `"schema.name"` form (even for `pg_catalog` parents that would
+ * otherwise be elided by search_path), so we look up the nsp+rel pair
+ * directly rather than relying on regclass-cast text.
  */
 const renderToastOwningTableFooter = async (
   conn: Connection,
   oid: number,
   out: NodeJS.WritableStream,
 ): Promise<void> => {
-  const q = fetchToastOwningTable({ oid });
-  const rs = await conn.query(q.sql, q.params);
+  // Side-step the regclass-cast query (which honours search_path and
+  // would drop the `pg_catalog.` prefix for pg_catalog parents). Look
+  // up the parent's schema + relname directly so we can render the
+  // schema-qualified form unconditionally.
+  const sql =
+    'SELECT n.nspname, c.relname\n' +
+    'FROM pg_catalog.pg_class c\n' +
+    'JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n' +
+    `WHERE c.reltoastrelid = '${oid}'\n` +
+    'LIMIT 1;';
+  const rs = await conn.query(sql, []);
   if (rs.rows.length === 0) return;
-  const owner = cellToString(rs.rows[0][0] ?? '');
-  if (owner === '') return;
-  out.write(`Owning table: ${owner}\n`);
+  const nspname = cellToString(rs.rows[0][0] ?? '');
+  const relname = cellToString(rs.rows[0][1] ?? '');
+  if (relname === '') return;
+  out.write(`Owning table: "${nspname}.${relname}"\n`);
 };
 
 /**

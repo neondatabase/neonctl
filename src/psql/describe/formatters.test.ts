@@ -1321,7 +1321,7 @@ describe('describeOneTableDetails', () => {
       ],
       [['chunk_id', 'oid', null, 't', null, '', '']],
     );
-    const owner = mkResultSet(['relname'], [['public.foo']]);
+    const owner = mkResultSet(['nspname', 'relname'], [['public', 'foo']]);
     const empty = mkResultSet([], []);
     const conn = mkConnection([
       { match: (s) => s.includes('FROM pg_catalog.pg_attribute'), rs: cols },
@@ -1346,7 +1346,7 @@ describe('describeOneTableDetails', () => {
     );
     const text = cap.text();
     expect(text).toContain('TOAST table "pg_toast.pg_toast_12345"');
-    expect(text).toContain('Owning table: public.foo');
+    expect(text).toContain('Owning table: "public.foo"');
   });
 });
 
