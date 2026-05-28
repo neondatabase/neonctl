@@ -73,6 +73,9 @@ import {
   listLanguages,
   listLargeObjects,
   listOperatorClasses,
+  listOperatorFamilies,
+  listOpFamilyFunctions,
+  listOpFamilyOperators,
   listPartitionedTables,
   listPublications,
   listSchemas,
@@ -603,6 +606,154 @@ const cmdListOperatorClasses = (cmdName: string): BackslashCmdSpec => ({
       });
       // Type pattern accepts db.schema.name; cross-db check on 2-dot.
       const err = validatePattern(typePat, r, 2, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
+    }
+    return runDualPatternList(ctx, query, results);
+  },
+});
+
+// ---- \dAf / \dAf+ ------------------------------------------------------
+// `\dAf [AM-pattern [TYPE-pattern]]` — list operator families. Same
+// two-pattern shape as `\dAc`. Routes through `listOperatorFamilies`
+// from queries.ts.
+
+const cmdListOperatorFamilies = (cmdName: string): BackslashCmdSpec => ({
+  name: cmdName,
+  run: async (ctx) => {
+    const amPat = ctx.nextArg('normal');
+    const typePat = amPat ? ctx.nextArg('normal') : null;
+    const c = conn(ctx);
+    if (!c) return noConn(ctx);
+    const { verbose } = decodeSuffix(cmdName, 'dAf');
+    const query = listOperatorFamilies({
+      amPattern: amPat ?? undefined,
+      typePattern: typePat ?? undefined,
+      verbose,
+      serverVersion: c.serverVersion,
+    });
+    const results: NamePatternResult[] = [];
+    const curDb = currentDb(c);
+    if (amPat !== null) {
+      const r = processSQLNamePattern({
+        namevar: 'am.amname',
+        pattern: amPat,
+      });
+      const err = validatePattern(amPat, r, 0, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
+    }
+    if (typePat !== null) {
+      const r = processSQLNamePattern({
+        namevar: 't.typname',
+        schemavar: 'tn.nspname',
+        pattern: typePat,
+      });
+      const err = validatePattern(typePat, r, 2, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
+    }
+    return runDualPatternList(ctx, query, results);
+  },
+});
+
+// ---- \dAo / \dAo+ ------------------------------------------------------
+// `\dAo [AM-pattern [OPFAMILY-pattern]]` — list operators in an opfamily.
+// Routes through `listOpFamilyOperators` from queries.ts.
+
+const cmdListOpFamilyOperators = (cmdName: string): BackslashCmdSpec => ({
+  name: cmdName,
+  run: async (ctx) => {
+    const amPat = ctx.nextArg('normal');
+    const familyPat = amPat ? ctx.nextArg('normal') : null;
+    const c = conn(ctx);
+    if (!c) return noConn(ctx);
+    const { verbose } = decodeSuffix(cmdName, 'dAo');
+    const query = listOpFamilyOperators({
+      amPattern: amPat ?? undefined,
+      familyPattern: familyPat ?? undefined,
+      verbose,
+      serverVersion: c.serverVersion,
+    });
+    const results: NamePatternResult[] = [];
+    const curDb = currentDb(c);
+    if (amPat !== null) {
+      const r = processSQLNamePattern({
+        namevar: 'am.amname',
+        pattern: amPat,
+      });
+      const err = validatePattern(amPat, r, 0, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
+    }
+    if (familyPat !== null) {
+      const r = processSQLNamePattern({
+        namevar: 'of.opfname',
+        schemavar: 'nsf.nspname',
+        pattern: familyPat,
+      });
+      const err = validatePattern(familyPat, r, 2, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
+    }
+    return runDualPatternList(ctx, query, results);
+  },
+});
+
+// ---- \dAp / \dAp+ ------------------------------------------------------
+// `\dAp [AM-pattern [OPFAMILY-pattern]]` — list support functions of an
+// opfamily. Routes through `listOpFamilyFunctions` from queries.ts.
+
+const cmdListOpFamilyFunctions = (cmdName: string): BackslashCmdSpec => ({
+  name: cmdName,
+  run: async (ctx) => {
+    const amPat = ctx.nextArg('normal');
+    const familyPat = amPat ? ctx.nextArg('normal') : null;
+    const c = conn(ctx);
+    if (!c) return noConn(ctx);
+    const { verbose } = decodeSuffix(cmdName, 'dAp');
+    const query = listOpFamilyFunctions({
+      amPattern: amPat ?? undefined,
+      familyPattern: familyPat ?? undefined,
+      verbose,
+      serverVersion: c.serverVersion,
+    });
+    const results: NamePatternResult[] = [];
+    const curDb = currentDb(c);
+    if (amPat !== null) {
+      const r = processSQLNamePattern({
+        namevar: 'am.amname',
+        pattern: amPat,
+      });
+      const err = validatePattern(amPat, r, 0, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
+    }
+    if (familyPat !== null) {
+      const r = processSQLNamePattern({
+        namevar: 'of.opfname',
+        schemavar: 'nsf.nspname',
+        pattern: familyPat,
+      });
+      const err = validatePattern(familyPat, r, 2, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
         return { status: 'error' };
@@ -1321,11 +1472,17 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
   }
 
   // Access methods. `\dA[+]` is upstream; `\dAm[+]` is a Neon-friendly
-  // alias that some docs reach for. `\dAc[+]` lists operator classes.
+  // alias that some docs reach for. `\dAc[+]`, `\dAf[+]`, `\dAo[+]`,
+  // `\dAp[+]` cover the operator-class / family / family-operator /
+  // family-function families upstream's `command.c::exec_command_d`
+  // dispatches.
   for (const suffix of ['', '+']) {
     registry.register(cmdDescribeAccessMethods('dA' + suffix));
     registry.register(cmdDescribeAccessMethods('dAm' + suffix));
     registry.register(cmdListOperatorClasses('dAc' + suffix));
+    registry.register(cmdListOperatorFamilies('dAf' + suffix));
+    registry.register(cmdListOpFamilyOperators('dAo' + suffix));
+    registry.register(cmdListOpFamilyFunctions('dAp' + suffix));
   }
 
   // Types.

@@ -894,7 +894,16 @@ const renderHorizontal = (
   // `printTableCleanup()` adds a separator `\n`. Verified against
   // vanilla psql 18: `SELECT 1; SELECT 2;` emits each result followed
   // by `(1 row)\n\n` so consecutive queries are visually separated.
-  if (!tuplesOnly && topt.defaultFooter) {
+  //
+  // Footer handling mirrors `footers_with_default` (print.c lines
+  // 397-413): user footers SUPPRESS the default `(N rows)` row counter.
+  // The default is only emitted when there are no user footers AND
+  // `defaultFooter` is true. This matters for `\d` output, which
+  // attaches user footers ("Access method: ...", "Owned by: ...") and
+  // doesn't want the row counter to interleave between the data rows
+  // and the footers.
+  const hasUserFooters = !!opts.footers && opts.footers.length > 0;
+  if (!tuplesOnly && topt.defaultFooter && !hasUserFooters) {
     const n = rs.rows.length;
     out += `(${String(n)} ${n === 1 ? 'row' : 'rows'})` + newline;
   }
@@ -1318,15 +1327,29 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
       newline;
   }
 
-  // Expanded mode emits a single trailing blank line after the last
-  // record instead of the horizontal-mode `(N rows)` row counter.
-  // Verified against vanilla psql 18: `\gx` ends with a bare `\n`
-  // after the last data line.
-  if (!tuplesOnly) {
+  // Footer + trailing blank-line handling mirrors upstream
+  // `print_aligned_vertical` (print.c lines 1804-1822):
+  //   - At border < 2, emit a blank line BEFORE the user footers
+  //     (separates the last data line from the footer block).
+  //   - At border >= 2, the bottom rule already provides the separator
+  //     so no extra blank is emitted before footers.
+  //   - Always emit a trailing blank line at the very end.
+  //   - Expanded mode never emits a `(N rows)` default footer; the
+  //     trailing blank is the only output between consecutive results.
+  const hasUserFooters = !!opts.footers && opts.footers.length > 0;
+  if (!tuplesOnly && hasUserFooters && border < 2) {
     out += newline;
   }
   if (!tuplesOnly && opts.footers) {
     for (const f of opts.footers) out += f + newline;
+  }
+  if (!tuplesOnly && !hasUserFooters) {
+    // No user footers — emit the standalone separator. (For
+    // border>=2 the bottom rule has already been emitted above.)
+    out += newline;
+  } else if (!tuplesOnly) {
+    // User footers were emitted; close with the trailing blank line.
+    out += newline;
   }
   return out;
 };
@@ -1729,7 +1752,10 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
   if (!tuplesOnly && (border === 2 || border === 3)) {
     out += buildRule(widths, border, glyphs, 'bottom') + '\n';
   }
-  if (!tuplesOnly && topt.defaultFooter) {
+  // User footers suppress the default `(0 rows)` row counter — mirrors
+  // upstream `footers_with_default` (print.c lines 397-413).
+  const hasUserFooters = !!opts.footers && opts.footers.length > 0;
+  if (!tuplesOnly && topt.defaultFooter && !hasUserFooters) {
     out += '(0 rows)\n';
   }
   if (!tuplesOnly && opts.footers) {
