@@ -1270,6 +1270,11 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
   const tuplesOnly = topt.tuplesOnly;
   const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
   const glyphs = glyphsFor(topt.unicodeBorderLineStyle);
+  // `old-ascii` swaps several emission decisions (leading-slot at border<2,
+  // suppressed data trailing marker, alternate midvrule glyph on
+  // continuation lines). Track once at the top so the per-line code stays
+  // readable.
+  const oldAscii = topt.unicodeBorderLineStyle === 'old-ascii';
 
   const headers = rs.fields.map((f) => f.name);
 
@@ -1308,15 +1313,12 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
   // enforced via `min_width` and `rwidth`) when `\pset format wrapped`
   // AND `\pset columns N` is in effect. Runs for all borders 0/1/2.
   //
-  // The `swidth` table below mirrors the upstream branches (we model
-  // only ASCII / Unicode — no old-ascii):
-  //   border 0: 1 (gutter)  +1 if hmultiline  +1 if dmultiline (border<2)
-  //   border 1: 3 (` | `)                     +1 if dmultiline (border<2)
+  // The `swidth` table below mirrors the upstream branches:
+  //   border 0: 1 (gutter)  +1 if hmultiline
+  //                         +1 if dmultiline (border<2 && !oldAscii)
+  //   border 1: 3 (` | `)   +1 if hmultiline && oldAscii (left newline marker)
+  //                         +1 if dmultiline (border<2 && !oldAscii)
   //   border 2: 7 (outer vrules + spacers; no dmultiline bump)
-  //
-  // At border 1 upstream only bumps swidth for hmultiline when
-  // `format == &pg_asciiformat_old` (the "old-ascii" format), which
-  // we don't model — so the hmultiline bump is restricted to border 0.
   //
   // `rwidth` is the natural label width (`* RECORD N` + digit count).
   // The two-pass loop turns `dmultiline` on the first iteration if a
@@ -1329,10 +1331,11 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
     if (outputColumns > 0) {
       let baseSwidth: number;
       if (border === 0) baseSwidth = 1 + (hmultiline ? 1 : 0);
-      else if (border === 1) baseSwidth = 3;
+      else if (border === 1) baseSwidth = 3 + (hmultiline && oldAscii ? 1 : 0);
       else baseSwidth = 7;
-      // dmultiline adds a marker column only when border < 2.
-      const dmAddOk = border < 2;
+      // dmultiline adds a marker column only when border < 2 and not old-ascii
+      // (old-ascii suppresses the data trailing marker entirely at border<2).
+      const dmAddOk = border < 2 && !oldAscii;
       const swidthInit = baseSwidth + (dmAddOk && dmultiline ? 1 : 0);
       const swidthAfterWrap = baseSwidth + (dmAddOk ? 1 : 0);
 
@@ -1392,18 +1395,33 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
 
   // Decide whether multi-line markers should be emitted on header/data
   // continuations. Mirrors upstream `print_aligned_vertical` predicates
-  // at print.c lines 1679-1689 and 1747-1763. For non-old-ascii formats
-  // (we don't model old-ascii — both ASCII and Unicode take the same
-  // branch), the header marker is emitted iff `opt_border > 0 ||
-  // hmultiline`, and the data marker iff `opt_border > 1 || dmultiline`.
-  const emitHeaderMarker = border > 0 || hmultiline;
-  const emitDataMarker = border > 1 || dmultiline;
+  // at print.c lines 1679-1689 (header right marker) and 1747-1763 (data
+  // trailing marker):
+  //   non-old-ascii: header marker iff `border > 0 || hmultiline`
+  //                  data marker   iff `border > 1 || dmultiline`
+  //   old-ascii:     header right marker emitted iff `border > 0`
+  //                  data right marker  emitted iff `border > 1`
+  //                  (old-ascii relies on header_nl_LEFT for header
+  //                  continuations and never emits the data right marker
+  //                  at border<2 — it uses the alt midvrule glyph instead.)
+  const emitHeaderMarker = oldAscii ? border > 0 : border > 0 || hmultiline;
+  const emitDataMarker = oldAscii ? border > 1 : border > 1 || dmultiline;
+  // Leading-slot for header column. Upstream `print_aligned_vertical`
+  // line 1655-1657 emits the slot at `border==2 || (hmultiline &&
+  // oldAscii)`. Old-ascii routes the continuation marker through the
+  // leading gutter (`+` in `headerNlLeft`) instead of the trailing slot.
+  const emitHeaderLeftSlot = border > 1 || (hmultiline && oldAscii);
+  // Record-header label width. Upstream line 1610-1613 bumps `lhwidth`
+  // by 1 at border<2 with hmultiline && oldAscii — the extra column is
+  // the same `+` newline-indicator slot the data lines reserve.
+  const lhwidth =
+    border < 2 && hmultiline && oldAscii ? nameWidth + 1 : nameWidth;
 
   for (let r = 0; r < cellGrid.length; r++) {
     if (!tuplesOnly) {
       out += renderRecordHeader(
         r + 1,
-        nameWidth,
+        lhwidth,
         dwidth,
         border,
         glyphs,
@@ -1425,6 +1443,8 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
         hmultiline,
         emitHeaderMarker,
         emitDataMarker,
+        emitHeaderLeftSlot,
+        oldAscii,
       );
     }
   }
@@ -1634,6 +1654,8 @@ const renderVerticalCell = (
   hmultiline: boolean,
   emitHeaderMarker: boolean,
   emitDataMarker: boolean,
+  emitHeaderLeftSlot: boolean,
+  oldAscii: boolean,
 ): string => {
   const { vrule } = glyphs;
   let out = '';
@@ -1672,6 +1694,14 @@ const renderVerticalCell = (
 
   let hLine = 0;
   let dLine = 0;
+  // `offset` mirrors upstream's `offset` variable (print.c line 1638): it
+  // tracks how much of the current data line has been emitted so far. A
+  // non-zero value at the start of an iteration means we're continuing a
+  // wrap (drives midvrule_wrap on old-ascii separator picking). Upstream
+  // updates `offset += bytes_to_output` even on the final chunk of a
+  // non-empty cell, so the next iteration (when header is still
+  // continuing) sees offset > 0.
+  let offset = 0;
   let hcomplete = headerLines.length === 0;
   let dcomplete = dataChunks.length === 0;
 
@@ -1681,9 +1711,10 @@ const renderVerticalCell = (
 
     // ---- Header part ----
     if (!hcomplete) {
-      // Leading slot: only emitted at border>=2 (or old-ascii hmultiline,
-      // which we don't model).
-      if (border === 2 || border === 3) {
+      // Leading slot. Upstream `print.c` lines 1655-1657: emitted at
+      // `border==2 || (hmultiline && oldAscii)`. Old-ascii routes the
+      // continuation marker through the LEFT side via header_nl_left.
+      if (emitHeaderLeftSlot) {
         out += hLine > 0 ? glyphs.headerNlLeft : ' ';
       }
 
@@ -1699,29 +1730,44 @@ const renderVerticalCell = (
         hcomplete = true;
       }
     } else {
-      // Header exhausted. Pad with `nameWidth + opt_border` spaces
-      // (+ 1 when border=0 and hmultiline). Mirrors upstream
-      // print.c lines 1693-1708 (we always take the non-old-ascii branch).
+      // Header exhausted but data still has lines. Pad with
+      // `nameWidth + border` spaces, +1 at border<2 if hmultiline &&
+      // oldAscii (mirrors the lhwidth bump), +1 at border==0 if
+      // hmultiline && !oldAscii (mirrors the extra trailing slot the
+      // non-old-ascii branch carved out). Upstream print.c lines
+      // 1693-1707.
       let swidth = nameWidth + border;
-      if (border === 0 && hmultiline) swidth++;
+      if (border < 2 && hmultiline && oldAscii) swidth++;
+      if (border === 0 && hmultiline && !oldAscii) swidth++;
       out += ' '.repeat(swidth);
     }
 
     // ---- Separator ----
-    // Border > 0 emits the column rule. Upstream picks
-    // midvrule_nl / midvrule_wrap / midvrule by continuation state, but
-    // for ASCII / Unicode all three resolve to the same vrule glyph.
+    // Border > 0 emits the column rule. Upstream `print.c` 1710-1719
+    // picks midvrule_wrap (`;` old-ascii) when offset != 0 (mid-wrap or
+    // we just finished emitting a non-empty cell), midvrule (`|`) on the
+    // very first data line, midvrule_nl (`:` old-ascii) on subsequent
+    // data lines. For ASCII/Unicode all three resolve to the same vrule
+    // glyph so the branch collapses; for old-ascii the continuation
+    // glyph drives the visual distinction.
     if (border > 0) {
-      out += vrule;
+      if (offset !== 0) out += glyphs.midvruleWrap;
+      else if (dLine === 0) out += vrule;
+      else out += glyphs.midvruleNl;
     }
 
     // ---- Data part ----
     if (!dcomplete) {
       const chunk = dataChunks[dLine];
       // Leading slot: " " on the first chunk of a source line,
-      // wrap_left on a wrap continuation.
-      out += chunk.isWrapStart ? ' ' : glyphs.wrapLeft;
+      // wrap_left on a wrap continuation. ALWAYS emitted (upstream
+      // print.c line 1731 has no border guard).
+      out += offset === 0 ? ' ' : glyphs.wrapLeft;
       out += chunk.text;
+      // Mirror upstream's `offset += bytes_to_output`: bumped even on
+      // the last chunk of a cell, so the next iteration (header still
+      // continuing) sees offset > 0 and picks midvrule_wrap.
+      offset += chunk.width;
 
       const isLastChunk = dLine === dataChunks.length - 1;
       const nextChunk = !isLastChunk ? dataChunks[dLine + 1] : null;
@@ -1735,6 +1781,7 @@ const renderVerticalCell = (
           markerGlyph = glyphs.wrapRight;
         }
         dLine++;
+        // Offset stays bumped — next chunk continues the same source line.
       } else if (nextChunk) {
         // Source-line boundary: next chunk starts a new data line.
         if (emitDataMarker) {
@@ -1742,6 +1789,7 @@ const renderVerticalCell = (
           markerGlyph = glyphs.nlRight;
         }
         dLine++;
+        offset = 0; // reset for new source line
       } else {
         // End of cell.
         if (border > 1) {
@@ -1750,6 +1798,8 @@ const renderVerticalCell = (
           markerGlyph = ' ';
         }
         dcomplete = true;
+        // Offset stays bumped — header-tail iterations should see
+        // midvrule_wrap unless the cell was empty.
       }
 
       if (needsPad) {

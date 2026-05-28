@@ -1031,6 +1031,153 @@ describe('alignedPrinter trailing-whitespace parity', () => {
   });
 });
 
+// Old-ascii (`\pset linestyle old-ascii`) expanded mode parity. The
+// old-ascii format routes the header newline marker through the LEFT
+// gutter (`+` in header_nl_left) instead of the trailing slot, and
+// swaps the column separator on continuation lines to `;` (mid-wrap)
+// or `:` (mid-nl). Verified against vanilla psql 18 with the regress
+// `prepare q as select ... "ab\n\nc", ..."a\nbc" from ...` fixture.
+describe('alignedPrinter expanded mode (old-ascii)', () => {
+  test('border=0 multi-line header uses leading `+` and trailing space', async () => {
+    // Headers "ab\n\nc" and "a\nbc" → hmultiline=true; values are single
+    // line. Layout per iteration at border 0 with old-ascii hmultiline:
+    //   <lead 1ch> <name padded to hwidth=2> <gap 1ch> <value>
+    // lead = " " on first iter, "+" on continuations (header_nl_left).
+    // No trailing slot (border==0, !hmultiline-not-oldAscii).
+    const rs = makeResultSet({
+      // Use longer values so dwidth gives the label-pad room. nameWidth
+      // = max line width = 2 (`ab`, `bc`). dwidth = max value = 8.
+      // lhwidth (old-ascii hmultiline bump) = nameWidth+1 = 3. Total =
+      // lhwidth + 1 + dwidth = 12.
+      columns: [{ name: 'ab\n\nc' }, { name: 'a\nbc' }],
+      rows: [['xxxxxxxx', 'yyyyyyyy']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          expanded: 'on',
+          border: 0,
+          unicodeBorderLineStyle: 'old-ascii',
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // Record header pads to lhwidth(3) + dwidth(8) = 11 chars (label
+    // "* Record 1" is 10 chars + 1 trailing space).
+    expect(lines[0]).toBe('* Record 1 ');
+    // Cell 1 ("ab\n\nc", "xxxxxxxx") emits 3 lines (header drives the
+    // height):
+    //   iter 1: " ab" (lead+name) + " " (gap) + "xxxxxxxx"
+    //   iter 2: "+  " (lead + empty padded name) + nothing
+    //   iter 3: "+c " (lead + "c" padded) + nothing
+    expect(lines[1]).toBe(' ab xxxxxxxx');
+    expect(lines[2]).toBe('+  ');
+    expect(lines[3]).toBe('+c ');
+    // Cell 2 ("a\nbc", "yyyyyyyy") emits 2 lines:
+    //   iter 1: " a " (lead + "a " padded) + " " + "yyyyyyyy"
+    //   iter 2: "+bc" (lead + "bc")  — no trailing whitespace, no value
+    expect(lines[4]).toBe(' a  yyyyyyyy');
+    expect(lines[5]).toBe('+bc');
+  });
+
+  test('border=1 multi-line header switches separator to `;`/`:` on continuation', async () => {
+    // At border 1 with old-ascii: separator picks midvrule (`|`) on the
+    // first data line, midvrule_wrap (`;`) when offset advanced (i.e.,
+    // we already emitted a chunk and the cell is done — header still
+    // continuing). For multi-line data, midvrule_nl (`:`) on the
+    // newline boundary.
+    const rs = makeResultSet({
+      columns: [{ name: 'ab\nc' }],
+      // Single-line value: triggers `;` on header continuations.
+      rows: [['xx']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          expanded: 'on',
+          border: 1,
+          unicodeBorderLineStyle: 'old-ascii',
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // Record header. lhwidth=3 (hmultiline old-ascii border<2 bump),
+    // dwidth=2 (no wrap). Row width = lhwidth(3) + 3 + dwidth(2) = 8.
+    // `-[ RECORD 1 ]` = 13 chars > leftSpan(4) and > rowWidth(8), so
+    // emit just the label-prefix with no padding.
+    expect(lines[0]).toBe('-[ RECORD 1 ]');
+    // Iter 1: " ab | xx" (lead, name, trailing space, |, gap, value)
+    expect(lines[1]).toBe(' ab | xx');
+    // Iter 2: "+c  ; " (lead +, name "c " padded, trailing space, ;,
+    // empty data — at border<2 oldAscii the data side is just the
+    // leading gutter slot, no value).
+    expect(lines[2]).toBe('+c  ;');
+  });
+
+  test('border=1 multi-line value switches separator to `:` on nl boundary', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'k' }],
+      rows: [['a\nb']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          expanded: 'on',
+          border: 1,
+          unicodeBorderLineStyle: 'old-ascii',
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // dmultiline=true. At border=1 oldAscii, data trailing marker is
+    // suppressed (emitDataMarker = border>1 = false), so no `+` on the
+    // right side; the separator glyph carries the continuation info.
+    expect(lines[1]).toBe('k | a');
+    // Iter 2: header done. swidth = nameWidth(1) + border(1) = 2 spaces.
+    // Separator: dLine==1 && offset==0 → midvrule_nl (`:`).
+    expect(lines[2]).toBe('  : b');
+  });
+
+  test('border=0 wrapped value uses oldAscii dwidth (no dmultiline reserve)', async () => {
+    // At border=0 oldAscii, the dmultiline reserve column is NOT added
+    // (oldAscii uses the alt midvrule glyph instead). swidth stays at
+    // 1 + hmultiline_bump. For hmultiline=false: swidth=1. Output_cols=10
+    // → dwidth = 10 - nameWidth(1) - swidth(1) = 8. Value "xxxxxxxxxx"
+    // (10 chars) wraps into "xxxxxxxx" + "xx".
+    const rs = makeResultSet({
+      columns: [{ name: 'k' }],
+      rows: [['x'.repeat(10)]],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          format: 'wrapped',
+          expanded: 'on',
+          border: 0,
+          columns: 10,
+          envColumns: 10,
+          unicodeBorderLineStyle: 'old-ascii',
+        }),
+        s,
+      ),
+    );
+    const lines = out.split('\n');
+    // Iter 1: "k xxxxxxxx"
+    expect(lines[1]).toBe('k xxxxxxxx');
+    // Iter 2: "  xx" — empty name + gap, then wrap continuation. At
+    // border=0 oldAscii, the data leading slot is " " (wrap_left) but
+    // wrap_left for old-ascii IS space; so we get "  xx".
+    expect(lines[2]).toBe('  xx');
+  });
+});
+
 // Multi-line / wrap marker parity. Verifies the `+` (nl) and `.` (wrap)
 // continuation indicators land in the correct slots — between cell
 // content and column separator on the row that has more content, with
