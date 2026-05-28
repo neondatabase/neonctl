@@ -653,23 +653,59 @@ export const objectDescription = (opts: CommonOpts): DescribeQuery => {
 /* render is WP-20.                                                   */
 /* ------------------------------------------------------------------ */
 export const describeTableDetails = (opts: CommonOpts): DescribeQuery => {
-  const { showSystem, pattern } = opts;
+  const { verbose, showSystem, pattern, serverVersion } = opts;
+  // For bare `\d [pattern]` upstream renders the same relations table as
+  // `\dtvmsiE` does, with the per-relkind type column populated. Include
+  // the verbose-mode columns when caller asks for them so `\d+ [pat]`
+  // matches `\dt+ [pat]` shape.
   let sql =
-    'SELECT c.oid,\n  n.nspname,\n  c.relname\n' +
-    'FROM pg_catalog.pg_class c\n' +
-    '     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n';
-  let hasWhere = false;
+    'SELECT n.nspname as "Schema",\n' +
+    '  c.relname as "Name",\n' +
+    '  CASE c.relkind' +
+    " WHEN 'r' THEN 'table'" +
+    " WHEN 'v' THEN 'view'" +
+    " WHEN 'm' THEN 'materialized view'" +
+    " WHEN 'i' THEN 'index'" +
+    " WHEN 'S' THEN 'sequence'" +
+    " WHEN 't' THEN 'TOAST table'" +
+    " WHEN 'f' THEN 'foreign table'" +
+    " WHEN 'p' THEN 'partitioned table'" +
+    " WHEN 'I' THEN 'partitioned index'" +
+    ' END as "Type",\n' +
+    '  pg_catalog.pg_get_userbyid(c.relowner) as "Owner"';
+  if (verbose) {
+    sql +=
+      ',\n  CASE c.relpersistence' +
+      " WHEN 'p' THEN 'permanent'" +
+      " WHEN 't' THEN 'temporary'" +
+      " WHEN 'u' THEN 'unlogged'" +
+      ' END as "Persistence"';
+    if (serverAtLeast(serverVersion, PG_12)) {
+      sql += ',\n  am.amname as "Access method"';
+    }
+    sql +=
+      ',\n  pg_catalog.pg_size_pretty(pg_catalog.pg_total_relation_size(c.oid)) as "Size"' +
+      ',\n  pg_catalog.obj_description(c.oid, \'pg_class\') as "Description"';
+  }
+  sql +=
+    '\nFROM pg_catalog.pg_class c' +
+    '\n     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace';
+  if (verbose && serverAtLeast(serverVersion, PG_12)) {
+    sql += '\n     LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam';
+  }
+  sql += "\nWHERE c.relkind IN ('r','p','v','m','S','f','')\n";
   if (!showSystem && pattern === undefined) {
     sql +=
-      "WHERE n.nspname <> 'pg_catalog'\n      AND n.nspname <> 'information_schema'\n";
-    hasWhere = true;
+      "      AND n.nspname <> 'pg_catalog'\n" +
+      "      AND n.nspname !~ '^pg_toast'\n" +
+      "      AND n.nspname <> 'information_schema'\n";
   }
-  sql += patternStub(hasWhere, 'n.nspname', 'c.relname');
-  sql += orderBy('2, 3');
+  sql += patternStub(true, 'n.nspname', 'c.relname');
+  sql += orderBy('1,2');
   return {
     sql,
     params: params(),
-    description: 'Get matching relations to describe',
+    description: 'List of relations',
   };
 };
 

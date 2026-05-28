@@ -1124,20 +1124,12 @@ export const describeOneSequence = async (
     `FROM pg_catalog.pg_sequence WHERE seqrelid = '${oid}';`;
   const rs = await conn.query(sql, []);
   const title = `Sequence "${schema}.${name}"`;
-  // Suppress the row-count footer — upstream's sequence detail output
-  // is a single row with no `(1 row)` line.
-  await alignedPrinter.printQuery(
-    coerceResultSet(rs),
-    {
-      ...popt,
-      title,
-      topt: { ...popt.topt, title, defaultFooter: false },
-      footers: null,
-    },
-    out,
-  );
 
-  // Owned-by footer
+  // Owned-by footer text is collected up-front so the printer can place
+  // it inside the body of the result (between the data row and the
+  // trailing blank line), matching upstream where `\d <seq>` renders
+  // `Owned by:` AS a footer of the printed table — not as a separate
+  // post-table line.
   const ownedSql =
     "SELECT pg_catalog.quote_ident(nspname) || '.' || pg_catalog.quote_ident(relname) || '.' || pg_catalog.quote_ident(attname)\n" +
     'FROM pg_catalog.pg_class c\n' +
@@ -1147,9 +1139,24 @@ export const describeOneSequence = async (
     `WHERE d.classid = 'pg_catalog.pg_class'::regclass AND d.refclassid = 'pg_catalog.pg_class'::regclass\n` +
     `  AND d.objid = '${oid}' AND d.deptype IN ('a', 'i');`;
   const ownRs = await conn.query(ownedSql, []);
+  const footers: string[] = [];
   if (ownRs.rows.length > 0) {
-    out.write(`Owned by: ${cellToString(ownRs.rows[0][0])}\n`);
+    footers.push(`Owned by: ${cellToString(ownRs.rows[0][0])}`);
   }
+
+  // Suppress the row-count footer — upstream's sequence detail output is
+  // a single row with no `(1 row)` line. Pass the Owned-by line as a
+  // user footer so the printer places it before the trailing blank.
+  await alignedPrinter.printQuery(
+    coerceResultSet(rs),
+    {
+      ...popt,
+      title,
+      topt: { ...popt.topt, title, defaultFooter: false },
+      footers: footers.length > 0 ? footers : null,
+    },
+    out,
+  );
 };
 
 /**
