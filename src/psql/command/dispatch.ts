@@ -52,6 +52,7 @@ import {
   cmdPrompt,
   cmdQecho,
   cmdQuit,
+  cmdReset,
   cmdSet,
   cmdSetenv,
   cmdShell,
@@ -318,8 +319,8 @@ export const dispatchBackslash = async (
 
 /**
  * Return a fresh registry pre-populated with every backslash command this
- * WP implements: meta (`\q`, `\!`, `\cd`, `\echo`, `\qecho`, `\warn`,
- * `\prompt`, `\set`, `\unset`, `\getenv`, `\setenv`, `\errverbose`,
+ * WP implements: meta (`\q`, `\r`/`\reset`, `\!`, `\cd`, `\echo`, `\qecho`,
+ * `\warn`, `\prompt`, `\set`, `\unset`, `\getenv`, `\setenv`, `\errverbose`,
  * `\timing`) and format (`\a`, `\C`, `\f`, `\H`, `\t`, `\T`, `\x`,
  * `\pset`, `\encoding`).
  *
@@ -330,6 +331,7 @@ export const defaultRegistry = (): BackslashRegistry => {
   const r = createBackslashRegistry();
   // Meta.
   r.register(cmdQuit);
+  r.register(cmdReset);
   r.register(cmdShell);
   r.register(cmdCd);
   r.register(cmdEcho);

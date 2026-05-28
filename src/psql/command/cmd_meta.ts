@@ -5,6 +5,7 @@
  * upstream PostgreSQL's `src/bin/psql/command.c`:
  *
  *   - `\q` / `\quit`              → exec_command_quit
+ *   - `\r` / `\reset`             → exec_command_reset
  *   - `\!`                        → exec_command_shell_escape (do_shell)
  *   - `\cd`                       → exec_command_cd
  *   - `\echo`, `\qecho`, `\warn`  → exec_command_echo / qecho / warn
@@ -320,6 +321,33 @@ export const cmdSet: BackslashCmdSpec = {
       return Promise.resolve({ status: 'error' });
     }
     return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * `\r` / `\reset` — discard the accumulated query buffer.
+ *
+ * Mirrors upstream `exec_command_reset`:
+ *
+ *   resetPQExpBuffer(query_buf);
+ *   psql_scan_reset(scan_state);
+ *   if (!pset.quiet)
+ *     puts(_("Query buffer reset (cleared)."));
+ *
+ * We model the buffer + scanner reset via `status: 'reset-buf'`; the
+ * mainloop wipes `queryBuf` and re-initialises `scanState` when it sees
+ * this. The diagnostic is gated on the `quiet` setting so `psql -q` (and
+ * the regress harness, which passes `--quiet`) produces no output.
+ */
+export const cmdReset: BackslashCmdSpec = {
+  name: 'r',
+  aliases: ['reset'],
+  helpKey: 'r',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    if (!ctx.settings.quiet) {
+      writeOut('Query buffer reset (cleared).\n');
+    }
+    return Promise.resolve({ status: 'reset-buf', newBuf: '' });
   },
 };
 
