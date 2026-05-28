@@ -383,6 +383,7 @@ const dispatchDetail = async (
         verbose,
         process.stdout,
         popt,
+        ctx.settings.hideTableam,
       );
   }
 };

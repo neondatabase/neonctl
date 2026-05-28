@@ -215,6 +215,7 @@ export const describeOneTableDetails = async (
   verbose: boolean,
   out: NodeJS.WritableStream,
   popt: PrintQueryOpts,
+  hideTableam = false,
 ): Promise<void> => {
   // ----- One-shot relation info (RLS flags, replica identity,
   //       partition flag, tablespace, access method). Fetched before
@@ -224,10 +225,12 @@ export const describeOneTableDetails = async (
 
   // Compose the title. Matviews with a non-default access method get
   // a second line ("Access method: <amname>") between the header and
-  // the column table — see upstream `describeOneTableDetails`.
+  // the column table — see upstream `describeOneTableDetails`. The
+  // matview-inline form is also gated by `HIDE_TABLEAM` so the user can
+  // opt out of access-method noise.
   const baseTitle = headerForRelkind(relkind, schema, name);
   const title =
-    relkind === 'm' && relInfo.relam !== 0 && relInfo.amname
+    !hideTableam && relkind === 'm' && relInfo.relam !== 0 && relInfo.amname
       ? `${baseTitle}\nAccess method: ${relInfo.amname}`
       : baseTitle;
 
@@ -476,8 +479,10 @@ export const describeOneTableDetails = async (
 
   // ----- Access method footer (verbose: relkind r/p with relam set).
   //       Matviews ('m') show their access method inline in the header,
-  //       so we don't double up here.
-  if (verbose && (relkind === 'r' || relkind === 'p')) {
+  //       so we don't double up here. Gated by `HIDE_TABLEAM` to mirror
+  //       upstream — the per-test psql.sql toggles the variable to
+  //       suppress access-method noise.
+  if (!hideTableam && verbose && (relkind === 'r' || relkind === 'p')) {
     renderAccessMethodFooter(relInfo, out);
   }
 
