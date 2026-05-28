@@ -753,6 +753,12 @@ const installNoticeHandler = (
   const db = ctx.settings.db;
   if (!db) return null;
   return db.onNotice((notice) => {
+    // Skip in pipeline mode: cmd_pipeline.ts's `\endpipeline` / `\getresults`
+    // re-renders each result's `notices[]` array via the per-result drain so
+    // the NOTICE lands AT the result boundary, not before. Emitting here too
+    // would duplicate every notice — once when the wire layer parses it,
+    // once when the drain walks `rs.notices`.
+    if (ctx.settings.sendMode === 'extended-pipeline') return;
     const text = formatNotice(
       notice,
       ctx.settings.verbosity,
