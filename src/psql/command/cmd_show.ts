@@ -134,12 +134,22 @@ const noConn = (ctx: BackslashContext): BackslashResult =>
 
 /**
  * Read the object descriptor as a whole-line argument with surrounding
- * whitespace trimmed. Returns `null` when no name was supplied (after the
- * trim — i.e. `\sf   ` is treated as empty).
+ * whitespace AND trailing semicolons stripped. Returns `null` when no
+ * name was supplied (after the strip — i.e. `\sf   ` or `\sf  ;;` is
+ * treated as empty).
+ *
+ * Upstream `psql_scan_slash_option(scan_state, OT_WHOLE_LINE, …)` keeps
+ * the `;` in the returned string, but `exec_command_sf_sv` (and its `ef`/
+ * `ev` siblings) trim trailing whitespace + `;` before passing the
+ * descriptor to `lookup_object_oid`. Without this, `\sf ts_debug(text);`
+ * sends `'ts_debug(text);'::regprocedure` to the server, which the
+ * regprocedure input parser rejects with "expected a right parenthesis".
  */
 const readObjDesc = (ctx: BackslashContext): string | null => {
   const raw = ctx.restOfLine();
-  const trimmed = raw.trim();
+  // Strip trailing whitespace and `;` (in any order, any count) so
+  // `\sf foo(arg) ;; ` round-trips like vanilla psql.
+  const trimmed = raw.replace(/[\s;]+$/, '').trimStart();
   return trimmed.length === 0 ? null : trimmed;
 };
 

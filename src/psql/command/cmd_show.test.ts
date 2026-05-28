@@ -300,6 +300,44 @@ describe('cmdShowFunction (\\sf)', () => {
     expect(r.status).toBe('error');
     expect(stderrChunks.join('')).toMatch(/\\sf: function name is required/);
   });
+
+  test('strips trailing whitespace and ; from the descriptor', async () => {
+    // Upstream `exec_command_sf_sv` trims trailing whitespace + `;`
+    // before passing the descriptor to `lookup_object_oid`, so users
+    // who type `\sf foo(int);` (with the muscle-memory trailing
+    // semicolon) get the same result as `\sf foo(int)`.
+    const spy = { queries: [] as string[] };
+    const conn = mkConn(
+      [
+        {
+          match: (sql) => sql.includes('regprocedure'),
+          result: mkResultSet([['42']]),
+        },
+        {
+          match: (sql) => sql.includes('pg_get_functiondef'),
+          result: mkResultSet([['CREATE FUNCTION foo() RETURNS int AS $$$$']]),
+        },
+      ],
+      spy,
+    );
+    // Trailing whitespace + ;; should be peeled off before regprocedure.
+    const ctx = mkCtx('sf', '  foo(int) ;; \t', mkSettings(conn));
+    const r = await cmdShowFunction.run(ctx);
+    expect(r.status).toBe('ok');
+    expect(spy.queries[0]).toContain(`'foo(int)'::pg_catalog.regprocedure`);
+  });
+
+  test('trailing-only ; descriptor is treated as missing', async () => {
+    // Pure punctuation/whitespace after trimming should be "no name"
+    // rather than reaching the server with an empty literal.
+    const spy = { queries: [] as string[] };
+    const conn = mkConn([], spy);
+    const ctx = mkCtx('sf', '  ;; ', mkSettings(conn));
+    const r = await cmdShowFunction.run(ctx);
+    expect(r.status).toBe('error');
+    expect(stderrChunks.join('')).toMatch(/\\sf: function name is required/);
+    expect(spy.queries).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
