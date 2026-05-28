@@ -422,8 +422,14 @@ export const cmdStartPipeline: BackslashCmdSpec = {
     if (!ctx.settings.db) {
       return Promise.resolve(errResult(ctx, 'no connection to the server'));
     }
+    // Vanilla psql 18.4 treats a duplicate `\startpipeline` as a silent
+    // no-op (no warning on stdout OR stderr) — verified empirically:
+    // `psql --no-psqlrc --echo-all --quiet -X -c '\startpipeline
+    // \startpipeline \endpipeline' 2>&1` prints only the three echoed
+    // lines. Our prior `errResult('pipeline already active')` was a
+    // divergence; match upstream's quiet path.
     if (getPipelineState(ctx.settings) !== null) {
-      return Promise.resolve(errResult(ctx, 'pipeline already active'));
+      return Promise.resolve({ status: 'ok' });
     }
     try {
       const session = wrapSessionForCounters(
@@ -453,7 +459,19 @@ export const cmdEndPipeline: BackslashCmdSpec = {
   async run(ctx: BackslashContext): Promise<BackslashResult> {
     const ps = getPipelineState(ctx.settings);
     if (!ps) {
-      return errResult(ctx, 'no pipeline active');
+      // Upstream `exec_command_endpipeline` writes the diagnostic via
+      // `pg_log_error`; in psql 18.4 the line lands on stderr with NO
+      // `psql:` / `\endpipeline:` prefix (verified empirically with
+      // `psql --no-psqlrc --echo-all --quiet -X -c '\endpipeline'
+      // 2>&1` — the only stderr line is the raw message). The
+      // conformance corpus mirrors that bare form, so we bypass
+      // `errResult` (which would inject `\endpipeline: `) and write
+      // the line directly.
+      ctx.settings.lastErrorResult = {
+        message: 'cannot send pipeline when not in pipeline mode',
+      };
+      writeErr('cannot send pipeline when not in pipeline mode\n');
+      return { status: 'error', errorWritten: true };
     }
     try {
       // Snapshot how many results were already surfaced by prior
