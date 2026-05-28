@@ -1195,21 +1195,15 @@ export const cmdGetResults: BackslashCmdSpec = {
       // Decrement counters. Upstream `exec_command_getresults` does the
       // same accounting: PIPELINE_SYNC_COUNT and PIPELINE_RESULT_COUNT
       // are decremented by the actually-consumed items in each
-      // category. Capped at 0 to be defensive.
+      // category. SYNC_COUNT only goes down when a drain walks an
+      // actual SyncMarker slot — we don't force-reset it when
+      // RESULT_COUNT hits zero, because the queue may still hold the
+      // pending PGRES_PIPELINE_SYNC entry. The regress test
+      // `\getresults 1` x5 after 4 commands + 1 sync drains the 5th
+      // call silently against the SyncMarker; a 6th call would emit
+      // "No pending results to get".
       bumpCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', -syncsDrained);
       bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', -resultsDrained);
-      // Upstream rule: when the queue is fully drained, SYNC_COUNT
-      // also resets to 0 (the pipeline is back to "no Sync
-      // outstanding") — verified empirically. A partial drain leaves
-      // it unchanged.
-      if (
-        readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT') === 0 &&
-        readCounter(ctx.settings, 'PIPELINE_SYNC_COUNT') === 0
-      ) {
-        // Already 0 — no-op.
-      } else if (readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT') === 0) {
-        setCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', 0);
-      }
       return { status: 'ok' };
     } catch (err) {
       return errResult(ctx, errorToMessage(err));
