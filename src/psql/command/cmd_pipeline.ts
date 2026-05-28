@@ -452,11 +452,33 @@ export const cmdClosePrepared: BackslashCmdSpec = {
     if (!db) {
       return errResult(ctx, 'no connection to the server');
     }
+    // Inside an open pipeline, upstream routes through
+    // `PQsendClosePrepared` (queues a `Close('S', name)` behind the
+    // already-pending P/B/E ops, no Sync). Issuing a Sync here — as the
+    // out-of-pipeline `db.closePreparedStatement` path does — would split
+    // the in-flight batch and surface the pipeline's sticky error on the
+    // wire, leading to `\close_prepared: bind message supplies …`
+    // diagnostics that vanilla never emits.
+    const ps = getPipelineState(ctx.settings);
+    if (ps !== null) {
+      try {
+        await ps.session.close(name);
+        // Upstream `exec_command_close_prepared` bumps `piped_commands`
+        // (PIPELINE_COMMAND_COUNT) after a successful PQsendClosePrepared.
+        bumpCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT', 1);
+        // Drop any cached binding so a later `\bind_named NAME \g`
+        // errors cleanly instead of using a stale handle.
+        dropPrepared(ctx.settings, name);
+        return { status: 'ok' };
+      } catch (err) {
+        return errResult(ctx, errorToMessage(err));
+      }
+    }
     try {
-      // Upstream psql just issues `Close('S', name) + Sync` directly; the
-      // server treats Close on a missing name as a no-op (CloseComplete
-      // without diagnostics), so we don't need to know whether the
-      // statement exists. A previous implementation faked a
+      // Out-of-pipeline path: upstream issues `Close('S', name) + Sync`
+      // directly; the server treats Close on a missing name as a no-op
+      // (CloseComplete without diagnostics), so we don't need to know
+      // whether the statement exists. A previous implementation faked a
       // `prepare(name, 'SELECT 1')` to reach the same Close, which broke
       // when the name was already prepared on the server (Parse fails
       // with `prepared statement "NAME" already exists`).
