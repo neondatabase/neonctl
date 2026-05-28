@@ -1133,16 +1133,16 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
   const glyphs = glyphsFor(topt.unicodeBorderLineStyle);
 
   const headers = rs.fields.map((f) => f.name);
-  const aligns: Alignment[] = rs.fields.map((f) =>
-    isRightAlignedField(f.dataTypeID) ? 'right' : 'left',
-  );
 
-  // Width of the name column = max header width.
+  // Width of the name column = max header line width (multi-line headers
+  // count per-line; upstream `pg_wcssize` returns the widest line).
   let nameWidth = 0;
   let hmultiline = false;
   for (const h of headers) {
-    const w = displayWidth(h);
-    if (w > nameWidth) nameWidth = w;
+    for (const line of h.split('\n')) {
+      const w = displayWidth(line);
+      if (w > nameWidth) nameWidth = w;
+    }
     if (h.includes('\n')) hmultiline = true;
   }
 
@@ -1162,51 +1162,44 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
     }
   }
 
-  // Compute the wrapped data-column width that the record header should
-  // be padded against in `\pset format wrapped` mode at border < 2.
-  // Mirrors upstream `print_aligned_vertical` in `fe_utils/print.c`
-  // lines 1463-1583: the value column shrinks to fit `output_columns`
-  // (with a hard floor enforced via `min_width` and `rwidth`). The same
-  // calculation runs for borders 0/1/2 in vanilla — we restrict the
-  // override to border 0/1 because at border 2 the bottom rule and the
-  // data-row padding both consume the value width, and shrinking the
-  // header without wrapping the data rows would create a shape
-  // mismatch. For border 0/1 the data row uses `${name} ${value}` (no
-  // value-width padding), so changing the header alone is a pure
-  // trailing-whitespace fix.
+  // Compute dwidth — the value-column width used for both the record
+  // header padding and the per-cell value wrap. Mirrors upstream
+  // `print_aligned_vertical` in `fe_utils/print.c` lines 1463-1583: the
+  // value column shrinks to fit `output_columns` (with a hard floor
+  // enforced via `min_width` and `rwidth`) when `\pset format wrapped`
+  // AND `\pset columns N` is in effect. Runs for all borders 0/1/2.
   //
-  // The `swidth` table below mirrors the upstream branches:
-  //   border 0: 1 (gutter)         +1 if hmultiline   +1 if dmultiline*
-  //   border 1: 3 (` | `)          +1 if hmultiline*  +1 if dmultiline*
-  //     *upstream extras: hmultiline-only at border 1 when format ==
-  //      old-ascii, dmultiline-only when border < 2 AND format !=
-  //      old-ascii. We don't expose old-ascii in our printer (it
-  //      collapses onto ASCII) so we always take the non-old-ascii
-  //      branch: dmultiline adds 1, hmultiline at border 1 doesn't.
-  //   border 2: 7 — not used here (we leave header width untouched).
+  // The `swidth` table below mirrors the upstream branches (we model
+  // only ASCII / Unicode — no old-ascii):
+  //   border 0: 1 (gutter)  +1 if hmultiline  +1 if dmultiline (border<2)
+  //   border 1: 3 (` | `)                     +1 if dmultiline (border<2)
+  //   border 2: 7 (outer vrules + spacers; no dmultiline bump)
+  //
+  // At border 1 upstream only bumps swidth for hmultiline when
+  // `format == &pg_asciiformat_old` (the "old-ascii" format), which
+  // we don't model — so the hmultiline bump is restricted to border 0.
   //
   // `rwidth` is the natural label width (`* RECORD N` + digit count).
   // The two-pass loop turns `dmultiline` on the first iteration if a
   // wrap is needed, then recomputes with the bumped swidth. We
   // implement that as a single pass over the two possible swidths.
-  const wrapped = topt.format === 'wrapped' && (border === 0 || border === 1);
-  let headerValueWidth = valueWidth;
-  if (wrapped) {
+  const wrappedMode = topt.format === 'wrapped';
+  let dwidth = valueWidth;
+  if (wrappedMode) {
     const outputColumns = topt.columns > 0 ? topt.columns : topt.envColumns;
     if (outputColumns > 0) {
-      // swidth: gutter + multiline marker slots. We branch on
-      // (hmultiline, dmultiline) to mirror upstream — for our ASCII /
-      // Unicode glyphs (we don't model old-ascii) the relevant additions
-      // are the data-nl marker column when dmultiline is set. Upstream's
-      // wrap loop also bumps dmultiline on the second iteration if it
-      // started false and a wrap is needed, so we compute swidth twice.
-      const baseSwidth = (border === 0 ? 1 : 3) + (hmultiline ? 1 : 0);
-      const swidthInit = baseSwidth + (dmultiline ? 1 : 0);
-      const swidthAfterWrap = baseSwidth + 1; // dmultiline forced true
+      let baseSwidth: number;
+      if (border === 0) baseSwidth = 1 + (hmultiline ? 1 : 0);
+      else if (border === 1) baseSwidth = 3;
+      else baseSwidth = 7;
+      // dmultiline adds a marker column only when border < 2.
+      const dmAddOk = border < 2;
+      const swidthInit = baseSwidth + (dmAddOk && dmultiline ? 1 : 0);
+      const swidthAfterWrap = baseSwidth + (dmAddOk ? 1 : 0);
 
-      // rwidth = label-width floor: `* RECORD N`(9) or `-[ RECORD N ]`
-      // (12) + digit count for `N` (1 + log10(nrows)).
-      const labelOverhead = border === 0 ? 9 : 12;
+      // rwidth = label-width floor: `* RECORD N`(9), `-[ RECORD  ]`(12),
+      // or `+-[ RECORD  ]-+`(15), each plus digit count for N.
+      const labelOverhead = border === 0 ? 9 : border === 1 ? 12 : 15;
       const nrows = cellGrid.length;
       const rwidth =
         labelOverhead +
@@ -1225,13 +1218,15 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
       // First pass with the natural swidth.
       let newDwidth = compute(swidthInit);
       // If wrap is needed (newDwidth < natural) AND dmultiline wasn't
-      // already true, upstream toggles it on and re-runs with swidth+1.
-      if (newDwidth < valueWidth && !dmultiline) {
+      // already true AND we're at border<2, upstream toggles dmultiline
+      // on and re-runs with swidth+1.
+      if (newDwidth < valueWidth && !dmultiline && dmAddOk) {
         newDwidth = compute(swidthAfterWrap);
+        dmultiline = true;
       }
-      // Clamp: never grow the header beyond the natural value width
-      // (matches the `dwidth = newdwidth` assignment in upstream).
-      headerValueWidth = newDwidth < valueWidth ? newDwidth : valueWidth;
+      // Clamp: never grow the data column beyond the natural value
+      // width (matches `dwidth = newdwidth` in upstream).
+      dwidth = newDwidth < valueWidth ? newDwidth : valueWidth;
     }
   }
 
@@ -1250,12 +1245,21 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
     return out;
   }
 
+  // Decide whether multi-line markers should be emitted on header/data
+  // continuations. Mirrors upstream `print_aligned_vertical` predicates
+  // at print.c lines 1679-1689 and 1747-1763. For non-old-ascii formats
+  // (we don't model old-ascii — both ASCII and Unicode take the same
+  // branch), the header marker is emitted iff `opt_border > 0 ||
+  // hmultiline`, and the data marker iff `opt_border > 1 || dmultiline`.
+  const emitHeaderMarker = border > 0 || hmultiline;
+  const emitDataMarker = border > 1 || dmultiline;
+
   for (let r = 0; r < cellGrid.length; r++) {
     if (!tuplesOnly) {
       out += renderRecordHeader(
         r + 1,
         nameWidth,
-        headerValueWidth,
+        dwidth,
         border,
         glyphs,
         r === 0,
@@ -1263,20 +1267,20 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
       out += newline;
     }
     for (let c = 0; c < headers.length; c++) {
-      const lines = cellGrid[r][c].split('\n');
-      for (let li = 0; li < lines.length; li++) {
-        const name = li === 0 ? headers[c] : '';
-        out += renderVerticalLine(
-          name,
-          lines[li],
-          nameWidth,
-          valueWidth,
-          aligns[c],
-          border,
-          glyphs,
-        );
-        out += newline;
-      }
+      const headerLines = headers[c].split('\n');
+      const dataLines = cellGrid[r][c].split('\n');
+
+      out += renderVerticalCell(
+        headerLines,
+        dataLines,
+        nameWidth,
+        dwidth,
+        border,
+        glyphs,
+        hmultiline,
+        emitHeaderMarker,
+        emitDataMarker,
+      );
     }
   }
 
@@ -1285,7 +1289,7 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
       glyphs.botLeft +
       glyphs.hrule.repeat(nameWidth + 2) +
       glyphs.botMid +
-      glyphs.hrule.repeat(valueWidth + 2) +
+      glyphs.hrule.repeat(dwidth + 2) +
       glyphs.botRight +
       newline;
   }
@@ -1434,43 +1438,183 @@ const renderRecordHeader = (
   );
 };
 
-const renderVerticalLine = (
-  name: string,
-  value: string,
+/**
+ * Render one cell (header + value) of an expanded-mode record.
+ *
+ * Mirrors the per-cell loop in upstream `print_aligned_vertical`
+ * (print.c lines 1636-1801). Each iteration of the outer loop emits ONE
+ * physical output line containing both the header part and the data
+ * part. Iteration continues until BOTH the header and data sides are
+ * exhausted (so a 3-line header against a 1-line value still emits 3
+ * lines, with the data side blank from line 2 onward).
+ *
+ * Layout per iteration (border=0):
+ *   <name padded to nameWidth><header_nl_right or space>
+ *   <" " or wrap_left><value chunk (padded to dwidth iff more follows)><wrap_right / nl_right>
+ *
+ * Layout per iteration (border=1):
+ *   <name padded to nameWidth><header_nl_right or space>
+ *   <vrule>
+ *   <" " or wrap_left><value chunk><wrap_right / nl_right or trailing space>
+ *
+ * Layout per iteration (border=2): adds outer vrules, always pads the
+ * value column to dwidth, and always emits trailing markers.
+ *
+ * When header is done but data is not, the header side becomes pure
+ * whitespace of width `hwidth + opt_border (+ 1 for border-0 hmultiline)`.
+ * When data is done but header is not (because hheight > dheight), the
+ * data side is just `\n` at border<2, or `<dwidth spaces>  |` at border>=2.
+ */
+const renderVerticalCell = (
+  headerLines: string[],
+  dataLines: string[],
   nameWidth: number,
-  valueWidth: number,
-  align: Alignment,
+  dwidth: number,
   border: BorderStyle,
   glyphs: Glyphs,
+  hmultiline: boolean,
+  emitHeaderMarker: boolean,
+  emitDataMarker: boolean,
 ): string => {
   const { vrule } = glyphs;
-  const namePadded = padToWidth(name, nameWidth, 'left');
-  // Upstream `print_aligned_vertical` (print.c lines 1721-1782) only pads
-  // the value column for border > 1 (full box). For border 0 and 1, the
-  // data ends immediately after the cell content — no trailing pad, no
-  // right margin space. Verified against vanilla psql 18:
-  //   border 0:  `longname  key`  (not `longname  key  `)
-  //   border 1:  `a | key`        (not `a | key  `)
-  //   border 2:  `| a    | key   |`  (padded)
-  // Note: vertical mode never right-aligns values either — upstream
-  // ignores `cont->aligns[j]` in `print_aligned_vertical` and always
-  // emits the bare bytes. We honour the same rule for parity.
-  if (border === 0) {
-    return `${namePadded} ${value}`;
+  let out = '';
+
+  // Wrap each data line to dwidth. Each entry records whether the chunk
+  // started a source line (`isWrapStart`) and whether it ended one
+  // (`isWrapEnd`) — needed to pick wrap_left/right vs nl_right markers.
+  type DataChunk = {
+    text: string;
+    width: number;
+    isWrapStart: boolean;
+    isWrapEnd: boolean;
+  };
+  const dataChunks: DataChunk[] = [];
+  for (const src of dataLines) {
+    if (dwidth > 0 && displayWidth(src) > dwidth) {
+      const pieces = wrapLine(src, dwidth);
+      const lastIdx = pieces.length - 1;
+      pieces.forEach((piece, pi) => {
+        dataChunks.push({
+          text: piece,
+          width: displayWidth(piece),
+          isWrapStart: pi === 0,
+          isWrapEnd: pi === lastIdx,
+        });
+      });
+    } else {
+      dataChunks.push({
+        text: src,
+        width: displayWidth(src),
+        isWrapStart: true,
+        isWrapEnd: true,
+      });
+    }
   }
-  if (border === 1) {
-    // Upstream vertical-mode border-1 emits `<name> | <value>` with no
-    // leading space; verified against vanilla psql 18:
-    //   `one | 1` (not ` one | 1`).
-    return `${namePadded} ${vrule} ${value}`;
+
+  let hLine = 0;
+  let dLine = 0;
+  let hcomplete = headerLines.length === 0;
+  let dcomplete = dataChunks.length === 0;
+
+  while (!hcomplete || !dcomplete) {
+    // ---- Left border ----
+    if (border === 2 || border === 3) out += vrule;
+
+    // ---- Header part ----
+    if (!hcomplete) {
+      // Leading slot: only emitted at border>=2 (or old-ascii hmultiline,
+      // which we don't model).
+      if (border === 2 || border === 3) {
+        out += hLine > 0 ? glyphs.headerNlLeft : ' ';
+      }
+
+      const text = headerLines[hLine];
+      out += padToWidth(text, nameWidth, 'left');
+
+      const hasMore = hLine + 1 < headerLines.length;
+      if (hasMore) {
+        if (emitHeaderMarker) out += glyphs.headerNlRight;
+        hLine++;
+      } else {
+        if (emitHeaderMarker) out += ' ';
+        hcomplete = true;
+      }
+    } else {
+      // Header exhausted. Pad with `nameWidth + opt_border` spaces
+      // (+ 1 when border=0 and hmultiline). Mirrors upstream
+      // print.c lines 1693-1708 (we always take the non-old-ascii branch).
+      let swidth = nameWidth + border;
+      if (border === 0 && hmultiline) swidth++;
+      out += ' '.repeat(swidth);
+    }
+
+    // ---- Separator ----
+    // Border > 0 emits the column rule. Upstream picks
+    // midvrule_nl / midvrule_wrap / midvrule by continuation state, but
+    // for ASCII / Unicode all three resolve to the same vrule glyph.
+    if (border > 0) {
+      out += vrule;
+    }
+
+    // ---- Data part ----
+    if (!dcomplete) {
+      const chunk = dataChunks[dLine];
+      // Leading slot: " " on the first chunk of a source line,
+      // wrap_left on a wrap continuation.
+      out += chunk.isWrapStart ? ' ' : glyphs.wrapLeft;
+      out += chunk.text;
+
+      const isLastChunk = dLine === dataChunks.length - 1;
+      const nextChunk = !isLastChunk ? dataChunks[dLine + 1] : null;
+
+      let needsPad = false;
+      let markerGlyph = '';
+      if (nextChunk && !chunk.isWrapEnd) {
+        // Wrap continuation: next chunk continues THIS source line.
+        if (emitDataMarker) {
+          needsPad = true;
+          markerGlyph = glyphs.wrapRight;
+        }
+        dLine++;
+      } else if (nextChunk) {
+        // Source-line boundary: next chunk starts a new data line.
+        if (emitDataMarker) {
+          needsPad = true;
+          markerGlyph = glyphs.nlRight;
+        }
+        dLine++;
+      } else {
+        // End of cell.
+        if (border > 1) {
+          // Border 2/3: pad to dwidth, trailing space, then vrule.
+          needsPad = true;
+          markerGlyph = ' ';
+        }
+        dcomplete = true;
+      }
+
+      if (needsPad) {
+        const pad = dwidth - chunk.width;
+        if (pad > 0) out += ' '.repeat(pad);
+      }
+      out += markerGlyph;
+
+      // ---- Right border ----
+      if (border === 2 || border === 3) out += vrule;
+    } else {
+      // Data exhausted. Border<2 emits no further chars (a bare `\n`).
+      // Border>=2 pads the value column then closes with right vrule
+      // (upstream: `fprintf(fout, "%*s  %s\n", dwidth, "", rightvrule)`
+      // — note the TWO trailing spaces between the dwidth pad and rule).
+      if (border === 2 || border === 3) {
+        out += ' '.repeat(dwidth) + '  ' + vrule;
+      }
+    }
+
+    out += '\n';
   }
-  // Border 2/3: the right border requires the value column to be padded
-  // out to its full width so the trailing `|` aligns. Use the configured
-  // alignment for parity with horizontal mode (upstream uses left-align
-  // for vertical, but our existing tests rely on the configured align —
-  // and the trailing `|` makes the trailing-whitespace cosmetic moot).
-  const valuePadded = padToWidth(value, valueWidth, align);
-  return `${vrule} ${namePadded} ${vrule} ${valuePadded} ${vrule}`;
+
+  return out;
 };
 
 // ---------------------------------------------------------------------------

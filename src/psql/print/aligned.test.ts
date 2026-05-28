@@ -918,11 +918,13 @@ describe('alignedPrinter trailing-whitespace parity', () => {
     // Record headers padded to 28 chars (16 + 12), not the natural 34.
     expect(lines[0]).toBe('* Record 1                  ');
     expect(lines[0].length).toBe(28);
-    // Data rows still use the full natural value width (we don't wrap
-    // them — value-column wrapping in expanded mode is a separate
-    // shape change beyond the trailing-whitespace fix).
+    // Data rows wrap to the shrunken dwidth=12 with wrap_right `.` markers
+    // on continuation lines. Verified against vanilla psql 18 for the same
+    // query / pset combo.
     expect(lines[1]).toBe('0123456789abcdef xx');
-    expect(lines[2]).toBe(`0123456789       ${'y'.repeat(18)}`);
+    // y*18 wraps as `y*12` + wrap_right `.` on line 1, `.` + `y*6` on line 2.
+    expect(lines[2]).toBe(`0123456789       ${'y'.repeat(12)}.`);
+    expect(lines[3]).toBe(`                .${'y'.repeat(6)}`);
   });
 
   test('expanded wrapped border=0 record header floors at min_width when columns is tight', async () => {
