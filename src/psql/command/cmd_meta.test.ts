@@ -181,6 +181,22 @@ describe('\\echo', () => {
     await run(cmdEcho, ctx);
     expect(stdout()).toBe('\n');
   });
+
+  test("single-quoted '-n' is data, not the suppress-newline flag", async () => {
+    // Upstream `exec_command_echo` keys off the *unquoted* source form
+    // of the first arg. The mock context's lexer strips quotes (so the
+    // emitted value is `-n` in both cases) — the production helper
+    // re-inspects `ctx.rawArgs` to distinguish, mirroring upstream.
+    const ctx = makeMockCtx('echo', "'-n' with newline");
+    await run(cmdEcho, ctx);
+    expect(stdout()).toBe('-n with newline\n');
+  });
+
+  test('double-quoted "-n" is data, not the suppress-newline flag', async () => {
+    const ctx = makeMockCtx('echo', '"-n" with newline');
+    await run(cmdEcho, ctx);
+    expect(stdout()).toBe('"-n" with newline\n');
+  });
 });
 
 describe('\\warn', () => {

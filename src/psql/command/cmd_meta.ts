@@ -121,6 +121,12 @@ export const cmdCd: BackslashCmdSpec = {
  * Helper for `\echo` / `\qecho` / `\warn`. Reads args until exhausted,
  * honours the leading `-n` flag (suppresses trailing newline), joins with
  * single spaces, and writes to the chosen stream.
+ *
+ * Upstream `exec_command_echo` only treats `-n` as a flag when the source
+ * was the unquoted two-character token `-n`. `'-n'` (single-quoted) is a
+ * literal value: it should be printed AND the trailing newline kept. We
+ * inspect `ctx.rawArgs` directly because `nextArg` discards quote
+ * metadata after lexing.
  */
 const runEcho = (
   ctx: BackslashContext,
@@ -129,10 +135,21 @@ const runEcho = (
   const parts: string[] = [];
   let noNewline = false;
   let first = true;
+  // Pre-scan the raw text to decide whether the first arg was the
+  // unquoted `-n` token. We can't rely on the lexed arg value alone:
+  // `'-n'` / `"-n"` produce the same string but must be treated as data.
+  const firstArgIsUnquotedDashN = ((): boolean => {
+    let i = 0;
+    while (i < ctx.rawArgs.length && /\s/.test(ctx.rawArgs[i])) i++;
+    return (
+      ctx.rawArgs.slice(i, i + 2) === '-n' &&
+      (i + 2 === ctx.rawArgs.length || /\s/.test(ctx.rawArgs[i + 2]))
+    );
+  })();
   for (;;) {
     const arg = ctx.nextArg('normal');
     if (arg === null) break;
-    if (first && arg === '-n') {
+    if (first && firstArgIsUnquotedDashN && arg === '-n') {
       noNewline = true;
       first = false;
       continue;
