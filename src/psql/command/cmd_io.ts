@@ -960,8 +960,11 @@ const runGCore = async (
   // `\g` / `\gx` with an empty buffer re-runs the most recently submitted
   // query — upstream tracks this in `pset.last_query` and `PSQLexec` reads
   // it when the active buffer is empty. We mirror via `settings.lastQuery`,
-  // populated in `sendQuery` before dispatch.
-  const sql = bufSql.length > 0 ? bufSql : ctx.settings.lastQuery.trim();
+  // populated in `sendQuery` before dispatch. Preserve trailing whitespace
+  // on the re-run so the server's `position` (and the `LINE N:` echo we
+  // render on failure) match upstream byte-for-byte — vanilla passes the
+  // un-trimmed `pset.last_query` straight to `PQexec`.
+  const sql = bufSql.length > 0 ? bufSql : ctx.settings.lastQuery;
 
   // If a `\bind_named NAME` has staged a server-side prepared statement
   // lookup, we don't need any SQL text — the prepared statement carries
@@ -1115,7 +1118,15 @@ const runGCore = async (
     // the server's reported `position` is a 1-based offset into THAT
     // trimmed buffer. We preserve trailing whitespace so a `\g` after
     // `SELECT $1, $2 ` still renders `LINE 1: SELECT $1, $2 ` verbatim.
-    return formatServerError(ctx, execError, trimmedBuf);
+    // When buffer was empty (lastQuery fallback or named-bind path), the
+    // dispatched SQL is `sql` — pass that instead so the `LINE N:` echo
+    // still reflects the executed statement (e.g. `\bind_named NAME \g`
+    // after a `\parse NAME` of `SELECT $1, $2`).
+    return formatServerError(
+      ctx,
+      execError,
+      bufSql.length > 0 ? trimmedBuf : sql,
+    );
   }
   if (pipeError !== null) {
     return errResult(ctx, pipeError);

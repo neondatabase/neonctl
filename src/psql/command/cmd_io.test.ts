@@ -505,6 +505,32 @@ describe('\\g', () => {
     expect(stderr()).not.toMatch(/LINE 3:/);
   });
 
+  test('empty-buffer re-run preserves trailing whitespace in LINE echo', async () => {
+    // Regression: the psql.sql `\bind_named stmt4 \\ \bind_named \\ \g`
+    // sequence stores `pset.last_query = "SELECT $1, $2 "` (trailing
+    // space from `\parse stmt3`) and dispatches that exact buffer when
+    // the follow-on `\g` fires with an empty buffer. Vanilla psql
+    // passes the un-trimmed string straight to PQexec, so the server's
+    // position-based `LINE N:` echo includes the trailing space. We
+    // mirror by passing un-trimmed lastQuery and using `sql` (not the
+    // empty trimmedBuf) for the formatServerError SQL argument.
+    const conn = makeMockConn();
+    conn.execSimple = () => {
+      const err = Object.assign(new Error('there is no parameter $1'), {
+        severity: 'ERROR',
+        code: '42P02',
+        position: '8',
+      });
+      return Promise.reject(err);
+    };
+    const s = makeSettings(conn);
+    s.lastQuery = 'SELECT $1, $2 ';
+    const ctx = makeMockCtx('g', '', s, '');
+    const r = await run(cmdG, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/^LINE 1: SELECT \$1, \$2 /m);
+  });
+
   test('unopenable FILE target emits `<path>: <strerror>` and does not crash', async () => {
     // Regression: a `\g :unresolved/path` (e.g. left behind by an
     // unsubstituted variable) used to crash the entire Node process
