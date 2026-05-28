@@ -788,14 +788,22 @@ export const cmdGetResults: BackslashCmdSpec = {
       process.stdout.write('No pending results to get\n');
       return { status: 'ok' };
     }
-    // Available result count is governed by `PIPELINE_RESULT_COUNT` —
-    // upstream `exec_command_getresults` consults `pset.piped_results`
-    // for the same decision. A `\sendpipeline` queued on the client but
-    // not yet `\flushrequest`-ed / `\syncpipeline`-ed does NOT count;
-    // those commands have a still-pending Execute promise but the
-    // server hasn't been told to flush replies, so we can't observe
-    // anything synchronously.
-    const available = readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT');
+    // Available items to drain = PIPELINE_SYNC_COUNT + PIPELINE_RESULT_COUNT.
+    // Sync markers and data-result entries both occupy slots in libpq's
+    // pipeline result queue; vanilla's `\getresults N` walks the queue
+    // FIFO, draining either kind. A `\sendpipeline` queued on the
+    // client but not yet `\flushrequest`-ed / `\syncpipeline`-ed does
+    // NOT count — those commands have a still-pending Execute promise
+    // but the server hasn't been told to flush replies. Verified
+    // empirically with vanilla psql 18.4: SQL like
+    //   \syncpipeline \syncpipeline SELECT $1 \bind 1 \sendpipeline
+    //   \flushrequest \getresults 1
+    // prints nothing on the first \getresults 1 (SyncMarker drained,
+    // SYNC_COUNT: 2 → 1), the second prints nothing (SYNC_COUNT: 1 →
+    // 0), and the third prints the SELECT result.
+    const syncAvailable = readCounter(ctx.settings, 'PIPELINE_SYNC_COUNT');
+    const resultAvailable = readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT');
+    const available = syncAvailable + resultAvailable;
     if (available === 0) {
       process.stdout.write('No pending results to get\n');
       return { status: 'ok' };
@@ -807,9 +815,10 @@ export const cmdGetResults: BackslashCmdSpec = {
         ? available
         : Math.min(requested, available);
     // Pull the next `n` ResultSet promises from the session-tracked
-    // list of per-Execute results. `drainedCount` advances by `n` so
-    // a follow-on `\endpipeline` knows to skip what we've already
-    // printed.
+    // list of per-op results (which interleaves Sync markers from
+    // `session.sync()` with data results from `session.execute()`).
+    // `drainedCount` advances by `n` so a follow-on `\endpipeline`
+    // knows to skip what we've already printed.
     const results = (ps.session as PipelineSession).results;
     const start = ps.drainedCount;
     const end = start + n;
@@ -822,22 +831,36 @@ export const cmdGetResults: BackslashCmdSpec = {
     void ps.pending.splice(0, n);
     try {
       const settled = await Promise.allSettled(slice);
+      // Walk in order, decrementing the appropriate counter per drained
+      // entry. Sync markers are zero-fields ResultSets (pushed by
+      // `session.sync()`); data results carry the real RowDescription.
+      let syncsDrained = 0;
+      let resultsDrained = 0;
       for (const r of settled) {
-        if (r.status !== 'fulfilled') continue;
+        if (r.status !== 'fulfilled') {
+          // Rejected promise — most likely an Execute that errored
+          // server-side. Treat as a data-result slot (it consumes one
+          // PIPELINE_RESULT_COUNT entry), but we don't print it inline
+          // here (the conformance corpus expects pipeline ERRORs to
+          // surface at `\endpipeline` time, not at `\getresults`).
+          resultsDrained++;
+          continue;
+        }
         const rs = r.value;
-        if (rs.fields.length === 0) continue;
+        if (rs.fields.length === 0) {
+          // Sync marker.
+          syncsDrained++;
+          continue;
+        }
+        resultsDrained++;
         await alignedPrinter.printQuery(rs, ctx.settings.popt, process.stdout);
       }
-      // Upstream `exec_command_getresults` decrements `pset.piped_results`
-      // by the number of results actually consumed. When the queue empties,
-      // upstream also resets `pset.piped_syncs` to 0 (the pipeline is back
-      // to "no Sync outstanding") — verified empirically: a full drain
-      // makes SYNC=0 even when there were multiple prior Syncs, but a
-      // partial drain leaves SYNC unchanged.
-      bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', -n);
-      if (readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT') === 0) {
-        setCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', 0);
-      }
+      // Decrement counters. Upstream `exec_command_getresults` does the
+      // same accounting: PIPELINE_SYNC_COUNT and PIPELINE_RESULT_COUNT
+      // are decremented by the actually-consumed items in each
+      // category. Capped at 0 to be defensive.
+      bumpCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', -syncsDrained);
+      bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', -resultsDrained);
       return { status: 'ok' };
     } catch (err) {
       return errResult(ctx, errorToMessage(err));

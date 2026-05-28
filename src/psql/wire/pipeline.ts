@@ -173,6 +173,25 @@ export class PipelineSession implements Pipeline {
     this.conn.startExtendedBatch();
     const p = this.conn.enqueueSync();
     this.conn.writeRaw(Sync());
+    // Each `\syncpipeline` registers an additional "result-queue
+    // entry" the caller must drain via `\getresults` — vanilla psql
+    // 18.4 surfaces this as the PGRES_PIPELINE_SYNC marker libpq
+    // pushes onto its result queue. The conformance test at SQL
+    // line 184 (`\syncpipeline count as one command to fetch for
+    // \getresults`) expects exactly this drain accounting. We
+    // simulate it by pushing an empty (zero-fields) ResultSet
+    // promise into the per-Execute queue — `\getresults` skips
+    // printing it (the empty-fields guard) but advances `drainedCount`
+    // by one, matching upstream's libpq queue layout.
+    const syncMarker: ResultSet = {
+      command: '',
+      rowCount: null,
+      oid: null,
+      fields: [],
+      rows: [],
+      notices: [],
+    };
+    this._results.push(Promise.resolve(syncMarker));
     // Don't propagate a non-FATAL ErrorResponse here: upstream
     // `\syncpipeline` is silent on stderr — the server-side error
     // surfaces at `\endpipeline` time (see expected/psql_pipeline.out
