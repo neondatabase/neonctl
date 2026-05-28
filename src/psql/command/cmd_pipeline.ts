@@ -333,6 +333,28 @@ export const cmdParse: BackslashCmdSpec = {
     if (!ctx.settings.db) {
       return errResult(ctx, 'no connection to the server');
     }
+    // In pipeline mode, route the Parse through the active session so
+    // it gets queued behind the in-flight P/B/E ops (and the server
+    // defers any ParseError until the next Sync). Doing a `db.prepare`
+    // here would issue its own Sync mid-pipeline, corrupting the
+    // pipeline's reply ordering — the conformance corpus exercises a
+    // `\parse '' \parse '' \parse pipeline_1` triple-Parse and
+    // expects the third Parse's `could not determine data type` error
+    // to surface AT `\endpipeline` time, not synchronously here.
+    const pipelineActive = getPipelineState(ctx.settings);
+    if (pipelineActive !== null) {
+      try {
+        await pipelineActive.session.parse(name, sql, []);
+        ctx.settings.lastQuery = sql;
+        // Upstream `exec_command_parse` bumps `pset.piped_commands` after
+        // PQsendPrepare succeeds — the Parse is one queued command.
+        bumpCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT', 1);
+        return { status: 'reset-buf', newBuf: '' };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errResult(ctx, msg);
+      }
+    }
     try {
       const ps = await ctx.settings.db.prepare(name, sql);
       // Cache for `\bind_named NAME \g` lookup later. Upstream tracks
@@ -348,15 +370,6 @@ export const cmdParse: BackslashCmdSpec = {
       // "ERROR: there is no parameter $1" the conformance corpus
       // expects from `SELECT $1, $2` executed without bind params.
       ctx.settings.lastQuery = sql;
-      // When pipeline mode is active, the Parse counts as one command
-      // toward PIPELINE_COMMAND_COUNT (upstream `exec_command_parse`
-      // bumps `pset.piped_commands` after the PQsendPrepare call).
-      // Outside a pipeline, this is a no-op call site — the counters are
-      // only read inside pipeline scope so the bump would be invisible
-      // anyway, but we guard explicitly for clarity.
-      if (getPipelineState(ctx.settings) !== null) {
-        bumpCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT', 1);
-      }
       return { status: 'reset-buf', newBuf: '' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -587,18 +600,50 @@ export const cmdSendPipeline: BackslashCmdSpec = {
   helpKey: 'sendpipeline',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
     const ps = getPipelineState(ctx.settings);
-    if (!ps) return errResult(ctx, 'no pipeline active');
-    const sql = ctx.queryBuf.trim();
-    if (sql.length === 0) return errResult(ctx, 'no query buffer');
-
+    if (!ps) {
+      // Upstream wording (psql 18.4): "\\sendpipeline not allowed
+      // outside of pipeline mode". Verified empirically; no
+      // `\sendpipeline: ` prefix on stderr.
+      ctx.settings.lastErrorResult = {
+        message: '\\sendpipeline not allowed outside of pipeline mode',
+      };
+      writeErr('\\sendpipeline not allowed outside of pipeline mode\n');
+      return { status: 'error', errorWritten: true };
+    }
     const bind = consumeBindState(ctx.settings);
-    const stmtName = bind?.name ?? '';
-    const params = bind?.values ?? [];
+    // Upstream `exec_command_sendpipeline` (in pipeline mode) requires
+    // a preceding `\bind` or `\bind_named`. Without it, the error is
+    // "\sendpipeline must be used after \bind or \bind_named", emitted
+    // BEFORE the empty-buffer check. The conformance test exercises
+    // both `\sendpipeline` (no buffer, no bind) and `SELECT 1
+    // \sendpipeline` (with buffer, no bind) — both must produce the
+    // same diagnostic, so order matters here.
+    if (bind === null) {
+      ctx.settings.lastErrorResult = {
+        message: '\\sendpipeline must be used after \\bind or \\bind_named',
+      };
+      writeErr('\\sendpipeline must be used after \\bind or \\bind_named\n');
+      return { status: 'error', errorWritten: true };
+    }
+    const sql = ctx.queryBuf.trim();
+    const stmtName = bind.name;
+    const params = bind.values;
+    // `\bind_named NAME` re-uses a server-side prep stmt, so an empty
+    // buffer is fine — we skip the Parse and just Bind + Execute. The
+    // anonymous-`\bind` path still needs a buffer because we must
+    // Parse the SQL first.
+    if (!bind.byName && sql.length === 0) {
+      return errResult(ctx, 'no query buffer');
+    }
 
     try {
       // We send the full P/B/E sequence without an intervening Sync — the
       // user is expected to call \syncpipeline or \endpipeline to commit.
-      if (stmtName === '') {
+      // For `\bind_named`, skip Parse (the prep stmt already exists on
+      // the server, named by the user). For anonymous `\bind`, queue
+      // an unnamed Parse so the SQL is parsed on the server in this
+      // batch.
+      if (!bind.byName) {
         await ps.session.parse('', sql, []);
       }
       await ps.session.bind(stmtName, params);
