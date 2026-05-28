@@ -605,12 +605,38 @@ export const cmdEndPipeline: BackslashCmdSpec = {
         const r = entries[i];
         if (r.status === 'fulfilled') {
           const rs = r.value;
-          if (rs.fields.length > 0) {
-            await alignedPrinter.printQuery(
-              rs,
-              ctx.settings.popt,
-              process.stdout,
-            );
+          // Print real tuples-producing results — including the 0-column
+          // 1-row shape from `SELECT \bind \sendpipeline` which upstream
+          // psql renders as `--\n(1 row)\n` (the table glyphs are just
+          // the trailing separator row plus the default row-count footer).
+          // Skip our internal Sync marker (empty `command`, see
+          // wire/pipeline.ts) and DDL-style CommandComplete-only sets
+          // (non-empty `command` but no fields and no rows).
+          const isSyncMarker = rs.fields.length === 0 && rs.command === '';
+          const isCommandOnly =
+            rs.fields.length === 0 && rs.rows.length === 0 && rs.command !== '';
+          if (!isSyncMarker && !isCommandOnly) {
+            if (rs.fields.length === 0 && rs.rows.length > 0) {
+              // 0-column tuples result: the aligned printer's
+              // header/rule machinery degenerates to whitespace because
+              // there are no column widths to drive the dividers. Emit
+              // the upstream-shaped placeholder (`--` separator + row
+              // count) inline so we match `psql_pipeline.out`'s
+              // `\watch`-rejected SELECT output byte-for-byte.
+              const tuplesOnly = ctx.settings.popt.topt.tuplesOnly;
+              if (!tuplesOnly) {
+                process.stdout.write('--\n');
+                process.stdout.write(
+                  `(${rs.rows.length} ${rs.rows.length === 1 ? 'row' : 'rows'})\n\n`,
+                );
+              }
+            } else {
+              await alignedPrinter.printQuery(
+                rs,
+                ctx.settings.popt,
+                process.stdout,
+              );
+            }
           }
         } else if (!errorRendered) {
           // Render only the FIRST rejection inline — subsequent ops
