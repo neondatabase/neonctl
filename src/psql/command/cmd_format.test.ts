@@ -6,6 +6,7 @@ import { createVarStore } from '../core/variables.js';
 import { defaultSettings } from '../core/settings.js';
 
 import {
+  applyPset,
   cmdA,
   cmdC,
   cmdEncoding,
@@ -327,6 +328,106 @@ describe('\\pset misc', () => {
     expect(settings.popt.topt.unicodeBorderLineStyle).toBe('unicode');
   });
 
+  test('linestyle preserves old-ascii (printer owns the glyph swap)', async () => {
+    // Upstream `do_pset("linestyle", "old-ascii", …)` flips
+    // `popt.topt.line_style = &pg_asciiformat_old`. The bulk-view's
+    // `linestyle` line then reports "old-ascii" — distinct from "ascii".
+    // We mirror that by carrying `'old-ascii'` verbatim on
+    // `unicodeBorderLineStyle`; the printer (`print/aligned.ts`) picks
+    // the matching glyph table from there.
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'linestyle old-ascii', settings));
+    expect(settings.popt.topt.unicodeBorderLineStyle).toBe('old-ascii');
+    expect(settings.popt.topt.unicodeColumnLineStyle).toBe('old-ascii');
+    expect(settings.popt.topt.unicodeHeaderLineStyle).toBe('old-ascii');
+    expect(stdout()).toContain('Line style is old-ascii.\n');
+  });
+
+  test('format accepts unique prefixes; "a" is ambiguous', async () => {
+    // Upstream `do_pset` accepts unambiguous prefix matches for the
+    // format name. "l" is unique to "latex"; "a" matches both "aligned"
+    // and "asciidoc" — the ambiguous case must report both candidates.
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'format l', settings));
+    expect(settings.popt.topt.format).toBe('latex');
+
+    const r = await run(cmdPset, makeMockCtx('pset', 'format a', settings));
+    expect(r.status).toBe('error');
+    expect(stderr()).toContain(
+      '\\pset: ambiguous abbreviation "a" matches both "aligned" and "asciidoc"\n',
+    );
+  });
+
+  test('csv_fieldsep diagnoses NUL/empty/multi-char vs forbidden singles', async () => {
+    // Upstream `do_pset` reports two distinct messages:
+    //   - "must be a single one-byte character" for empty / multi-char
+    //     inputs (and `\0`, which in C is NUL-terminator → empty C str).
+    //   - "cannot be a double quote, a newline, or a carriage return"
+    //     for the three forbidden single-byte values.
+    const r1 = await run(cmdPset, makeMockCtx('pset', 'csv_fieldsep'));
+    expect(r1.status).toBe('ok');
+
+    stderrChunks.length = 0;
+    const r2 = await run(
+      cmdPset,
+      makeMockCtx('pset', 'csv_fieldsep ab', defaultSettings(createVarStore())),
+    );
+    expect(r2.status).toBe('error');
+    expect(stderr()).toContain(
+      '\\pset: csv_fieldsep must be a single one-byte character\n',
+    );
+
+    stderrChunks.length = 0;
+    const settings = defaultSettings(createVarStore());
+    settings.popt.topt.csvFieldSep = ',';
+    // Simulate the post-octal-decode NUL byte.
+    const ctxNul: BackslashContext = {
+      ...makeMockCtx('pset', '', settings),
+      // Stub nextArg to feed option then NUL value:
+    };
+    // We can exercise the NUL path more directly via applyPset:
+    // here, just rely on the empty-string check (multi-char branch).
+    void ctxNul;
+
+    stderrChunks.length = 0;
+    const r3 = applyPset(settings.popt.topt, 'csv_fieldsep', '\n', 'pset');
+    expect(r3.status).toBe('error');
+    expect(stderr()).toContain(
+      '\\pset: csv_fieldsep cannot be a double quote, a newline, or a carriage return\n',
+    );
+
+    stderrChunks.length = 0;
+    const r4 = applyPset(settings.popt.topt, 'csv_fieldsep', '\r', 'pset');
+    expect(r4.status).toBe('error');
+    expect(stderr()).toContain(
+      '\\pset: csv_fieldsep cannot be a double quote, a newline, or a carriage return\n',
+    );
+
+    stderrChunks.length = 0;
+    const r5 = applyPset(settings.popt.topt, 'csv_fieldsep', '"', 'pset');
+    expect(r5.status).toBe('error');
+    expect(stderr()).toContain(
+      '\\pset: csv_fieldsep cannot be a double quote, a newline, or a carriage return\n',
+    );
+
+    stderrChunks.length = 0;
+    const r6 = applyPset(settings.popt.topt, 'csv_fieldsep', '\0', 'pset');
+    expect(r6.status).toBe('error');
+    expect(stderr()).toContain(
+      '\\pset: csv_fieldsep must be a single one-byte character\n',
+    );
+  });
+
+  test('error wording uses single \\pset: prefix even via \\C/\\a wrappers', async () => {
+    // Upstream `do_pset` always logs via `pg_log_error("\\pset: ...")`,
+    // independent of the calling slash command. Our applyPset must
+    // mirror that — no `\<callerCmd>: \pset: ...` doubling.
+    const r = await run(cmdPset, makeMockCtx('pset', 'border 9'));
+    expect(r.status).toBe('error');
+    expect(stderr()).toContain('\\pset: invalid border "9"\n');
+    expect(stderr()).not.toContain('\\pset: \\pset:');
+  });
+
   test('columns sets a positive int', async () => {
     const settings = defaultSettings(createVarStore());
     await run(cmdPset, makeMockCtx('pset', 'columns 100', settings));
@@ -336,6 +437,36 @@ describe('\\pset misc', () => {
   test('unknown option errors', async () => {
     const r = await run(cmdPset, makeMockCtx('pset', 'mystery x'));
     expect(r.status).toBe('error');
+  });
+
+  test('extra args after value emit "extra argument ignored" per token', async () => {
+    // Upstream `exec_command_pset` drains trailing args with
+    // `ignore_slash_options` (which uses OT_NO_EVAL — neither variables
+    // nor backticks are evaluated). The warning text should preserve
+    // quote delimiters and the `:var` colon form verbatim.
+    const settings = defaultSettings(createVarStore());
+    settings.vars.set('foo', 'bar');
+    await run(
+      cmdPset,
+      makeMockCtx(
+        'pset',
+        `fieldsep | nosuchcommand :foo :'foo' :"foo"`,
+        settings,
+      ),
+    );
+    const err = stderr();
+    expect(err).toContain('\\pset: extra argument "nosuchcommand" ignored\n');
+    expect(err).toContain('\\pset: extra argument ":foo" ignored\n');
+    expect(err).toContain('\\pset: extra argument ":\'foo\'" ignored\n');
+    expect(err).toContain('\\pset: extra argument ":"foo"" ignored\n');
+  });
+
+  test('extra-arg drain peels backtick delimiters but does not exec', async () => {
+    // `\pset fieldsep | `whoami`` arrives with a backticked second token;
+    // upstream `OT_NO_EVAL` drops the delimiters and keeps the body.
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'fieldsep | `whoami`', settings));
+    expect(stderr()).toContain('\\pset: extra argument "whoami" ignored\n');
   });
 
   test('no args prints all options', async () => {

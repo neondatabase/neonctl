@@ -199,7 +199,7 @@ export const cmdX: BackslashCmdSpec = {
         writeErr(
           `\\${ctx.cmdName}: unrecognized value "${arg}": Boolean expected\n`,
         );
-        return Promise.resolve({ status: 'error' });
+        return Promise.resolve({ status: 'error', errorWritten: true });
       }
       if (parsed === 'toggle') {
         next = topt.expanded === 'on' ? 'off' : 'on';
@@ -247,7 +247,7 @@ export const cmdEncoding: BackslashCmdSpec = {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         writeErr(`\\${ctx.cmdName}: ${msg}\n`);
-        return Promise.resolve({ status: 'error' });
+        return Promise.resolve({ status: 'error', errorWritten: true });
       }
     }
     return Promise.resolve({ status: 'ok' });
@@ -299,12 +299,31 @@ export const applyPset = (
         return { status: 'ok' };
       }
       const v = value.toLowerCase();
-      const match = OUTPUT_FORMATS.find((f) => f === v);
+      // Upstream `do_pset` accepts unambiguous prefix matches for the
+      // format name via a hand-rolled cascade of `pg_strncasecmp` checks:
+      //
+      //   1. Special ambiguity guard for "aligned" vs "asciidoc" — any
+      //      input that is a prefix of BOTH is rejected with the
+      //      "ambiguous abbreviation" diagnostic (the only pair where
+      //      upstream cares).
+      //   2. Otherwise pick the first OUTPUT_FORMATS entry that starts
+      //      with `v` (the order in OUTPUT_FORMATS — `latex` before
+      //      `latex-longtable` etc. — encodes which canonical name wins
+      //      when one is a prefix of another).
+      const startsWithBoth =
+        'aligned'.startsWith(v) && 'asciidoc'.startsWith(v);
+      if (startsWithBoth) {
+        writeErr(
+          `\\pset: ambiguous abbreviation "${value}" matches both "aligned" and "asciidoc"\n`,
+        );
+        return { status: 'error', errorWritten: true };
+      }
+      const match = OUTPUT_FORMATS.find((f) => f.startsWith(v));
       if (!match) {
         writeErr(
-          `\\${cmdName}: \\pset: allowed formats are aligned, asciidoc, csv, html, json, latex, latex-longtable, troff-ms, unaligned, wrapped\n`,
+          `\\pset: allowed formats are aligned, asciidoc, csv, html, json, latex, latex-longtable, troff-ms, unaligned, wrapped\n`,
         );
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       topt.format = match;
       writeOutMaybe(`Output format is ${formatName(match)}.\n`);
@@ -317,8 +336,8 @@ export const applyPset = (
       }
       const n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 0 || n > 3) {
-        writeErr(`\\${cmdName}: \\pset: invalid border "${value}"\n`);
-        return { status: 'error' };
+        writeErr(`\\pset: invalid border "${value}"\n`);
+        return { status: 'error', errorWritten: true };
       }
       topt.border = n as BorderStyle;
       writeOutMaybe(`Border style is ${topt.border}.\n`);
@@ -332,9 +351,9 @@ export const applyPset = (
         const p = parseTriple(value);
         if (p === null) {
           writeErr(
-            `\\${cmdName}: \\pset: unrecognized value "${value}" for "expanded": Boolean expected\n`,
+            `\\pset: unrecognized value "${value}" for "expanded": Boolean expected\n`,
           );
-          return { status: 'error' };
+          return { status: 'error', errorWritten: true };
         }
         topt.expanded =
           p === 'toggle' ? (topt.expanded === 'on' ? 'off' : 'on') : p;
@@ -368,9 +387,9 @@ export const applyPset = (
         const b = parseBool(value);
         if (b === null) {
           writeErr(
-            `\\${cmdName}: \\pset: unrecognized value "${value}" for "footer": Boolean expected\n`,
+            `\\pset: unrecognized value "${value}" for "footer": Boolean expected\n`,
           );
-          return { status: 'error' };
+          return { status: 'error', errorWritten: true };
         }
         topt.defaultFooter = b;
         return { status: 'ok' };
@@ -412,10 +431,8 @@ export const applyPset = (
         // silent. The toggle path (no value) still prints.
         const b = parseBool(value);
         if (b === null) {
-          writeErr(
-            `\\${cmdName}: \\pset: unrecognized value "${value}": Boolean expected\n`,
-          );
-          return { status: 'error' };
+          writeErr(`\\pset: unrecognized value "${value}": Boolean expected\n`);
+          return { status: 'error', errorWritten: true };
         }
         topt.tuplesOnly = b;
         return { status: 'ok' };
@@ -457,10 +474,8 @@ export const applyPset = (
         } else {
           const b = parseBool(value);
           if (b === null) {
-            writeErr(
-              `\\${cmdName}: \\pset: unrecognized value "${value}" for "pager"\n`,
-            );
-            return { status: 'error' };
+            writeErr(`\\pset: unrecognized value "${value}" for "pager"\n`);
+            return { status: 'error', errorWritten: true };
           }
           topt.pager = b ? 'on' : 'off';
         }
@@ -478,10 +493,8 @@ export const applyPset = (
       if (value !== null) {
         const n = parseInt(value, 10);
         if (!Number.isFinite(n) || n < 0) {
-          writeErr(
-            `\\${cmdName}: \\pset: invalid pager_min_lines "${value}"\n`,
-          );
-          return { status: 'error' };
+          writeErr(`\\pset: invalid pager_min_lines "${value}"\n`);
+          return { status: 'error', errorWritten: true };
         }
         topt.pagerMinLines = n;
       }
@@ -499,16 +512,23 @@ export const applyPset = (
     }
     case 'csv_fieldsep': {
       if (value !== null) {
-        if (
-          value.length !== 1 ||
-          value === '"' ||
-          value === '\n' ||
-          value === '\r'
-        ) {
+        // Upstream `do_pset` splits the validation in two: length-based
+        // ("must be a single one-byte character") fires for empty / multi-
+        // char inputs *and* for the NUL byte (because in C the string is
+        // NUL-terminated, so `'\0'` decodes to an empty C string). The
+        // "cannot be a double quote, a newline, or a carriage return"
+        // path is reserved for the three forbidden single-byte values.
+        if (value.length !== 1 || value === '\0') {
           writeErr(
-            `\\${cmdName}: \\pset: csv_fieldsep must be a single one-byte character\n`,
+            `\\pset: csv_fieldsep must be a single one-byte character\n`,
           );
-          return { status: 'error' };
+          return { status: 'error', errorWritten: true };
+        }
+        if (value === '"' || value === '\n' || value === '\r') {
+          writeErr(
+            `\\pset: csv_fieldsep cannot be a double quote, a newline, or a carriage return\n`,
+          );
+          return { status: 'error', errorWritten: true };
         }
         topt.csvFieldSep = value;
       }
@@ -524,9 +544,9 @@ export const applyPset = (
         const p = parseTriple(value);
         if (p === null || p === 'auto') {
           writeErr(
-            `\\${cmdName}: \\pset: unrecognized value "${value}" for "numericlocale": Boolean expected\n`,
+            `\\pset: unrecognized value "${value}" for "numericlocale": Boolean expected\n`,
           );
-          return { status: 'error' };
+          return { status: 'error', errorWritten: true };
         }
         topt.numericLocale = p === 'toggle' ? !topt.numericLocale : p === 'on';
         return { status: 'ok' };
@@ -545,7 +565,12 @@ export const applyPset = (
         return { status: 'ok' };
       }
       const lower = value.toLowerCase();
-      if (lower === 'ascii' || lower === 'unicode') {
+      // Preserve 'old-ascii' verbatim so the bulk-view (`\pset` with no
+      // args) round-trips and the printer can pick the matching glyph
+      // table. Upstream `do_pset("linestyle", "old-ascii", …)` flips
+      // `popt.topt.line_style = &pg_asciiformat_old`; we carry the same
+      // three-way distinction on `unicodeBorderLineStyle`.
+      if (lower === 'ascii' || lower === 'old-ascii' || lower === 'unicode') {
         const ls = lower as Unicode2LineStyle;
         topt.unicodeBorderLineStyle = ls;
         topt.unicodeColumnLineStyle = ls;
@@ -553,24 +578,15 @@ export const applyPset = (
         writeOutMaybe(`Line style is ${ls}.\n`);
         return { status: 'ok' };
       }
-      if (lower === 'old-ascii') {
-        topt.unicodeBorderLineStyle = 'ascii';
-        topt.unicodeColumnLineStyle = 'ascii';
-        topt.unicodeHeaderLineStyle = 'ascii';
-        writeOutMaybe('Line style is old-ascii.\n');
-        return { status: 'ok' };
-      }
-      writeErr(
-        `\\${cmdName}: \\pset: allowed line styles are ascii, old-ascii, unicode\n`,
-      );
-      return { status: 'error' };
+      writeErr(`\\pset: allowed line styles are ascii, old-ascii, unicode\n`);
+      return { status: 'error', errorWritten: true };
     }
     case 'columns': {
       if (value !== null) {
         const n = parseInt(value, 10);
         if (!Number.isFinite(n) || n < 0) {
-          writeErr(`\\${cmdName}: \\pset: invalid columns "${value}"\n`);
-          return { status: 'error' };
+          writeErr(`\\pset: invalid columns "${value}"\n`);
+          return { status: 'error', errorWritten: true };
         }
         topt.columns = n;
       }
@@ -596,9 +612,9 @@ export const applyPset = (
             !/^[+]?\d+$/.test(value.trim())
           ) {
             writeErr(
-              `\\${cmdName}: \\pset: allowed xheader_width values are "full" (default), "column", "page", or a number specifying the exact width\n`,
+              `\\pset: allowed xheader_width values are "full" (default), "column", "page", or a number specifying the exact width\n`,
             );
-            return { status: 'error' };
+            return { status: 'error', errorWritten: true };
           }
           topt.xheaderWidth = n;
         }
@@ -630,8 +646,8 @@ export const applyPset = (
       if (value !== null) {
         const lower = value.toLowerCase();
         if (lower !== 'single' && lower !== 'double') {
-          writeErr(`\\${cmdName}: \\pset: ${opt} must be single or double\n`);
-          return { status: 'error' };
+          writeErr(`\\pset: ${opt} must be single or double\n`);
+          return { status: 'error', errorWritten: true };
         }
         const style: Unicode2BorderStyle = lower;
         if (opt === 'unicode_border_linestyle') {
@@ -652,8 +668,8 @@ export const applyPset = (
       return { status: 'ok' };
     }
     default: {
-      writeErr(`\\${cmdName}: \\pset: unknown option "${option}"\n`);
-      return { status: 'error' };
+      writeErr(`\\pset: unknown option "${option}"\n`);
+      return { status: 'error', errorWritten: true };
     }
   }
 };
@@ -738,11 +754,101 @@ const printAllPset = (topt: PrintTableOpts): void => {
 };
 
 /**
+ * Lex extra args from the rest-of-line tail without expanding variables or
+ * executing backticks — mirrors upstream `ignore_slash_options`, which uses
+ * `psql_scan_slash_option(scan_state, OT_NO_EVAL, …)`. Quoting characters
+ * are preserved in the returned text so `:foo` stays `:foo`, `:'foo'` stays
+ * `:'foo'`, and `` `cmd` `` becomes `cmd` (backticks dropped, body kept
+ * unevaluated). Stops at the next backslash so the next command isn't
+ * eaten.
+ */
+const lexExtraArgs = (tail: string): string[] => {
+  const out: string[] = [];
+  let i = 0;
+  const isSpace = (c: string | undefined): boolean =>
+    c === ' ' ||
+    c === '\t' ||
+    c === '\n' ||
+    c === '\r' ||
+    c === '\f' ||
+    c === '\v';
+  while (i < tail.length) {
+    while (i < tail.length && isSpace(tail[i])) i++;
+    if (i >= tail.length) break;
+    if (tail[i] === '\\') break;
+    let arg = '';
+    while (i < tail.length && !isSpace(tail[i]) && tail[i] !== '\\') {
+      const c = tail[i];
+      if (c === "'") {
+        // Single-quoted: keep delimiters in the warning text so the user
+        // sees the literal token.
+        let j = i + 1;
+        let inner = '';
+        while (j < tail.length && tail[j] !== "'") {
+          if (tail[j] === '\\' && j + 1 < tail.length) {
+            inner += tail[j] + tail[j + 1];
+            j += 2;
+            continue;
+          }
+          inner += tail[j];
+          j++;
+        }
+        arg += `'${inner}'`;
+        i = j < tail.length ? j + 1 : j;
+        continue;
+      }
+      if (c === '"') {
+        let j = i + 1;
+        let inner = '';
+        while (j < tail.length && tail[j] !== '"') {
+          inner += tail[j];
+          j++;
+        }
+        arg += `"${inner}"`;
+        i = j < tail.length ? j + 1 : j;
+        continue;
+      }
+      if (c === '`') {
+        // Drop the backtick delimiters; don't run the command (OT_NO_EVAL).
+        let j = i + 1;
+        let inner = '';
+        while (j < tail.length && tail[j] !== '`') {
+          inner += tail[j];
+          j++;
+        }
+        arg += inner;
+        i = j < tail.length ? j + 1 : j;
+        continue;
+      }
+      arg += c;
+      i++;
+    }
+    out.push(arg);
+  }
+  return out;
+};
+
+/**
  * `\pset [option [value]]` — the master print-options setter.
  *
  * - No args: print all options.
  * - Option only: toggle (for booleans) or show current value.
  * - Option + value: set.
+ * - Option + value + extra: set, then emit one `extra argument "X" ignored`
+ *   per extra arg (matches upstream `exec_command_pset`'s post-`do_pset`
+ *   call to `ignore_slash_options`).
+ *
+ * Implementation note: the surrounding REPL's `BackslashContext` (built
+ * in `core/mainloop.ts::makeBackslashContext`) returns the full
+ * `rawArgs` verbatim from `restOfLine()` — there's no cursor we can
+ * read to find the unconsumed tail. We therefore lex `rawArgs` a second
+ * time with {@link lexExtraArgs} to recover the *raw* (unexpanded)
+ * token text, while still calling `ctx.nextArg('normal')` for
+ * option/value so variable substitution and backtick execution behave
+ * exactly like the rest of the slash-command layer. The drain pulls
+ * the raw token text from index 2+ so the warning preserves the
+ * upstream `OT_NO_EVAL` semantics — `:foo` stays as `:foo`, `` `cmd` ``
+ * collapses to `cmd` without running.
  */
 export const cmdPset: BackslashCmdSpec = {
   name: 'pset',
@@ -759,14 +865,21 @@ export const cmdPset: BackslashCmdSpec = {
     // confirmation lines like `Null display is "…".` and `Tuples only
     // is on.`. Pass `silent=true` so applyPset skips the writes —
     // errors (invalid option / bad value) still go to stderr.
-    return Promise.resolve(
-      applyPset(
-        ctx.settings.popt.topt,
-        option,
-        value,
-        ctx.cmdName,
-        ctx.settings.quiet,
-      ),
+    const result = applyPset(
+      ctx.settings.popt.topt,
+      option,
+      value,
+      ctx.cmdName,
+      ctx.settings.quiet,
     );
+    // Drain extras. Re-lex `rawArgs` raw so the warning text is the
+    // original (unexpanded, un-executed) token; the option/value were
+    // already consumed by the two `nextArg` calls above, so we skip
+    // the first two raw tokens and emit a warning per remaining one.
+    const rawTokens = lexExtraArgs(ctx.rawArgs);
+    for (let i = 2; i < rawTokens.length; i++) {
+      writeErr(`\\${ctx.cmdName}: extra argument "${rawTokens[i]}" ignored\n`);
+    }
+    return Promise.resolve(result);
   },
 };
