@@ -888,15 +888,19 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           }
         }
         if (wantsCopyOut && ctx.settings.db) {
-          // Wire a stdout-bound sink so the wire layer can forward
-          // mid-batch CopyData bytes verbatim (matching `handleCopyOut`).
-          // Bytes already include trailing newlines on each row, so we
-          // pass them through unchanged.
+          // Wire a sink so the wire layer can forward mid-batch CopyData
+          // bytes verbatim (matching `handleCopyOut`). Routes to the
+          // active query output (`\o FILE` stashed stream when set,
+          // otherwise `ctx.stdout`) — upstream `handleCopyOut` sinks the
+          // bytes into `pset.queryFout`, which is whatever `\o` last
+          // pointed at. Bytes already include trailing newlines on each
+          // row, so we pass them through unchanged.
           const conn = ctx.settings.db as unknown as {
             copyOutMidBatchSink?: ((chunk: Buffer) => void) | null;
           };
+          const out = pickOut(ctx);
           conn.copyOutMidBatchSink = (chunk: Buffer): void => {
-            ctx.stdout.write(chunk);
+            out.write(chunk);
           };
         }
         sigintState.inQuery = true;

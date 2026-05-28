@@ -597,6 +597,80 @@ describe('runMainLoop — conditional dispatch', () => {
 });
 
 // ---------------------------------------------------------------------------
+// COPY ... TO STDOUT mid-batch sink routing
+//
+// The wire layer routes mid-batch CopyData bytes via
+// `copyOutMidBatchSink`. Mainloop installs that sink ahead of
+// `dispatchSendQuery` so the wire side has a target before the server
+// pushes data. The sink must route to the active query output target —
+// `\o FILE` stash when set, otherwise `ctx.stdout` — matching upstream
+// `handleCopyOut(pset.queryFout, ...)`.
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — COPY-OUT mid-batch sink', () => {
+  test('sink writes to ctx.stdout when no \\o redirect is active', async () => {
+    const { ctx, stdout, db } = buildCtx({
+      lines: [`COPY (SELECT 'foo') TO STDOUT;`],
+    });
+    // Capture the sink mainloop installs so we can drive it directly,
+    // bypassing the wire layer. The mock execSimple is what triggers
+    // mainloop's prior installation.
+    let installedSink: ((chunk: Buffer) => void) | null = null;
+    const conn = db as unknown as {
+      copyOutMidBatchSink: ((chunk: Buffer) => void) | null;
+      execSimple: (sql: string) => Promise<ResultSet[]>;
+    };
+    const origExec = conn.execSimple.bind(conn);
+    conn.execSimple = (sql: string): Promise<ResultSet[]> => {
+      installedSink = conn.copyOutMidBatchSink ?? null;
+      installedSink?.(Buffer.from('foo\n'));
+      return origExec(sql);
+    };
+    await runMainLoop(ctx);
+    expect(stdout.text()).toContain('foo\n');
+  });
+
+  test('sink writes to queryFout stash (\\o FILE target) when active', async () => {
+    const { ctx, stdout, db } = buildCtx({
+      lines: [`COPY (SELECT 'bar') TO STDOUT;`],
+    });
+    const redirected = makeBuffer();
+    // Mimic `\o FILE` by stashing a queryFout entry directly. The
+    // symbol key matches cmd_io.ts's `QUERY_FOUT_KEY`.
+    const stash = ctx.settings as unknown as Record<symbol, unknown>;
+    stash[Symbol.for('neonctl.psql.queryFout')] = {
+      stream: redirected,
+      close: () => Promise.resolve(),
+    };
+    const conn = db as unknown as {
+      copyOutMidBatchSink: ((chunk: Buffer) => void) | null;
+      execSimple: (sql: string) => Promise<ResultSet[]>;
+    };
+    const origExec = conn.execSimple.bind(conn);
+    conn.execSimple = (sql: string): Promise<ResultSet[]> => {
+      conn.copyOutMidBatchSink?.(Buffer.from('bar\n'));
+      return origExec(sql);
+    };
+    await runMainLoop(ctx);
+    expect(redirected.text()).toContain('bar\n');
+    expect(stdout.text()).not.toContain('bar\n');
+  });
+
+  test('sink is cleared once the batch settles', async () => {
+    const { ctx, db } = buildCtx({
+      lines: [`COPY (SELECT 'baz') TO STDOUT;`],
+    });
+    const conn = db as unknown as {
+      copyOutMidBatchSink: ((chunk: Buffer) => void) | null;
+    };
+    await runMainLoop(ctx);
+    // Post-batch teardown leaves the sink null so the next call starts
+    // with a fresh slate (no write-after-close hazard on closed \o files).
+    expect(conn.copyOutMidBatchSink).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 
