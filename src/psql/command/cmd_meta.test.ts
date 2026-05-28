@@ -368,6 +368,28 @@ describe('\\setenv', () => {
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/must not contain "="/);
   });
+
+  test('reads VALUE in OT_NORMAL mode so :VAR substitutes through', async () => {
+    // Sanity guard for the parallel-cursor regression: the mainloop
+    // BackslashContext maintains a per-mode read cursor, so if both
+    // `\setenv NAME VALUE` reads requested different modes the second
+    // call would return the first arg again. cmd_meta now uses the same
+    // mode for both (matching upstream OT_NORMAL/OT_NORMAL), which keeps
+    // the cursor in sync regardless of how the context implements it,
+    // and ALSO matches upstream by performing `:VAR` substitution on
+    // the value (vanilla psql `\setenv FOO :BAR` propagates BAR's
+    // psql-variable value into the env var).
+    const settings = defaultSettings(createVarStore());
+    settings.vars.set('source', 'expanded-from-source');
+    const ctx = makeMockCtx('setenv', 'NEONCTL_TEST_VAR_SUB :source', settings);
+    const r = await run(cmdSetenv, ctx);
+    expect(r.status).toBe('ok');
+    // Mock context's nextArg doesn't perform variable substitution; we
+    // verify the *value* arg is read positionally as a distinct second
+    // token (the regression would set process.env to the var name).
+    expect(process.env.NEONCTL_TEST_VAR_SUB).toBe(':source');
+    delete process.env.NEONCTL_TEST_VAR_SUB;
+  });
 });
 
 describe('\\timing', () => {

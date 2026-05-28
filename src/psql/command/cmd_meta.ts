@@ -364,7 +364,14 @@ export const cmdSetenv: BackslashCmdSpec = {
       );
       return Promise.resolve({ status: 'error' });
     }
-    const value = ctx.nextArg('no-vars');
+    // Upstream `exec_command_setenv` reads BOTH the name AND the value with
+    // OT_NORMAL — `:VAR` substitution applies to the value so
+    // `\setenv FOO :BAR` propagates the psql-variable value into the env.
+    // (Earlier 'no-vars' was a misread; vanilla psql expands inside the
+    // value.) The mainloop context maintains a per-mode cursor, so using
+    // a single mode for both calls also keeps positional reads in sync —
+    // each cursor advances exactly once per call.
+    const value = ctx.nextArg('normal');
     if (value === null) {
       // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
       delete process.env[envname];
