@@ -1040,8 +1040,25 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           queryBuf = '';
           scanState = initialScanState();
           stmtLineNumber = 1;
-          const nlIdx = working.indexOf('\n');
-          working = nlIdx === -1 ? '' : working.slice(nlIdx + 1);
+          // Discard any trailing content on the SAME physical line — but NOT
+          // the rest of the script. The scanner consumes a slash command's
+          // args but typically leaves the line terminator (`\n`) at the head
+          // of `working`. If `working` starts with `\n` / `\r\n`, the failed
+          // command was already at end-of-line — just drop the terminator
+          // and let the next line dispatch normally. If `working` has
+          // non-newline chars before the next `\n`, drop up to and including
+          // that `\n` (mirrors upstream `HandleSlashCmds`' `OT_WHOLE_LINE`
+          // discard). Without this branch a stack of `\gdesc\n\gdesc\n…`
+          // lines collapses to a single dispatched `\gdesc` because the
+          // first discard ate the second line.
+          if (working.startsWith('\r\n')) {
+            working = working.slice(2);
+          } else if (working.startsWith('\n') || working.startsWith('\r')) {
+            working = working.slice(1);
+          } else {
+            const nlIdx = working.indexOf('\n');
+            working = nlIdx === -1 ? '' : working.slice(nlIdx + 1);
+          }
         }
         lastWasError = bres?.status === 'error';
         // Backslash commands like \connect can also tear down the connection.
