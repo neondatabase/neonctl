@@ -550,6 +550,59 @@ describe('\\g', () => {
     expect(conn.history).toEqual([]);
     expect(stderr()).not.toMatch(/\\g:/);
   });
+
+  test('routes COPY-TO-STDOUT bytes to the file target via copyOutMidBatchSink', async () => {
+    // Regression: `COPY (SELECT 'foo') TO STDOUT \g :file` should write
+    // `foo\n` to the FILE, not stdout. The wire forwards CopyData
+    // through `copyOutMidBatchSink` — `runGCore` must install a sink
+    // pointed at the `\g FILE` target so the data lands in the file.
+    // Without the install, the bytes vanish and the file ends up with
+    // only the (empty) ResultSet shape from the COPY command tag.
+    const conn = makeMockConn();
+    // Carry the assigned sink so the test can drive synthetic CopyData
+    // bytes that mimic what the wire would forward mid-execSimple.
+    let installedSink: ((chunk: Buffer) => void) | null = null;
+    (conn as unknown as Record<string, unknown>).copyOutMidBatchSink = null;
+    Object.defineProperty(conn, 'copyOutMidBatchSink', {
+      configurable: true,
+      get() {
+        return installedSink;
+      },
+      set(v: ((chunk: Buffer) => void) | null) {
+        installedSink = v;
+      },
+    });
+    conn.execSimple = (sql: string) => {
+      conn.history.push(sql);
+      // Simulate the wire's mid-batch CopyData arrival before the
+      // CommandComplete drains into the empty-fields ResultSet.
+      if (installedSink) {
+        installedSink(Buffer.from('foo\n', 'utf8'));
+      }
+      return Promise.resolve([
+        // CommandComplete arrives as an empty-fields "COPY 1" tag.
+        {
+          command: 'COPY',
+          rowCount: 1,
+          oid: null,
+          fields: [],
+          rows: [],
+          notices: [],
+        },
+      ] as ResultSet[]);
+    };
+    const s = makeSettings(conn);
+    const file = tmpFile();
+    const ctx = makeMockCtx('g', file, s, "COPY (SELECT 'foo') TO STDOUT");
+    const r = await run(cmdG, ctx);
+    expect(r.status).toBe('reset-buf');
+    const written = await fs.readFile(file, 'utf8');
+    expect(written).toContain('foo\n');
+    // Sink must be cleared after dispatch so subsequent top-level batches
+    // see a clean slate (mainloop reinstalls per dispatch). Otherwise the
+    // next CopyData burst would try to write to the now-closed file.
+    expect(installedSink).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
