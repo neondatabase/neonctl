@@ -264,6 +264,67 @@ export class PipelineSession implements Pipeline {
     if (count > this._externalDrained) this._externalDrained = count;
   }
 
+  /**
+   * Peek at the FIRST real (non-`pipelineAborted`) rejection anywhere
+   * in `pending` ∪ `results`, INSPECTING ONLY promises that are already
+   * settled. Used by `\getresults` / `\endpipeline` to find the
+   * originating diagnostic when the wire layer's cascade-reject landed
+   * the real `ConnectError` on a `pending` Parse/Bind/Close (not visible
+   * to `results`-only walks) and stamped `pipelineAborted` onto the
+   * visible Execute slots.
+   *
+   * Each candidate is raced against a microtask-resolved sentinel so a
+   * still-pending promise (e.g. the next Execute waiting for its
+   * Sync round-trip) doesn't block the peek. Returns `null` when
+   * nothing has rejected yet — or when the only rejections so far are
+   * the synthetic `pipelineAborted` marker.
+   */
+  public async peekRealError(): Promise<unknown> {
+    const allP = [...this.pending, ...this.results];
+    const sentinel = Symbol('pending');
+    // Race each candidate against a `setImmediate`-deferred sentinel so
+    // any promise that was already settled (synchronously, e.g. by the
+    // wire layer's cascade-reject inside its ErrorResponse handler) has
+    // a full microtask drain to fulfil its `.then(...)` chain before
+    // the sentinel resolves. A bare `Promise.resolve(sentinel)` would
+    // race in the same microtask tier and the sentinel sometimes wins
+    // even when the candidate has a settled value — that's the
+    // ordering quirk this `setImmediate` step pins down.
+    const deferred = (): Promise<typeof sentinel> =>
+      new Promise((resolve) =>
+        setImmediate(() => {
+          resolve(sentinel);
+        }),
+      );
+    for (const p of allP) {
+      const r = (await Promise.race([
+        p.then(
+          (v): { status: 'fulfilled'; value: unknown } => ({
+            status: 'fulfilled',
+            value: v,
+          }),
+          (e: unknown): { status: 'rejected'; reason: unknown } => ({
+            status: 'rejected',
+            reason: e,
+          }),
+        ),
+        deferred(),
+      ])) as
+        | { status: 'fulfilled'; value: unknown }
+        | { status: 'rejected'; reason: unknown }
+        | typeof sentinel;
+      if (r === sentinel) continue;
+      if (r.status !== 'rejected') continue;
+      const reason = r.reason;
+      const isAborted =
+        typeof reason === 'object' &&
+        reason !== null &&
+        (reason as { pipelineAborted?: boolean }).pipelineAborted === true;
+      if (!isAborted) return reason;
+    }
+    return null;
+  }
+
   public async end(): Promise<ResultSet[]> {
     // Send a terminating Sync so the connection settles back to idle.
     this.conn.startExtendedBatch();
@@ -310,7 +371,7 @@ export class PipelineSession implements Pipeline {
       if (!this._errorConsumedExternally) {
         this._lastError = fatal;
       }
-    } else {
+    } else if (this._lastError === null) {
       // Also scan the settled per-op promises: a ParseError /
       // BindError that arrived BEFORE the final Sync rejects its own
       // op promise but the Sync may still resolve cleanly (the
@@ -322,6 +383,14 @@ export class PipelineSession implements Pipeline {
       // inline (tracked via `markDrained`). Without this, the same
       // rejection would re-stash on `_lastError` and `\endpipeline`
       // would double-print the diagnostic.
+      //
+      // Don't OVERWRITE an existing `_lastError`: a prior `sync()`
+      // (via `\syncpipeline`) may have already stashed the real
+      // ConnectError for an earlier batch, and the second batch's
+      // results carry only `pipelineAborted` markers which would
+      // shadow the real diagnostic if blindly assigned here. The
+      // outer `if (this._lastError === null)` guard makes this a
+      // first-wins capture.
       for (let i = this._externalDrained; i < settled.length; i++) {
         const r = settled[i];
         if (r.status === 'rejected') {

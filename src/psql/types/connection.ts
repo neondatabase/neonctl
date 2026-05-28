@@ -37,7 +37,19 @@ export type Notice = {
   routine?: string;
 };
 
-export type ConnectError = Notice & { cause?: unknown };
+export type ConnectError = Notice & {
+  cause?: unknown;
+  /**
+   * `true` when this error is the synthetic
+   * `Pipeline aborted, command did not run` marker the wire layer
+   * generates for queued pipeline ops that the server skipped after
+   * a preceding ErrorResponse. Mirrors libpq's
+   * `PGRES_PIPELINE_ABORTED` result. The cmd layer renders these
+   * with the bare "Pipeline aborted, command did not run" line
+   * (no `ERROR:` prefix) so the `psql_pipeline.out` baseline matches.
+   */
+  pipelineAborted?: boolean;
+};
 
 export type CopyInStream = {
   write(chunk: Buffer | string): Promise<void>;

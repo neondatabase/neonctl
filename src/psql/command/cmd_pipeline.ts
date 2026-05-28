@@ -300,7 +300,17 @@ const renderPipelineError = (err: unknown): void => {
     detail?: string;
     hint?: string;
     where?: string;
+    pipelineAborted?: boolean;
   };
+  // libpq's `PGRES_PIPELINE_ABORTED` marker — the message is the bare
+  // "Pipeline aborted, command did not run" text with no `ERROR:` /
+  // `SEVERITY:` prefix and no DETAIL/HINT/CONTEXT layers. Mirrors the
+  // wording the regress baseline asserts for cascaded skips after a
+  // preceding ErrorResponse.
+  if (e.pipelineAborted) {
+    writeErr(`${e.message ?? 'Pipeline aborted, command did not run'}\n`);
+    return;
+  }
   const severity = e.severity ?? 'ERROR';
   const message = e.message ?? '';
   writeErr(`${severity}:  ${message}\n`);
@@ -623,6 +633,37 @@ export const cmdEndPipeline: BackslashCmdSpec = {
                 value: rs,
               }),
             );
+      // Pre-scan for the first non-aborted rejection. The wire layer
+      // cascade-rejects every queued non-sync op on ErrorResponse: the
+      // first failing op gets the real `ConnectError`, follow-on ops
+      // are rejected with the synthetic `pipelineAborted` marker. When
+      // the failing op lives in `pending` (Parse / Bind / Close — none
+      // of which are tracked on `results`), the only signal that
+      // reaches `entries[]` is the cascaded `pipelineAborted` on the
+      // subsequent Execute slots. Ask the session for the first real
+      // (non-aborted) rejection across pending ∪ results so
+      // `\endpipeline` surfaces `ERROR: <real msg>` instead of the
+      // cascaded `Pipeline aborted, command did not run`.
+      const sessPeek = session as PipelineSession & {
+        peekRealError?: () => Promise<unknown>;
+      };
+      const realFromPeek =
+        typeof sessPeek.peekRealError === 'function'
+          ? await sessPeek.peekRealError()
+          : null;
+      const realLastError =
+        realFromPeek ??
+        (() => {
+          const le = session.lastError;
+          if (le === null || le === undefined) return null;
+          if (
+            typeof le === 'object' &&
+            (le as { pipelineAborted?: boolean }).pipelineAborted
+          ) {
+            return null;
+          }
+          return le;
+        })();
       for (let i = alreadyDrained; i < entries.length; i++) {
         const r = entries[i];
         if (r.status === 'fulfilled') {
@@ -662,12 +703,24 @@ export const cmdEndPipeline: BackslashCmdSpec = {
           }
         } else if (!errorRendered) {
           // Render only the FIRST rejection inline — subsequent ops
-          // in an aborted pipeline reject with the same sticky error
-          // (or with `Pipeline aborted, command did not run`, which
-          // the conformance corpus already suppresses for empty-buffer
-          // sentinel cases). Matching the vanilla "one ERROR, then
-          // recovery" rhythm.
-          renderPipelineError(r.reason);
+          // in an aborted pipeline reject with the synthetic
+          // `pipelineAborted` marker, which we DON'T surface at
+          // `\endpipeline` (those land at `\getresults` time when the
+          // cmd layer drains them one-by-one). When the wire layer
+          // cascade-rejected from a Parse/Bind/Close that lives in
+          // `pending`, the only entry in `results` is an Execute
+          // rejected with `pipelineAborted` — fall back to
+          // `session.lastError` which carries the original ERROR.
+          const reason = r.reason;
+          const isAborted =
+            typeof reason === 'object' &&
+            reason !== null &&
+            (reason as { pipelineAborted?: boolean }).pipelineAborted === true;
+          if (isAborted && realLastError !== null) {
+            renderPipelineError(realLastError);
+          } else {
+            renderPipelineError(reason);
+          }
           errorRendered = true;
         }
       }
@@ -926,6 +979,25 @@ export const cmdGetResults: BackslashCmdSpec = {
       let resultsDrained = 0;
       let walkedItems = 0;
       let errorRenderedHere = false;
+      // The wire layer's cascade-reject puts the real `ConnectError` on
+      // the FIRST failing op (which may live in `pending` for Parse /
+      // Bind / Close) and stamps `pipelineAborted` onto everything
+      // queued behind it. When our visible Execute slot is one of those
+      // cascaded entries, prefer the real diagnostic from
+      // `peekRealError()` over the `Pipeline aborted, …` marker.
+      //
+      // Call AFTER `Promise.allSettled(slice)` so the wire driver has
+      // had a chance to push ErrorResponse onto every queued op (the
+      // result-slot rejection arrives in the same Flush-driven burst as
+      // the rejections that land on `pending` Parse/Bind ops). Calling
+      // earlier would race the wire layer and miss the real error.
+      const sessPeek = session as PipelineSession & {
+        peekRealError?: () => Promise<unknown>;
+      };
+      const realErr =
+        typeof sessPeek.peekRealError === 'function'
+          ? await sessPeek.peekRealError()
+          : null;
       for (const r of settled) {
         walkedItems++;
         if (r.status !== 'fulfilled') {
@@ -939,7 +1011,17 @@ export const cmdGetResults: BackslashCmdSpec = {
           // through the same `\getresults` call.
           resultsDrained++;
           if (!errorRenderedHere) {
-            renderPipelineError(r.reason);
+            const reason = r.reason;
+            const isAborted =
+              typeof reason === 'object' &&
+              reason !== null &&
+              (reason as { pipelineAborted?: boolean }).pipelineAborted ===
+                true;
+            if (isAborted && realErr !== null) {
+              renderPipelineError(realErr);
+            } else {
+              renderPipelineError(reason);
+            }
             errorRenderedHere = true;
           }
           continue;

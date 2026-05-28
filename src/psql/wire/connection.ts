@@ -105,6 +105,23 @@ function fieldsToConnectError(fields: Map<string, string>): ConnectError {
   return { ...fieldsToNotice(fields), cause: fields };
 }
 
+/**
+ * Synthetic ConnectError used as the rejection reason for queued
+ * pipeline ops that the server skipped after a preceding ErrorResponse.
+ * Mirrors libpq's `PGRES_PIPELINE_ABORTED` result — the message text
+ * matches the string libpq stamps onto skipped ops so the cmd layer
+ * can render it byte-identically with vanilla psql's `\getresults` /
+ * `\endpipeline` output.
+ */
+function pipelineAbortedError(): ConnectError {
+  return {
+    severity: 'ERROR',
+    code: '',
+    message: 'Pipeline aborted, command did not run',
+    pipelineAborted: true,
+  } as ConnectError;
+}
+
 /** Parse "PostgreSQL 16.2 …" into a numeric `major * 10000 + minor * 100`. */
 function parseServerVersion(value: string): number {
   // libpq's PQserverVersion returns NNNNNN (e.g. 160002 for 16.2). For
@@ -2239,11 +2256,24 @@ export class PgConnection implements Connection {
       // after an aborted bind) doesn't issue Sync next, no further wire
       // messages will arrive — so we must cascade-reject the rest of the
       // queue NOW or those promises hang forever.
+      //
+      // Mirror libpq's `PGRES_PIPELINE_ABORTED` marker for follow-on ops:
+      // the FIRST failing op carries the real `ErrorResponse` payload,
+      // every subsequent op gets a synthetic "Pipeline aborted, command
+      // did not run" error so `\getresults` / `\endpipeline` can
+      // distinguish the originating ERROR from the cascaded skips. See
+      // upstream `pqPipelineProcessQueue` in `fe-exec.c`.
+      let first = true;
       while (driver.queue.length > 0) {
         const head = driver.queue[0];
         if (head.kind === 'sync') break;
         driver.queue.shift();
-        head.reject(driver.error);
+        if (first) {
+          head.reject(driver.error);
+          first = false;
+        } else {
+          head.reject(pipelineAbortedError());
+        }
       }
       return;
     }
