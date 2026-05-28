@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 
 import type {
   Connection,
+  Notice,
   ResultSet,
   FieldDescription,
 } from '../types/connection.js';
@@ -56,6 +57,8 @@ type NotificationListener = (
   pid: number,
 ) => void;
 
+type NoticeListener = (notice: Notice) => void;
+
 type MockConn = Connection & {
   calls: string[];
   queryCalls: QueryCall[];
@@ -64,6 +67,8 @@ type MockConn = Connection & {
   setParam(name: string, value: string): void;
   /** Emit a NotificationResponse to every subscriber installed via onNotification. */
   emitNotification(channel: string, payload: string, pid: number): void;
+  /** Emit a NoticeResponse to every subscriber installed via onNotice. */
+  emitNotice(notice: Notice): void;
 };
 
 const makeMockConnection = (
@@ -72,9 +77,9 @@ const makeMockConnection = (
   const calls: string[] = [];
   const queryCalls: QueryCall[] = [];
   let cancelCalls = 0;
-  const noop = (): (() => void) => () => undefined;
   const params = new Map<string, string>();
   const notificationListeners = new Set<NotificationListener>();
+  const noticeListeners = new Set<NoticeListener>();
   const conn = {
     serverVersion: 170000,
     parameterStatus: (name: string): string | undefined => params.get(name),
@@ -83,6 +88,9 @@ const makeMockConnection = (
     },
     emitNotification(channel: string, payload: string, pid: number): void {
       for (const l of notificationListeners) l(channel, payload, pid);
+    },
+    emitNotice(notice: Notice): void {
+      for (const l of noticeListeners) l(notice);
     },
     query(sql: string, params?: unknown[]): Promise<ResultSet> {
       const trimmed = sql.trim();
@@ -122,7 +130,10 @@ const makeMockConnection = (
     },
     escapeIdentifier: (v: string) => `"${v}"`,
     escapeLiteral: (v: string) => `'${v}'`,
-    onNotice: noop,
+    onNotice(listener: NoticeListener): () => void {
+      noticeListeners.add(listener);
+      return () => noticeListeners.delete(listener);
+    },
     onNotification(listener: NotificationListener): () => void {
       notificationListeners.add(listener);
       return () => notificationListeners.delete(listener);
@@ -968,6 +979,134 @@ describe('runMainLoop — NotificationResponse', () => {
     expect(stdout.text()).toMatch(
       /Asynchronous notification "foo" with payload "bar" received from server process with PID 7\./,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NoticeResponse — mainloop subscribes once per REPL invocation and prints
+// each notice via libpq's default `psql_notice_processor` format (severity
+// line + DETAIL / HINT / CONTEXT). Notices land on stderr.
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — NoticeResponse', () => {
+  const drive = (
+    notice: Notice,
+  ): Promise<{
+    stdoutText: string;
+    stderrText: string;
+  }> => {
+    const { ctx, stdout, stderr, db } = buildCtx({ lines: ['SELECT 1;'] });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotice(notice);
+        return orig(sql);
+      };
+    }
+    return runMainLoop(ctx).then(() => ({
+      stdoutText: stdout.text(),
+      stderrText: stderr.text(),
+    }));
+  };
+
+  test('renders the upstream "NOTICE:  <msg>" line on stderr', async () => {
+    const { stderrText } = await drive({
+      severity: 'NOTICE',
+      message: 'foo',
+    });
+    expect(stderrText).toContain('NOTICE:  foo\n');
+  });
+
+  test('renders DETAIL and HINT below the severity line', async () => {
+    const { stderrText } = await drive({
+      severity: 'NOTICE',
+      message: 'foo',
+      detail: 'extra detail',
+      hint: 'try this',
+    });
+    expect(stderrText).toBe(
+      'NOTICE:  foo\nDETAIL:  extra detail\nHINT:  try this\n',
+    );
+  });
+
+  test('suppresses CONTEXT for NOTICE when SHOW_CONTEXT is errors (default)', async () => {
+    const { stderrText } = await drive({
+      severity: 'NOTICE',
+      message: 'foo',
+      where: 'PL/pgSQL function inline_code_block line 3 at RAISE',
+    });
+    expect(stderrText).toBe('NOTICE:  foo\n');
+  });
+
+  test('renders CONTEXT for NOTICE when SHOW_CONTEXT is always', async () => {
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.showContext = 'always';
+        s.vars.set('SHOW_CONTEXT', 'always');
+      },
+    });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotice({
+          severity: 'NOTICE',
+          message: 'foo',
+          where: 'PL/pgSQL function inline_code_block line 3 at RAISE',
+        });
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stderr.text()).toContain(
+      'NOTICE:  foo\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\n',
+    );
+  });
+
+  test('strips DETAIL / HINT / CONTEXT in terse verbosity', async () => {
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.verbosity = 'terse';
+      },
+    });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotice({
+          severity: 'NOTICE',
+          message: 'foo',
+          detail: 'd',
+          hint: 'h',
+          where: 'w',
+        });
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stderr.text()).toBe('NOTICE:  foo\n');
+  });
+
+  test('prepends SQLSTATE in sqlstate verbosity', async () => {
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.verbosity = 'sqlstate';
+      },
+    });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotice({
+          severity: 'NOTICE',
+          code: '00P01',
+          message: 'foo',
+        });
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stderr.text()).toBe('NOTICE:  00P01: foo\n');
   });
 });
 

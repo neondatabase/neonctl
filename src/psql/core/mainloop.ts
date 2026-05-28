@@ -37,6 +37,7 @@ import type {
   BackslashContext,
   BackslashResult,
 } from '../types/backslash.js';
+import type { Notice } from '../types/connection.js';
 import type { REPLContext, IfState } from '../types/repl.js';
 import type { ScanState, SlashArgMode } from '../types/scanner.js';
 
@@ -671,6 +672,107 @@ const installNotificationHandler = (
   });
 };
 
+/**
+ * Render a NoticeResponse field the same way libpq's `pqBuildErrorMessage3`
+ * does for the default `psql_notice_processor` (which is a thin
+ * `fputs(msg, stderr)`). Mirrors VERBOSITY / SHOW_CONTEXT semantics:
+ *
+ *   - `terse` / `sqlstate`: just `<severity>:  <message>` (`sqlstate` also
+ *     prepends the SQLSTATE on the severity line).
+ *   - `default`: severity line + LINE/^ pointer + DETAIL/HINT, and CONTEXT
+ *     when SHOW_CONTEXT is `always` (NOTICE is not an error, so the default
+ *     `errors` setting suppresses its CONTEXT — upstream's libpq path
+ *     gates context on `severity_nonlocalized == "ERROR"|"FATAL"|"PANIC"`).
+ *   - `verbose`: full SQLSTATE / DETAIL / HINT / CONTEXT / LOCATION layers.
+ *
+ * The trailing newline mirrors libpq, so callers can `stderr.write()` the
+ * returned string directly.
+ */
+const formatNotice = (
+  notice: Notice,
+  verbosity: 'default' | 'verbose' | 'terse' | 'sqlstate',
+  showContext: 'never' | 'errors' | 'always',
+): string => {
+  const severity = notice.severity || 'NOTICE';
+  const message = notice.message || '';
+  const lines: string[] = [];
+
+  if (verbosity === 'verbose' || verbosity === 'sqlstate') {
+    const sqlstate = notice.code ?? 'XX000';
+    lines.push(`${severity}:  ${sqlstate}: ${message}`);
+  } else {
+    lines.push(`${severity}:  ${message}`);
+  }
+
+  if (verbosity === 'terse' || verbosity === 'sqlstate') {
+    return lines.join('\n') + '\n';
+  }
+
+  if (notice.detail) lines.push(`DETAIL:  ${notice.detail}`);
+  if (notice.hint) lines.push(`HINT:  ${notice.hint}`);
+
+  // CONTEXT gating mirrors libpq's `pqBuildErrorMessage3`:
+  //   - `verbose` always includes CONTEXT
+  //   - `default` shows CONTEXT only when SHOW_CONTEXT is `always` for
+  //     non-error severities (NOTICE / WARNING / INFO / LOG / DEBUG), or
+  //     when SHOW_CONTEXT is `errors`/`always` for ERROR-level entries.
+  const isError =
+    severity === 'ERROR' || severity === 'FATAL' || severity === 'PANIC';
+  const includeContext =
+    verbosity === 'verbose' ||
+    showContext === 'always' ||
+    (showContext === 'errors' && isError);
+  if (includeContext && notice.where) {
+    lines.push(`CONTEXT:  ${notice.where}`);
+  }
+
+  if (verbosity === 'verbose' && (notice.routine || notice.file)) {
+    const location =
+      (notice.routine ?? '') +
+      (notice.file ? `, ${notice.file}:${notice.line ?? ''}` : '');
+    lines.push(`LOCATION:  ${location}`);
+  }
+
+  return lines.join('\n') + '\n';
+};
+
+/**
+ * Subscribe to NoticeResponse on the active connection, rendering each to
+ * stderr the way libpq's default `psql_notice_processor` does. Returns the
+ * disposer the connection handed us, or `null` when no connection is bound.
+ *
+ * NOTICEs fire synchronously as the wire layer receives them, so an
+ * inline `RAISE NOTICE` inside a `\;`-chained batch lands BEFORE the
+ * tuples-producing portion of the batch is rendered — matching upstream
+ * psql output.
+ */
+const installNoticeHandler = (
+  ctx: REPLContext,
+  reader: LineReader,
+): (() => void) | null => {
+  const db = ctx.settings.db;
+  if (!db) return null;
+  return db.onNotice((notice) => {
+    const text = formatNotice(
+      notice,
+      ctx.settings.verbosity,
+      ctx.settings.showContext,
+    );
+    // Notices go to stderr (libpq default). The LineEditor's prompt-redraw
+    // logic uses `interjectErr` to flush the message without disturbing the
+    // active prompt block — fall back to a raw stderr write when the reader
+    // doesn't expose that hook (stream / notty path).
+    const interjectErr = (
+      reader as LineReader & { interjectErr?: (s: string) => void }
+    ).interjectErr;
+    if (interjectErr) {
+      interjectErr.call(reader, text);
+    } else {
+      ctx.stderr.write(text);
+    }
+  });
+};
+
 // ---------------------------------------------------------------------------
 // SIGINT installer. Returns a disposer to remove the listener cleanly. The
 // installer is scoped to the duration of runMainLoop so we don't leak handlers
@@ -746,6 +848,11 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   // surfaces upstream's `Asynchronous notification "foo" ...` line. The
   // disposer is run in the finally block at exit so we don't leak listeners.
   const removeNotificationHandler = installNotificationHandler(ctx, reader);
+  // Subscribe to NoticeResponse so `RAISE NOTICE` / NOTICE DETAIL / `drop
+  // cascades` style server notices surface on stderr — matching libpq's
+  // default `psql_notice_processor`. Notices arrive synchronously during
+  // query execution, so inline `\;`-chain notices land at the right spot.
+  const removeNoticeHandler = installNoticeHandler(ctx, reader);
 
   // Compute the prompt string for the current state. For notty input we emit
   // the empty string so the stream reader doesn't see prompt bytes interleaved
@@ -1293,6 +1400,7 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
     await reader.close();
     removeSigint();
     if (removeNotificationHandler) removeNotificationHandler();
+    if (removeNoticeHandler) removeNoticeHandler();
   }
 
   return successResult;
