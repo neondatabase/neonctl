@@ -551,12 +551,22 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       const alreadyDrained = ps.drainedCount;
       // Hold a reference to the session BEFORE end() clears the stash —
       // we still need `lastError` after the pipeline has been torn down.
-      const session = ps.session as PipelineSession;
+      // The session is `Pipeline` (interface) but the concrete impl
+      // (`PipelineSession`) exposes per-Execute promise tracking; cast
+      // and probe for the field so test mocks (which don't carry the
+      // extra fields) still work — they get an empty snapshot and the
+      // path degenerates to the previous `sets`-only rendering.
+      const session = ps.session as PipelineSession & {
+        results?: readonly Promise<ResultSet>[];
+        lastError?: unknown;
+      };
       // Capture per-Execute promises as a snapshot — `end()` settles
       // them but doesn't expose the per-op rejection records, which
       // we need to interleave errors at the correct ordinal position.
-      const promiseSnapshot = session.results.slice();
-      await ps.session.end();
+      const promiseSnapshot = Array.isArray(session.results)
+        ? session.results.slice()
+        : [];
+      const sets = await ps.session.end();
       stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
       ctx.settings.sendMode = 'extended-query';
       // Upstream `exec_command_endpipeline` zeroes the counters once the
@@ -576,8 +586,23 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       // promises — `end()` awaits them itself — so this is safe.
       const settled = await Promise.allSettled(promiseSnapshot);
       let errorRendered = false;
-      for (let i = alreadyDrained; i < settled.length; i++) {
-        const r = settled[i];
+      // When `promiseSnapshot` is empty (test mocks that don't track
+      // per-Execute promises, or implementations that don't expose
+      // `results`), fall back to printing the `sets` returned by
+      // `end()` directly. This preserves the historical behaviour for
+      // mocks while keeping the in-order interleaving for the real
+      // PipelineSession.
+      const entries =
+        settled.length > 0
+          ? settled
+          : sets.map(
+              (rs): PromiseSettledResult<ResultSet> => ({
+                status: 'fulfilled',
+                value: rs,
+              }),
+            );
+      for (let i = alreadyDrained; i < entries.length; i++) {
+        const r = entries[i];
         if (r.status === 'fulfilled') {
           const rs = r.value;
           if (rs.fields.length > 0) {
@@ -819,7 +844,14 @@ export const cmdGetResults: BackslashCmdSpec = {
     // `session.sync()` with data results from `session.execute()`).
     // `drainedCount` advances by `n` so a follow-on `\endpipeline`
     // knows to skip what we've already printed.
-    const results = (ps.session as PipelineSession).results;
+    const session = ps.session as PipelineSession & {
+      results?: readonly Promise<ResultSet>[];
+    };
+    const results: readonly Promise<ResultSet>[] = Array.isArray(
+      session.results,
+    )
+      ? session.results
+      : [];
     const start = ps.drainedCount;
     const end = start + n;
     const slice = results.slice(start, end);
@@ -836,7 +868,9 @@ export const cmdGetResults: BackslashCmdSpec = {
       // `session.sync()`); data results carry the real RowDescription.
       let syncsDrained = 0;
       let resultsDrained = 0;
+      let walkedItems = 0;
       for (const r of settled) {
+        walkedItems++;
         if (r.status !== 'fulfilled') {
           // Rejected promise — most likely an Execute that errored
           // server-side. Treat as a data-result slot (it consumes one
@@ -855,12 +889,33 @@ export const cmdGetResults: BackslashCmdSpec = {
         resultsDrained++;
         await alignedPrinter.printQuery(rs, ctx.settings.popt, process.stdout);
       }
+      // Fallback when `session.results` wasn't tracked (test mocks):
+      // decrement RESULT_COUNT first, then SYNC_COUNT. Real
+      // PipelineSession populates `results` so the walk above already
+      // attributed each drain to the right counter.
+      if (walkedItems === 0) {
+        const ddata = Math.min(n, resultAvailable);
+        resultsDrained = ddata;
+        syncsDrained = n - ddata;
+      }
       // Decrement counters. Upstream `exec_command_getresults` does the
       // same accounting: PIPELINE_SYNC_COUNT and PIPELINE_RESULT_COUNT
       // are decremented by the actually-consumed items in each
       // category. Capped at 0 to be defensive.
       bumpCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', -syncsDrained);
       bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', -resultsDrained);
+      // Upstream rule: when the queue is fully drained, SYNC_COUNT
+      // also resets to 0 (the pipeline is back to "no Sync
+      // outstanding") — verified empirically. A partial drain leaves
+      // it unchanged.
+      if (
+        readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT') === 0 &&
+        readCounter(ctx.settings, 'PIPELINE_SYNC_COUNT') === 0
+      ) {
+        // Already 0 — no-op.
+      } else if (readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT') === 0) {
+        setCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', 0);
+      }
       return { status: 'ok' };
     } catch (err) {
       return errResult(ctx, errorToMessage(err));

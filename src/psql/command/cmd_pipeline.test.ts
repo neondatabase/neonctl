@@ -391,7 +391,9 @@ describe('\\startpipeline / \\endpipeline', () => {
     const s = makeSettings(conn);
     const r = await run(cmdEndPipeline, makeMockCtx('endpipeline', '', s));
     expect(r.status).toBe('error');
-    expect(stderr()).toMatch(/no pipeline active/);
+    // Upstream psql 18.4 wording (matches conformance corpus at
+    // psql_pipeline.out line 425).
+    expect(stderr()).toMatch(/cannot send pipeline when not in pipeline mode/);
   });
 });
 
