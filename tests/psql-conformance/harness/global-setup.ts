@@ -28,6 +28,13 @@ export default async function setup(): Promise<() => Promise<void>> {
   if (conn.absBuilddir !== null) {
     process.env.PGCONFORMANCE_ABS_BUILDDIR = conn.absBuilddir;
   }
+  // Surface the detected server major so regress.spec.ts can drive
+  // version-conditional normalize rules. The CI matrix path
+  // (PGCONFORMANCE_PG_HOST set) preserves a pre-existing
+  // PGCONFORMANCE_PG_MAJOR if the workflow already provided one.
+  if (conn.serverMajor !== null) {
+    process.env.PGCONFORMANCE_PG_MAJOR = String(conn.serverMajor);
+  }
   return async () => {
     await teardownPg();
   };

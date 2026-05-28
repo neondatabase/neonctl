@@ -216,6 +216,11 @@ const runConformance = (
     PGCONFORMANCE_PG_USER: pgConn.user,
     PGCONFORMANCE_PG_PASSWORD: pgConn.password,
     PGCONFORMANCE_PG_DB: pgConn.db,
+    // Surface the slot's PG major so the harness can apply
+    // version-conditional normalize rules without round-tripping
+    // through the server-side probe (the GHA path uses the same env
+    // var; bootTestcontainer path autodetects).
+    PGCONFORMANCE_PG_MAJOR: pg,
   };
 
   const r = spawnSync(

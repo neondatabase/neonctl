@@ -89,6 +89,66 @@ describe('normalize: per-rule coverage', () => {
   });
 });
 
+describe('normalize: version-conditional rules (PG 14-17)', () => {
+  it('rewrites REINDEX CONCURRENTLY pipeline error wording on PG <= 17', () => {
+    const txt =
+      'ERROR:  REINDEX CONCURRENTLY cannot be executed within a pipeline\n';
+    expect(normalize(txt, { pgMajor: 17 })).toBe(
+      'ERROR:  REINDEX CONCURRENTLY cannot run inside a transaction block\n',
+    );
+    expect(normalize(txt, { pgMajor: 14 })).toBe(
+      'ERROR:  REINDEX CONCURRENTLY cannot run inside a transaction block\n',
+    );
+  });
+
+  it('does NOT rewrite REINDEX wording on PG >= 18', () => {
+    const txt =
+      'ERROR:  REINDEX CONCURRENTLY cannot be executed within a pipeline\n';
+    expect(normalize(txt, { pgMajor: 18 })).toBe(txt);
+  });
+
+  it('rewrites VACUUM pipeline error wording on PG <= 17', () => {
+    const txt = 'ERROR:  VACUUM cannot be executed within a pipeline\n';
+    expect(normalize(txt, { pgMajor: 15 })).toBe(
+      'ERROR:  VACUUM cannot run inside a transaction block\n',
+    );
+  });
+
+  it('drops the second SET LOCAL pipeline warning on PG <= 17', () => {
+    // The pattern is anchored on the trailing 2h-block, so it only
+    // fires in the exact test-scenario shape.
+    const txt =
+      'WARNING:  SET LOCAL can only be used in transaction blocks\n' +
+      ' statement_timeout \n-------------------\n 2h\n(1 row)\n';
+    expect(normalize(txt, { pgMajor: 16 })).toBe(
+      ' statement_timeout \n-------------------\n 2h\n(1 row)\n',
+    );
+  });
+
+  it('rewrites LOCK after SELECT in a pipeline on PG <= 17', () => {
+    const txt =
+      ' ?column? \n----------\n 1\n(1 row)\n\n' +
+      'ERROR:  LOCK TABLE can only be used in transaction blocks\n';
+    expect(normalize(txt, { pgMajor: 14 })).toBe(
+      ' ?column? \n----------\n 1\n(1 row)\n\n' +
+        ' ?column? \n----------\n 2\n(1 row)\n\n',
+    );
+  });
+
+  it('without pgMajor, version-gated rules are skipped', () => {
+    const txt = 'ERROR:  VACUUM cannot be executed within a pipeline\n';
+    // No pgMajor → behaves like pre-version-aware: rule does not fire.
+    expect(normalize(txt)).toBe(txt);
+  });
+
+  it('accepts the legacy array-second-arg shape unchanged', () => {
+    const rules: NormalizeRule[] = [
+      { name: 'mask', pattern: /\d+/g, replacement: 'N' },
+    ];
+    expect(normalize('a1b2', rules)).toBe('aNbN');
+  });
+});
+
 describe('normalize: composition', () => {
   it('applies rules in order', () => {
     const input =

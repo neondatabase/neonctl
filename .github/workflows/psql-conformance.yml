@@ -111,6 +111,10 @@ jobs:
           PGCONFORMANCE_PG_USER: postgres
           PGCONFORMANCE_PG_PASSWORD: postgres
           PGCONFORMANCE_PG_DB: regression
+          # Surface the matrix PG major so the harness can apply
+          # version-conditional normalize rules without a server-side
+          # probe (the GHA-service path skips bootTestcontainer).
+          PGCONFORMANCE_PG_MAJOR: ${{ matrix.pg }}
         run: |
           set -o pipefail
           pnpm run test:conformance 2>&1 | tee psql-conformance.log

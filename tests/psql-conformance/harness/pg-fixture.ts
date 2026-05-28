@@ -47,6 +47,16 @@ export type PgConn = {
    * the PG server.
    */
   absBuilddir: string | null;
+  /**
+   * Server major version (e.g. 14, 15, 16, 17, 18). Detected once
+   * during fixture boot via `SHOW server_version_num`. Consumed by
+   * the regress spec to drive version-conditional normalize rules
+   * (PG 14-17 emit different wording / behavior for some pipeline
+   * errors vs the PG 18 vendored expected — see normalize.ts). Falls
+   * back to `null` when the version probe fails so callers can still
+   * decide what to do.
+   */
+  serverMajor: number | null;
 };
 
 const PG_IMAGE_DEFAULT = 'postgres:18.0';
@@ -88,6 +98,7 @@ export async function setupPg(): Promise<PgConn> {
 
   const envHost = process.env.PGCONFORMANCE_PG_HOST;
   if (envHost) {
+    const envMajor = process.env.PGCONFORMANCE_PG_MAJOR;
     cached = {
       host: envHost,
       port: Number(process.env.PGCONFORMANCE_PG_PORT ?? '5432'),
@@ -95,9 +106,11 @@ export async function setupPg(): Promise<PgConn> {
       user: process.env.PGCONFORMANCE_PG_USER ?? 'postgres',
       password: process.env.PGCONFORMANCE_PG_PASSWORD ?? 'postgres',
       absBuilddir: process.env.PGCONFORMANCE_ABS_BUILDDIR ?? null,
+      serverMajor: envMajor ? Number(envMajor) : null,
     };
     log(
-      `pg-fixture: using $PGCONFORMANCE_PG_HOST=${cached.host}:${cached.port}`,
+      `pg-fixture: using $PGCONFORMANCE_PG_HOST=${cached.host}:${cached.port}` +
+        (cached.serverMajor !== null ? ` (major=${cached.serverMajor})` : ''),
     );
     return cached;
   }
@@ -119,6 +132,7 @@ export function getPgConn(): PgConn {
   if (cached) return cached;
   const envHost = process.env.PGCONFORMANCE_PG_HOST;
   if (envHost) {
+    const envMajor = process.env.PGCONFORMANCE_PG_MAJOR;
     cached = {
       host: envHost,
       port: Number(process.env.PGCONFORMANCE_PG_PORT ?? '5432'),
@@ -126,6 +140,7 @@ export function getPgConn(): PgConn {
       user: process.env.PGCONFORMANCE_PG_USER ?? 'postgres',
       password: process.env.PGCONFORMANCE_PG_PASSWORD ?? 'postgres',
       absBuilddir: process.env.PGCONFORMANCE_ABS_BUILDDIR ?? null,
+      serverMajor: envMajor ? Number(envMajor) : null,
     };
     return cached;
   }
@@ -299,6 +314,34 @@ async function bootTestcontainer(): Promise<PgConn> {
     );
   }
 
+  // Probe the running server's major version so the harness can apply
+  // version-conditional normalize rules without round-tripping through
+  // the test code. `server_version_num` is e.g. 180000 / 170004 — the
+  // major is the first 1-2 digits.
+  let serverMajor: number | null = null;
+  try {
+    const probe = await started.exec([
+      'psql',
+      '-tA', // tuples only + unaligned
+      '-U',
+      started.getUsername(),
+      '-d',
+      started.getDatabase(),
+      '-c',
+      'SHOW server_version_num',
+    ]);
+    if (probe.exitCode === 0) {
+      const n = Number((probe.stdout ?? '').trim());
+      if (Number.isFinite(n) && n > 0) {
+        // server_version_num = MMmmpp; PG 10+ uses MMMmpp where MMM is
+        // the major (10, 11, ..., 18, ...). Divide by 10_000.
+        serverMajor = Math.floor(n / 10_000);
+      }
+    }
+  } catch {
+    // best-effort: leave null and let callers fall back.
+  }
+
   const conn: PgConn = {
     host: started.getHost(),
     port: started.getPort(),
@@ -306,10 +349,11 @@ async function bootTestcontainer(): Promise<PgConn> {
     user: started.getUsername(),
     password: started.getPassword(),
     absBuilddir,
+    serverMajor,
   };
   log(
     `pg-fixture: ready at ${conn.host}:${conn.port} (db=${conn.db}, ` +
-      `abs_builddir=${absBuilddir})`,
+      `abs_builddir=${absBuilddir}, server_major=${serverMajor ?? 'unknown'})`,
   );
   return conn;
 }

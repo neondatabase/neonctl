@@ -129,7 +129,14 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
       throw new Error(`vendor expected output missing: ${expectedPath}`);
     }
     const sql = readFileSync(sqlPath, 'utf8');
-    const expected = normalize(readFileSync(expectedPath, 'utf8'));
+    // Apply the same normalize options to both sides of the diff so
+    // version-conditional rules can collapse PG 14-17 wording onto
+    // the PG 18 vendored expected shape (rules only match older-PG
+    // output, so they are no-ops on expected).
+    const pgMajor = conn.serverMajor ?? undefined;
+    const expected = normalize(readFileSync(expectedPath, 'utf8'), {
+      pgMajor,
+    });
 
     const psqlArgs = [
       '--no-psqlrc',
@@ -196,7 +203,7 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
     // the child wrote it; stderr is empty (or holds shell errors only).
     const stdout = result.stdout ?? '';
     const stderr = result.stderr ?? '';
-    const actual = normalize(stdout);
+    const actual = normalize(stdout, { pgMajor });
 
     if (actual === expected) {
       expect(actual).toBe(expected);
