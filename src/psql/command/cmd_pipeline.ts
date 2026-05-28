@@ -744,6 +744,14 @@ export const cmdSendPipeline: BackslashCmdSpec = {
       // Upstream wording (psql 18.4): "\\sendpipeline not allowed
       // outside of pipeline mode". Verified empirically; no
       // `\sendpipeline: ` prefix on stderr.
+      //
+      // Upstream `exec_command_sendpipeline` also calls
+      // `clean_extended_state()` here, which clears any pending
+      // `\bind` / `\bind_named` parameters. Mirror that so a later
+      // `\startpipeline` followed by a bare `\sendpipeline` reports
+      // the missing-bind diagnostic instead of replaying the stale
+      // parameters from before the failed-outside-pipeline send.
+      consumeBindState(ctx.settings);
       ctx.settings.lastErrorResult = {
         message: '\\sendpipeline not allowed outside of pipeline mode',
       };
