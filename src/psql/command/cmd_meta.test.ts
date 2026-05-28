@@ -515,6 +515,42 @@ describe('formatErrorReport', () => {
     expect(lines).toEqual(['ERROR:  boom']);
   });
 
+  test('terse verbosity appends "at character N" when position is set', () => {
+    // Vanilla psql's libpq `pqGetErrorNotice3` with `PQERRORS_TERSE`
+    // promotes the server's `position` field into the severity line
+    // (where default verbosity would have rendered LINE/caret). Verified
+    // against the regress `psql.sql` `\set VERBOSITY terse` + `SELECT 1
+    // UNION;` block, which expects `ERROR:  syntax error at or near ";"
+    // at character 15`.
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        code: '42601',
+        message: 'syntax error at or near ";"',
+        position: '15',
+        sqlText: 'SELECT 1 UNION;',
+      },
+      'terse',
+      'errors',
+    );
+    expect(lines).toEqual([
+      'ERROR:  syntax error at or near ";" at character 15',
+    ]);
+  });
+
+  test('terse verbosity omits "at character N" when position is missing', () => {
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        code: '42P01',
+        message: 'relation "x" does not exist',
+      },
+      'terse',
+      'errors',
+    );
+    expect(lines).toEqual(['ERROR:  relation "x" does not exist']);
+  });
+
   test('sqlstate verbosity drops the message entirely (vanilla parity)', () => {
     // Upstream `\set VERBOSITY sqlstate` emits ONLY `<severity>:  <sqlstate>` —
     // no message body, no LINE/DETAIL/HINT, no CONTEXT. Verified against

@@ -655,13 +655,22 @@ export const formatErrorReport = (
   }
   if (verbosity === 'verbose') {
     out.push(`${severity}:  ${sqlstate}: ${message}`);
+  } else if (verbosity === 'terse') {
+    // Terse suppresses LINE/caret/DETAIL/HINT/CONTEXT, but it merges the
+    // server's `position` into the severity line as `at character N` —
+    // matches libpq's `pqGetErrorNotice3` with `PQERRORS_TERSE` (and
+    // vanilla psql in the regress fixture). Only fires when position is a
+    // positive integer; the LINE/caret block below would have shown the
+    // same anchor for default verbosity.
+    const pos = e.position ? Number.parseInt(e.position, 10) : NaN;
+    if (Number.isFinite(pos) && pos > 0) {
+      out.push(`${severity}:  ${message} at character ${String(pos)}`);
+    } else {
+      out.push(`${severity}:  ${message}`);
+    }
+    return out;
   } else {
     out.push(`${severity}:  ${message}`);
-  }
-
-  // `terse` stops after the severity line.
-  if (verbosity === 'terse') {
-    return out;
   }
 
   const lineCaret = renderLineAndCaret(e.sqlText, e.position);
