@@ -660,7 +660,8 @@ const cmdDescribeRoles = (cmdName: string): BackslashCmdSpec => ({
       showSystem,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'r.rolname' });
+    // Roles are global — first dot is "too many".
+    return runWithPattern(ctx, pattern, query, { namevar: 'r.rolname' }, 0);
   },
 });
 
@@ -762,7 +763,10 @@ const cmdListSchemas = (cmdName: string): BackslashCmdSpec => ({
       showSystem,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'n.nspname' });
+    // Schemas live in a single namespace; the optional qualifier slot
+    // is interpreted as a database name (cross-database check fires on
+    // mismatch). `maxDots = 1`.
+    return runWithPattern(ctx, pattern, query, { namevar: 'n.nspname' }, 1);
   },
 });
 
@@ -852,7 +856,8 @@ const cmdListLanguages = (cmdName: string): BackslashCmdSpec => ({
       showSystem,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'l.lanname' });
+    // Languages are global; first dot is a database qualifier (cross-db).
+    return runWithPattern(ctx, pattern, query, { namevar: 'l.lanname' }, 1);
   },
 });
 
@@ -995,7 +1000,8 @@ const cmdListEventTriggers: BackslashCmdSpec = {
       verbose,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'evtname' });
+    // Event triggers are global; first dot is a database qualifier (cross-db).
+    return runWithPattern(ctx, pattern, query, { namevar: 'evtname' }, 1);
   },
 };
 
@@ -1011,7 +1017,8 @@ const cmdListExtensions: BackslashCmdSpec = {
       pattern: pattern ?? undefined,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'e.extname' });
+    // Extensions are global; first dot is a database qualifier (cross-db).
+    return runWithPattern(ctx, pattern, query, { namevar: 'e.extname' }, 1);
   },
 };
 
@@ -1124,7 +1131,8 @@ const cmdListForeignDataWrappers: BackslashCmdSpec = {
       verbose,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'fdwname' });
+    // FDWs are global; first dot is a database qualifier (cross-db).
+    return runWithPattern(ctx, pattern, query, { namevar: 'fdwname' }, 1);
   },
 };
 
@@ -1140,7 +1148,8 @@ const cmdListForeignServers: BackslashCmdSpec = {
       verbose,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 's.srvname' });
+    // Foreign servers are global; first dot is a database qualifier.
+    return runWithPattern(ctx, pattern, query, { namevar: 's.srvname' }, 1);
   },
 };
 
@@ -1156,7 +1165,8 @@ const cmdListUserMappings: BackslashCmdSpec = {
       verbose,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'um.srvname' });
+    // User mappings live alongside foreign servers (global); first dot is db.
+    return runWithPattern(ctx, pattern, query, { namevar: 'um.srvname' }, 1);
   },
 };
 
@@ -1217,7 +1227,8 @@ const cmdListPublications: BackslashCmdSpec = {
       pattern: pattern ?? undefined,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'pubname' });
+    // Publications are global; first dot is a database qualifier (cross-db).
+    return runWithPattern(ctx, pattern, query, { namevar: 'pubname' }, 1);
   },
 };
 
@@ -1233,7 +1244,8 @@ const cmdDescribeSubscriptions: BackslashCmdSpec = {
       verbose,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'subname' });
+    // Subscriptions are global; first dot is a database qualifier (cross-db).
+    return runWithPattern(ctx, pattern, query, { namevar: 'subname' }, 1);
   },
 };
 
