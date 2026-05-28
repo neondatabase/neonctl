@@ -299,6 +299,32 @@ describe('cmdIf', () => {
       expect(cond.top()?.state).toBe(expected);
     }
   });
+
+  // Upstream's slash lexer recognises `:{?name}` directly and substitutes
+  // `TRUE` / `FALSE` based on whether the named variable is defined. Our
+  // scanner only handles plain `:name`, `:'name'`, `:"name"`, so the cond
+  // expression evaluator does the `:{?name}` substitution after joining
+  // args. See regress/psql.sql ~line 1104.
+  test(':{?name} substitutes to TRUE when variable is defined', async () => {
+    const settings = makeSettings();
+    settings.vars.set('i', '1');
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'if', [':{?i}']);
+    attachCondStack(ctx, cond);
+    const r = await run(cmdIf, ctx);
+    expect(r.status).toBe('ok');
+    expect(cond.top()?.state).toBe('true');
+  });
+
+  test(':{?name} substitutes to FALSE when variable is undefined', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'if', [':{?no_such_variable}']);
+    attachCondStack(ctx, cond);
+    const r = await run(cmdIf, ctx);
+    expect(r.status).toBe('ok');
+    expect(cond.top()?.state).toBe('false');
+  });
 });
 
 // ---------------------------------------------------------------------------

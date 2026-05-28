@@ -169,7 +169,27 @@ export const parseBool = (value: string): boolean | null => {
  * args follow the command name — upstream's "missing expression" path
  * surfaces the same `unrecognized value ""...` diagnostic as any other
  * unparseable token, then evaluates to false.
+ *
+ * After joining, we resolve the `:{?varname}` "defined-variable" substitution
+ * form. Upstream's slash lexer recognises `:{?name}` directly and emits
+ * `TRUE` / `FALSE` depending on whether the named variable is currently
+ * set; we re-create that pass here because the underlying scanner only
+ * handles the plain `:name`, `:'name'`, `:"name"` forms (the `:{?name}`
+ * form lives in a separate `xslashdefined` flex rule upstream). Doing it
+ * after the join keeps the rule local to the conditional-expression
+ * pipeline — every other call site of the slash scanner has its own
+ * variable-expansion needs that we don't want to disturb.
  */
+const DEFINED_VAR_RE = /:\{\?([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+const expandDefinedVar = (
+  text: string,
+  isDefined: (name: string) => boolean,
+): string =>
+  text.replace(DEFINED_VAR_RE, (_match, name: string) =>
+    isDefined(name) ? 'TRUE' : 'FALSE',
+  );
+
 const collectExpr = (ctx: BackslashContext): string => {
   const parts: string[] = [];
   for (;;) {
@@ -177,7 +197,9 @@ const collectExpr = (ctx: BackslashContext): string => {
     if (arg === null) break;
     parts.push(arg);
   }
-  return parts.join(' ');
+  return expandDefinedVar(parts.join(' '), (name) =>
+    ctx.settings.vars.has(name),
+  );
 };
 
 /**
