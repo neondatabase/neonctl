@@ -1578,4 +1578,63 @@ describe('\\gdesc', () => {
     await run(cmdGdesc, ctx);
     expect(s.lastQuery).toBe('select 5 as x');
   });
+
+  test('refreshes :ERROR/:SQLSTATE/:ROW_COUNT on describe success', async () => {
+    // Mirrors regress/psql lines 4895-4909: after `SELECT 3 AS three, 4 AS
+    // four \gdesc` upstream sets `:ERROR=false`, `:SQLSTATE=00000`, and
+    // `:ROW_COUNT` to the number of described columns. Without explicit
+    // refresh in the gdesc success path the diagnostic vars carry over the
+    // previous statement's failure (e.g. `\set VERBOSITY sqlstate; SELECT
+    // 1/0` leaves :SQLSTATE=22012).
+    const conn = mockGdescConn(
+      [
+        {
+          name: 'three',
+          tableID: 0,
+          columnID: 0,
+          dataTypeID: 23,
+          dataTypeSize: 4,
+          dataTypeModifier: -1,
+          format: 0,
+        },
+        {
+          name: 'four',
+          tableID: 0,
+          columnID: 0,
+          dataTypeID: 23,
+          dataTypeSize: 4,
+          dataTypeModifier: -1,
+          format: 0,
+        },
+      ],
+      ['integer', 'integer'],
+    );
+    const s = makeSettings(conn);
+    // Pretend a previous statement raised division-by-zero.
+    s.vars.set('ERROR', 'true');
+    s.vars.set('SQLSTATE', '22012');
+    s.vars.set('ROW_COUNT', '0');
+    s.lastErrorResult = { message: 'division by zero', code: '22012' };
+    const ctx = makeMockCtx('gdesc', '', s, 'SELECT 3 AS three, 4 AS four');
+    await run(cmdGdesc, ctx);
+    expect(s.vars.get('ERROR')).toBe('false');
+    expect(s.vars.get('SQLSTATE')).toBe('00000');
+    expect(s.vars.get('ROW_COUNT')).toBe('2');
+  });
+
+  test('refreshes :ERROR/:SQLSTATE/:ROW_COUNT when describe yields 0 columns', async () => {
+    // Mirrors `CREATE TABLE bububu(a int) \gdesc`: describe returns no
+    // fields, we print the "no result, no columns" notice and upstream
+    // treats it as a successful dispatch (:ERROR=false, :ROW_COUNT=0).
+    const conn = mockGdescConn([], []);
+    const s = makeSettings(conn);
+    s.vars.set('ERROR', 'true');
+    s.vars.set('SQLSTATE', '22012');
+    s.vars.set('ROW_COUNT', '0');
+    const ctx = makeMockCtx('gdesc', '', s, 'CREATE TABLE bububu(a int)');
+    await run(cmdGdesc, ctx);
+    expect(s.vars.get('ERROR')).toBe('false');
+    expect(s.vars.get('SQLSTATE')).toBe('00000');
+    expect(s.vars.get('ROW_COUNT')).toBe('0');
+  });
 });

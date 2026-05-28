@@ -1443,6 +1443,8 @@ export const cmdGdesc: BackslashCmdSpec = {
       process.stdout.write(
         'The command has no result, or the result has no columns.\n',
       );
+      // Match upstream's post-PSQL_CMD_SEND state vars: success, 0 rows.
+      refreshErrorVars(ctx.settings, { kind: 'success', rowCount: 0 });
       return { status: 'reset-buf', newBuf: '' };
     }
     if (!ctx.settings.db) {
@@ -1489,6 +1491,8 @@ export const cmdGdesc: BackslashCmdSpec = {
       process.stdout.write(
         'The command has no result, or the result has no columns.\n',
       );
+      // Match upstream's post-PSQL_CMD_SEND state vars: success, 0 rows.
+      refreshErrorVars(ctx.settings, { kind: 'success', rowCount: 0 });
       return { status: 'reset-buf', newBuf: '' };
     }
 
@@ -1521,6 +1525,15 @@ export const cmdGdesc: BackslashCmdSpec = {
       const msg = err instanceof Error ? err.message : String(err);
       return errResult(ctx, msg);
     }
+    // Refresh state vars to mark the describe success: `:ERROR=false`,
+    // `:SQLSTATE=00000`, `:ROW_COUNT=<#-described-columns>`. Upstream
+    // routes `\gdesc` through `PSQL_CMD_SEND` so its post-dispatch
+    // `SetResultVariables` sees the synthetic 2-column tuple result and
+    // assigns ROW_COUNT to the field count we just rendered.
+    refreshErrorVars(ctx.settings, {
+      kind: 'success',
+      rowCount: rs.rowCount,
+    });
     return { status: 'reset-buf', newBuf: '' };
   },
 };
