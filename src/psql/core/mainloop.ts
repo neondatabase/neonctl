@@ -943,6 +943,21 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         // \bind) will read this through `BackslashContext.queryBuf` and
         // return `reset-buf` to clear it; commands that don't care leave it
         // intact for the next dispatch.
+        //
+        // Track whether this scan started cleanly: empty queryBuf and the
+        // backslash was at the head of `working`. In that case the slash
+        // command is the ENTIRE source line — the trailing `\n` left in
+        // `working` after the slice is just the line terminator, not an
+        // inter-line continuation separator. We need to drop it after
+        // dispatch so the next chunk's scanSql doesn't return an `eof`
+        // with `sql: '\n'` and accumulate a stray leading newline into
+        // the NEXT statement's queryBuf. Mirrors upstream `MainLoop()`'s
+        // `query_buf->len == added_nl_pos` strip (mainloop.c lines
+        // 480-484): when a line contains only a backslash command and
+        // the scanner added nothing to the buffer, the appended `\n` is
+        // taken back off so the buffer's `LINE N:` counting matches the
+        // user's mental model.
+        const slashOnlyLine = result.sql.length === 0 && queryBuf.length === 0;
         queryBuf += result.sql;
         working = working.slice(result.consumed);
         const cmdName = result.cmd;
@@ -1019,6 +1034,24 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           // through-newline behaviour for the buffer-reset case — without
           // changing the scanner's semantics for the inline-slash + multi-
           // line shape that depends on the `\n` surviving.
+          if (working.startsWith('\r\n')) {
+            working = working.slice(2);
+          } else if (working.startsWith('\n') || working.startsWith('\r')) {
+            working = working.slice(1);
+          }
+        }
+        // For status='ok' (the buffer was NOT consumed by the slash command),
+        // also drop the `\n` left in `working` when the slash command was
+        // the sole content of this source line. Upstream's
+        // `query_buf->len == added_nl_pos` strip (mainloop.c lines 480-484)
+        // covers the same shape: a line whose only token is a slash command
+        // doesn't contribute a `\n` to `query_buf`. Without this, e.g.
+        //   \set ECHO errors
+        //   SELECT * FROM bad;
+        // would assemble the SELECT's queryBuf as `\n` + `SELECT...` —
+        // shifting the server's `LINE N` count by one and contaminating
+        // the `STATEMENT:  ...` echo emitted on error.
+        if (bres?.status !== 'reset-buf' && slashOnlyLine) {
           if (working.startsWith('\r\n')) {
             working = working.slice(2);
           } else if (working.startsWith('\n') || working.startsWith('\r')) {

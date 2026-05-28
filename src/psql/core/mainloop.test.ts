@@ -427,6 +427,40 @@ describe('runMainLoop — backslash commands', () => {
     // `\capture` then sees a clean `SELECT 2 ` with no `\n` prefix.
     expect(captured).toEqual(['SELECT 2 ']);
   });
+
+  test('non-consuming slash-only line drops its trailing `\\n` from queryBuf', async () => {
+    // Mirrors upstream `MainLoop()`'s `query_buf->len == added_nl_pos`
+    // strip (mainloop.c lines 480-484): a source line whose only token is
+    // a slash command does NOT contribute a `\n` to query_buf. Without
+    // that strip, the next SQL statement assembled into queryBuf would
+    // start with a stray `\n` — shifting the server's `LINE N:` count by
+    // one and contaminating any `STATEMENT:  ...` echo emitted on error.
+    //
+    // Use a non-buffer-consuming command (`\echo`) that returns `'ok'`
+    // and a following SQL statement; assert execSimple receives the SQL
+    // verbatim (no leading newline).
+    const { ctx, db } = buildCtx({
+      lines: ['\\echo hello', 'SELECT 1;'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 1;']);
+  });
+
+  test('inline slash + multi-line SQL still preserves the inter-line `\\n`', async () => {
+    // The opposite case to the slash-only strip: when the slash command
+    // appears AFTER buffered SQL on the same physical line, the `\n` that
+    // follows IS a continuation separator and must survive into queryBuf
+    // so multi-line `LINE N:` numbering matches what the user typed.
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1 \\echo hello', '+ 2;'],
+    });
+    await runMainLoop(ctx);
+    // The query buffer reaches execSimple as `SELECT 1 \n+ 2;` (one inter-
+    // line newline). Strip the trailing `;` to compare without the
+    // mock's `.trim()` normalisation getting in the way.
+    expect(db?.calls.length).toBe(1);
+    expect(db?.calls[0]).toMatch(/SELECT 1\s*\n\s*\+ 2;/);
+  });
 });
 
 // ---------------------------------------------------------------------------
