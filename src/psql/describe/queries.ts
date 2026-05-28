@@ -798,18 +798,57 @@ export const describeTableDetails = (
 /* ------------------------------------------------------------------ */
 /* \du / \dg — describeRoles                                          */
 /* ------------------------------------------------------------------ */
+/**
+ * Upstream `describeRoles` (psql/describe.c) fetches the raw boolean
+ * columns then builds the cooked "Attributes" cell client-side from
+ * fixed per-flag strings. We do that aggregation in SQL via a
+ * NULL-skipping array_to_string so the printer sees only the final
+ * two visible columns ("Role name", "Attributes") plus an optional
+ * "Description" column when `+` is used. This matches the column
+ * layout, header banner ("List of roles"), and content ordering of
+ * vanilla psql 18, including the `Cannot login`-only rows produced by
+ * `\du regress_du_role*` in `src/test/regress/expected/psql.out`.
+ */
 export const describeRoles = (opts: CommonOpts): DescribeQuery => {
   const { verbose, showSystem, pattern, serverVersion } = opts;
+  // Per-flag attribute strings, in upstream order. Each VALUES row
+  // contributes one string (or NULL when the flag is off) so
+  // array_to_string can join them with ", ".
+  const attrParts: string[] = [
+    "CASE WHEN r.rolsuper THEN 'Superuser' END",
+    "CASE WHEN NOT r.rolinherit THEN 'No inheritance' END",
+    "CASE WHEN r.rolcreaterole THEN 'Create role' END",
+    "CASE WHEN r.rolcreatedb THEN 'Create DB' END",
+    "CASE WHEN NOT r.rolcanlogin THEN 'Cannot login' END",
+    "CASE WHEN r.rolreplication THEN 'Replication' END",
+  ];
+  if (serverAtLeast(serverVersion, PG_9_5)) {
+    attrParts.push("CASE WHEN r.rolbypassrls THEN 'Bypass RLS' END");
+  }
+  // `rolconnlimit = -1` means unlimited; only render when >= 0.
+  attrParts.push(
+    'CASE WHEN r.rolconnlimit >= 0 THEN' +
+      " pg_catalog.format('%s connection%s', r.rolconnlimit," +
+      " CASE WHEN r.rolconnlimit = 1 THEN '' ELSE 's' END) END",
+  );
+  // `rolvaliduntil` rendered with upstream's `Password valid until <ts>`.
+  attrParts.push(
+    'CASE WHEN r.rolvaliduntil IS NOT NULL THEN' +
+      " pg_catalog.format('Password valid until %s', r.rolvaliduntil) END",
+  );
+  const attrValues = attrParts.map((p) => `(${p})`).join(',\n        ');
   let sql =
-    'SELECT r.rolname, r.rolsuper, r.rolinherit,\n' +
-    '  r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,\n' +
-    '  r.rolconnlimit, r.rolvaliduntil';
+    'SELECT r.rolname AS "Role name",\n' +
+    '  pg_catalog.array_to_string(ARRAY(\n' +
+    '    SELECT a FROM (VALUES\n' +
+    `        ${attrValues}\n` +
+    '      ) AS x(a)\n' +
+    '      WHERE a IS NOT NULL\n' +
+    '  ), \', \') AS "Attributes"';
   if (verbose) {
     sql +=
-      "\n, pg_catalog.shobj_description(r.oid, 'pg_authid') AS description";
+      ',\n  pg_catalog.shobj_description(r.oid, \'pg_authid\') AS "Description"';
   }
-  sql += '\n, r.rolreplication';
-  if (serverAtLeast(serverVersion, PG_9_5)) sql += '\n, r.rolbypassrls';
   sql += '\nFROM pg_catalog.pg_roles r\n';
   let hasWhere = false;
   if (!showSystem && pattern === undefined) {

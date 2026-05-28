@@ -238,11 +238,21 @@ exports[`describe/queries — pg17 snapshots > describeRoles > pg17 / verbose=fa
 {
   "description": "List of roles",
   "params": [],
-  "sql": "SELECT r.rolname, r.rolsuper, r.rolinherit,
-  r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
-  r.rolconnlimit, r.rolvaliduntil
-, r.rolreplication
-, r.rolbypassrls
+  "sql": "SELECT r.rolname AS "Role name",
+  pg_catalog.array_to_string(ARRAY(
+    SELECT a FROM (VALUES
+        (CASE WHEN r.rolsuper THEN 'Superuser' END),
+        (CASE WHEN NOT r.rolinherit THEN 'No inheritance' END),
+        (CASE WHEN r.rolcreaterole THEN 'Create role' END),
+        (CASE WHEN r.rolcreatedb THEN 'Create DB' END),
+        (CASE WHEN NOT r.rolcanlogin THEN 'Cannot login' END),
+        (CASE WHEN r.rolreplication THEN 'Replication' END),
+        (CASE WHEN r.rolbypassrls THEN 'Bypass RLS' END),
+        (CASE WHEN r.rolconnlimit >= 0 THEN pg_catalog.format('%s connection%s', r.rolconnlimit, CASE WHEN r.rolconnlimit = 1 THEN '' ELSE 's' END) END),
+        (CASE WHEN r.rolvaliduntil IS NOT NULL THEN pg_catalog.format('Password valid until %s', r.rolvaliduntil) END)
+      ) AS x(a)
+      WHERE a IS NOT NULL
+  ), ', ') AS "Attributes"
 FROM pg_catalog.pg_roles r
 WHERE r.rolname !~ '^pg_'
   AND true /* TODO(WP-20): pattern matching */
@@ -254,12 +264,22 @@ exports[`describe/queries — pg17 snapshots > describeRoles > pg17 / verbose=tr
 {
   "description": "List of roles",
   "params": [],
-  "sql": "SELECT r.rolname, r.rolsuper, r.rolinherit,
-  r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
-  r.rolconnlimit, r.rolvaliduntil
-, pg_catalog.shobj_description(r.oid, 'pg_authid') AS description
-, r.rolreplication
-, r.rolbypassrls
+  "sql": "SELECT r.rolname AS "Role name",
+  pg_catalog.array_to_string(ARRAY(
+    SELECT a FROM (VALUES
+        (CASE WHEN r.rolsuper THEN 'Superuser' END),
+        (CASE WHEN NOT r.rolinherit THEN 'No inheritance' END),
+        (CASE WHEN r.rolcreaterole THEN 'Create role' END),
+        (CASE WHEN r.rolcreatedb THEN 'Create DB' END),
+        (CASE WHEN NOT r.rolcanlogin THEN 'Cannot login' END),
+        (CASE WHEN r.rolreplication THEN 'Replication' END),
+        (CASE WHEN r.rolbypassrls THEN 'Bypass RLS' END),
+        (CASE WHEN r.rolconnlimit >= 0 THEN pg_catalog.format('%s connection%s', r.rolconnlimit, CASE WHEN r.rolconnlimit = 1 THEN '' ELSE 's' END) END),
+        (CASE WHEN r.rolvaliduntil IS NOT NULL THEN pg_catalog.format('Password valid until %s', r.rolvaliduntil) END)
+      ) AS x(a)
+      WHERE a IS NOT NULL
+  ), ', ') AS "Attributes",
+  pg_catalog.shobj_description(r.oid, 'pg_authid') AS "Description"
 FROM pg_catalog.pg_roles r
 WHERE r.rolname !~ '^pg_'
   AND true /* TODO(WP-20): pattern matching */
