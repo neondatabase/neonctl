@@ -1028,19 +1028,20 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         // positional intervals) would leave `SELECT 1 ` in the buffer for
         // the next prompt — and in notty mode the tail dispatch would
         // execute it, masking the failure exit code.
+        //
+        // Upstream `HandleSlashCmds` additionally silently discards the
+        // remainder of the current line via `psql_scan_slash_option(scan_state,
+        // OT_WHOLE_LINE, …)` when a backslash command returns PSQL_CMD_ERROR.
+        // Mirror that here by dropping `working` up to and including the next
+        // newline. Without this, `\bind_named NAME 1 2 \gset pref02_ \echo X`
+        // would still execute `\echo X` after the pipeline-mode `\gset`
+        // rejection — vanilla suppresses it.
         if (bres?.status === 'error') {
           queryBuf = '';
           scanState = initialScanState();
           stmtLineNumber = 1;
-          // Same residual-newline reasoning as `reset-buf`: the buffer is
-          // being dropped on a failed slash command, so the `\n` left over
-          // from the slash-command line shouldn't seep into the next
-          // statement's queryBuf via the `eof` accumulation path.
-          if (working.startsWith('\r\n')) {
-            working = working.slice(2);
-          } else if (working.startsWith('\n') || working.startsWith('\r')) {
-            working = working.slice(1);
-          }
+          const nlIdx = working.indexOf('\n');
+          working = nlIdx === -1 ? '' : working.slice(nlIdx + 1);
         }
         lastWasError = bres?.status === 'error';
         // Backslash commands like \connect can also tear down the connection.
