@@ -5,7 +5,7 @@ import {
   OrgScopeProps,
 } from '../types.js';
 import { looksLikeBranchId } from './formats.js';
-import { Branch } from '@neondatabase/api-client';
+import { Branch, Database } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 
 export const branchIdResolve = async ({
@@ -65,6 +65,38 @@ const getBranchIdFromProps = async (props: BranchScopeProps) => {
 export const branchIdFromProps = async (props: BranchScopeProps) => {
   (props as any).branchId = await getBranchIdFromProps(props);
   return (props as any).branchId;
+};
+
+export const resolveSingleDatabase = async (props: {
+  apiClient: CommonProps['apiClient'];
+  projectId: string;
+  branchId: string;
+  database?: string;
+}): Promise<string> => {
+  const { data } = await props.apiClient.listProjectBranchDatabases(
+    props.projectId,
+    props.branchId,
+  );
+  const databases = data.databases;
+
+  if (props.database !== undefined) {
+    if (!databases.find((d: Database) => d.name === props.database)) {
+      throw new Error(
+        `Database not found: ${props.database}. Available databases on branch ${props.branchId}: ${databases.map((d: Database) => d.name).join(', ')}`,
+      );
+    }
+    return props.database;
+  }
+
+  if (databases.length === 0) {
+    throw new Error(`No databases found for the branch: ${props.branchId}`);
+  }
+  if (databases.length === 1) {
+    return databases[0].name;
+  }
+  throw new Error(
+    `Multiple databases found for the branch, please provide one with the --database option: ${databases.map((d: Database) => d.name).join(', ')}`,
+  );
 };
 
 export const fillSingleProject = async (

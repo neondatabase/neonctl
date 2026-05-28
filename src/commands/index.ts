@@ -12,6 +12,7 @@ import * as cs from './connection_string.js';
 import * as psql from './psql.js';
 import * as setContext from './set_context.js';
 import * as init from './init.js';
+import * as dataApi from './data_api.js';
 
 export default [
   auth,
@@ -28,4 +29,5 @@ export default [
   psql,
   setContext,
   init,
+  dataApi,
 ];
