@@ -75,6 +75,16 @@ const patternStub = (
   return `${join}true /* TODO(WP-20): pattern matching */\n`;
 };
 
+/**
+ * Per-argument pattern slot for `\df name argtype1 argtype2 …` and
+ * `\do name argtype1 argtype2`. Each slot emits a uniquely tagged
+ * placeholder so the dispatcher can substitute the i-th processed
+ * type-name pattern (matched against `t<i>.typname`, `nt<i>.nspname`,
+ * and `format_type(t<i>.oid, NULL)` like upstream).
+ */
+const argPatternStub = (slot: number): string =>
+  `true /* ARG_PATTERN_${slot} */`;
+
 const orderBy = (cols: string): string => `ORDER BY ${cols};`;
 
 type CommonOpts = {
@@ -181,12 +191,21 @@ export const describeTablespaces = (opts: CommonOpts): DescribeQuery => {
 type DescribeFunctionsOpts = CommonOpts & {
   /** Combination of 'a' (aggregate), 'n' (normal), 'p' (procedure), 't' (trigger), 'w' (window). Empty = all. */
   functypes?: string;
+  /**
+   * Per-argument type filters. Upstream `\df name arg1 arg2 …` accepts
+   * one extra word per function argument. Each slot is either a type
+   * name pattern (matched against `pg_type.typname` and `format_type`),
+   * or the literal `-` to mean "function has no argument in that slot
+   * (typname IS NULL)". Empty array = no per-arg constraint.
+   */
+  argPatterns?: string[];
 };
 export const describeFunctions = (
   opts: DescribeFunctionsOpts,
 ): DescribeQuery => {
   const { verbose, showSystem, pattern, serverVersion } = opts;
   const functypes = opts.functypes ?? '';
+  const argPatterns = opts.argPatterns ?? [];
   let showAgg = functypes.includes('a');
   let showNorm = functypes.includes('n');
   let showProc = functypes.includes('p');
@@ -255,6 +274,14 @@ export const describeFunctions = (
   sql +=
     '\nFROM pg_catalog.pg_proc p' +
     '\n     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace\n';
+  // Upstream emits the per-argument joins *before* the verbose-language
+  // join so that all `t<i>`/`nt<i>` tables exist by the time the WHERE
+  // pulls in per-arg conditions. See describe.c::describeFunctions.
+  for (let i = 0; i < argPatterns.length; i++) {
+    sql +=
+      `     LEFT JOIN pg_catalog.pg_type t${i} ON t${i}.oid = p.proargtypes[${i}]\n` +
+      `     LEFT JOIN pg_catalog.pg_namespace nt${i} ON nt${i}.oid = t${i}.typnamespace\n`;
+  }
   if (verbose) {
     sql += '     LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang\n';
   }
@@ -310,6 +337,19 @@ export const describeFunctions = (
   }
 
   sql += patternStub(hasWhere, 'n.nspname', 'p.proname');
+
+  // Upstream's per-argument filter loop. `-` means "no type in this
+  // slot" (function has fewer args); anything else is a type-name
+  // pattern matched against typname/format_type — same shape as `\dT`.
+  // Each slot emits a uniquely tagged placeholder so cmd_describe.ts
+  // can splice in the appropriate per-arg conditions.
+  for (let i = 0; i < argPatterns.length; i++) {
+    if (argPatterns[i] === '-') {
+      sql += `      AND t${i}.typname IS NULL\n`;
+    } else {
+      sql += `      AND ${argPatternStub(i)}\n`;
+    }
+  }
 
   if (!showSystem && pattern === undefined) {
     sql +=
@@ -373,8 +413,23 @@ export const describeTypes = (opts: CommonOpts): DescribeQuery => {
 /* ------------------------------------------------------------------ */
 /* \do — describeOperators                                            */
 /* ------------------------------------------------------------------ */
-export const describeOperators = (opts: CommonOpts): DescribeQuery => {
+type DescribeOperatorsOpts = CommonOpts & {
+  /**
+   * Upstream `\do name arg1 [arg2]` takes up to two extra args: with
+   * one arg it filters the right argument type (`o.oprright`) AND
+   * constrains to unary right (`o.oprleft = 0`); with two args it
+   * filters both `oprleft` and `oprright`. Extra args past two are
+   * ignored by upstream. `-` means "no type in that slot".
+   */
+  argPatterns?: string[];
+};
+export const describeOperators = (
+  opts: DescribeOperatorsOpts,
+): DescribeQuery => {
   const { verbose, showSystem, pattern, serverVersion } = opts;
+  let argPatterns = opts.argPatterns ?? [];
+  // Upstream caps at 2 — extra args past two are silently dropped.
+  if (argPatterns.length > 2) argPatterns = argPatterns.slice(0, 2);
   let sql =
     'SELECT n.nspname as "Schema",\n' +
     '  o.oprname AS "Name",\n' +
@@ -395,6 +450,21 @@ export const describeOperators = (opts: CommonOpts): DescribeQuery => {
     '           pg_catalog.obj_description(o.oprcode, \'pg_proc\')) AS "Description"\n' +
     'FROM pg_catalog.pg_operator o\n' +
     '     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace\n';
+  // Upstream emits arg-type joins before the verbose `pg_proc` join.
+  // With one arg pattern: only join the right-hand side (oprright);
+  // with two: both oprleft/oprright. Tag indices match the join name
+  // so `t0/nt0` correspond to the first arg pattern slot.
+  if (argPatterns.length === 1) {
+    sql +=
+      '     LEFT JOIN pg_catalog.pg_type t0 ON t0.oid = o.oprright\n' +
+      '     LEFT JOIN pg_catalog.pg_namespace nt0 ON nt0.oid = t0.typnamespace\n';
+  } else if (argPatterns.length >= 2) {
+    sql +=
+      '     LEFT JOIN pg_catalog.pg_type t0 ON t0.oid = o.oprleft\n' +
+      '     LEFT JOIN pg_catalog.pg_namespace nt0 ON nt0.oid = t0.typnamespace\n' +
+      '     LEFT JOIN pg_catalog.pg_type t1 ON t1.oid = o.oprright\n' +
+      '     LEFT JOIN pg_catalog.pg_namespace nt1 ON nt1.oid = t1.typnamespace\n';
+  }
   if (verbose && serverAtLeast(serverVersion, PG_18)) {
     // Only joined when we need proleakproof from pg_proc (PG 18+).
     sql += '     LEFT JOIN pg_catalog.pg_proc p ON p.oid = o.oprcode\n';
@@ -406,6 +476,19 @@ export const describeOperators = (opts: CommonOpts): DescribeQuery => {
     hasWhere = true;
   }
   sql += patternStub(hasWhere, 'n.nspname', 'o.oprname');
+  // With a single arg pattern, upstream additionally constrains the
+  // operator to be unary-right (oprleft = 0) so unrelated binary
+  // operators don't leak through the `t0` join.
+  if (argPatterns.length === 1) {
+    sql += '      AND o.oprleft = 0\n';
+  }
+  for (let i = 0; i < argPatterns.length; i++) {
+    if (argPatterns[i] === '-') {
+      sql += `      AND t${i}.typname IS NULL\n`;
+    } else {
+      sql += `      AND ${argPatternStub(i)}\n`;
+    }
+  }
   sql += orderBy('1, 2, 3, 4');
   return { sql, params: params(), description: 'List of operators' };
 };

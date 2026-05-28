@@ -302,6 +302,175 @@ const runDualPatternList = async (
   }
 };
 
+/**
+ * Apply per-argument type patterns into the `ARG_PATTERN_<i>`
+ * placeholders emitted by {@link describeFunctions} and
+ * {@link describeOperators}. Each non-`-` arg pattern produces a set of
+ * conditions against the `t<i>` / `nt<i>` join, matched against
+ * `typname`, `nt<i>.nspname`, and the formatted-type expression — same
+ * semantics as upstream's `validateSQLNamePattern(... ft, tiv, ...)`
+ * call in `describe.c`. `-` slots emit a literal `typname IS NULL`
+ * check at SQL build time and don't generate any conditions here.
+ *
+ * Returns the rewritten SQL plus the merged parameter list (renumbered
+ * so `$N` slots from each arg pattern don't collide with prior slots).
+ */
+const applyArgPatterns = (
+  sql: string,
+  baseParams: unknown[],
+  argResults: (NamePatternResult | null)[],
+): { sql: string; params: unknown[] } => {
+  let rendered = sql;
+  const params = [...baseParams];
+  for (let i = 0; i < argResults.length; i++) {
+    const placeholder = `true /* ARG_PATTERN_${i} */`;
+    const idx = rendered.indexOf(placeholder);
+    if (idx < 0) continue;
+    const r = argResults[i];
+    let replacement = 'true';
+    if (r !== null) {
+      const conds = [
+        ...r.schemaConditions,
+        ...r.nameConditions,
+        ...r.visibilityConditions,
+      ];
+      if (conds.length > 0) {
+        const slotOffset = params.length;
+        const renumbered = conds.map((c) =>
+          c.replace(/\$(\d+)/g, (_, n: string) => `$${Number(n) + slotOffset}`),
+        );
+        params.push(...r.params);
+        replacement = `(${renumbered.join(' AND ')})`;
+      }
+    }
+    rendered =
+      rendered.slice(0, idx) +
+      replacement +
+      rendered.slice(idx + placeholder.length);
+  }
+  return { sql: rendered, params };
+};
+
+/**
+ * Upstream `map_typename_pattern()`: a few aliases the user can type
+ * (`int`, `float`, `decimal`, …) get rewritten to the canonical type
+ * names that appear in `pg_type.typname` / `format_type()`. Mirrors
+ * `describe.c::map_typename_pattern`. Pattern matching is otherwise
+ * literal, so this is the only place the user's input gets rewritten.
+ */
+const TYPENAME_ALIASES: Record<string, string> = {
+  decimal: 'numeric',
+  float: 'double precision',
+  int: 'integer',
+  'bool[]': 'boolean[]',
+  'decimal[]': 'numeric[]',
+  'float[]': 'double precision[]',
+  'float4[]': 'real[]',
+  'float8[]': 'double precision[]',
+  'int[]': 'integer[]',
+  'int2[]': 'smallint[]',
+  'int4[]': 'integer[]',
+  'int8[]': 'bigint[]',
+  'time[]': 'time without time zone[]',
+  'timetz[]': 'time with time zone[]',
+  'timestamp[]': 'timestamp without time zone[]',
+  'timestamptz[]': 'timestamp with time zone[]',
+  'varbit[]': 'bit varying[]',
+  'varchar[]': 'character varying[]',
+};
+
+const mapTypenamePattern = (pattern: string): string =>
+  TYPENAME_ALIASES[pattern.toLowerCase()] ?? pattern;
+
+/**
+ * Process a per-argument type pattern slot for `\df` / `\do`. `-`
+ * returns null (the SQL builder handles the literal `IS NULL` check);
+ * any other value goes through {@link processSQLNamePattern} configured
+ * with the `t<i>` / `nt<i>` join columns and the formatted-type
+ * altnamevar so `\df foo int4` matches `oid -> integer` correctly.
+ */
+const processArgPattern = (
+  slot: number,
+  raw: string,
+): NamePatternResult | null => {
+  if (raw === '-') return null;
+  const mapped = mapTypenamePattern(raw);
+  return processSQLNamePattern({
+    pattern: mapped,
+    schemavar: `nt${slot}.nspname`,
+    namevar: `t${slot}.typname`,
+    altnamevar: `pg_catalog.format_type(t${slot}.oid, NULL)`,
+    visibilityrule: `pg_catalog.pg_type_is_visible(t${slot}.oid)`,
+  });
+};
+
+/**
+ * Drive a `\df` / `\do` style command: collect the main pattern, then
+ * any extra args as per-arg type filters, splice them all into the
+ * query, and print. Returns the collected arg patterns so the SQL
+ * builder upstream can mirror them as joins.
+ */
+const collectArgPatterns = (ctx: BackslashContext): string[] => {
+  const args: string[] = [];
+  // Upstream caps `\do` at 2 args internally but reads all of them
+  // from the scanner; describeFunctions caps at FUNC_MAX_ARGS (100).
+  // We let the caller decide what to do with extras (mostly: ignore).
+  for (;;) {
+    const arg = ctx.nextArg('normal');
+    if (arg === null) break;
+    args.push(arg);
+  }
+  return args;
+};
+
+/**
+ * Run a `\df` / `\do` query: handles the main pattern AND the per-arg
+ * type filters in one go. Mirrors {@link runWithPattern}, but also
+ * threads per-arg `NamePatternResult`s into the `ARG_PATTERN_<i>`
+ * placeholders before handing off to {@link runListQuery}.
+ */
+const runFunctionOrOperatorQuery = async (
+  ctx: BackslashContext,
+  pattern: string | null,
+  argPatternResults: (NamePatternResult | null)[],
+  query: import('../describe/queries.js').DescribeQuery,
+  patternOpts: Omit<Parameters<typeof processSQLNamePattern>[0], 'pattern'>,
+): Promise<BackslashResult> => {
+  const c = conn(ctx);
+  if (!c) return noConn(ctx);
+  const result = processSQLNamePattern({ ...patternOpts, pattern });
+  const dotErr = validatePattern(pattern, result, 2, currentDb(c));
+  if (dotErr !== null) {
+    writeErr(`${dotErr}\n`);
+    return { status: 'error', errorWritten: true };
+  }
+  // Substitute the arg-pattern placeholders first so the params they
+  // contribute precede the main pattern's `$N` allocations.
+  const { sql, params } = applyArgPatterns(
+    query.sql,
+    query.params,
+    argPatternResults,
+  );
+  const finalQuery: import('../describe/queries.js').DescribeQuery = {
+    ...query,
+    sql,
+    params,
+  };
+  try {
+    await runListQuery(
+      c,
+      finalQuery,
+      result,
+      process.stdout,
+      ctx.settings.popt,
+    );
+    return { status: 'ok' };
+  } catch (err) {
+    writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
+    return { status: 'error', errorWritten: true };
+  }
+};
+
 const errMsg = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
@@ -542,6 +711,17 @@ const cmdDescribeFunctions = (cmdName: string): BackslashCmdSpec => ({
         functypes += ch;
       }
     }
+    // Per-argument type patterns: only collected when the main pattern
+    // is non-null (upstream: "Collect argument-type patterns too /
+    // otherwise it was just \df"). Each extra arg filters one slot of
+    // `proargtypes`; `-` means "no type in that slot".
+    const argPatterns: string[] = [];
+    if (pattern !== null) {
+      argPatterns.push(...collectArgPatterns(ctx));
+    }
+    const argPatternResults = argPatterns.map((a, i) =>
+      processArgPattern(i, a),
+    );
     // `x` enables expanded mode for the printed result. For `\df` upstream
     // applies the toggle whether or not a pattern is present (unlike `\d`,
     // which only toggles when no pattern is given). Override popt locally
@@ -560,13 +740,20 @@ const cmdDescribeFunctions = (cmdName: string): BackslashCmdSpec => ({
         verbose,
         showSystem,
         functypes,
+        argPatterns,
         serverVersion: c.serverVersion,
       });
-      return await runWithPattern(ctx, pattern, query, {
-        namevar: 'p.proname',
-        schemavar: 'n.nspname',
-        visibilityrule: 'pg_catalog.pg_function_is_visible(p.oid)',
-      });
+      return await runFunctionOrOperatorQuery(
+        ctx,
+        pattern,
+        argPatternResults,
+        query,
+        {
+          namevar: 'p.proname',
+          schemavar: 'n.nspname',
+          visibilityrule: 'pg_catalog.pg_function_is_visible(p.oid)',
+        },
+      );
     } finally {
       ctx.settings.popt = savedPopt;
     }
@@ -870,13 +1057,26 @@ const cmdDescribeOperators = (cmdName: string): BackslashCmdSpec => ({
     const c = conn(ctx);
     if (!c) return noConn(ctx);
     const { verbose, showSystem } = decodeSuffix(cmdName, 'do');
+    // Upstream: same arg-collection rule as `\df` (only when main
+    // pattern is non-null). describeOperators caps at 2 args; we still
+    // forward the user's input so the SQL builder can decide which
+    // joins to emit.
+    let argPatterns: string[] = [];
+    if (pattern !== null) {
+      argPatterns = collectArgPatterns(ctx);
+    }
+    if (argPatterns.length > 2) argPatterns = argPatterns.slice(0, 2);
+    const argPatternResults = argPatterns.map((a, i) =>
+      processArgPattern(i, a),
+    );
     const query = describeOperators({
       pattern: pattern ?? undefined,
       verbose,
       showSystem,
+      argPatterns,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, {
+    return runFunctionOrOperatorQuery(ctx, pattern, argPatternResults, query, {
       namevar: 'o.oprname',
       schemavar: 'n.nspname',
       visibilityrule: 'pg_catalog.pg_operator_is_visible(o.oid)',
