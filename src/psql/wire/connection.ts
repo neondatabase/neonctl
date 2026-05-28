@@ -2233,8 +2233,15 @@ export class PgConnection implements Connection {
 
     if (msg.type === 'ErrorResponse') {
       driver.error = fieldsToConnectError(msg.fields);
-      const head = driver.queue[0];
-      if (head && head.kind !== 'sync') {
+      // Reject ALL queued non-sync ops eagerly. Upstream server semantics:
+      // once a P/B/D/E op errors, the server skips every subsequent message
+      // until the next Sync. If the client (e.g. `\flushrequest` + `\getresults`
+      // after an aborted bind) doesn't issue Sync next, no further wire
+      // messages will arrive — so we must cascade-reject the rest of the
+      // queue NOW or those promises hang forever.
+      while (driver.queue.length > 0) {
+        const head = driver.queue[0];
+        if (head.kind === 'sync') break;
         driver.queue.shift();
         head.reject(driver.error);
       }
