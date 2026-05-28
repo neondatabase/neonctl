@@ -424,6 +424,29 @@ describe('cmd_describe', () => {
     expect(spy[0].params).toContain('^(btree)$');
   });
 
+  it('\\du suppresses the (N rows) footer (default_footer=false)', async () => {
+    const conn = mkConnection([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_roles'),
+        rs: mkResultSet(
+          ['Role name', 'Attributes'],
+          [['postgres', 'Superuser']],
+        ),
+      },
+    ]);
+    const r = buildRegistry();
+    const spec = mustLookup(r, 'du');
+    const ctx = mkCtx('du', '', mkSettings(conn));
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    const out = stdoutChunks.join('');
+    // Header / data rows are present.
+    expect(out).toContain('List of roles');
+    expect(out).toContain('postgres');
+    // Row counter is suppressed (matches upstream `describeRoles`).
+    expect(out).not.toMatch(/\(\d+ rows?\)/);
+  });
+
   it('\\dA foo bar emits "extra argument" warning, runs with first arg', async () => {
     const spy: QuerySpy[] = [];
     const conn = mkConnection(

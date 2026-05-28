@@ -193,12 +193,26 @@ const validatePattern = (
  * {@link validatePattern}); defaults to 2 (the standard schema-qualified
  * pattern). Commands accepting only single-component patterns pass `0`.
  */
+/**
+ * Per-call overrides for `runWithPattern`'s aligned-printer invocation.
+ *
+ * - `suppressDefaultFooter` flips `topt.defaultFooter` to `false` for
+ *   this query only, matching upstream commands that call
+ *   `printQuery` with `default_footer = false` to omit the
+ *   `(N rows)` row counter (e.g. `\du`, `\dg`, `\drg`, `\dconfig`).
+ *   It does not affect the global `\pset footer` setting.
+ */
+type RunWithPatternOverrides = {
+  suppressDefaultFooter?: boolean;
+};
+
 const runWithPattern = async (
   ctx: BackslashContext,
   pattern: string | null,
   query: import('../describe/queries.js').DescribeQuery,
   patternOpts: Omit<Parameters<typeof processSQLNamePattern>[0], 'pattern'>,
   maxDots = 2,
+  overrides: RunWithPatternOverrides = {},
 ): Promise<BackslashResult> => {
   const c = conn(ctx);
   if (!c) return noConn(ctx);
@@ -209,7 +223,11 @@ const runWithPattern = async (
     return { status: 'error', errorWritten: true };
   }
   try {
-    await runListQuery(c, query, result, process.stdout, ctx.settings.popt);
+    const basePopt = ctx.settings.popt;
+    const popt = overrides.suppressDefaultFooter
+      ? { ...basePopt, topt: { ...basePopt.topt, defaultFooter: false } }
+      : basePopt;
+    await runListQuery(c, query, result, process.stdout, popt);
     return { status: 'ok' };
   } catch (err) {
     writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
@@ -1116,8 +1134,13 @@ const cmdDescribeRoles = (cmdName: string): BackslashCmdSpec => ({
       showSystem,
       serverVersion: c.serverVersion,
     });
-    // Roles are global — first dot is "too many".
-    return runWithPattern(ctx, pattern, query, { namevar: 'r.rolname' }, 0);
+    // Roles are global — first dot is "too many". Upstream calls
+    // `printQuery` with `default_footer = false` (describe.c
+    // `describeRoles`), so suppress the `(N rows)` counter for both
+    // populated and empty results to match `psql -E \du`.
+    return runWithPattern(ctx, pattern, query, { namevar: 'r.rolname' }, 0, {
+      suppressDefaultFooter: true,
+    });
   },
 });
 
