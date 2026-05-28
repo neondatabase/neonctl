@@ -733,8 +733,26 @@ const renderHorizontal = (
   let out = '';
   const newline = '\n';
 
+  // Compute total table width once: needed for title centring (and only
+  // there at the moment). Mirrors upstream `width_total` from
+  // print.c lines 935-950: when the title is narrower than the table,
+  // centre it; otherwise left-align (no padding).
+  let widthTotal = 0;
   if (!tuplesOnly && topt.title) {
-    out += topt.title + newline;
+    const overhead =
+      border === 0
+        ? widths.length
+        : border === 1
+          ? widths.length * 3 - (widths.length > 0 ? 1 : 0)
+          : widths.length * 3 + 1;
+    widthTotal = overhead + widths.reduce((a, b) => a + b, 0);
+    const titleW = displayWidth(topt.title);
+    if (titleW >= widthTotal) {
+      out += topt.title + newline;
+    } else {
+      const pad = (widthTotal - titleW) >> 1;
+      out += ' '.repeat(pad) + topt.title + newline;
+    }
   }
 
   // Top rule: emitted when border == 2 or 3.
@@ -1238,10 +1256,16 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
   }
 
   if (rs.rows.length === 0) {
-    if (!tuplesOnly) out += '(No rows)' + newline;
+    // Expanded mode on empty result: upstream emits the "(0 rows)"
+    // footer (same wording as horizontal mode) followed by the trailing
+    // blank-line separator, NOT a special "(No rows)" string. Verified
+    // against vanilla psql 18: `\\pset expanded on` then `select 1
+    // where false;` emits `(0 rows)\n\n`.
+    if (!tuplesOnly) out += '(0 rows)' + newline;
     if (!tuplesOnly && opts.footers) {
       for (const f of opts.footers) out += f + newline;
     }
+    if (!tuplesOnly) out += newline;
     return out;
   }
 
