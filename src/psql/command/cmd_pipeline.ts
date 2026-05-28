@@ -549,42 +549,64 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       // results from libpq's queue inside `\getresults`; we mirror
       // the semantics with an explicit cursor (`drainedCount`).
       const alreadyDrained = ps.drainedCount;
-      const sets = await ps.session.end();
+      // Hold a reference to the session BEFORE end() clears the stash —
+      // we still need `lastError` after the pipeline has been torn down.
+      const session = ps.session as PipelineSession;
+      // Capture per-Execute promises as a snapshot — `end()` settles
+      // them but doesn't expose the per-op rejection records, which
+      // we need to interleave errors at the correct ordinal position.
+      const promiseSnapshot = session.results.slice();
+      await ps.session.end();
       stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
       ctx.settings.sendMode = 'extended-query';
       // Upstream `exec_command_endpipeline` zeroes the counters once the
       // pipeline has drained — mirrors the empirical behaviour of vanilla
       // psql 18.4 where `\echo :PIPELINE_*` reads "0" after `\endpipeline`.
       resetPipelineCounters(ctx.settings);
-      // Render each ResultSet through the active printer so the
-      // pipeline's queued queries surface their output. Empty-result
-      // sets (CREATE/INSERT/etc.) still go through so command tags
-      // emit. Upstream's `\endpipeline` calls `ProcessResult` per
-      // queued result in the same way.
-      for (let i = alreadyDrained; i < sets.length; i++) {
-        const rs = sets[i];
-        if (rs.fields.length > 0) {
-          await alignedPrinter.printQuery(
-            rs,
-            ctx.settings.popt,
-            process.stdout,
-          );
+      // Walk the per-Execute promises in execute order, interleaving
+      // ErrorResponse renderings with successful ResultSets. Upstream
+      // psql 18.4 emits errors EXACTLY where the failed op sat in the
+      // wire stream (see expected/psql_pipeline.out line 433: the
+      // `bind message supplies 0 parameters` ERROR prints BEFORE the
+      // second `\sendpipeline`'s `?column?` table because the failed
+      // bind was the first Execute and the successful query was the
+      // second). Plain "print all sets then error" would invert the
+      // order. The snapshot was taken before `end()` settled the
+      // promises, but Promise.allSettled is a no-op on already-settled
+      // promises — `end()` awaits them itself — so this is safe.
+      const settled = await Promise.allSettled(promiseSnapshot);
+      let errorRendered = false;
+      for (let i = alreadyDrained; i < settled.length; i++) {
+        const r = settled[i];
+        if (r.status === 'fulfilled') {
+          const rs = r.value;
+          if (rs.fields.length > 0) {
+            await alignedPrinter.printQuery(
+              rs,
+              ctx.settings.popt,
+              process.stdout,
+            );
+          }
+        } else if (!errorRendered) {
+          // Render only the FIRST rejection inline — subsequent ops
+          // in an aborted pipeline reject with the same sticky error
+          // (or with `Pipeline aborted, command did not run`, which
+          // the conformance corpus already suppresses for empty-buffer
+          // sentinel cases). Matching the vanilla "one ERROR, then
+          // recovery" rhythm.
+          renderPipelineError(r.reason);
+          errorRendered = true;
         }
       }
-      // Surface any sticky non-FATAL pipeline error (e.g. ParseError
-      // from `SELECT $2 \parse pipeline_1` where the server can't
-      // determine `$1`'s type, or BindError from a parameter-count
-      // mismatch). Upstream's `\endpipeline` prints these via
-      // `pg_log_error` AFTER all queued ResultSets have been rendered;
-      // the conformance corpus expects the bare `ERROR:` /
-      // `DETAIL:`-prefixed lines on stderr (no `\endpipeline: `
-      // marker). We delegate the rendering to the same writeQueryError
-      // path the simple-query code uses, so VERBOSITY / SHOW_CONTEXT
-      // are honoured uniformly.
-      const session = ps.session as PipelineSession;
-      const lastErr = session.lastError;
-      if (lastErr !== null && lastErr !== undefined) {
-        renderPipelineError(lastErr);
+      // Fallback: if `session.lastError` was set but no per-op
+      // rejection was observed (can happen when the error came from
+      // the trailing Sync rather than a specific Execute), render it
+      // here. Otherwise the diagnostic would be lost.
+      if (!errorRendered) {
+        const lastErr = session.lastError;
+        if (lastErr !== null && lastErr !== undefined) {
+          renderPipelineError(lastErr);
+        }
       }
       return { status: 'ok' };
     } catch (err) {
