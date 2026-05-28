@@ -278,14 +278,14 @@ export const describeOneTableDetails = async (
         "    WHEN 'e' THEN 'external'" +
         "    WHEN 'm' THEN 'main'" +
         "    WHEN 'x' THEN 'extended'" +
-        '    ELSE \'???\'' +
+        "    ELSE '???'" +
         '  END AS attstorage' +
         (includeCompression
           ? ',\n  CASE a.attcompression' +
             "    WHEN 'p' THEN 'pglz'" +
             "    WHEN 'l' THEN 'lz4'" +
             "    WHEN '' THEN ''" +
-            '    ELSE \'???\'' +
+            "    ELSE '???'" +
             '  END AS attcompression'
           : '') +
         ',\n  CASE WHEN a.attstattarget = -1 THEN NULL ELSE a.attstattarget::text END AS attstattarget' +
