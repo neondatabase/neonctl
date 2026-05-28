@@ -191,7 +191,7 @@ export class PipelineSession implements Pipeline {
       rows: [],
       notices: [],
     };
-    this._results.push(Promise.resolve(syncMarker));
+    this.results.push(Promise.resolve(syncMarker));
     // Don't propagate a non-FATAL ErrorResponse here: upstream
     // `\syncpipeline` is silent on stderr — the server-side error
     // surfaces at `\endpipeline` time (see expected/psql_pipeline.out
