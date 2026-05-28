@@ -515,6 +515,26 @@ describe('formatErrorReport', () => {
     expect(lines).toEqual(['ERROR:  boom']);
   });
 
+  test('sqlstate verbosity drops the message entirely (vanilla parity)', () => {
+    // Upstream `\set VERBOSITY sqlstate` emits ONLY `<severity>:  <sqlstate>` —
+    // no message body, no LINE/DETAIL/HINT, no CONTEXT. Verified against
+    // `regress/psql.sql` near `\set VERBOSITY sqlstate` + `SELECT 1/0`,
+    // which expects `ERROR:  22012`.
+    const lines = formatErrorReport(
+      {
+        severity: 'ERROR',
+        code: '22012',
+        message: 'division by zero',
+        detail: 'should NOT appear',
+        hint: 'should NOT appear',
+        where: 'should NOT appear',
+      },
+      'sqlstate',
+      'errors',
+    );
+    expect(lines).toEqual(['ERROR:  22012']);
+  });
+
   test('SHOW_CONTEXT=never suppresses CONTEXT under default verbosity', () => {
     const lines = formatErrorReport(
       {

@@ -641,16 +641,26 @@ export const formatErrorReport = (
   const message = e.message ?? '';
   const out: string[] = [];
 
-  const showSqlstate = verbosity === 'verbose' || verbosity === 'sqlstate';
-  if (showSqlstate) {
+  // `sqlstate` mode is the upstream "just give me the code" flavour:
+  // emit `<severity>:  <sqlstate>` with NO message body. `verbose` mode
+  // adds the SQLSTATE prefix and keeps the message + LINE/DETAIL/HINT
+  // layers below. Default/terse omit the SQLSTATE entirely.
+  //
+  // Reference: upstream `pg_log_pre_callback` / `PQresultErrorMessage`
+  // with `verbosity = PQERRORS_SQLSTATE`, which formats just
+  // `severity: sqlstate\n` and stops.
+  if (verbosity === 'sqlstate') {
+    out.push(`${severity}:  ${sqlstate}`);
+    return out;
+  }
+  if (verbosity === 'verbose') {
     out.push(`${severity}:  ${sqlstate}: ${message}`);
   } else {
     out.push(`${severity}:  ${message}`);
   }
 
-  // `terse` stops after the severity line. `sqlstate` likewise stops
-  // after the prefixed severity line.
-  if (verbosity === 'terse' || verbosity === 'sqlstate') {
+  // `terse` stops after the severity line.
+  if (verbosity === 'terse') {
     return out;
   }
 
