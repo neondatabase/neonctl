@@ -123,7 +123,7 @@ const conn = (ctx: BackslashContext) => ctx.settings.db;
 /** Emit "no current connection" error. */
 const noConn = (ctx: BackslashContext): BackslashResult => {
   writeErr(`\\${ctx.cmdName}: no current connection\n`);
-  return { status: 'error' };
+  return { status: 'error', errorWritten: true };
 };
 
 /**
@@ -203,14 +203,14 @@ const runWithPattern = async (
   const dotErr = validatePattern(pattern, result, maxDots, currentDb(c));
   if (dotErr !== null) {
     writeErr(`${dotErr}\n`);
-    return { status: 'error' };
+    return { status: 'error', errorWritten: true };
   }
   try {
     await runListQuery(c, query, result, process.stdout, ctx.settings.popt);
     return { status: 'ok' };
   } catch (err) {
     writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
-    return { status: 'error' };
+    return { status: 'error', errorWritten: true };
   }
 };
 
@@ -295,7 +295,7 @@ const runDualPatternList = async (
     return { status: 'ok' };
   } catch (err) {
     writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
-    return { status: 'error' };
+    return { status: 'error', errorWritten: true };
   }
 };
 
@@ -336,7 +336,7 @@ const makeDescribeCmd = (baseName: string): BackslashCmdSpec => ({
         }
       } catch (err) {
         writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       // Fall through to list (mirrors upstream behaviour: if no exact
       // relation, treat the name as a list pattern).
@@ -594,7 +594,7 @@ const cmdListOperatorClasses = (cmdName: string): BackslashCmdSpec => ({
       const err = validatePattern(amPat, r, 0, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -608,7 +608,7 @@ const cmdListOperatorClasses = (cmdName: string): BackslashCmdSpec => ({
       const err = validatePattern(typePat, r, 2, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -645,7 +645,7 @@ const cmdListOperatorFamilies = (cmdName: string): BackslashCmdSpec => ({
       const err = validatePattern(amPat, r, 0, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -658,7 +658,7 @@ const cmdListOperatorFamilies = (cmdName: string): BackslashCmdSpec => ({
       const err = validatePattern(typePat, r, 2, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -694,7 +694,7 @@ const cmdListOpFamilyOperators = (cmdName: string): BackslashCmdSpec => ({
       const err = validatePattern(amPat, r, 0, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -707,7 +707,7 @@ const cmdListOpFamilyOperators = (cmdName: string): BackslashCmdSpec => ({
       const err = validatePattern(familyPat, r, 2, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -743,20 +743,20 @@ const cmdListOpFamilyFunctions = (cmdName: string): BackslashCmdSpec => ({
       const err = validatePattern(amPat, r, 0, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
     if (familyPat !== null) {
       const r = processSQLNamePattern({
         namevar: 'of.opfname',
-        schemavar: 'nsf.nspname',
+        schemavar: 'ns.nspname',
         pattern: familyPat,
       });
       const err = validatePattern(familyPat, r, 2, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -861,7 +861,7 @@ const cmdListDbRoleSettings: BackslashCmdSpec = {
       const err = validatePattern(rolePat, r, 0, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -874,7 +874,7 @@ const cmdListDbRoleSettings: BackslashCmdSpec = {
       const err = validatePattern(dbPat, r, 0, curDb);
       if (err !== null) {
         writeErr(`${err}\n`);
-        return { status: 'error' };
+        return { status: 'error', errorWritten: true };
       }
       results.push(r);
     }
@@ -926,7 +926,7 @@ const cmdListDbRoleSettings: BackslashCmdSpec = {
       return { status: 'ok' };
     } catch (err) {
       writeErr(`\\${ctx.cmdName}: ${errMsg(err)}\n`);
-      return { status: 'error' };
+      return { status: 'error', errorWritten: true };
     }
   },
 };
