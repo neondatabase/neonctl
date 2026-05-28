@@ -895,6 +895,16 @@ describe('describeOneTableDetails', () => {
     const titleIdx = lines.findIndex((l) => l.includes('Table "public.foo"'));
     const amIdx = lines.findIndex((l) => l.includes('Access method: heap'));
     expect(amIdx).toBeGreaterThan(titleIdx + 2);
+    // Footer sits flush against the last data row (no blank line
+    // between data and footer) and is followed by a single trailing
+    // blank line — matches upstream `printTableAddFooter` semantics.
+    // The last data row is the one containing ` id ` (boringCols).
+    const lastDataIdx = lines.findIndex(
+      (l, i) => i > titleIdx + 2 && /\bid\b/.test(l) && !l.startsWith('---'),
+    );
+    expect(lastDataIdx).toBeGreaterThan(-1);
+    expect(amIdx).toBe(lastDataIdx + 1);
+    expect(lines[amIdx + 1]).toBe('');
   });
 
   it('renders matview Access method in the header even in non-verbose mode', async () => {
