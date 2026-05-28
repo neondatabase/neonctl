@@ -13,7 +13,16 @@ export type OutputFormat =
   | 'json';
 
 export type Unicode2BorderStyle = 'single' | 'double';
-export type Unicode2LineStyle = 'ascii' | 'unicode';
+/**
+ * Upstream `printQueryOpt.line_style` is a tagged pointer to one of three
+ * glyph tables (`pg_asciiformat`, `pg_asciiformat_old`, `pg_utf8format`).
+ * We carry the same three-way distinction so `\pset linestyle old-ascii`
+ * survives round-trip through the bulk-view (`\pset` with no args) and so
+ * the aligned printer can dispatch to the right glyph family. The 'ascii'
+ * vs 'old-ascii' difference is purely a glyph swap — the printer owns the
+ * actual rendering tables (see `src/psql/print/aligned.ts`).
+ */
+export type Unicode2LineStyle = 'ascii' | 'old-ascii' | 'unicode';
 export type BorderStyle = 0 | 1 | 2 | 3;
 /**
  * Expanded-header width — upstream `pset.popt.topt.expanded_header_width_type`
