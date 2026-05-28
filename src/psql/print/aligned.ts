@@ -979,25 +979,29 @@ type WrapState = 'wrap' | 'nl' | 'none';
  * Unicode collapse `midvruleNl` / `midvruleWrap` / `midvruleBlank` onto the
  * base `vrule`, so the alt-glyph branches only matter for `old-ascii`,
  * which uses `:` for `\n` continuations, `;` for wrap continuations, and
- * `" "` when both adjacent cells are exhausted but the line still exists
- * because of a wrap elsewhere in the row.
+ * `" "` when the joining column is exhausted but the line still exists
+ * because of a wrap/continuation elsewhere in the row.
  *
- * The active state is the most active of the two adjacent columns
- * (wrap > nl > none). `firstLine = true` short-circuits to the base
- * `vrule` — upstream only consults the midvrule table once at least
- * one continuation has been emitted, so the first display line of
- * every row always uses the regular vrule even if a column will wrap
- * on the next line.
+ * Upstream picks the midvrule from the column *to the right of the
+ * separator* (`right`) — if that column is past-end, the separator
+ * collapses to `midvruleBlank` regardless of the left column's state.
+ *
+ * `firstLine = true` short-circuits to the base `vrule` — upstream
+ * only consults the midvrule table once at least one continuation has
+ * been emitted, so the first display line of every row always uses
+ * the regular vrule even if a column will wrap on the next line.
  */
 const pickMidvrule = (
   glyphs: Glyphs,
-  left: WrapState,
+  // Left col's state at this line (cellWrapPrev[i]) — unused by the
+  // upstream rule but kept in the signature for clarity at call sites.
+  _left: WrapState,
   right: WrapState,
   firstLine: boolean,
 ): string => {
   if (firstLine) return glyphs.vrule;
-  if (left === 'wrap' || right === 'wrap') return glyphs.midvruleWrap;
-  if (left === 'nl' || right === 'nl') return glyphs.midvruleNl;
+  if (right === 'wrap') return glyphs.midvruleWrap;
+  if (right === 'nl') return glyphs.midvruleNl;
   return glyphs.midvruleBlank;
 };
 
