@@ -895,25 +895,72 @@ export const cmdGetResults: BackslashCmdSpec = {
       let syncsDrained = 0;
       let resultsDrained = 0;
       let walkedItems = 0;
+      let errorRenderedHere = false;
       for (const r of settled) {
         walkedItems++;
         if (r.status !== 'fulfilled') {
-          // Rejected promise — most likely an Execute that errored
-          // server-side. Treat as a data-result slot (it consumes one
-          // PIPELINE_RESULT_COUNT entry), but we don't print it inline
-          // here (the conformance corpus expects pipeline ERRORs to
-          // surface at `\endpipeline` time, not at `\getresults`).
+          // Rejected promise — an Execute (or Bind/Parse) that the server
+          // responded to with ErrorResponse. Upstream `\getresults` walks
+          // libpq's per-Sync result queue inline: the failed entry
+          // produces an `ERROR: …` on stderr at the `\getresults` line,
+          // not deferred to `\endpipeline`. Match that — but only render
+          // the FIRST rejection in this drain so we don't double-print
+          // when an aborted pipeline funnels multiple sticky rejections
+          // through the same `\getresults` call.
           resultsDrained++;
+          if (!errorRenderedHere) {
+            renderPipelineError(r.reason);
+            errorRenderedHere = true;
+          }
           continue;
         }
         const rs = r.value;
-        if (rs.fields.length === 0) {
-          // Sync marker.
+        if (rs.fields.length === 0 && rs.command === '') {
+          // Sync marker (see wire/pipeline.ts).
           syncsDrained++;
           continue;
         }
         resultsDrained++;
-        await alignedPrinter.printQuery(rs, ctx.settings.popt, process.stdout);
+        if (rs.fields.length === 0 && rs.rows.length > 0) {
+          // 0-column tuples result — same upstream placeholder shape as
+          // `\endpipeline` (see comment there).
+          const tuplesOnly = ctx.settings.popt.topt.tuplesOnly;
+          if (!tuplesOnly) {
+            process.stdout.write('--\n');
+            process.stdout.write(
+              `(${rs.rows.length} ${rs.rows.length === 1 ? 'row' : 'rows'})\n\n`,
+            );
+          }
+        } else if (rs.fields.length > 0) {
+          await alignedPrinter.printQuery(
+            rs,
+            ctx.settings.popt,
+            process.stdout,
+          );
+        }
+      }
+      // Tell the wire layer how far the cmd layer has consumed from its
+      // results queue. `PipelineSession.end()` uses this offset to skip
+      // entries that `\getresults` has already inspected; otherwise the
+      // rejected promise we just rendered here would get re-stashed on
+      // `session.lastError` and `\endpipeline`'s fallback would
+      // double-print the same `ERROR: …` line.
+      const sessMark = session as PipelineSession & {
+        markDrained?: (n: number) => void;
+      };
+      if (typeof sessMark.markDrained === 'function') {
+        sessMark.markDrained(end);
+      }
+      // Once we surface a rejection inline here, also clear any sticky
+      // `lastError` already stashed by a previous wire-layer scan so
+      // `\endpipeline`'s fallback doesn't re-emit the same diagnostic.
+      if (errorRenderedHere) {
+        const sessAny = session as PipelineSession & {
+          clearLastError?: () => void;
+        };
+        if (typeof sessAny.clearLastError === 'function') {
+          sessAny.clearLastError();
+        }
       }
       // Fallback when `session.results` wasn't tracked (test mocks):
       // decrement RESULT_COUNT first, then SYNC_COUNT. Real

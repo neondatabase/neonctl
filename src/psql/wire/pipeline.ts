@@ -231,6 +231,38 @@ export class PipelineSession implements Pipeline {
   public get lastError(): unknown {
     return this._lastError;
   }
+  /**
+   * Drop any sticky error stashed via `_lastError = err` AND latch a
+   * "do not re-stash" sentinel so the next `end()` won't overwrite the
+   * cleared state from its final-Sync `fatal` capture or its per-op
+   * rejection scan. Used by `\getresults` when it surfaced a rejection
+   * inline so the follow-on `\endpipeline` doesn't re-emit the same
+   * diagnostic.
+   *
+   * The sentinel only applies to the IMMEDIATELY-FOLLOWING `end()`
+   * call: if a fresh error arrives on the wire AFTER clearLastError
+   * (e.g. a `\sendpipeline` queued after the `\getresults` that
+   * itself triggers a server-side ERROR), `_lastError` is re-armed
+   * normally because the per-op rejection scan only skips entries
+   * the cmd layer has already inspected (see `_externalDrained`).
+   */
+  public clearLastError(): void {
+    this._lastError = null;
+    this._errorConsumedExternally = true;
+  }
+  private _errorConsumedExternally = false;
+
+  /**
+   * Number of entries from `results` that the cmd layer (`\getresults`)
+   * has already inspected. `end()`'s post-Sync per-op scan starts at
+   * this offset so a rejection that was already surfaced inline by
+   * `\getresults` doesn't get re-stashed on `_lastError` and re-rendered
+   * by `\endpipeline`.
+   */
+  private _externalDrained = 0;
+  public markDrained(count: number): void {
+    if (count > this._externalDrained) this._externalDrained = count;
+  }
 
   public async end(): Promise<ResultSet[]> {
     // Send a terminating Sync so the connection settles back to idle.
@@ -270,8 +302,14 @@ export class PipelineSession implements Pipeline {
           (fatal as { message?: string }).message ?? 'pipeline aborted';
         throw Object.assign(new Error(msg), fatal as object);
       }
-      // Non-FATAL (typically ERROR) — keep for the cmd layer.
-      this._lastError = fatal;
+      // Non-FATAL (typically ERROR) — keep for the cmd layer, unless
+      // `\getresults` already consumed the diagnostic (see
+      // `clearLastError()` / `_errorConsumedExternally`). In that case
+      // the same rejection is mirrored on the final Sync — re-stashing
+      // it here would cause `\endpipeline` to double-print.
+      if (!this._errorConsumedExternally) {
+        this._lastError = fatal;
+      }
     } else {
       // Also scan the settled per-op promises: a ParseError /
       // BindError that arrived BEFORE the final Sync rejects its own
@@ -279,8 +317,13 @@ export class PipelineSession implements Pipeline {
       // server marks subsequent ops as "Pipeline aborted, command
       // did not run" instead of erroring). The conformance corpus
       // expects the first ErrorResponse to surface at `\endpipeline`
-      // time, so we hunt for the first rejected per-op promise.
-      for (const r of settled) {
+      // time, so we hunt for the first rejected per-op promise — but
+      // skip entries that `\getresults` already inspected and surfaced
+      // inline (tracked via `markDrained`). Without this, the same
+      // rejection would re-stash on `_lastError` and `\endpipeline`
+      // would double-print the diagnostic.
+      for (let i = this._externalDrained; i < settled.length; i++) {
+        const r = settled[i];
         if (r.status === 'rejected') {
           this._lastError = r.reason;
           break;
