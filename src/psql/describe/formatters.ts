@@ -139,6 +139,66 @@ const coerceResultSet = (rs: ResultSet): ResultSet => ({
 });
 
 /**
+ * Minimal stream-like collector used by the per-section helpers to
+ * accumulate footer content. Each `render*Section` writes into one of
+ * these so the orchestrator can lift the rendered text into the
+ * printer's `opts.footers` array — that's how upstream `describe.c`
+ * attaches footers to the columns table (`printTableAddFooter`), and
+ * how the trailing-blank-line ordering ends up matching `\d <relation>`
+ * vs `\d <sequence>` consistently.
+ */
+type SectionBufferLike = NodeJS.WritableStream & { toString(): string };
+
+const makeSectionBuffer = (): SectionBufferLike => {
+  let buf = '';
+  const write = (chunk: string | Buffer): boolean => {
+    if (typeof chunk === 'string') {
+      buf += chunk;
+    } else {
+      buf += chunk.toString('utf-8');
+    }
+    return true;
+  };
+  // We only need `.write(chunk)` from the renderers; everything else on
+  // WritableStream is stubbed so the type checks pass.
+  const stub: unknown = {
+    write,
+    end: () => true,
+    on: () => stub,
+    once: () => stub,
+    emit: () => true,
+    removeListener: () => stub,
+    addListener: () => stub,
+    setDefaultEncoding: () => stub,
+    cork: () => undefined,
+    uncork: () => undefined,
+    destroy: () => stub,
+    writable: true,
+    writableEnded: false,
+    writableFinished: false,
+    toString: () => buf,
+  };
+  return stub as SectionBufferLike;
+};
+
+/**
+ * Capture the output of a single render-section helper into a string
+ * suitable for `opts.footers`. Returns `null` when the section emitted
+ * nothing (so callers can skip pushing an empty entry). Trailing
+ * newlines are stripped: the printer re-appends a single `\n` per
+ * footer, and trailing blank lines (between sections / before next
+ * command) are emitted once by the printer's own footer-terminator.
+ */
+const captureSection = async (
+  fn: (out: NodeJS.WritableStream) => void | Promise<void>,
+): Promise<string | null> => {
+  const buf = makeSectionBuffer();
+  await fn(buf);
+  const text = buf.toString().replace(/\n+$/, '');
+  return text === '' ? null : text;
+};
+
+/**
  * Run a list-style describe query and write its result via the aligned
  * printer. Returns the {@link ResultSet} for callers that want to
  * inspect or post-process. Used by `\dt`, `\df`, `\dn`, etc.
@@ -417,37 +477,45 @@ export const describeOneTableDetails = async (
     rows,
     notices: [],
   };
-  // Upstream's `printTable` is invoked with `default_footer = false`
-  // for the column listing: the row-count footer ("(N rows)") and the
-  // trailing blank line are suppressed so the relkind-specific footer
-  // sections (Indexes:, Triggers:, …) sit flush against the table.
-  const colOpts: PrintQueryOpts = {
-    ...popt,
-    title,
-    topt: { ...popt.topt, title, defaultFooter: false },
-    footers: null,
+
+  // ----- Per-section footers, accumulated *before* the column table is
+  //       printed. Upstream `describeOneTableDetails` attaches each
+  //       relkind-specific footer to the columns table via
+  //       `printTableAddFooter()`, then `printTable()` emits them flush
+  //       against the data rows with a single trailing blank line at the
+  //       end of the whole block. Routing every section through
+  //       `opts.footers` mirrors that layout — single-line annotations
+  //       (`Access method:`, `Tablespace:`, …) sit immediately under the
+  //       last data row, multi-line group footers (`Indexes:`,
+  //       `Foreign-key constraints:`, …) follow, and the trailing blank
+  //       only fires after the last footer rather than between data and
+  //       the first footer.
+  const footers: string[] = [];
+  const push = (s: string | null): void => {
+    if (s !== null) footers.push(s);
   };
-  await pickPrinterForFormat(colOpts).printQuery(
-    coerceResultSet(colsResult),
-    colOpts,
-    out,
-  );
 
   // ----- Partition-key (partitioned-table parent only) -----
   if (relkind === 'p') {
-    await renderPartitionKeySection(conn, oid, out);
+    push(await captureSection((b) => renderPartitionKeySection(conn, oid, b)));
   }
 
   // ----- Partition-of (child partition only) -----
   if (relInfo.relispartition) {
-    await renderPartitionOfSection(conn, oid, verbose, out);
+    push(
+      await captureSection((b) =>
+        renderPartitionOfSection(conn, oid, verbose, b),
+      ),
+    );
   }
 
   // ----- Owning table (TOAST tables only — printed before Indexes).
   //       Upstream `describeOneTableDetails` adds the owning-table footer
   //       prior to attaching the indexes footer for `RELKIND_TOASTVALUE`.
   if (relkind === 't') {
-    await renderToastOwningTableFooter(conn, oid, out);
+    push(
+      await captureSection((b) => renderToastOwningTableFooter(conn, oid, b)),
+    );
   }
 
   // ----- Indexes (tables / matviews / partitioned tables / TOAST) -----
@@ -457,45 +525,57 @@ export const describeOneTableDetails = async (
     relkind === 'p' ||
     relkind === 't'
   ) {
-    await renderIndexesSection(conn, oid, out);
+    push(await captureSection((b) => renderIndexesSection(conn, oid, b)));
   }
 
   // ----- Check constraints -----
   if (relkind === 'r' || relkind === 'p' || relkind === 'f') {
-    await renderCheckConstraintsSection(conn, oid, out);
+    push(
+      await captureSection((b) => renderCheckConstraintsSection(conn, oid, b)),
+    );
   }
 
   // ----- Foreign-key constraints -----
   if (relkind === 'r' || relkind === 'p') {
-    await renderForeignKeyConstraintsSection(conn, oid, out);
-    await renderReferencedBySection(conn, oid, out);
+    push(
+      await captureSection((b) =>
+        renderForeignKeyConstraintsSection(conn, oid, b),
+      ),
+    );
+    push(await captureSection((b) => renderReferencedBySection(conn, oid, b)));
   }
 
   // ----- Triggers -----
   if (relkind === 'r' || relkind === 'p' || relkind === 'v') {
-    await renderTriggersSection(conn, oid, out);
+    push(await captureSection((b) => renderTriggersSection(conn, oid, b)));
   }
 
   // ----- RLS policies (regular + partitioned tables) -----
   if (relkind === 'r' || relkind === 'p') {
-    await renderPoliciesSection(conn, oid, relInfo, out);
+    push(
+      await captureSection((b) => renderPoliciesSection(conn, oid, relInfo, b)),
+    );
   }
 
   // ----- Foreign-table footer: Server + FDW options -----
   // Per-column FDW options are rendered inline within the columns
   // table (see fdwOptionsByColumn above); no separate footer here.
   if (relkind === 'f') {
-    await renderForeignTableFooter(conn, oid, out);
+    push(await captureSection((b) => renderForeignTableFooter(conn, oid, b)));
   }
 
   // ----- Inherits: (parents) — for tables, partitioned tables, foreign -----
   if (relkind === 'r' || relkind === 'p' || relkind === 'f') {
-    await renderInheritsSection(conn, oid, out);
+    push(await captureSection((b) => renderInheritsSection(conn, oid, b)));
   }
 
   // ----- Inherited by / Partitions / Number of [child tables|partitions] -----
   if (relkind === 'r' || relkind === 'p' || relkind === 'f') {
-    await renderInheritedBySection(conn, oid, relkind, verbose, out);
+    push(
+      await captureSection((b) =>
+        renderInheritedBySection(conn, oid, relkind, verbose, b),
+      ),
+    );
   }
 
   // ----- Publications (any publishable relkind) -----
@@ -505,7 +585,7 @@ export const describeOneTableDetails = async (
     relkind === 'm' ||
     relkind === 'f'
   ) {
-    await renderPublicationsSection(conn, oid, out);
+    push(await captureSection((b) => renderPublicationsSection(conn, oid, b)));
   }
 
   // ----- Subscriptions (any publishable relkind; permission-denied silent) -----
@@ -515,7 +595,7 @@ export const describeOneTableDetails = async (
     relkind === 'm' ||
     relkind === 'f'
   ) {
-    await renderSubscriptionsSection(conn, oid, out);
+    push(await captureSection((b) => renderSubscriptionsSection(conn, oid, b)));
   }
 
   // ----- Statistics objects (verbose; r/m/p/f) -----
@@ -523,19 +603,29 @@ export const describeOneTableDetails = async (
     verbose &&
     (relkind === 'r' || relkind === 'm' || relkind === 'p' || relkind === 'f')
   ) {
-    await renderStatisticsObjectsSection(conn, oid, out);
+    push(
+      await captureSection((b) => renderStatisticsObjectsSection(conn, oid, b)),
+    );
   }
 
   // ----- Replica Identity (verbose, non-default, regular & matview).
   //       INDEX mode is rendered inline within Indexes:, so the footer
   //       is only emitted for FULL / NOTHING.
   if (verbose && (relkind === 'r' || relkind === 'm')) {
-    renderReplicaIdentitySection(schema, relInfo, out);
+    push(
+      await captureSection((b) => {
+        renderReplicaIdentitySection(schema, relInfo, b);
+      }),
+    );
   }
 
   // ----- Tablespace footer (verbose: explicit tablespace only) -----
   if (verbose) {
-    renderTablespaceFooter(relkind, relInfo, out);
+    push(
+      await captureSection((b) => {
+        renderTablespaceFooter(relkind, relInfo, b);
+      }),
+    );
   }
 
   // ----- Access method footer (verbose: relkind r/p with relam set).
@@ -544,8 +634,30 @@ export const describeOneTableDetails = async (
   //       upstream — the per-test psql.sql toggles the variable to
   //       suppress access-method noise.
   if (!hideTableam && verbose && (relkind === 'r' || relkind === 'p')) {
-    renderAccessMethodFooter(relInfo, out);
+    push(
+      await captureSection((b) => {
+        renderAccessMethodFooter(relInfo, b);
+      }),
+    );
   }
+
+  // Upstream's `printTable` is invoked with `default_footer = false`
+  // for the column listing: the row-count footer ("(N rows)") is
+  // suppressed so the relkind-specific footers we just collected drive
+  // the post-table layout. Pass them via `opts.footers` so the printer
+  // emits each one flush against the data rows and ends the block with
+  // a single trailing blank line.
+  const colOpts: PrintQueryOpts = {
+    ...popt,
+    title,
+    topt: { ...popt.topt, title, defaultFooter: false },
+    footers: footers.length > 0 ? footers : null,
+  };
+  await pickPrinterForFormat(colOpts).printQuery(
+    coerceResultSet(colsResult),
+    colOpts,
+    out,
+  );
 };
 
 /**
