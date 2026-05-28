@@ -674,6 +674,59 @@ describe('runMainLoop — \\timing', () => {
 });
 
 // ---------------------------------------------------------------------------
+// ECHO=all — mirrors upstream `--echo-all`. Every input line is echoed to
+// stdout before processing, EXCEPT bare-empty lines outside any quoted
+// construct (those upstream drops entirely via the `psql_scan_in_quote`
+// gate in `mainloop.c` MainLoop's blank-line short-circuit).
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — ECHO=all', () => {
+  test('echoes a non-empty SQL line before its result', async () => {
+    const { ctx, stdout } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.echo = 'all';
+      },
+    });
+    await runMainLoop(ctx);
+    const out = stdout.text();
+    const echoIdx = out.indexOf('SELECT 1;');
+    const resultIdx = out.indexOf('?column?');
+    expect(echoIdx).toBeGreaterThanOrEqual(0);
+    expect(resultIdx).toBeGreaterThan(echoIdx);
+  });
+
+  test('drops bare-empty lines between statements (no echo, no dispatch)', async () => {
+    const { ctx, stdout, db } = buildCtx({
+      lines: ['SELECT 1;', '', 'SELECT 2;'],
+      settingsOverride: (s) => {
+        s.echo = 'all';
+      },
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 1;', 'SELECT 2;']);
+    expect(stdout.text()).not.toMatch(/SELECT 1;\n\nSELECT 2;/);
+  });
+
+  test('echoes blank lines inside a multi-line quoted identifier', async () => {
+    // Multi-line quoted identifier `"a\n\nb"` — the scanner stays in
+    // double-quote state across the blank line, so upstream echoes it
+    // through. Mirrors the regress/psql `prepare q as select ... as
+    // "ab\n\nc" ...` test case where the embedded blank lands on its
+    // own line and must surface in the `--echo-all` stream.
+    const { ctx, stdout, db } = buildCtx({
+      lines: ['SELECT 1 AS "a', '', 'b";'],
+      settingsOverride: (s) => {
+        s.echo = 'all';
+      },
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toHaveLength(1);
+    expect(stdout.text()).toMatch(/SELECT 1 AS "a\n\nb";\n/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // `\bind` — extended-protocol path with parameter substitution.
 //
 // `cmd_pipeline.ts` stashes parameters on a Symbol-keyed slot of

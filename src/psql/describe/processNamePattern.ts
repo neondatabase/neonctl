@@ -43,6 +43,21 @@ export type NamePatternResult = {
   visibilityConditions: string[];
   /** Values referenced by `$N` placeholders in the conditions, in order. */
   params: unknown[];
+  /**
+   * Number of unquoted `.` separators in the raw pattern. Independent of
+   * the caller's component budget — the dispatcher inspects this to emit
+   * "improper qualified name (too many dotted names)" the way upstream
+   * `processSQLNamePattern` does.
+   */
+  dotCount: number;
+  /**
+   * Literal text of the *first* dotted component (lower-cased outside
+   * quotes, wildcards preserved as-typed). The dispatcher compares this
+   * against the connection's current database to detect cross-database
+   * references. `null` for null patterns / single-component patterns
+   * when the caller didn't ask to keep it (`dbnamevar` was unset).
+   */
+  dbLiteral: string | null;
 };
 
 export type ProcessSQLNamePatternOpts = {
@@ -111,8 +126,15 @@ const patternToSQLRegex = (
   const maxComponents = wantDb ? 3 : wantSchema ? 2 : 1;
   const buffers: string[] = ['^('];
   let leftLiteral = '';
-  let trackingLeft = wantDb; // upstream's `want_literal_dbname`
+  // Upstream's `want_literal_dbname`: track the first component's
+  // literal text unconditionally so the dispatcher can detect
+  // cross-database references and emit the canonical error message.
+  let trackingLeft = true;
   let inQuotes = false;
+  // Total separator count, independent of `maxComponents`. Upstream
+  // increments `dotcnt` past the budget so callers can raise
+  // "improper qualified name (too many dotted names)".
+  let dotCount = 0;
 
   let cp = 0;
   while (cp < pattern.length) {
@@ -148,6 +170,7 @@ const patternToSQLRegex = (
       continue;
     }
     if (!inQuotes && ch === '.') {
+      dotCount++;
       trackingLeft = false;
       if (buffers.length < maxComponents) {
         buffers[buffers.length - 1] += ')$';
@@ -181,19 +204,18 @@ const patternToSQLRegex = (
   }
   buffers[buffers.length - 1] += ')$';
 
-  // Compute dotCount (excess dots beyond maxComponents stay in the
-  // last buffer as literal `.`s — upstream's behavior).
-  const dotCount = (pattern.match(/(?<!"[^"]*)\./g) ?? []).length; // best-effort
-  void dotCount;
-
   // Upstream emits buffers in *reverse* assignment order: namebuf gets
   // the *last* component, schemabuf the second-to-last, dbnamebuf the
   // first. So we reverse for downstream consumption.
   const regexes = [...buffers].reverse();
   return {
-    dotCount: buffers.length - 1,
+    dotCount,
     regexes,
-    dbLiteral: trackingLeft || buffers.length > 1 ? leftLiteral : null,
+    // Expose the first-component literal whenever the pattern was dotted
+    // (so the dispatcher can do the cross-db check) or when the caller
+    // explicitly asked for it via `wantDb` (the `\l` style three-part
+    // matcher).
+    dbLiteral: dotCount > 0 || wantDb ? leftLiteral : null,
   };
 };
 
@@ -222,6 +244,8 @@ export const processSQLNamePattern = (
     nameConditions: [],
     visibilityConditions: [],
     params: [],
+    dotCount: 0,
+    dbLiteral: null,
   };
 
   if (pattern === null) {
@@ -237,6 +261,8 @@ export const processSQLNamePattern = (
     schemavar !== null,
     dbnamevar !== null,
   );
+  result.dotCount = parts.dotCount;
+  result.dbLiteral = parts.dbLiteral;
 
   // parts.regexes is name-first: [nameRegex, schemaRegex?, dbRegex?]
   const nameRegex = parts.regexes[0];
