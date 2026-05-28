@@ -163,8 +163,8 @@ const validatePattern = (
     return `improper qualified name (too many dotted names): ${pattern}`;
   }
   if (
-    result.dotCount === 2 &&
-    maxDots === 2 &&
+    maxDots >= 1 &&
+    result.dotCount === maxDots &&
     result.dbLiteral !== null &&
     result.dbLiteral !== curDb
   ) {
