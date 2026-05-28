@@ -38,9 +38,16 @@
  */
 
 import type { Connection, ResultSet } from '../types/connection.js';
-import type { PrintQueryOpts } from '../types/printer.js';
+import type { PrintQueryOpts, Printer } from '../types/printer.js';
 
 import { alignedPrinter } from '../print/aligned.js';
+import { asciidocPrinter } from '../print/asciidoc.js';
+import { csvPrinter } from '../print/csv.js';
+import { htmlPrinter } from '../print/html.js';
+import { jsonPrinter } from '../print/json.js';
+import { latexLongtablePrinter, latexPrinter } from '../print/latex.js';
+import { troffMsPrinter } from '../print/troff.js';
+import { unalignedPrinter } from '../print/unaligned.js';
 
 import type { DescribeQuery } from './queries.js';
 import {
@@ -58,6 +65,41 @@ import {
   fetchToastOwningTable,
 } from './queries.js';
 import { applyPattern, type NamePatternResult } from './processNamePattern.js';
+
+/**
+ * Pick the printer for the active output format. Mirrors `pickPrinter`
+ * in `core/common.ts`, but operates off `PrintQueryOpts.topt.format`
+ * since formatters don't have access to the full `PsqlSettings`. The
+ * aligned printer covers both `aligned` and `wrapped`; everything else
+ * routes to its dedicated module so `\d <obj>` honours the user's
+ * `\pset format` choice (asciidoc/csv/html/latex/etc.) the same way
+ * regular SELECTs do.
+ */
+const pickPrinterForFormat = (opts: PrintQueryOpts): Printer => {
+  switch (opts.topt.format) {
+    case 'aligned':
+    case 'wrapped':
+      return alignedPrinter;
+    case 'unaligned':
+      return unalignedPrinter;
+    case 'csv':
+      return csvPrinter;
+    case 'json':
+      return jsonPrinter;
+    case 'html':
+      return htmlPrinter;
+    case 'asciidoc':
+      return asciidocPrinter;
+    case 'latex':
+      return latexPrinter;
+    case 'latex-longtable':
+      return latexLongtablePrinter;
+    case 'troff-ms':
+      return troffMsPrinter;
+    default:
+      return alignedPrinter;
+  }
+};
 
 /**
  * Format a cell value coming back from the protocol layer. Connection
@@ -124,7 +166,7 @@ export const runListQuery = async (
           ? popt.footers
           : null,
   };
-  await alignedPrinter.printQuery(coerced, opts, out);
+  await pickPrinterForFormat(opts).printQuery(coerced, opts, out);
   return rs;
 };
 
@@ -373,14 +415,15 @@ export const describeOneTableDetails = async (
   // for the column listing: the row-count footer ("(N rows)") and the
   // trailing blank line are suppressed so the relkind-specific footer
   // sections (Indexes:, Triggers:, …) sit flush against the table.
-  await alignedPrinter.printQuery(
+  const colOpts: PrintQueryOpts = {
+    ...popt,
+    title,
+    topt: { ...popt.topt, title, defaultFooter: false },
+    footers: null,
+  };
+  await pickPrinterForFormat(colOpts).printQuery(
     coerceResultSet(colsResult),
-    {
-      ...popt,
-      title,
-      topt: { ...popt.topt, title, defaultFooter: false },
-      footers: null,
-    },
+    colOpts,
     out,
   );
 
@@ -1147,14 +1190,15 @@ export const describeOneSequence = async (
   // Suppress the row-count footer — upstream's sequence detail output is
   // a single row with no `(1 row)` line. Pass the Owned-by line as a
   // user footer so the printer places it before the trailing blank.
-  await alignedPrinter.printQuery(
+  const seqOpts: PrintQueryOpts = {
+    ...popt,
+    title,
+    topt: { ...popt.topt, title, defaultFooter: false },
+    footers: footers.length > 0 ? footers : null,
+  };
+  await pickPrinterForFormat(seqOpts).printQuery(
     coerceResultSet(rs),
-    {
-      ...popt,
-      title,
-      topt: { ...popt.topt, title, defaultFooter: false },
-      footers: footers.length > 0 ? footers : null,
-    },
+    seqOpts,
     out,
   );
 };
