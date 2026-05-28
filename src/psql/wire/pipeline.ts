@@ -65,7 +65,18 @@ export type PipelineHost = {
 };
 
 export class PipelineSession implements Pipeline {
-  private readonly results: Promise<ResultSet>[] = [];
+  /**
+   * Per-Execute ResultSet promises, accumulated in the order
+   * `execute()` was called. Public-read so `\getresults` (in
+   * `cmd_pipeline.ts`) can surface each pending result the moment a
+   * Flush / Sync makes the server emit replies — mirroring upstream
+   * psql's `exec_command_getresults`, which calls `PQgetResult()` and
+   * prints each one inline.
+   *
+   * Never spliced internally: `\endpipeline` / `\getresults` track
+   * their own "drained count" so already-printed results are skipped.
+   */
+  public readonly results: Promise<ResultSet>[] = [];
   // Promises for ops whose server-side completion we still need to
   // observe (Parse, Bind, Describe, Close). In pipeline mode the
   // server doesn't reply until the next Sync, so awaiting them in

@@ -48,6 +48,7 @@ import type {
 
 import { writeErr } from './shared.js';
 import { alignedPrinter } from '../print/aligned.js';
+import { PipelineSession } from '../wire/pipeline.js';
 
 // ---------------------------------------------------------------------------
 // Settings stash. We can't add new fields to PsqlSettings (frozen WP-00) so
@@ -73,8 +74,22 @@ type BindState = {
 
 type PipelineStash = {
   session: Pipeline;
-  /** Promises returned by send-style commands; drained by `\getresults`. */
+  /**
+   * Synthetic per-Execute slots — one entry per `\sendpipeline` or
+   * implicit-`;` push. The contents aren't load-bearing; the **count**
+   * (length) is used by older call sites that track "queued but not
+   * sent" commands. Real per-Execute ResultSets live on
+   * `(session as PipelineSession).results` and are surfaced by
+   * `\getresults` / `\endpipeline` via {@link drainedCount}.
+   */
   pending: Promise<ResultSet | undefined>[];
+  /**
+   * Index into `(session as PipelineSession).results` of the next
+   * ResultSet that has NOT yet been displayed. Bumped by `\getresults`
+   * after each result is printed; `\endpipeline` prints
+   * `results[drainedCount..]` on the way out.
+   */
+  drainedCount: number;
 };
 
 type Stash = Record<symbol, unknown> & {
@@ -418,6 +433,7 @@ export const cmdStartPipeline: BackslashCmdSpec = {
       stashOf(ctx.settings)[PIPELINE_KEY] = {
         session,
         pending: [],
+        drainedCount: 0,
       };
       ctx.settings.sendMode = 'extended-pipeline';
       // Upstream `exec_command_startpipeline` calls SetVariable for the three
@@ -440,6 +456,13 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       return errResult(ctx, 'no pipeline active');
     }
     try {
+      // Snapshot how many results were already surfaced by prior
+      // `\getresults` calls — only the residual that the final Sync
+      // inside `session.end()` flushes should be printed. Upstream
+      // psql achieves this implicitly via `PQgetResult()` consuming
+      // results from libpq's queue inside `\getresults`; we mirror
+      // the semantics with an explicit cursor (`drainedCount`).
+      const alreadyDrained = ps.drainedCount;
       const sets = await ps.session.end();
       stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
       ctx.settings.sendMode = 'extended-query';
@@ -452,7 +475,8 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       // sets (CREATE/INSERT/etc.) still go through so command tags
       // emit. Upstream's `\endpipeline` calls `ProcessResult` per
       // queued result in the same way.
-      for (const rs of sets) {
+      for (let i = alreadyDrained; i < sets.length; i++) {
+        const rs = sets[i];
         if (rs.fields.length > 0) {
           await alignedPrinter.printQuery(
             rs,
@@ -591,26 +615,75 @@ export const cmdGetResults: BackslashCmdSpec = {
   helpKey: 'getresults',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
     const ps = getPipelineState(ctx.settings);
-    if (!ps) return errResult(ctx, 'no pipeline active');
     const arg = ctx.nextArg('normal');
-    let n = ps.pending.length;
+    // Upstream `exec_command_getresults` parses the optional count BEFORE
+    // checking pipeline state, so an invalid count surfaces even when
+    // there's no pipeline active. The wording matches upstream verbatim
+    // ("invalid number of requested results").
+    let requested: number | null = null;
     if (arg !== null && arg.length > 0) {
       const parsed = parseInt(arg, 10);
       if (!Number.isFinite(parsed) || parsed < 0) {
-        return errResult(ctx, `invalid count: ${arg}`);
+        return errResult(ctx, 'invalid number of requested results');
       }
-      n = Math.min(parsed, ps.pending.length);
+      requested = parsed;
     }
-    const drained = ps.pending.splice(0, n);
+    // No active pipeline → upstream prints `No pending results to get`
+    // (the "no-op idle" message), NOT a hard "no pipeline active" error.
+    // This matches the conformance test that runs `\getresults` BOTH
+    // outside of `\startpipeline / \endpipeline` brackets and right
+    // after `\endpipeline`.
+    if (!ps) {
+      process.stdout.write('No pending results to get\n');
+      return { status: 'ok' };
+    }
+    // Available result count is governed by `PIPELINE_RESULT_COUNT` —
+    // upstream `exec_command_getresults` consults `pset.piped_results`
+    // for the same decision. A `\sendpipeline` queued on the client but
+    // not yet `\flushrequest`-ed / `\syncpipeline`-ed does NOT count;
+    // those commands have a still-pending Execute promise but the
+    // server hasn't been told to flush replies, so we can't observe
+    // anything synchronously.
+    const available = readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT');
+    if (available === 0) {
+      process.stdout.write('No pending results to get\n');
+      return { status: 'ok' };
+    }
+    // `\getresults 0` and bare `\getresults` mean "all pending"
+    // (upstream semantics).
+    const n =
+      requested === null || requested === 0
+        ? available
+        : Math.min(requested, available);
+    // Pull the next `n` ResultSet promises from the session-tracked
+    // list of per-Execute results. `drainedCount` advances by `n` so
+    // a follow-on `\endpipeline` knows to skip what we've already
+    // printed.
+    const results = (ps.session as PipelineSession).results;
+    const start = ps.drainedCount;
+    const end = start + n;
+    const slice = results.slice(start, end);
+    ps.drainedCount = end;
+    // Keep `ps.pending` in sync for any legacy callers that read its
+    // length — splice off the consumed count. The spliced promises are
+    // synthetic placeholders (real ResultSets live on `session.results`),
+    // so we discard the return value.
+    void ps.pending.splice(0, n);
     try {
-      await Promise.all(drained);
+      const settled = await Promise.allSettled(slice);
+      for (const r of settled) {
+        if (r.status !== 'fulfilled') continue;
+        const rs = r.value;
+        if (rs.fields.length === 0) continue;
+        await alignedPrinter.printQuery(rs, ctx.settings.popt, process.stdout);
+      }
       // Upstream `exec_command_getresults` decrements `pset.piped_results`
       // by the number of results actually consumed. When the queue empties,
       // upstream also resets `pset.piped_syncs` to 0 (the pipeline is back
       // to "no Sync outstanding") — verified empirically: a full drain
       // makes SYNC=0 even when there were multiple prior Syncs, but a
       // partial drain leaves SYNC unchanged.
-      bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', -drained.length);
+      bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', -n);
       if (readCounter(ctx.settings, 'PIPELINE_RESULT_COUNT') === 0) {
         setCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', 0);
       }
