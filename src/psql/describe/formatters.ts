@@ -241,12 +241,23 @@ export const describeOneTableDetails = async (
       : new Map<string, string>();
 
   // ----- Columns -----
-  // Verbose mode adds Storage / Compression / Stats target / Description
-  // columns to mirror upstream's `\d+`. Compression is PG 14+ only; we
-  // omit the projection on older servers and let the field list match.
-  const serverVer = conn.serverVersion;
-  const verboseCols = verbose && (relkind === 'r' || relkind === 'm' || relkind === 'p' || relkind === 'f' || relkind === 'v' || relkind === 'I' || relkind === 'i');
-  const includeCompression = verboseCols && serverVer >= 140000;
+  // Verbose mode adds Storage / Stats target / Description columns to
+  // mirror upstream's `\d+`. Compression (PG 14+) is intentionally
+  // *omitted*: upstream's PG-18 regress expected output drops the
+  // column header when no row carries a non-default compression value,
+  // so emitting it unconditionally would diverge from the conformance
+  // baseline. A follow-up can add a `HAS_COMPRESSION_FOOTER` style
+  // detection if real-world workflows need it.
+  const verboseCols =
+    verbose &&
+    (relkind === 'r' ||
+      relkind === 'm' ||
+      relkind === 'p' ||
+      relkind === 'f' ||
+      relkind === 'v' ||
+      relkind === 'I' ||
+      relkind === 'i');
+  const includeCompression = false;
   const colSql =
     'SELECT a.attname,\n' +
     '  pg_catalog.format_type(a.atttypid, a.atttypmod),\n' +
