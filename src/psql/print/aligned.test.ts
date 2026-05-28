@@ -285,7 +285,11 @@ describe('alignedPrinter horizontal mode', () => {
         s,
       ),
     );
-    expect(out).toBe(' x\n y\n');
+    // The trailing blank line is emitted unconditionally upstream
+    // (print.c line 1196 `fputc('\n', fout)` is outside the
+    // `!opt_tuples_only` guard) so back-to-back `\pset tuples_only on`
+    // queries still get a separator before the next command.
+    expect(out).toBe(' x\n y\n\n');
   });
 
   test('east-asian wide chars are padded correctly', async () => {
@@ -1142,6 +1146,34 @@ describe('alignedPrinter expanded mode (old-ascii)', () => {
     // Iter 2: header done. swidth = nameWidth(1) + border(1) = 2 spaces.
     // Separator: dLine==1 && offset==0 → midvrule_nl (`:`).
     expect(lines[2]).toBe('  : b');
+  });
+
+  test('tuples_only expanded border=1 emits inter-record separator without label', async () => {
+    // Upstream `print_aligned_vertical` (print.c lines 1615-1621): in
+    // tuples_only mode the `* Record N` label is suppressed but the
+    // inter-record separator is still emitted (with `record=0`, so the
+    // label glyph is dropped). For border=1 this produces a continuous
+    // hrule line with the `+` mid-junction aligned to the data `|`.
+    const rs = makeResultSet({
+      columns: [{ name: 'k' }],
+      rows: [['a'], ['b']],
+    });
+    const out = await capture((s) =>
+      alignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, {
+          expanded: 'on',
+          border: 1,
+          tuplesOnly: true,
+        }),
+        s,
+      ),
+    );
+    // Row 1: "k | a"
+    // Inter-record separator: "--+--" (no label)
+    // Row 2: "k | b"
+    // Trailing blank.
+    expect(out).toBe('k | a\n--+--\nk | b\n\n');
   });
 
   test('border=0 wrapped value uses oldAscii dwidth (no dmultiline reserve)', async () => {

@@ -964,10 +964,12 @@ const renderHorizontal = (
     for (const f of opts.footers) out += f + newline;
   }
 
-  // Trailing blank line between query results (upstream parity).
-  if (!tuplesOnly) {
-    out += newline;
-  }
+  // Trailing blank line between query results. Upstream `print.c`
+  // line 1196 emits `fputc('\n', fout)` UNCONDITIONALLY (not guarded by
+  // `opt_tuples_only`) when `stop_table` is set — so `\pset tuples_only
+  // on` queries still get a single blank separator before the next
+  // command. Verified against vanilla psql 18.
+  out += newline;
 
   return out;
 };
@@ -1428,6 +1430,14 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
         r === 0,
       );
       out += newline;
+    } else if (r > 0 || border === 2 || border === 3) {
+      // tuples_only: upstream `print_aligned_vertical` line 1619-1621
+      // still emits the inter-record separator (with the `* Record N`
+      // label suppressed) for r>0, and the top rule at border=2/3 for
+      // the very first record. Reuses the same record-header path with
+      // `record=0` to suppress the label glyph.
+      out += renderRecordHeader(0, lhwidth, dwidth, border, glyphs, r === 0);
+      out += newline;
     }
     for (let c = 0; c < headers.length; c++) {
       const headerLines = headers[c].split('\n');
@@ -1465,7 +1475,10 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
   //     (separates the last data line from the footer block).
   //   - At border >= 2, the bottom rule already provides the separator
   //     so no extra blank is emitted before footers.
-  //   - Always emit a trailing blank line at the very end.
+  //   - Always emit a trailing blank line at the very end —
+  //     `fputc('\n', fout)` on line 1821 is UNCONDITIONAL (not gated by
+  //     `opt_tuples_only`), so tuples_only mode still gets a single
+  //     separator before the next command.
   //   - Expanded mode never emits a `(N rows)` default footer; the
   //     trailing blank is the only output between consecutive results.
   const hasUserFooters = !!opts.footers && opts.footers.length > 0;
@@ -1475,14 +1488,7 @@ const renderVertical = (rs: ResultSet, opts: PrintQueryOpts): string => {
   if (!tuplesOnly && opts.footers) {
     for (const f of opts.footers) out += f + newline;
   }
-  if (!tuplesOnly && !hasUserFooters) {
-    // No user footers — emit the standalone separator. (For
-    // border>=2 the bottom rule has already been emitted above.)
-    out += newline;
-  } else if (!tuplesOnly) {
-    // User footers were emitted; close with the trailing blank line.
-    out += newline;
-  }
+  out += newline;
   return out;
 };
 
@@ -1537,6 +1543,38 @@ const renderRecordHeader = (
   isFirst: boolean,
 ): string => {
   const { hrule } = glyphs;
+  // `record === 0` is the tuples_only "separator-only" sentinel — upstream
+  // `print_aligned_vertical_line` (print.c line 1244-1249) gates the
+  // label emission on `if (record)`, so passing 0 yields a bare rule
+  // with no `* Record N` / `[ RECORD N ]` text. At border=0 that's a
+  // blank line padded to width; at border>=1 a continuous hrule run.
+  if (record === 0) {
+    if (border === 0) {
+      return ' '.repeat(nameWidth + valueWidth);
+    }
+    if (border === 1) {
+      const rowWidth = nameWidth + 3 + valueWidth;
+      const leftSpan = nameWidth + 1;
+      // Mid junction lands at the `|` position in data rows.
+      return (
+        hrule.repeat(leftSpan) +
+        glyphs.midMid +
+        hrule.repeat(rowWidth - leftSpan - 1)
+      );
+    }
+    // border 2/3.
+    const outerLeft = isFirst ? glyphs.topLeft : glyphs.midLeft;
+    const outerRight = isFirst ? glyphs.topRight : glyphs.midRight;
+    const outerMid = isFirst ? glyphs.topMid : glyphs.midMid;
+    return (
+      outerLeft +
+      hrule.repeat(nameWidth + 2) +
+      outerMid +
+      hrule.repeat(valueWidth + 2) +
+      outerRight
+    );
+  }
+
   if (border === 0) {
     const label = `* Record ${String(record)}`;
     const target = nameWidth + valueWidth;
@@ -1943,9 +1981,11 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
     for (const f of opts.footers) out += f + '\n';
   }
   // Trailing blank line between query results, mirroring the horizontal /
-  // vertical code paths (which append `\n` via `printTableCleanup`). Empty
-  // results were previously missing this separator, which made multiple
-  // back-to-back `\d`-family queries run together.
-  if (!tuplesOnly) out += '\n';
+  // vertical code paths (which append `\n` via `printTableCleanup`).
+  // Empty results were previously missing this separator, which made
+  // multiple back-to-back `\d`-family queries run together. Emitted
+  // unconditionally (matches `fputc('\n', fout)` on print.c line 1196 /
+  // 1821 — both are outside the `!opt_tuples_only` guard).
+  out += '\n';
   return out;
 };
