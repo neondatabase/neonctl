@@ -913,28 +913,38 @@ const renderIndexesSection = async (
     const idxName = cellToString(r[0]);
     const isPrimary = String(r[1]) === 't' || r[1] === true;
     const isUnique = String(r[2]) === 't' || r[2] === true;
+    const isClustered = String(r[3]) === 't' || r[3] === true;
     const isValid = String(r[4]) === 't' || r[4] === true;
     const indexdef = cellToString(r[5]);
     const constrDef = r[6] !== null ? cellToString(r[6]) : '';
+    const contype = r[7] === null ? '' : cellToString(r[7]);
+    const condeferrable = String(r[8]) === 't' || r[8] === true;
+    const condeferred = String(r[9]) === 't' || r[9] === true;
     const isReplIdent = String(r[10]) === 't' || r[10] === true;
-    const tag = isPrimary ? 'PRIMARY KEY' : isUnique ? 'UNIQUE CONSTRAINT' : '';
     let line = `    "${idxName}"`;
-    // Strip the "CREATE [UNIQUE] INDEX ... USING " prefix to get
-    // "btree (...)" tail — used when there's no pg_constraint backing
-    // (TOAST primary indexes, plain CREATE INDEX, etc.).
-    const tail = indexdef.replace(
-      /^CREATE\s+(UNIQUE\s+)?INDEX\s+\S+\s+ON\s+\S+\s+USING\s+/i,
-      '',
-    );
-    if (constrDef) {
-      line += `, ${tag || 'CONSTRAINT'} ${constrDef}`;
-    } else if (isPrimary) {
-      // TOAST primary index — indisprimary set but no pg_constraint row.
-      line += ` PRIMARY KEY, ${tail}`;
+    // Strip everything up through " USING " from the indexdef so we get
+    // the trailing `btree (...)` clause.
+    const usingPos = indexdef.indexOf(' USING ');
+    const tail = usingPos >= 0 ? indexdef.slice(usingPos + 7) : indexdef;
+    if (contype === 'x') {
+      // Exclusion constraint: emit constraintdef verbatim, no tail.
+      line += ` ${constrDef}`;
     } else {
-      line += isUnique ? ` UNIQUE` : '';
-      line += `, ${tail}`;
+      // Prefix label per upstream describe.c:
+      //   indisprimary       -> " PRIMARY KEY,"
+      //   indisunique && contype=='u' -> " UNIQUE CONSTRAINT,"
+      //   indisunique        -> " UNIQUE,"
+      // No prefix for plain non-unique indexes.
+      if (isPrimary) {
+        line += ' PRIMARY KEY,';
+      } else if (isUnique) {
+        line += contype === 'u' ? ' UNIQUE CONSTRAINT,' : ' UNIQUE,';
+      }
+      line += ` ${tail}`;
+      if (condeferrable) line += ' DEFERRABLE';
+      if (condeferred) line += ' INITIALLY DEFERRED';
     }
+    if (isClustered) line += ' CLUSTER';
     if (!isValid) line += ' INVALID';
     if (isReplIdent) line += ' REPLICA IDENTITY';
     out.write(`${line}\n`);
