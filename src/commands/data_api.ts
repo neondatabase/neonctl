@@ -265,13 +265,8 @@ const get = async (props: DataApiProps): Promise<void> => {
   };
 
   if (props.output === 'json' || props.output === 'yaml') {
-    // JSON/YAML output preserves the nested `settings` shape rather than
-    // the flattened-for-table shape; the writer's `fields` arg controls
-    // table column selection and is irrelevant for those formats, but TS
-    // still type-checks the tuple. Cast to the table-row shape so
-    // `db_schemas` is a valid key in the static `GET_FIELDS` literal.
-    writer(props).end(publicData as unknown as typeof tableRow, {
-      fields: GET_FIELDS,
+    writer(props).end(publicData, {
+      fields: ['url', 'status', 'settings'] as const,
     });
     return;
   }
