@@ -241,6 +241,12 @@ export const describeOneTableDetails = async (
       : new Map<string, string>();
 
   // ----- Columns -----
+  // Verbose mode adds Storage / Compression / Stats target / Description
+  // columns to mirror upstream's `\d+`. Compression is PG 14+ only; we
+  // omit the projection on older servers and let the field list match.
+  const serverVer = conn.serverVersion;
+  const verboseCols = verbose && (relkind === 'r' || relkind === 'm' || relkind === 'p' || relkind === 'f' || relkind === 'v' || relkind === 'I' || relkind === 'i');
+  const includeCompression = verboseCols && serverVer >= 140000;
   const colSql =
     'SELECT a.attname,\n' +
     '  pg_catalog.format_type(a.atttypid, a.atttypmod),\n' +
@@ -251,8 +257,27 @@ export const describeOneTableDetails = async (
     '  (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t\n' +
     '   WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation) AS attcollation,\n' +
     '  a.attidentity,\n' +
-    '  a.attgenerated\n' +
-    'FROM pg_catalog.pg_attribute a\n' +
+    '  a.attgenerated' +
+    (verboseCols
+      ? ',\n  CASE a.attstorage' +
+        "    WHEN 'p' THEN 'plain'" +
+        "    WHEN 'e' THEN 'external'" +
+        "    WHEN 'm' THEN 'main'" +
+        "    WHEN 'x' THEN 'extended'" +
+        '    ELSE \'???\'' +
+        '  END AS attstorage' +
+        (includeCompression
+          ? ',\n  CASE a.attcompression' +
+            "    WHEN 'p' THEN 'pglz'" +
+            "    WHEN 'l' THEN 'lz4'" +
+            "    WHEN '' THEN ''" +
+            '    ELSE \'???\'' +
+            '  END AS attcompression'
+          : '') +
+        ',\n  CASE WHEN a.attstattarget = -1 THEN NULL ELSE a.attstattarget::text END AS attstattarget' +
+        ',\n  pg_catalog.col_description(a.attrelid, a.attnum)'
+      : '') +
+    '\nFROM pg_catalog.pg_attribute a\n' +
     `WHERE a.attrelid = '${oid}' AND a.attnum > 0 AND NOT a.attisdropped\n` +
     'ORDER BY a.attnum;';
   const colsRs = await conn.query(colSql, []);
@@ -262,7 +287,8 @@ export const describeOneTableDetails = async (
   // slot is conditional on the row data, not just the relkind).
   const hasAnyFdwOptions = fdwOptionsByColumn.size > 0;
 
-  // Synthesize a printable result set: Column, Type, Collation, Nullable, Default[, FDW options]
+  // Synthesize a printable result set: Column, Type, Collation, Nullable,
+  // Default[, Storage[, Compression], Stats target, Description][, FDW options].
   const fields = [
     fakeField('Column'),
     fakeField('Type'),
@@ -270,6 +296,12 @@ export const describeOneTableDetails = async (
     fakeField('Nullable'),
     fakeField('Default'),
   ];
+  if (verboseCols) {
+    fields.push(fakeField('Storage'));
+    if (includeCompression) fields.push(fakeField('Compression'));
+    fields.push(fakeField('Stats target'));
+    fields.push(fakeField('Description'));
+  }
   if (hasAnyFdwOptions) fields.push(fakeField('FDW options'));
   const rows: unknown[][] = colsRs.rows.map((r) => {
     const colName = cellToString(r[0]);
@@ -294,6 +326,21 @@ export const describeOneTableDetails = async (
       dflt = dflt ? `generated always as (${dflt})` : '';
     }
     const row: unknown[] = [colName, colType, collation ?? '', nullable, dflt];
+    if (verboseCols) {
+      // Slot offsets: 7 = storage, [8 = compression if PG14+], stats, desc.
+      let idx = 7;
+      const storage = cellToString(r[idx++] ?? '');
+      row.push(storage);
+      if (includeCompression) {
+        const compression = cellToString(r[idx++] ?? '');
+        row.push(compression);
+      }
+      const statsTarget = r[idx] === null ? '' : cellToString(r[idx] ?? '');
+      idx++;
+      row.push(statsTarget);
+      const description = r[idx] === null ? '' : cellToString(r[idx] ?? '');
+      row.push(description);
+    }
     if (hasAnyFdwOptions) {
       const opts = fdwOptionsByColumn.get(colName);
       row.push(opts ? `(${opts})` : '');
