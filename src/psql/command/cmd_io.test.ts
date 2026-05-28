@@ -25,6 +25,7 @@ import {
   cmdGx,
   cmdInclude,
   cmdOut,
+  cmdPrint,
   cmdWatch,
   cmdWrite,
   getQueryFout,
@@ -680,6 +681,80 @@ describe('\\gx', () => {
     expect(seenExpanded).toBe('on');
     // Restored.
     expect(s.popt.topt.expanded).toBe('off');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// \p / \print
+// ---------------------------------------------------------------------------
+
+describe('\\p / \\print', () => {
+  test('prints queryBuf verbatim (with trailing newline)', async () => {
+    const s = makeSettings();
+    const ctx = makeMockCtx('p', '', s, 'SELECT 1 ');
+    const r = await run(cmdPrint, ctx);
+    expect(r.status).toBe('ok');
+    expect(stdoutChunks.join('')).toBe('SELECT 1 \n');
+    expect(stderrChunks.join('')).toBe('');
+  });
+
+  test('queryBuf precedence over lastQuery', async () => {
+    const s = makeSettings();
+    s.lastQuery = 'SELECT prev;';
+    const ctx = makeMockCtx('p', '', s, 'SELECT cur');
+    await run(cmdPrint, ctx);
+    expect(stdoutChunks.join('')).toBe('SELECT cur\n');
+  });
+
+  test('falls back to lastQuery when queryBuf is empty', async () => {
+    const s = makeSettings();
+    s.lastQuery = 'SELECT 1;';
+    const ctx = makeMockCtx('p', '', s, '');
+    await run(cmdPrint, ctx);
+    expect(stdoutChunks.join('')).toBe('SELECT 1;\n');
+  });
+
+  test('whitespace-only queryBuf falls through to lastQuery', async () => {
+    // Our mainloop leaves a residual `\n` in queryBuf after a top-level
+    // dispatch when the next line starts with a slash command — upstream's
+    // `query_buf->len > 0` byte-check sees 0 there. We must mirror by
+    // treating whitespace-only as empty for the precedence test.
+    const s = makeSettings();
+    s.lastQuery = 'SELECT 1;';
+    const ctx = makeMockCtx('p', '', s, '\n');
+    await run(cmdPrint, ctx);
+    expect(stdoutChunks.join('')).toBe('SELECT 1;\n');
+  });
+
+  test('"Query buffer is empty." when both buffers are empty and quiet is off', async () => {
+    const s = makeSettings();
+    s.quiet = false;
+    s.lastQuery = '';
+    const ctx = makeMockCtx('p', '', s, '');
+    await run(cmdPrint, ctx);
+    expect(stdoutChunks.join('')).toBe('Query buffer is empty.\n');
+  });
+
+  test('silent when both buffers empty and quiet is on (mirrors upstream --quiet)', async () => {
+    const s = makeSettings();
+    s.quiet = true;
+    s.lastQuery = '';
+    const ctx = makeMockCtx('p', '', s, '');
+    await run(cmdPrint, ctx);
+    expect(stdoutChunks.join('')).toBe('');
+  });
+
+  test('does not consume queryBuf (returns status=ok, never reset-buf)', async () => {
+    const s = makeSettings();
+    const ctx = makeMockCtx('p', '', s, 'SELECT 1');
+    const r = await run(cmdPrint, ctx);
+    expect(r.status).toBe('ok');
+    // newBuf should be unset since the buffer is preserved.
+    expect(r.newBuf).toBeUndefined();
+  });
+
+  test('aliased as \\print', () => {
+    expect(cmdPrint.aliases).toContain('print');
   });
 });
 

@@ -100,7 +100,7 @@ import { latexLongtablePrinter, latexPrinter } from '../print/latex.js';
 import { troffMsPrinter } from '../print/troff.js';
 import { unalignedPrinter } from '../print/unaligned.js';
 
-import { writeErr } from './shared.js';
+import { writeErr, writeOut } from './shared.js';
 import { enqueue as enqueueInput } from './inputQueue.js';
 import { formatErrorReport, psqlErrorPrefix } from './cmd_meta.js';
 import { applyPset } from './cmd_format.js';
@@ -1330,6 +1330,71 @@ export const cmdGx: BackslashCmdSpec = {
 };
 
 // ---------------------------------------------------------------------------
+// \p / \print — print the current or previous query buffer.
+// ---------------------------------------------------------------------------
+
+/**
+ * `\p` / `\print` — print the query buffer the next `\g` would execute.
+ *
+ * Mirrors upstream `exec_command_print` in `src/bin/psql/command.c`:
+ *
+ *   if (query_buf && query_buf->len > 0)
+ *     puts(query_buf->data);
+ *   else if (previous_buf && previous_buf->len > 0)
+ *     puts(previous_buf->data);
+ *   else if (!pset.quiet)
+ *     puts(_("Query buffer is empty."));
+ *
+ * Buffer-vs-previous-buffer precedence matters for the regress sequence:
+ *
+ *     SELECT 1;       -- executes, previous_buf := "SELECT 1;"
+ *     \p              -- queryBuf empty → prints previous_buf
+ *     SELECT 2 \r     -- queryBuf="SELECT 2 ", \r resets to "" without
+ *                     -- touching previous_buf
+ *     \p              -- queryBuf still empty → prints previous_buf
+ *     SELECT 3 \p     -- queryBuf="SELECT 3 ", non-empty → prints queryBuf
+ *
+ * Implementation notes:
+ *
+ *  - We use `settings.lastQuery` as the previous-buffer source. Upstream
+ *    tracks `previous_buf` independently of `pset.last_query`, but our
+ *    `lastQuery` is set at the exact same point upstream sets
+ *    `previous_buf` (the dispatch site in `SendQuery`-equivalent code paths
+ *    in `core/common.ts` and `cmd_io.ts`'s `\g` implementation), so the
+ *    semantics match for every shape exercised by the conformance corpus.
+ *  - We must NOT clear queryBuf — return `status: 'ok'` so the mainloop
+ *    leaves the buffer untouched. The user is inspecting, not executing.
+ *  - `puts()` appends a trailing newline. We use `writeOut` and append `\n`
+ *    explicitly to match.
+ */
+export const cmdPrint: BackslashCmdSpec = {
+  name: 'p',
+  aliases: ['print'],
+  helpKey: 'p',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    // `queryBuf.trim()` for the emptiness check — not the printed text.
+    // Upstream's `query_buf->len > 0` is a byte-length check that, in
+    // upstream, is reliably zero after a `;`-dispatch (because PQexec is
+    // followed by `resetPQExpBuffer(query_buf)`). Our mainloop leaves a
+    // residual `\n` in queryBuf after a top-level dispatch when the next
+    // source line starts with a slash command — so a raw `length > 0`
+    // check here would route to the "print the buffer" arm and emit
+    // `\n\n` instead of falling through to `lastQuery`. The trim-only
+    // emptiness check is purely an empty-vs-content discriminator; the
+    // actual writeOut still uses the un-trimmed buffer text so an inline
+    // `SELECT 3 \p` correctly emits the trailing space upstream prints.
+    if (ctx.queryBuf.trim().length > 0) {
+      writeOut(`${ctx.queryBuf}\n`);
+    } else if (ctx.settings.lastQuery.length > 0) {
+      writeOut(`${ctx.settings.lastQuery}\n`);
+    } else if (!ctx.settings.quiet) {
+      writeOut('Query buffer is empty.\n');
+    }
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+// ---------------------------------------------------------------------------
 // \gset [PREFIX]
 // ---------------------------------------------------------------------------
 
@@ -2223,6 +2288,7 @@ export const registerIoCommands = (registry: BackslashRegistry): void => {
   registry.register(cmdWrite);
   registry.register(cmdG);
   registry.register(cmdGx);
+  registry.register(cmdPrint);
   registry.register(cmdGset);
   registry.register(cmdGdesc);
   registry.register(cmdGexec);
