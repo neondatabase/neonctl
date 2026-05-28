@@ -215,6 +215,27 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
 };
 
 /**
+ * Reject buffer-consuming commands when an extended pipeline is open. Upstream
+ * `exec_command_g` / `gx` / `gset` / `gdesc` / `gexec` / `watch` all guard
+ * with `PQpipelineStatus(pset.db) != PQ_PIPELINE_OFF` and emit
+ * `pg_log_error("\\%s not allowed in pipeline mode", cmd)` (note: no `:`
+ * after the command name — different shape from `errResult`). If the command
+ * proceeded it would inject a synchronous Query/Sync into the queue, corrupt
+ * the pipeline state, and leave `\endpipeline` waiting forever.
+ *
+ * Returns `null` when not in pipeline mode (caller proceeds); otherwise
+ * returns a populated error result the caller should bubble up.
+ */
+const pipelineGate = (ctx: BackslashContext): BackslashResult | null => {
+  if (ctx.settings.sendMode !== 'extended-pipeline') return null;
+  const message = `\\${ctx.cmdName} not allowed in pipeline mode`;
+  ctx.settings.lastErrorResult = { message };
+  const prefix = psqlErrorPrefix(ctx.settings);
+  writeErr(`${prefix}${message}\n`);
+  return { status: 'error', errorWritten: true };
+};
+
+/**
  * Set of psql variables upstream marks as "specially treated" — i.e. names
  * that have a substitute / assign hook installed in `startup.c`'s
  * `EstablishVariableSpace`. Used by `\gset` to reject assignments into
@@ -924,6 +945,8 @@ const runGCore = async (
   ctx: BackslashContext,
   forceExpanded: boolean,
 ): Promise<BackslashResult> => {
+  const gated = pipelineGate(ctx);
+  if (gated !== null) return gated;
   // Strip leading whitespace + `--`/`/* */` comments so the SQL we hand to
   // the wire (and use for `LINE N:` re-print on error) matches what vanilla
   // psql sends through `PQexec`. Without the strip, queryBuf accumulated
@@ -1175,6 +1198,8 @@ export const cmdGset: BackslashCmdSpec = {
   name: 'gset',
   helpKey: 'gset',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const gated = pipelineGate(ctx);
+    if (gated !== null) return gated;
     // Strip leading whitespace + comments — see runGCore for the rationale.
     const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
     const bufSql = trimmedBuf.trim();
@@ -1394,6 +1419,8 @@ export const cmdGdesc: BackslashCmdSpec = {
   name: 'gdesc',
   helpKey: 'gdesc',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const gated = pipelineGate(ctx);
+    if (gated !== null) return gated;
     // Strip leading whitespace + comments — see runGCore for the rationale.
     const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
     const sql = trimmedBuf.trim();
@@ -1496,6 +1523,8 @@ export const cmdGexec: BackslashCmdSpec = {
   name: 'gexec',
   helpKey: 'gexec',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const gated = pipelineGate(ctx);
+    if (gated !== null) return gated;
     // Strip leading whitespace + comments — see runGCore for the rationale.
     const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
     const bufSql = trimmedBuf.trim();
@@ -1818,6 +1847,8 @@ export const cmdWatch: BackslashCmdSpec = {
   name: 'watch',
   helpKey: 'watch',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
+    const gated = pipelineGate(ctx);
+    if (gated !== null) return gated;
     // Strip leading whitespace + comments — see runGCore for the rationale.
     const trimmedBuf = stripLeadingCommentsAndWS(ctx.queryBuf);
     const sql = trimmedBuf.trim();
