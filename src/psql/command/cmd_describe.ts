@@ -580,19 +580,33 @@ const cmdListOperatorClasses = (cmdName: string): BackslashCmdSpec => ({
       serverVersion: c.serverVersion,
     });
     const results: NamePatternResult[] = [];
+    const curDb = currentDb(c);
     if (amPat !== null) {
-      results.push(
-        processSQLNamePattern({ namevar: 'am.amname', pattern: amPat }),
-      );
+      const r = processSQLNamePattern({
+        namevar: 'am.amname',
+        pattern: amPat,
+      });
+      // Access method names are flat — first dot is "too many".
+      const err = validatePattern(amPat, r, 0, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
     }
     if (typePat !== null) {
-      results.push(
-        processSQLNamePattern({
-          namevar: 't.typname',
-          schemavar: 'tn.nspname',
-          pattern: typePat,
-        }),
-      );
+      const r = processSQLNamePattern({
+        namevar: 't.typname',
+        schemavar: 'tn.nspname',
+        pattern: typePat,
+      });
+      // Type pattern accepts db.schema.name; cross-db check on 2-dot.
+      const err = validatePattern(typePat, r, 2, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
     }
     return runDualPatternList(ctx, query, results);
   },
@@ -685,15 +699,32 @@ const cmdListDbRoleSettings: BackslashCmdSpec = {
       serverVersion: c.serverVersion,
     });
     const results: NamePatternResult[] = [];
+    const curDb = currentDb(c);
     if (rolePat !== null) {
-      results.push(
-        processSQLNamePattern({ namevar: 'r.rolname', pattern: rolePat }),
-      );
+      const r = processSQLNamePattern({
+        namevar: 'r.rolname',
+        pattern: rolePat,
+      });
+      // Role names are flat — first dot is "too many".
+      const err = validatePattern(rolePat, r, 0, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
     }
     if (dbPat !== null) {
-      results.push(
-        processSQLNamePattern({ namevar: 'd.datname', pattern: dbPat }),
-      );
+      const r = processSQLNamePattern({
+        namevar: 'd.datname',
+        pattern: dbPat,
+      });
+      // Database names are top-level — first dot is "too many".
+      const err = validatePattern(dbPat, r, 0, curDb);
+      if (err !== null) {
+        writeErr(`${err}\n`);
+        return { status: 'error' };
+      }
+      results.push(r);
     }
     // Upstream deviates from the rest of describe.c here: when the
     // result set is empty and we're not in --quiet, emit a stderr
@@ -980,9 +1011,14 @@ const cmdDescribeConfigParams: BackslashCmdSpec = {
       verbose,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, {
-      namevar: 'pg_catalog.lower(s.name)',
-    });
+    // GUC names are flat — any dot is "too many".
+    return runWithPattern(
+      ctx,
+      pattern,
+      query,
+      { namevar: 'pg_catalog.lower(s.name)' },
+      0,
+    );
   },
 };
 
