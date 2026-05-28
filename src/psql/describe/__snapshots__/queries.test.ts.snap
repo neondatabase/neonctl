@@ -907,7 +907,7 @@ ORDER BY 1, 2;",
 
 exports[`describe/queries — pg17 snapshots > listTables > pg12 / verbose=true (no tableam join semantics differ) 1`] = `
 {
-  "description": "List of relations",
+  "description": "List of tables",
   "params": [],
   "sql": "SELECT n.nspname as "Schema",
   c.relname as "Name",

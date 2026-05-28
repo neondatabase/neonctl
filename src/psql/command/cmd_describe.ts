@@ -345,9 +345,25 @@ const makeDescribeCmd = (baseName: string): BackslashCmdSpec => ({
       // relation, treat the name as a list pattern).
     }
 
-    // List mode — use either describeTableDetails (for bare \d) or
-    // listTables(tabtypes=...) for the typed variants.
-    return runTypedList(ctx, c, baseName, pattern, verbose, showSystem);
+    // `\d`-family `x` suffix toggles expanded mode for the LIST view
+    // only — upstream `command.c` declines to apply it when a pattern is
+    // present and would dispatch to per-relation detail rendering.
+    const forceExpanded =
+      ctx.cmdName.slice(baseName.length).includes('x') && pattern === null;
+    const savedPopt = ctx.settings.popt;
+    if (forceExpanded) {
+      ctx.settings.popt = {
+        ...savedPopt,
+        topt: { ...savedPopt.topt, expanded: 'on' },
+      };
+    }
+    try {
+      // List mode — use either describeTableDetails (for bare \d) or
+      // listTables(tabtypes=...) for the typed variants.
+      return await runTypedList(ctx, c, baseName, pattern, verbose, showSystem);
+    } finally {
+      ctx.settings.popt = savedPopt;
+    }
   },
 });
 
@@ -490,9 +506,19 @@ const runTypedList = async (
 
 // Register all the relation-list-style commands with all suffix combos.
 const RELATION_BASES = ['d', 'dt', 'di', 'dv', 'dm', 'ds', 'dE'];
+// Standard suffix matrix. `x` is added separately for the bases that
+// accept the expanded-mode toggle (currently `\d`/`\d+`).
 const SUFFIX_COMBOS = ['', '+', 'S', 'S+', '+S'];
+// Extended suffix matrix for `\d` only — adds the `x` (expanded) suffix
+// in the same combinations regress exercises.
+const DESCRIBE_X_SUFFIXES = ['x', '+x', 'x+', 'Sx', 'xS', '+Sx', '+xS'];
 
-// ---- \df / \df+ / \dfS --------------------------------------------------
+// ---- \df / \df+ / \dfS / \dfa / \dfn / \dfp / \dft / \dfw / \dfx -------
+// Upstream's `command.c::exec_command_df` accepts a free-form suffix after
+// `\df`: `+` for verbose, `S` to include system schemas, `x` to force
+// expanded mode (when no pattern), and {a,n,p,t,w} to filter by function
+// kind (aggregate / normal / procedure / trigger / window). Multiple may
+// combine and order is unrestricted (`\dfax+`, `\df+xn`, etc.).
 
 const cmdDescribeFunctions = (cmdName: string): BackslashCmdSpec => ({
   name: cmdName,
@@ -501,17 +527,41 @@ const cmdDescribeFunctions = (cmdName: string): BackslashCmdSpec => ({
     const c = conn(ctx);
     if (!c) return noConn(ctx);
     const { verbose, showSystem } = decodeSuffix(cmdName, 'df');
-    const query = describeFunctions({
-      pattern: pattern ?? undefined,
-      verbose,
-      showSystem,
-      serverVersion: c.serverVersion,
-    });
-    return runWithPattern(ctx, pattern, query, {
-      namevar: 'p.proname',
-      schemavar: 'n.nspname',
-      visibilityrule: 'pg_catalog.pg_function_is_visible(p.oid)',
-    });
+    let functypes = '';
+    const tail = cmdName.slice(2);
+    for (const ch of tail) {
+      if (ch === 'a' || ch === 'n' || ch === 'p' || ch === 't' || ch === 'w') {
+        functypes += ch;
+      }
+    }
+    // `x` enables expanded mode for the printed result. For `\df` upstream
+    // applies the toggle whether or not a pattern is present (unlike `\d`,
+    // which only toggles when no pattern is given). Override popt locally
+    // so we don't leak the change to subsequent commands.
+    const forceExpanded = tail.includes('x');
+    const savedPopt = ctx.settings.popt;
+    if (forceExpanded) {
+      ctx.settings.popt = {
+        ...savedPopt,
+        topt: { ...savedPopt.topt, expanded: 'on' },
+      };
+    }
+    try {
+      const query = describeFunctions({
+        pattern: pattern ?? undefined,
+        verbose,
+        showSystem,
+        functypes,
+        serverVersion: c.serverVersion,
+      });
+      return await runWithPattern(ctx, pattern, query, {
+        namevar: 'p.proname',
+        schemavar: 'n.nspname',
+        visibilityrule: 'pg_catalog.pg_function_is_visible(p.oid)',
+      });
+    } finally {
+      ctx.settings.popt = savedPopt;
+    }
   },
 });
 
@@ -730,40 +780,53 @@ const cmdListOpFamilyFunctions = (cmdName: string): BackslashCmdSpec => ({
     const c = conn(ctx);
     if (!c) return noConn(ctx);
     const { verbose } = decodeSuffix(cmdName, 'dAp');
-    const query = listOpFamilyFunctions({
-      amPattern: amPat ?? undefined,
-      familyPattern: familyPat ?? undefined,
-      verbose,
-      serverVersion: c.serverVersion,
-    });
-    const results: NamePatternResult[] = [];
-    const curDb = currentDb(c);
-    if (amPat !== null) {
-      const r = processSQLNamePattern({
-        namevar: 'am.amname',
-        pattern: amPat,
-      });
-      const err = validatePattern(amPat, r, 0, curDb);
-      if (err !== null) {
-        writeErr(`${err}\n`);
-        return { status: 'error', errorWritten: true };
-      }
-      results.push(r);
+    // `\dApx[+]` — expanded toggle, same convention as `\df`/`\z`.
+    const forceExpanded = cmdName.slice(3).includes('x');
+    const savedPopt = ctx.settings.popt;
+    if (forceExpanded) {
+      ctx.settings.popt = {
+        ...savedPopt,
+        topt: { ...savedPopt.topt, expanded: 'on' },
+      };
     }
-    if (familyPat !== null) {
-      const r = processSQLNamePattern({
-        namevar: 'of.opfname',
-        schemavar: 'ns.nspname',
-        pattern: familyPat,
+    try {
+      const query = listOpFamilyFunctions({
+        amPattern: amPat ?? undefined,
+        familyPattern: familyPat ?? undefined,
+        verbose,
+        serverVersion: c.serverVersion,
       });
-      const err = validatePattern(familyPat, r, 2, curDb);
-      if (err !== null) {
-        writeErr(`${err}\n`);
-        return { status: 'error', errorWritten: true };
+      const results: NamePatternResult[] = [];
+      const curDb = currentDb(c);
+      if (amPat !== null) {
+        const r = processSQLNamePattern({
+          namevar: 'am.amname',
+          pattern: amPat,
+        });
+        const err = validatePattern(amPat, r, 0, curDb);
+        if (err !== null) {
+          writeErr(`${err}\n`);
+          return { status: 'error', errorWritten: true };
+        }
+        results.push(r);
       }
-      results.push(r);
+      if (familyPat !== null) {
+        const r = processSQLNamePattern({
+          namevar: 'of.opfname',
+          schemavar: 'ns.nspname',
+          pattern: familyPat,
+        });
+        const err = validatePattern(familyPat, r, 2, curDb);
+        if (err !== null) {
+          writeErr(`${err}\n`);
+          return { status: 'error', errorWritten: true };
+        }
+        results.push(r);
+      }
+      return await runDualPatternList(ctx, query, results);
+    } finally {
+      ctx.settings.popt = savedPopt;
     }
-    return runDualPatternList(ctx, query, results);
   },
 });
 
@@ -1091,22 +1154,36 @@ const cmdListCollations = (cmdName: string): BackslashCmdSpec => ({
 
 const cmdPermissionsList = (cmdName: string): BackslashCmdSpec => ({
   name: cmdName,
-  aliases: cmdName === 'dp' ? ['z'] : undefined,
   run: async (ctx) => {
     const pattern = ctx.nextArg('normal');
     const c = conn(ctx);
     if (!c) return noConn(ctx);
-    const { showSystem } = decodeSuffix(cmdName, 'dp');
-    const query = permissionsList({
-      pattern: pattern ?? undefined,
-      showSystem,
-      serverVersion: c.serverVersion,
-    });
-    return runWithPattern(ctx, pattern, query, {
-      namevar: 'c.relname',
-      schemavar: 'n.nspname',
-      visibilityrule: 'pg_catalog.pg_table_is_visible(c.oid)',
-    });
+    const base = cmdName.startsWith('z') ? 'z' : 'dp';
+    const { showSystem } = decodeSuffix(cmdName, base);
+    // `\z[x]`, `\dp[x]` — same expanded-mode toggle convention as `\df`,
+    // applied whether or not a pattern is present.
+    const forceExpanded = cmdName.slice(base.length).includes('x');
+    const savedPopt = ctx.settings.popt;
+    if (forceExpanded) {
+      ctx.settings.popt = {
+        ...savedPopt,
+        topt: { ...savedPopt.topt, expanded: 'on' },
+      };
+    }
+    try {
+      const query = permissionsList({
+        pattern: pattern ?? undefined,
+        showSystem,
+        serverVersion: c.serverVersion,
+      });
+      return await runWithPattern(ctx, pattern, query, {
+        namevar: 'c.relname',
+        schemavar: 'n.nspname',
+        visibilityrule: 'pg_catalog.pg_table_is_visible(c.oid)',
+      });
+    } finally {
+      ctx.settings.popt = savedPopt;
+    }
   },
 });
 
@@ -1526,10 +1603,52 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
       registry.register({ ...makeDescribeCmd(base), name });
     }
   }
+  // `\d` accepts an additional `x` (expanded-mode toggle) suffix that we
+  // register only for the bare `\d` base — upstream only honours it for
+  // `\d` itself, not for typed variants like `\dt` or `\dv`.
+  for (const suffix of DESCRIBE_X_SUFFIXES) {
+    registry.register({ ...makeDescribeCmd('d'), name: 'd' + suffix });
+  }
 
-  // Functions.
-  for (const suffix of SUFFIX_COMBOS) {
-    registry.register(cmdDescribeFunctions('df' + suffix));
+  // Functions. Beyond the standard `\df[+S]` matrix, upstream accepts
+  // function-kind filter letters (a / n / p / t / w) and an expanded-mode
+  // toggle (x) appended in any order, with multiple stacking. The fanout
+  // covers the common one-letter additions used in regress; combined
+  // letter sequences (`\dfax+`, `\dfxw`, …) are handled by the runtime
+  // suffix walk in `cmdDescribeFunctions`.
+  const dfTails = [
+    '',
+    '+',
+    'S',
+    'S+',
+    '+S',
+    'a',
+    'n',
+    'p',
+    't',
+    'w',
+    'x',
+    'ax',
+    'nx',
+    'px',
+    'tx',
+    'wx',
+    'xa',
+    'xn',
+    'xp',
+    'xt',
+    'xw',
+    'a+',
+    'n+',
+    'p+',
+    't+',
+    'w+',
+    'x+',
+    'a+x',
+    'x+a',
+  ];
+  for (const tail of dfTails) {
+    registry.register(cmdDescribeFunctions('df' + tail));
   }
 
   // Aggregates.
@@ -1549,6 +1668,10 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
     registry.register(cmdListOperatorFamilies('dAf' + suffix));
     registry.register(cmdListOpFamilyOperators('dAo' + suffix));
     registry.register(cmdListOpFamilyFunctions('dAp' + suffix));
+  }
+  // `x` (expanded) variants of the two-pattern access-method families.
+  for (const tail of ['x', 'x+', '+x', 'xS', 'Sx']) {
+    registry.register(cmdListOpFamilyFunctions('dAp' + tail));
   }
 
   // Types.
@@ -1602,9 +1725,13 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
     registry.register(cmdListCollations('dO' + suffix));
   }
 
-  // Permissions / default ACLs.
-  registry.register(cmdPermissionsList('dp'));
-  registry.register(cmdPermissionsList('z'));
+  // Permissions / default ACLs. `\dp` and `\z` are independent base names
+  // (aliasing them via `aliases` couldn't carry separate `x`-suffix
+  // variants), so register each with its own suffix matrix.
+  for (const tail of ['', 'S', 'x', 'Sx', 'xS']) {
+    registry.register(cmdPermissionsList('dp' + tail));
+    registry.register(cmdPermissionsList('z' + tail));
+  }
   registry.register(cmdListDefaultACLs);
 
   // Descriptions.
