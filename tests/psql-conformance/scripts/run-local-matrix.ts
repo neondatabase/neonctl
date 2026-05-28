@@ -228,7 +228,17 @@ const runConformance = (
       '--reporter=json',
       `--outputFile=${reportFile}`,
     ],
-    { env, stdio: ['ignore', 'pipe', 'pipe'] },
+    {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Defensive ceiling so a stuck vitest process can't freeze the
+      // matrix forever. vitest itself enforces testTimeout: 120_000 and
+      // hookTimeout: 180_000 per the conformance vitest.config.ts; with
+      // ~30 test files this caps total work at ~10min. A 15min outer
+      // timeout swallows that plus container teardown overhead and still
+      // catches a true infinite loop.
+      timeout: 15 * 60 * 1000,
+    },
   );
 
   if (!existsSync(reportFile)) {
