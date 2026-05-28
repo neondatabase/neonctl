@@ -713,6 +713,23 @@ export const cmdEndPipeline: BackslashCmdSpec = {
         const r = entries[i];
         if (r.status === 'fulfilled') {
           const rs = r.value;
+          // Emit any NoticeResponse messages attached to this result
+          // to stderr in the upstream libpq shape
+          // (`${severity}:  ${message}\n`). In pipeline mode the
+          // server emits notices interleaved with Bind / Execute
+          // replies, so they're attached to the corresponding
+          // ResultSet's `notices` array; vanilla psql 18.4 prints
+          // them BEFORE the result body at `\endpipeline` time
+          // (e.g. `regress/psql_pipeline.out` line 671: the
+          // `WARNING:  SET LOCAL can only be used in transaction
+          // blocks` lands right before the first `statement_timeout`
+          // table).
+          for (const n of rs.notices) {
+            let out = `${n.severity}:  ${n.message}\n`;
+            if (n.detail !== undefined) out += `DETAIL:  ${n.detail}\n`;
+            if (n.hint !== undefined) out += `HINT:  ${n.hint}\n`;
+            writeErr(out);
+          }
           // Print real tuples-producing results — including the 0-column
           // 1-row shape from `SELECT \bind \sendpipeline` which upstream
           // psql renders as `--\n(1 row)\n` (the table glyphs are just
@@ -1123,6 +1140,16 @@ export const cmdGetResults: BackslashCmdSpec = {
           continue;
         }
         const rs = r.value;
+        // Emit any NoticeResponse messages attached to this result to
+        // stderr (libpq shape). Notices arrive interleaved with the
+        // Bind / Execute replies and stick to the relevant ResultSet;
+        // upstream psql renders them inline with each result's prelude.
+        for (const n of rs.notices) {
+          let out = `${n.severity}:  ${n.message}\n`;
+          if (n.detail !== undefined) out += `DETAIL:  ${n.detail}\n`;
+          if (n.hint !== undefined) out += `HINT:  ${n.hint}\n`;
+          writeErr(out);
+        }
         // Silent placeholder: empty fields, empty command, no rows.
         // Either a SyncMarker (from `session.sync()`) or a successful
         // Parse-only / Close-only slot. Both print nothing; counter
