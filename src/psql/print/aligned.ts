@@ -423,6 +423,11 @@ type Glyphs = {
   //                   marker is always emitted even at border=0 / on the
   //                   last column. When false (old-ascii), markers are
   //                   suppressed at the table edge for border=0.
+  //   midvruleNl / midvruleWrap / midvruleBlank - in old-ascii, the
+  //                   column separator on continuation lines changes
+  //                   based on the joining cell's wrap state:
+  //                   `:` for nl, `;` for wrap, ` ` for blank. ASCII /
+  //                   Unicode keep `|` (resp. `│`) for all three.
   headerNlLeft: string;
   headerNlRight: string;
   wrapLeft: string;
@@ -430,6 +435,9 @@ type Glyphs = {
   nlLeft: string;
   nlRight: string;
   wrapRightBorder: boolean;
+  midvruleNl: string;
+  midvruleWrap: string;
+  midvruleBlank: string;
 };
 
 const ASCII_GLYPHS: Glyphs = {
@@ -451,6 +459,42 @@ const ASCII_GLYPHS: Glyphs = {
   nlLeft: ' ',
   nlRight: '+',
   wrapRightBorder: true,
+  midvruleNl: '|',
+  midvruleWrap: '|',
+  midvruleBlank: '|',
+};
+
+// `pg_asciiformat_old` — the legacy ASCII renderer kept around for
+// `\pset linestyle old-ascii`. Two visible quirks vs the modern ASCII
+// glyphs:
+//   - left-side `+` markers in headers (header_nl_left), no right-side
+//     marker on either headers or data, and `wrap_right_border=false`
+//     (no trailing marker at the table edge);
+//   - the column separator on continuation rows changes — `:` when the
+//     joining cell has more `\n`-split lines below, `;` when it has more
+//     wrap-split lines, ` ` when the cell is exhausted (`midvrule_blank`).
+const OLD_ASCII_GLYPHS: Glyphs = {
+  hrule: '-',
+  vrule: '|',
+  topLeft: '+',
+  topMid: '+',
+  topRight: '+',
+  midLeft: '+',
+  midMid: '+',
+  midRight: '+',
+  botLeft: '+',
+  botMid: '+',
+  botRight: '+',
+  headerNlLeft: '+',
+  headerNlRight: ' ',
+  wrapLeft: ' ',
+  wrapRight: ' ',
+  nlLeft: ' ',
+  nlRight: ' ',
+  wrapRightBorder: false,
+  midvruleNl: ':',
+  midvruleWrap: ';',
+  midvruleBlank: ' ',
 };
 
 // Light box-drawing glyphs (the only Unicode variant we expose today —
@@ -496,10 +540,16 @@ const UNICODE_GLYPHS: Glyphs = {
   nlLeft: ' ',
   nlRight: '↵',
   wrapRightBorder: true,
+  midvruleNl: '│',
+  midvruleWrap: '│',
+  midvruleBlank: '│',
 };
 
-const glyphsFor = (style: Unicode2LineStyle): Glyphs =>
-  style === 'unicode' ? UNICODE_GLYPHS : ASCII_GLYPHS;
+const glyphsFor = (style: Unicode2LineStyle): Glyphs => {
+  if (style === 'unicode') return UNICODE_GLYPHS;
+  if (style === 'old-ascii') return OLD_ASCII_GLYPHS;
+  return ASCII_GLYPHS;
+};
 
 // ---------------------------------------------------------------------------
 // Column width computation.
@@ -798,6 +848,7 @@ const renderHorizontal = (
         glyphs,
         cellWrapPrev,
         cellWrapNext,
+        lineIdx === 0,
       );
       out += newline;
     }
@@ -875,6 +926,7 @@ const renderHorizontal = (
         glyphs,
         cellWrapPrev,
         cellWrapNext,
+        li === 0,
       );
       out += newline;
     }
@@ -921,6 +973,33 @@ const renderHorizontal = (
 };
 
 type WrapState = 'wrap' | 'nl' | 'none';
+
+/**
+ * Pick the column-separator glyph between two adjacent cells. ASCII and
+ * Unicode collapse `midvruleNl` / `midvruleWrap` / `midvruleBlank` onto the
+ * base `vrule`, so the alt-glyph branches only matter for `old-ascii`,
+ * which uses `:` for `\n` continuations, `;` for wrap continuations, and
+ * `" "` when both adjacent cells are exhausted but the line still exists
+ * because of a wrap elsewhere in the row.
+ *
+ * The active state is the most active of the two adjacent columns
+ * (wrap > nl > none). `firstLine = true` short-circuits to the base
+ * `vrule` — upstream only consults the midvrule table once at least
+ * one continuation has been emitted, so the first display line of
+ * every row always uses the regular vrule even if a column will wrap
+ * on the next line.
+ */
+const pickMidvrule = (
+  glyphs: Glyphs,
+  left: WrapState,
+  right: WrapState,
+  firstLine: boolean,
+): string => {
+  if (firstLine) return glyphs.vrule;
+  if (left === 'wrap' || right === 'wrap') return glyphs.midvruleWrap;
+  if (left === 'nl' || right === 'nl') return glyphs.midvruleNl;
+  return glyphs.midvruleBlank;
+};
 
 /**
  * Right-marker glyph for a data row's cell. Mirrors the `wrap[j]`-driven
@@ -982,10 +1061,17 @@ const renderHeaderLine = (
   glyphs: Glyphs,
   // What kind of continuation produced THIS line (curr_nl_line > 0 in
   // upstream): determines the leading marker on this side of the cell.
+  // Per-col `cellWrapPrev[i]` only drives the trailing marker now; the
+  // leading-gutter decision uses `firstLine` (curr_nl_line == 0).
   cellWrapPrev: WrapState[],
   // What kind of continuation follows on the NEXT line: determines
   // the trailing marker for this cell.
   cellWrapNext: WrapState[],
+  // True on the very first display line of the header (curr_nl_line == 0
+  // in upstream). Upstream emits `header_nl_left` for ALL non-first cells
+  // whenever curr_nl_line > 0 — even for cells that are themselves
+  // exhausted on that line — so the choice can't be made per-column.
+  firstLine: boolean,
 ): string => {
   const { vrule } = glyphs;
   let out = '';
@@ -999,13 +1085,10 @@ const renderHeaderLine = (
     //     fputs(curr_nl_line ? format->header_nl_left : " ", fout);
     // For ASCII (wrap_right_border=true): emitted iff border != 0.
     // For old-ascii (wrap_right_border=false): emitted for non-first
-    // cells too at border=0 (kept for parity even though our type only
-    // exposes ASCII/Unicode today).
+    // cells too at border=0 — the inter-column slot doubles as the
+    // leading-gutter slot of col[i].
     if (border !== 0 || (!glyphs.wrapRightBorder && i > 0)) {
-      out +=
-        cellWrapPrev[i] === 'nl' || cellWrapPrev[i] === 'wrap'
-          ? glyphs.headerNlLeft
-          : ' ';
+      out += firstLine ? ' ' : glyphs.headerNlLeft;
     }
 
     // Header cells are always centered and padded to full width
@@ -1018,22 +1101,20 @@ const renderHeaderLine = (
     //     fputs(!header_done[i] ? format->header_nl_right : " ", fout);
     // For ASCII this is always emitted (wrap_right_border=true), so
     // multi-line headers get `+` between content and the column
-    // separator AND on the trailing edge of the last column.
+    // separator AND on the trailing edge of the last column. For
+    // OLD-ASCII (wrap_right_border=false) this slot is skipped at
+    // border=0 — the inter-column space comes from the NEXT cell's
+    // leading-gutter emit on the next loop iteration.
     if (border !== 0 || glyphs.wrapRightBorder) {
       out += cellWrapNext[i] !== 'none' ? glyphs.headerNlRight : ' ';
     }
 
-    // Column divider (not on the last column).
-    if (!isLast) {
-      if (border === 0) {
-        // Border 0 with wrap_right_border=true: the trailing marker
-        // (above) consumes the would-be separator space, so no extra
-        // separator needed. For old-ascii (wrap_right_border=false) we
-        // still need a single space between columns.
-        if (!glyphs.wrapRightBorder) out += ' ';
-      } else {
-        out += vrule;
-      }
+    // Column divider (not on the last column). For border 0 ASCII the
+    // trailing-marker slot above already consumes the inter-column gap.
+    // For border 0 OLD-ASCII the next iteration emits the leading-gutter
+    // slot, so no extra space is needed here either.
+    if (!isLast && border !== 0) {
+      out += vrule;
     }
   }
 
@@ -1071,6 +1152,11 @@ const renderDataLine = (
   // and whatever follows on the NEXT line (drives the RIGHT marker and
   // the column divider glyph).
   cellWrapNext: WrapState[],
+  // True only on the first display line of a row. Used by old-ascii to
+  // keep the regular `|` separator on the row's first line (the alt
+  // midvrules only kick in once at least one continuation has been
+  // emitted).
+  firstLine: boolean,
 ): string => {
   const { vrule } = glyphs;
   let out = '';
@@ -1080,8 +1166,13 @@ const renderDataLine = (
   for (let i = 0; i < cells.length; i++) {
     const isLast = i === cells.length - 1;
 
-    // Left marker. Border 0 has no leading-gutter slot (upstream line 1066).
+    // Left marker. Border 0 has no leading-gutter slot for non-first
+    // cells under ASCII (wrap_right_border=true); under OLD-ASCII the
+    // leading-gutter slot doubles as the inter-column space for i > 0
+    // (upstream `print.c` line 1066-1073).
     if (border !== 0) {
+      out += dataLeftMarker(cellWrapPrev[i], glyphs);
+    } else if (!glyphs.wrapRightBorder && i > 0) {
       out += dataLeftMarker(cellWrapPrev[i], glyphs);
     }
 
@@ -1107,14 +1198,31 @@ const renderDataLine = (
     //   - WRAP   → wrap_right
     //   - NEWLINE→ nl_right
     //   - NONE   → space (only when not last col / border=2)
-    out += dataRightMarker(cellWrapNext[i], glyphs, isLast, border);
+    // For OLD-ASCII at border 0 the inter-column trailing slot of
+    // non-last cells is owned by the *next* iteration's leading-gutter
+    // emit (single space either way). For the very last column, upstream
+    // still emits a trailing char when the cell is on a continuation
+    // (`cellWrapNext != none`) so wrapped cells keep their trailing
+    // column position aligned with the first line.
+    if (border !== 0 || glyphs.wrapRightBorder) {
+      out += dataRightMarker(cellWrapNext[i], glyphs, isLast, border);
+    } else if (isLast && cellWrapNext[i] !== 'none') {
+      out += dataRightMarker(cellWrapNext[i], glyphs, isLast, border);
+    }
 
-    // Column divider. Upstream lines 1158-1169: midvrule varies with
-    // the NEXT column's wrap state in old-ascii (midvrule_nl=":",
-    // midvrule_wrap=";", midvrule_blank=" "). For ASCII / Unicode all
-    // three midvrule_* equal the regular vrule, so we just emit it.
+    // Column divider. Upstream lines 1158-1169: in old-ascii the
+    // midvrule between col[i] and col[i+1] swaps to a continuation
+    // glyph when *either* adjacent cell is on a wrap/nl continuation
+    // (midvrule_nl=":", midvrule_wrap=";", midvrule_blank=" "). For
+    // ASCII / Unicode all three midvrule_* equal the regular vrule, so
+    // the branch collapses to `vrule`.
     if (!isLast && border !== 0) {
-      out += vrule;
+      out += pickMidvrule(
+        glyphs,
+        cellWrapPrev[i],
+        cellWrapPrev[i + 1],
+        firstLine,
+      );
     }
   }
 
@@ -1764,6 +1872,7 @@ const renderEmpty = (rs: ResultSet, opts: PrintQueryOpts): string => {
         glyphs,
         noneStates,
         noneStates,
+        true,
       ) + '\n';
     out += buildRule(widths, border, glyphs, 'middle') + '\n';
   }
