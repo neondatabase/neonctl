@@ -553,7 +553,9 @@ const cmdDescribeAccessMethods = (cmdName: string): BackslashCmdSpec => ({
       verbose: isAlias ? true : verbose,
       serverVersion: c.serverVersion,
     });
-    return runWithPattern(ctx, pattern, query, { namevar: 'amname' });
+    // Access methods are global, never schema-qualified; first dot is
+    // "too many dotted names".
+    return runWithPattern(ctx, pattern, query, { namevar: 'amname' }, 0);
   },
 });
 
