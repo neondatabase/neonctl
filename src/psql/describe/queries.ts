@@ -652,8 +652,11 @@ export const objectDescription = (opts: CommonOpts): DescribeQuery => {
 /* This WP delivers ONLY the lookup query; the per-relation detail    */
 /* render is WP-20.                                                   */
 /* ------------------------------------------------------------------ */
-export const describeTableDetails = (opts: CommonOpts): DescribeQuery => {
+export const describeTableDetails = (
+  opts: CommonOpts & { hideTableam?: boolean },
+): DescribeQuery => {
   const { verbose, showSystem, pattern, serverVersion } = opts;
+  const hideTableam = opts.hideTableam ?? false;
   // For bare `\d [pattern]` upstream renders the same relations table as
   // `\dtvmsiE` does, with the per-relkind type column populated. Include
   // the verbose-mode columns when caller asks for them so `\d+ [pat]`
@@ -680,7 +683,7 @@ export const describeTableDetails = (opts: CommonOpts): DescribeQuery => {
       " WHEN 't' THEN 'temporary'" +
       " WHEN 'u' THEN 'unlogged'" +
       ' END as "Persistence"';
-    if (serverAtLeast(serverVersion, PG_12)) {
+    if (!hideTableam && serverAtLeast(serverVersion, PG_12)) {
       sql += ',\n  am.amname as "Access method"';
     }
     sql +=
@@ -690,7 +693,7 @@ export const describeTableDetails = (opts: CommonOpts): DescribeQuery => {
   sql +=
     '\nFROM pg_catalog.pg_class c' +
     '\n     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace';
-  if (verbose && serverAtLeast(serverVersion, PG_12)) {
+  if (verbose && !hideTableam && serverAtLeast(serverVersion, PG_12)) {
     sql += '\n     LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam';
   }
   sql += "\nWHERE c.relkind IN ('r','p','v','m','S','f','')\n";
@@ -804,9 +807,12 @@ export const describeRoleGrants = (opts: CommonOpts): DescribeQuery => {
 type ListTablesOpts = CommonOpts & {
   /** Combination of 't' (tables), 'i' (indexes), 'v' (views), 'm' (matviews), 's' (sequences), 'E' (foreign). */
   tabtypes?: string;
+  /** Mirror of `HIDE_TABLEAM` — suppress the "Access method" column. */
+  hideTableam?: boolean;
 };
 export const listTables = (opts: ListTablesOpts): DescribeQuery => {
   const { verbose, showSystem, pattern, serverVersion } = opts;
+  const hideTableam = opts.hideTableam ?? false;
   const tt = opts.tabtypes ?? '';
   let showTables = tt.includes('t');
   const showIndexes = tt.includes('i');
@@ -849,6 +855,7 @@ export const listTables = (opts: ListTablesOpts): DescribeQuery => {
       " WHEN 'u' THEN 'unlogged'" +
       ' END as "Persistence"';
     const wantsAm =
+      !hideTableam &&
       serverAtLeast(serverVersion, PG_12) &&
       (showTables || showMatViews || showIndexes);
     if (wantsAm) sql += ',\n  am.amname as "Access method"';
@@ -865,6 +872,7 @@ export const listTables = (opts: ListTablesOpts): DescribeQuery => {
     '\n     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace';
   if (
     verbose &&
+    !hideTableam &&
     serverAtLeast(serverVersion, PG_12) &&
     (showTables || showMatViews || showIndexes)
   ) {

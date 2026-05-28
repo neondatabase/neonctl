@@ -419,6 +419,7 @@ const runTypedList = async (
   showSystem: boolean,
 ): Promise<BackslashResult> => {
   const serverVersion = c.serverVersion;
+  const hideTableam = ctx.settings.hideTableam;
   let query: import('../describe/queries.js').DescribeQuery;
   let tabtypes = '';
   switch (baseName) {
@@ -428,6 +429,7 @@ const runTypedList = async (
         verbose,
         showSystem,
         serverVersion,
+        hideTableam,
       });
       break;
     case 'dt':
@@ -438,6 +440,7 @@ const runTypedList = async (
         showSystem,
         serverVersion,
         tabtypes,
+        hideTableam,
       });
       break;
     case 'di':
@@ -448,6 +451,7 @@ const runTypedList = async (
         showSystem,
         serverVersion,
         tabtypes,
+        hideTableam,
       });
       break;
     case 'dv':
@@ -458,6 +462,7 @@ const runTypedList = async (
         showSystem,
         serverVersion,
         tabtypes,
+        hideTableam,
       });
       break;
     case 'dm':
@@ -468,6 +473,7 @@ const runTypedList = async (
         showSystem,
         serverVersion,
         tabtypes,
+        hideTableam,
       });
       break;
     case 'ds':
@@ -478,6 +484,7 @@ const runTypedList = async (
         showSystem,
         serverVersion,
         tabtypes,
+        hideTableam,
       });
       break;
     case 'dE':
@@ -488,6 +495,7 @@ const runTypedList = async (
         showSystem,
         serverVersion,
         tabtypes,
+        hideTableam,
       });
       break;
     default:
