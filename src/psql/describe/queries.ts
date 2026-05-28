@@ -689,10 +689,12 @@ export const describeRoles = (opts: CommonOpts): DescribeQuery => {
   sql += '\n, r.rolreplication';
   if (serverAtLeast(serverVersion, PG_9_5)) sql += '\n, r.rolbypassrls';
   sql += '\nFROM pg_catalog.pg_roles r\n';
+  let hasWhere = false;
   if (!showSystem && pattern === undefined) {
     sql += "WHERE r.rolname !~ '^pg_'\n";
+    hasWhere = true;
   }
-  sql += patternStub(true, undefined, 'r.rolname');
+  sql += patternStub(hasWhere, undefined, 'r.rolname');
   sql += orderBy('1');
   return { sql, params: params(), description: 'List of roles' };
 };
@@ -750,10 +752,12 @@ export const describeRoleGrants = (opts: CommonOpts): DescribeQuery => {
     '     JOIN pg_catalog.pg_auth_members pam ON (pam.member = m.oid)\n' +
     '     LEFT JOIN pg_catalog.pg_roles r ON (pam.roleid = r.oid)\n' +
     '     LEFT JOIN pg_catalog.pg_roles g ON (pam.grantor = g.oid)\n';
+  let hasWhere = false;
   if (!showSystem && pattern === undefined) {
     sql += "WHERE m.rolname !~ '^pg_'\n";
+    hasWhere = true;
   }
-  sql += patternStub(true, undefined, 'm.rolname');
+  sql += patternStub(hasWhere, undefined, 'm.rolname');
   sql += orderBy('1, 2, 4');
   return { sql, params: params(), description: 'List of role grants' };
 };
@@ -857,7 +861,20 @@ export const listTables = (opts: ListTablesOpts): DescribeQuery => {
   }
   sql += patternStub(true, 'n.nspname', 'c.relname');
   sql += orderBy('1,2');
-  return { sql, params: params(), description: 'List of relations' };
+  // Upstream `describe.c::listTables` uses a type-specific title when the
+  // caller filters to a single relkind family, falling back to "relations"
+  // for mixed (or default) selections. Mirror that so `\dt` / `\dv` /
+  // `\dm` / `\di` / `\ds` / `\dE` titles match.
+  let description = 'List of relations';
+  if (ntypes === 1) {
+    if (showTables) description = 'List of tables';
+    else if (showIndexes) description = 'List of indexes';
+    else if (showViews) description = 'List of views';
+    else if (showMatViews) description = 'List of materialized views';
+    else if (showSeq) description = 'List of sequences';
+    else if (showForeign) description = 'List of foreign tables';
+  }
+  return { sql, params: params(), description };
 };
 
 /* ------------------------------------------------------------------ */

@@ -54,9 +54,11 @@ import {
   describeConfigurationParameters,
   describeFunctions,
   describeOperators,
+  describeRoleGrants,
   describeRoles,
   describeSubscriptions,
   describeTableDetails,
+  describeTablespaces,
   describeTypes,
   listAllDbs,
   listCasts,
@@ -66,16 +68,17 @@ import {
   listDefaultACLs,
   listDomains,
   listEventTriggers,
+  listExtendedStats,
   listExtensions,
   listForeignDataWrappers,
   listForeignServers,
   listForeignTables,
   listLanguages,
   listLargeObjects,
-  listOperatorClasses,
-  listOperatorFamilies,
   listOpFamilyFunctions,
   listOpFamilyOperators,
+  listOperatorClasses,
+  listOperatorFamilies,
   listPartitionedTables,
   listPublications,
   listSchemas,
@@ -957,6 +960,23 @@ const cmdListSchemas = (cmdName: string): BackslashCmdSpec => ({
 // Tablespaces — not typically relevant on Neon. We still register so the
 // command exists; it returns an empty result against a managed deployment.
 
+const cmdDescribeTablespaces = (cmdName: string): BackslashCmdSpec => ({
+  name: cmdName,
+  run: async (ctx) => {
+    const pattern = ctx.nextArg('normal');
+    const c = conn(ctx);
+    if (!c) return noConn(ctx);
+    const { verbose } = decodeSuffix(cmdName, 'db');
+    const query = describeTablespaces({
+      pattern: pattern ?? undefined,
+      verbose,
+      serverVersion: c.serverVersion,
+    });
+    // Tablespaces are flat — first dot is "too many".
+    return runWithPattern(ctx, pattern, query, { namevar: 'spcname' }, 0);
+  },
+});
+
 // ---- \dD / \dDS / \dD+ -------------------------------------------------
 
 const cmdListDomains = (cmdName: string): BackslashCmdSpec => ({
@@ -1403,6 +1423,52 @@ const cmdListPartitionedTables: BackslashCmdSpec = {
   },
 };
 
+// ---- \dX / \dX+ -------------------------------------------------------
+// Extended-statistics objects (`pg_statistic_ext`). Patterns accept the
+// usual schema-qualified form: `\dX` schema.name, with the cross-database
+// 2-dot check applied.
+
+const cmdListExtendedStats = (cmdName: string): BackslashCmdSpec => ({
+  name: cmdName,
+  run: async (ctx) => {
+    const pattern = ctx.nextArg('normal');
+    const c = conn(ctx);
+    if (!c) return noConn(ctx);
+    const { verbose } = decodeSuffix(cmdName, 'dX');
+    const query = listExtendedStats({
+      pattern: pattern ?? undefined,
+      verbose,
+      serverVersion: c.serverVersion,
+    });
+    return runWithPattern(ctx, pattern, query, {
+      namevar: 'es.stxname',
+      schemavar: 'es.stxnamespace::pg_catalog.regnamespace::pg_catalog.text',
+    });
+  },
+});
+
+// ---- \drg / \drg+ -----------------------------------------------------
+// Role grants — membership rows from `pg_auth_members`. Two-pattern shape
+// is upstream-specific to `\du`/`\dg`; `\drg` carries the same pattern as
+// `\du` (role name), with the cross-database check declined because roles
+// are global.
+
+const cmdDescribeRoleGrants = (cmdName: string): BackslashCmdSpec => ({
+  name: cmdName,
+  run: async (ctx) => {
+    const pattern = ctx.nextArg('normal');
+    const c = conn(ctx);
+    if (!c) return noConn(ctx);
+    const { showSystem } = decodeSuffix(cmdName, 'drg');
+    const query = describeRoleGrants({
+      pattern: pattern ?? undefined,
+      showSystem,
+      serverVersion: c.serverVersion,
+    });
+    return runWithPattern(ctx, pattern, query, { namevar: 'm.rolname' }, 0);
+  },
+});
+
 // ---- \dRp / \dRs ------------------------------------------------------
 
 const cmdListPublications: BackslashCmdSpec = {
@@ -1521,6 +1587,11 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
     registry.register(cmdListCasts('dC' + suffix));
   }
 
+  // Tablespaces.
+  for (const suffix of ['', '+']) {
+    registry.register(cmdDescribeTablespaces('db' + suffix));
+  }
+
   // Languages.
   for (const suffix of SUFFIX_COMBOS) {
     registry.register(cmdListLanguages('dL' + suffix));
@@ -1600,6 +1671,16 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
   // Role-database settings.
   registry.register(cmdListDbRoleSettings);
   registry.register({ ...cmdListDbRoleSettings, name: 'drds+' });
+
+  // Extended statistics (\dX / \dX+).
+  for (const suffix of ['', '+']) {
+    registry.register(cmdListExtendedStats('dX' + suffix));
+  }
+
+  // Role grants (\drg / \drg+ / \drgS).
+  for (const suffix of ['', '+', 'S', 'S+', '+S']) {
+    registry.register(cmdDescribeRoleGrants('drg' + suffix));
+  }
 
   // Publication / subscription.
   for (const variant of ['dRp', 'dRp+']) {
