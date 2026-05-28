@@ -308,9 +308,18 @@ export const describeOneTableDetails = async (
     rows,
     notices: [],
   };
+  // Upstream's `printTable` is invoked with `default_footer = false`
+  // for the column listing: the row-count footer ("(N rows)") and the
+  // trailing blank line are suppressed so the relkind-specific footer
+  // sections (Indexes:, Triggers:, …) sit flush against the table.
   await alignedPrinter.printQuery(
     coerceResultSet(colsResult),
-    { ...popt, title, topt: { ...popt.topt, title }, footers: null },
+    {
+      ...popt,
+      title,
+      topt: { ...popt.topt, title, defaultFooter: false },
+      footers: null,
+    },
     out,
   );
 
@@ -1052,9 +1061,16 @@ export const describeOneSequence = async (
     `FROM pg_catalog.pg_sequence WHERE seqrelid = '${oid}';`;
   const rs = await conn.query(sql, []);
   const title = `Sequence "${schema}.${name}"`;
+  // Suppress the row-count footer — upstream's sequence detail output
+  // is a single row with no `(1 row)` line.
   await alignedPrinter.printQuery(
     coerceResultSet(rs),
-    { ...popt, title, topt: { ...popt.topt, title }, footers: null },
+    {
+      ...popt,
+      title,
+      topt: { ...popt.topt, title, defaultFooter: false },
+      footers: null,
+    },
     out,
   );
 
