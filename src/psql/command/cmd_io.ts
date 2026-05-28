@@ -216,19 +216,29 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
 
 /**
  * Reject buffer-consuming commands when an extended pipeline is open. Upstream
- * `exec_command_g` / `gx` / `gset` / `gdesc` / `gexec` / `watch` all guard
- * with `PQpipelineStatus(pset.db) != PQ_PIPELINE_OFF` and emit
+ * `exec_command_g` / `gx` / `gset` / `gexec` / `watch` all guard with
+ * `PQpipelineStatus(pset.db) != PQ_PIPELINE_OFF` and emit
  * `pg_log_error("\\%s not allowed in pipeline mode", cmd)` (note: no `:`
- * after the command name — different shape from `errResult`). If the command
- * proceeded it would inject a synchronous Query/Sync into the queue, corrupt
- * the pipeline state, and leave `\endpipeline` waiting forever.
+ * after the command name — different shape from `errResult`).
+ *
+ * `\gdesc` is the odd one out: upstream uses
+ * `pg_log_error("synchronous command execution functions are not allowed in
+ * pipeline mode")` because the underlying `PQdescribePrepared`/`PQfn`-style
+ * helpers all share that text — the regress baseline asserts this exact
+ * wording at three call sites in `psql_pipeline.out`.
+ *
+ * If the command proceeded it would inject a synchronous Query/Sync into the
+ * queue, corrupt the pipeline state, and leave `\endpipeline` waiting forever.
  *
  * Returns `null` when not in pipeline mode (caller proceeds); otherwise
  * returns a populated error result the caller should bubble up.
  */
 const pipelineGate = (ctx: BackslashContext): BackslashResult | null => {
   if (ctx.settings.sendMode !== 'extended-pipeline') return null;
-  const message = `\\${ctx.cmdName} not allowed in pipeline mode`;
+  const message =
+    ctx.cmdName === 'gdesc'
+      ? 'synchronous command execution functions are not allowed in pipeline mode'
+      : `\\${ctx.cmdName} not allowed in pipeline mode`;
   ctx.settings.lastErrorResult = { message };
   const prefix = psqlErrorPrefix(ctx.settings);
   writeErr(`${prefix}${message}\n`);
