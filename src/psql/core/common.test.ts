@@ -402,6 +402,43 @@ describe('sendQuery — FETCH_COUNT', () => {
     expect(db?.calls).toEqual(['SELECT 1;']);
   });
 
+  test('FETCH_COUNT chunks are merged into one printed table (single header, single footer)', async () => {
+    // Two non-empty chunks: 2 rows then 1 row. Upstream's print_cursor.c
+    // would emit `?column?` header once and `(3 rows)` footer once, with
+    // no intra-chunk divider. We achieve the same by accumulating into a
+    // single ResultSet before printing.
+    let call = 0;
+    const fetchResults = new Map<string, Canned>([
+      [
+        'FETCH FORWARD 2 FROM _psql_cursor',
+        () => {
+          call += 1;
+          if (call === 1) {
+            return [
+              buildResultSet('FETCH', [{ name: '?column?' }], [[1], [2]]),
+            ];
+          }
+          if (call === 2) {
+            return [buildResultSet('FETCH', [{ name: '?column?' }], [[3]])];
+          }
+          return [buildResultSet('FETCH', [{ name: '?column?' }], [])];
+        },
+      ],
+    ]);
+    const { ctx, stdout } = buildCtxWithBuffers({
+      canned: fetchResults,
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '2');
+      },
+    });
+    await sendQuery(ctx, 'SELECT * FROM t;');
+    const out = stdout.text();
+    // Exactly one header row.
+    expect(out.match(/\?column\?/g)?.length).toBe(1);
+    // Exactly one `(N rows)` footer reflecting the merged row count.
+    expect(out.match(/\(\d+ rows?\)/g)).toEqual(['(3 rows)']);
+  });
+
   test('DECLARE failure: lastErrorResult.sqlText is the user query, position rebased into user-sql coords', async () => {
     // The user typed `SELECT error;`. Our wrapper sends
     // `DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT error`, which the

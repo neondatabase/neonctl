@@ -834,17 +834,19 @@ const runCursorLoop = async (
   // with the caret pointing past end-of-line.
   let currentWrapper = declared;
 
+  const printer = pickPrinter(ctx.settings);
+  // Upstream's print_cursor.c walks the cursor in chunks and toggles libpq's
+  // `flag.start_table` / `flag.stop_table` so the table renders as one
+  // continuous block — header on the first chunk, footer on the last. Our
+  // `aligned` printer doesn't (yet) honour those toggles, so we merge every
+  // chunk into a single synthetic ResultSet and hand it to the printer once.
+  // The user-facing output is identical to the non-chunked path, which is
+  // what the regress baseline expects (one `(19 rows)` footer instead of
+  // `(10 rows)` + `(9 rows)`).
+  let merged: ResultSet | null = null;
   try {
     await db.execSimple(declared);
     cursorOpen = true;
-    const printer = pickPrinter(ctx.settings);
-    const topt = ctx.settings.popt.topt;
-    const priorStart = topt.startTable;
-    const priorStop = topt.stopTable;
-    // Suppress the header/footer on the inner chunks so the output reads
-    // like one continuous table. Upstream does the equivalent via
-    // print_cursor.c's `flags.start_table` flip.
-    let first = true;
     while (true) {
       currentWrapper = fetchSql;
       const sets = await db.execSimple(fetchSql);
@@ -852,15 +854,28 @@ const runCursorLoop = async (
       const rs = sets[sets.length - 1];
       const chunkRows = rs.rows.length;
       if (chunkRows === 0) break;
-      topt.startTable = first ? priorStart : false;
-      topt.stopTable = chunkRows < fetchCount ? priorStop : false;
-      await printer.printQuery(rs, ctx.settings.popt, out);
+      if (merged === null) {
+        merged = {
+          command: rs.command,
+          fields: rs.fields,
+          rows: rs.rows.slice(),
+          rowCount: rs.rowCount,
+          oid: rs.oid,
+          notices: rs.notices,
+        };
+      } else {
+        for (const row of rs.rows) merged.rows.push(row);
+      }
       rowsPrinted += chunkRows;
-      first = false;
       if (chunkRows < fetchCount) break;
     }
-    topt.startTable = priorStart;
-    topt.stopTable = priorStop;
+    if (merged !== null) {
+      // Patch the merged rowCount to reflect the actual aggregated row
+      // total so command-tag / `(N rows)` footers match the upstream
+      // single-statement output.
+      merged.rowCount = merged.rows.length;
+      await printer.printQuery(merged, ctx.settings.popt, out);
+    }
     await db.execSimple(`CLOSE ${CURSOR_NAME}`);
     cursorOpen = false;
     if (initiallyIdle) {
