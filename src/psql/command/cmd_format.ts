@@ -77,15 +77,25 @@ export const cmdA: BackslashCmdSpec = {
 
 /**
  * `\C [title]` — set or clear `topt.title`. No arg clears, any arg sets to
- * that string verbatim.
+ * that string verbatim. Equivalent to `\pset title [value]`; upstream
+ * `exec_command_C` dispatches via `do_pset("title", value, …)` so the
+ * status line (`Title is "…".` / `Title is unset.`) is emitted by
+ * `printPsetInfo`.
  */
 export const cmdC: BackslashCmdSpec = {
   name: 'C',
   helpKey: 'C',
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
     const arg = ctx.nextArg('normal');
-    ctx.settings.popt.topt.title = arg ?? null;
-    return Promise.resolve({ status: 'ok' });
+    return Promise.resolve(
+      applyPset(
+        ctx.settings.popt.topt,
+        'title',
+        arg,
+        ctx.cmdName,
+        ctx.settings.quiet,
+      ),
+    );
   },
 };
 
@@ -122,41 +132,54 @@ export const cmdH: BackslashCmdSpec = {
   },
 };
 
-/** `\t [on|off|toggle]` — tuples-only. No arg → toggle. */
+/**
+ * `\t [on|off|toggle]` — tuples-only. No arg → toggle.
+ *
+ * Equivalent to `\pset tuples_only [value]`; upstream `exec_command_t`
+ * dispatches via `do_pset("tuples_only", opt, …)`. The
+ * `printPsetInfo("tuples_only")` confirmation line is only emitted when
+ * `opt` is NULL (the toggle path) — when a value is supplied,
+ * `do_pset` returns early via `ParseVariableBool` and skips
+ * `printPsetInfo`, so the status line is suppressed.
+ */
 export const cmdT: BackslashCmdSpec = {
   name: 't',
   helpKey: 't',
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
     const arg = ctx.nextArg('normal');
-    const topt = ctx.settings.popt.topt;
-    if (arg === null) {
-      topt.tuplesOnly = !topt.tuplesOnly;
-    } else {
-      const parsed = parseTriple(arg);
-      if (parsed === null || parsed === 'auto') {
-        writeErr(
-          `\\${ctx.cmdName}: unrecognized value "${arg}": Boolean expected\n`,
-        );
-        return Promise.resolve({ status: 'error' });
-      }
-      topt.tuplesOnly =
-        parsed === 'toggle' ? !topt.tuplesOnly : parsed === 'on';
-    }
-    writeOut(
-      topt.tuplesOnly ? 'Tuples only is on.\n' : 'Tuples only is off.\n',
+    return Promise.resolve(
+      applyPset(
+        ctx.settings.popt.topt,
+        'tuples_only',
+        arg,
+        ctx.cmdName,
+        ctx.settings.quiet,
+      ),
     );
-    return Promise.resolve({ status: 'ok' });
   },
 };
 
-/** `\T [attr]` — set HTML table attributes. No arg clears. */
+/**
+ * `\T [attr]` — set HTML table attributes. No arg clears. Equivalent to
+ * `\pset tableattr [value]`; upstream `exec_command_T` dispatches via
+ * `do_pset("tableattr", value, …)` so the status line
+ * (`Table attributes are "…".` / `Table attributes unset.`) is emitted
+ * by `printPsetInfo`.
+ */
 export const cmdTitleAttr: BackslashCmdSpec = {
   name: 'T',
   helpKey: 'T',
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
     const arg = ctx.nextArg('normal');
-    ctx.settings.popt.topt.tableAttr = arg ?? null;
-    return Promise.resolve({ status: 'ok' });
+    return Promise.resolve(
+      applyPset(
+        ctx.settings.popt.topt,
+        'tableattr',
+        arg,
+        ctx.cmdName,
+        ctx.settings.quiet,
+      ),
+    );
   },
 };
 
@@ -237,6 +260,24 @@ export const cmdEncoding: BackslashCmdSpec = {
  *
  * Returns `{ status: 'error' }` and writes an error if the value is
  * unrecognised; `{ status: 'ok' }` otherwise.
+ *
+ * Wording reference: every status line is byte-matched against the
+ * `printPsetInfo` table in upstream `src/bin/psql/command.c`. Notable
+ * subtleties:
+ *
+ *  - `tuples_only`, `footer`, and `numericlocale` are silenced when a
+ *    value is supplied — upstream `do_pset` returns directly out of
+ *    `ParseVariableBool`, never reaching `printPsetInfo`. The toggle
+ *    paths still print.
+ *  - `recordsep` renders the literal `\n` as the `<newline>` sentinel.
+ *  - `columns` reports `0` as `Target width is unset.`.
+ *  - `unicode_*_linestyle` uses the multi-word "line style" phrasing
+ *    even though the option name itself is a single token.
+ *  - `pager_min_lines` pluralizes via `ngettext` — singular at 1, plural
+ *    everywhere else (including 0).
+ *  - `csv_fieldsep` reports as `Field separator for CSV is "…".`.
+ *  - `xheader_width` quotes the named enum values (`"full"`/`"column"`/
+ *    `"page"`) and prints the numeric form unquoted.
  */
 export const applyPset = (
   topt: PrintTableOpts,
@@ -319,9 +360,11 @@ export const applyPset = (
       return { status: 'ok' };
     }
     case 'footer': {
-      if (value === null) {
-        topt.defaultFooter = !topt.defaultFooter;
-      } else {
+      if (value !== null) {
+        // Upstream `do_pset` returns directly from `ParseVariableBool`
+        // for `footer`, bypassing the `printPsetInfo` call entirely
+        // — `\pset footer on` is silent, while `\pset footer`
+        // (toggle) still prints the new state.
         const b = parseBool(value);
         if (b === null) {
           writeErr(
@@ -330,7 +373,9 @@ export const applyPset = (
           return { status: 'error' };
         }
         topt.defaultFooter = b;
+        return { status: 'ok' };
       }
+      topt.defaultFooter = !topt.defaultFooter;
       writeOutMaybe(
         topt.defaultFooter
           ? 'Default footer is on.\n'
@@ -339,12 +384,18 @@ export const applyPset = (
       return { status: 'ok' };
     }
     case 'recordsep': {
-      if (value === null) {
-        writeOutMaybe(`Record separator is "${topt.recordSep}".\n`);
-        return { status: 'ok' };
+      if (value !== null) {
+        topt.recordSep = value;
       }
-      topt.recordSep = value;
-      writeOutMaybe(`Record separator is "${topt.recordSep}".\n`);
+      // Upstream `printPsetInfo` has three branches: the separator-zero
+      // path (handled by the dedicated `recordsep_zero` case), the
+      // "<newline>" sentinel for the literal `\n` byte, and the quoted
+      // verbatim form for everything else.
+      if (topt.recordSep === '\n') {
+        writeOutMaybe('Record separator is <newline>.\n');
+      } else {
+        writeOutMaybe(`Record separator is "${topt.recordSep}".\n`);
+      }
       return { status: 'ok' };
     }
     case 'recordsep_zero': {
@@ -354,9 +405,11 @@ export const applyPset = (
     }
     case 'tuples_only':
     case 't': {
-      if (value === null) {
-        topt.tuplesOnly = !topt.tuplesOnly;
-      } else {
+      if (value !== null) {
+        // Upstream `do_pset` returns directly from `ParseVariableBool`
+        // for `tuples_only`, bypassing `printPsetInfo` — so
+        // `\pset tuples_only on` (and the equivalent `\t on`) is
+        // silent. The toggle path (no value) still prints.
         const b = parseBool(value);
         if (b === null) {
           writeErr(
@@ -365,7 +418,9 @@ export const applyPset = (
           return { status: 'error' };
         }
         topt.tuplesOnly = b;
+        return { status: 'ok' };
       }
+      topt.tuplesOnly = !topt.tuplesOnly;
       writeOutMaybe(
         topt.tuplesOnly ? 'Tuples only is on.\n' : 'Tuples only is off.\n',
       );
@@ -420,19 +475,21 @@ export const applyPset = (
       return { status: 'ok' };
     }
     case 'pager_min_lines': {
-      if (value === null) {
-        writeOutMaybe(
-          `Pager won't be used for less than ${topt.pagerMinLines} line(s).\n`,
-        );
-        return { status: 'ok' };
+      if (value !== null) {
+        const n = parseInt(value, 10);
+        if (!Number.isFinite(n) || n < 0) {
+          writeErr(
+            `\\${cmdName}: \\pset: invalid pager_min_lines "${value}"\n`,
+          );
+          return { status: 'error' };
+        }
+        topt.pagerMinLines = n;
       }
-      const n = parseInt(value, 10);
-      if (!Number.isFinite(n) || n < 0) {
-        writeErr(`\\${cmdName}: \\pset: invalid pager_min_lines "${value}"\n`);
-        return { status: 'error' };
-      }
-      topt.pagerMinLines = n;
-      writeOutMaybe(`Pager won't be used for less than ${n} line(s).\n`);
+      // Upstream uses `ngettext` so singular ("line") fires only for
+      // n == 1; 0 and 2+ render as "lines".
+      const lines = topt.pagerMinLines;
+      const unit = lines === 1 ? 'line' : 'lines';
+      writeOutMaybe(`Pager won't be used for less than ${lines} ${unit}.\n`);
       return { status: 'ok' };
     }
     case 'null': {
@@ -441,29 +498,29 @@ export const applyPset = (
       return { status: 'ok' };
     }
     case 'csv_fieldsep': {
-      if (value === null) {
-        writeOutMaybe(`CSV field separator is "${topt.csvFieldSep}".\n`);
-        return { status: 'ok' };
+      if (value !== null) {
+        if (
+          value.length !== 1 ||
+          value === '"' ||
+          value === '\n' ||
+          value === '\r'
+        ) {
+          writeErr(
+            `\\${cmdName}: \\pset: csv_fieldsep must be a single one-byte character\n`,
+          );
+          return { status: 'error' };
+        }
+        topt.csvFieldSep = value;
       }
-      if (
-        value.length !== 1 ||
-        value === '"' ||
-        value === '\n' ||
-        value === '\r'
-      ) {
-        writeErr(
-          `\\${cmdName}: \\pset: csv_fieldsep must be a single one-byte character\n`,
-        );
-        return { status: 'error' };
-      }
-      topt.csvFieldSep = value;
-      writeOutMaybe(`CSV field separator is "${value}".\n`);
+      // Upstream wording: "Field separator for CSV is "%s".".
+      writeOutMaybe(`Field separator for CSV is "${topt.csvFieldSep}".\n`);
       return { status: 'ok' };
     }
     case 'numericlocale': {
-      if (value === null) {
-        topt.numericLocale = !topt.numericLocale;
-      } else {
+      if (value !== null) {
+        // Upstream `do_pset` returns directly from `ParseVariableBool`
+        // for `numericlocale`, bypassing `printPsetInfo`. The toggle
+        // path (no value) still prints the new state.
         const p = parseTriple(value);
         if (p === null || p === 'auto') {
           writeErr(
@@ -472,7 +529,9 @@ export const applyPset = (
           return { status: 'error' };
         }
         topt.numericLocale = p === 'toggle' ? !topt.numericLocale : p === 'on';
+        return { status: 'ok' };
       }
+      topt.numericLocale = !topt.numericLocale;
       writeOutMaybe(
         topt.numericLocale
           ? 'Locale-adjusted numeric output is on.\n'
@@ -507,74 +566,89 @@ export const applyPset = (
       return { status: 'error' };
     }
     case 'columns': {
-      if (value === null) {
+      if (value !== null) {
+        const n = parseInt(value, 10);
+        if (!Number.isFinite(n) || n < 0) {
+          writeErr(`\\${cmdName}: \\pset: invalid columns "${value}"\n`);
+          return { status: 'error' };
+        }
+        topt.columns = n;
+      }
+      // Upstream `printPsetInfo` reports `0` as the special "unset"
+      // sentinel — see `command.c:5433`.
+      if (topt.columns === 0) {
+        writeOutMaybe('Target width is unset.\n');
+      } else {
         writeOutMaybe(`Target width is ${topt.columns}.\n`);
-        return { status: 'ok' };
       }
-      const n = parseInt(value, 10);
-      if (!Number.isFinite(n) || n < 0) {
-        writeErr(`\\${cmdName}: \\pset: invalid columns "${value}"\n`);
-        return { status: 'error' };
-      }
-      topt.columns = n;
-      writeOutMaybe(`Target width is ${n}.\n`);
       return { status: 'ok' };
     }
     case 'xheader_width': {
-      if (value === null) {
-        writeOutMaybe(
-          `Expanded header width is ${xheaderWidthDisplay(topt.xheaderWidth ?? 'full')}.\n`,
-        );
-        return { status: 'ok' };
+      if (value !== null) {
+        const lower = value.toLowerCase();
+        if (lower === 'full' || lower === 'column' || lower === 'page') {
+          topt.xheaderWidth = lower;
+        } else {
+          const n = parseInt(value, 10);
+          if (
+            !Number.isFinite(n) ||
+            n <= 0 ||
+            !/^[+]?\d+$/.test(value.trim())
+          ) {
+            writeErr(
+              `\\${cmdName}: \\pset: allowed xheader_width values are "full" (default), "column", "page", or a number specifying the exact width\n`,
+            );
+            return { status: 'error' };
+          }
+          topt.xheaderWidth = n;
+        }
       }
-      const lower = value.toLowerCase();
-      if (lower === 'full' || lower === 'column' || lower === 'page') {
-        topt.xheaderWidth = lower;
-        writeOutMaybe(`Expanded header width is ${lower}.\n`);
-        return { status: 'ok' };
+      // Upstream `printPsetInfo` quotes the three named widths
+      // ("full" / "column" / "page") but renders the numeric form
+      // unquoted as `Expanded header width is 33.`.
+      const current = topt.xheaderWidth ?? 'full';
+      if (typeof current === 'number') {
+        writeOutMaybe(`Expanded header width is ${current}.\n`);
+      } else {
+        writeOutMaybe(`Expanded header width is "${current}".\n`);
       }
-      const n = parseInt(value, 10);
-      if (!Number.isFinite(n) || n <= 0 || !/^[+]?\d+$/.test(value.trim())) {
-        writeErr(
-          `\\${cmdName}: \\pset: allowed xheader_width values are "full" (default), "column", "page", or a number specifying the exact width\n`,
-        );
-        return { status: 'error' };
-      }
-      topt.xheaderWidth = n;
-      writeOutMaybe(`Expanded header width is ${n}.\n`);
       return { status: 'ok' };
     }
     case 'unicode_border_linestyle':
     case 'unicode_column_linestyle':
     case 'unicode_header_linestyle': {
-      if (value === null) {
-        const current =
-          opt === 'unicode_border_linestyle'
-            ? (topt.unicodeBorderStyle ?? 'single')
-            : opt === 'unicode_column_linestyle'
-              ? (topt.unicodeColumnStyle ?? 'single')
-              : (topt.unicodeHeaderStyle ?? 'single');
-        writeOutMaybe(
-          `Unicode ${opt.replace('unicode_', '').replace('_linestyle', '')} linestyle is "${current}".\n`,
-        );
-        return { status: 'ok' };
+      // Upstream `printPsetInfo` renders these as
+      // `Unicode border line style is "single".` etc. — note the space
+      // between "line" and "style" in the message (the option name
+      // itself is one token, `linestyle`).
+      const which =
+        opt === 'unicode_border_linestyle'
+          ? 'border'
+          : opt === 'unicode_column_linestyle'
+            ? 'column'
+            : 'header';
+      if (value !== null) {
+        const lower = value.toLowerCase();
+        if (lower !== 'single' && lower !== 'double') {
+          writeErr(`\\${cmdName}: \\pset: ${opt} must be single or double\n`);
+          return { status: 'error' };
+        }
+        const style: Unicode2BorderStyle = lower;
+        if (opt === 'unicode_border_linestyle') {
+          topt.unicodeBorderStyle = style;
+        } else if (opt === 'unicode_column_linestyle') {
+          topt.unicodeColumnStyle = style;
+        } else {
+          topt.unicodeHeaderStyle = style;
+        }
       }
-      const lower = value.toLowerCase();
-      if (lower !== 'single' && lower !== 'double') {
-        writeErr(`\\${cmdName}: \\pset: ${opt} must be single or double\n`);
-        return { status: 'error' };
-      }
-      const style: Unicode2BorderStyle = lower;
-      if (opt === 'unicode_border_linestyle') {
-        topt.unicodeBorderStyle = style;
-      } else if (opt === 'unicode_column_linestyle') {
-        topt.unicodeColumnStyle = style;
-      } else {
-        topt.unicodeHeaderStyle = style;
-      }
-      writeOutMaybe(
-        `Unicode ${opt.replace('unicode_', '').replace('_linestyle', '')} linestyle is "${lower}".\n`,
-      );
+      const current =
+        opt === 'unicode_border_linestyle'
+          ? (topt.unicodeBorderStyle ?? 'single')
+          : opt === 'unicode_column_linestyle'
+            ? (topt.unicodeColumnStyle ?? 'single')
+            : (topt.unicodeHeaderStyle ?? 'single');
+      writeOutMaybe(`Unicode ${which} line style is "${current}".\n`);
       return { status: 'ok' };
     }
     default: {

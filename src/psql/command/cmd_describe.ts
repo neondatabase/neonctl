@@ -124,6 +124,56 @@ const noConn = (ctx: BackslashContext): BackslashResult => {
 };
 
 /**
+ * Read the connection's current database. Mirrors upstream's
+ * `PQdb(pset.db)` — used by the cross-database check. PgConnection
+ * exposes `database` as a getter; mocks typically pass it as a record
+ * property. Returns `''` on miss; callers compare case-sensitively
+ * (matching upstream's `strcmp`).
+ */
+const currentDb = (c: import('../types/connection.js').Connection): string => {
+  const meta = c as unknown as { database?: unknown };
+  return typeof meta.database === 'string' ? meta.database : '';
+};
+
+/**
+ * Validate a `processSQLNamePattern` result against the command's max
+ * dotted-name budget. Mirrors the dot-count check upstream's
+ * `processSQLNamePattern` performs after parsing:
+ *
+ *  - `dotCount > maxDots` → "improper qualified name (too many dotted names)"
+ *  - `dotCount == 2 && maxDots == 2 && dbLiteral != current_db` →
+ *    "cross-database references are not implemented"
+ *
+ * Pass `maxDots = 0` for commands that don't accept schema-qualified
+ * patterns (`\dA`, `\dx`, `\dn`, `\db`, `\des`, …). Pass `maxDots = 2`
+ * for the schema-qualified-with-db family (`\dt`, `\df`, `\dD`, …) so
+ * the 2-dot case emits the dedicated cross-database error rather than
+ * a generic "too many" message.
+ *
+ * Returns `null` on success; the formatted error string otherwise.
+ */
+const validatePattern = (
+  pattern: string | null,
+  result: NamePatternResult,
+  maxDots: number,
+  curDb: string,
+): string | null => {
+  if (pattern === null) return null;
+  if (result.dotCount > maxDots) {
+    return `improper qualified name (too many dotted names): ${pattern}`;
+  }
+  if (
+    result.dotCount === 2 &&
+    maxDots === 2 &&
+    result.dbLiteral !== null &&
+    result.dbLiteral !== curDb
+  ) {
+    return `cross-database references are not implemented: ${pattern}`;
+  }
+  return null;
+};
+
+/**
  * Run a query that fetches a single (typically pattern-filtered) result
  * set and prints it. Resolves the pattern with default settings:
  *
@@ -132,16 +182,26 @@ const noConn = (ctx: BackslashContext): BackslashResult => {
  *   - visibility check via `pg_*_is_visible` when relevant
  *
  * Callers pass a pre-built query and the (oid-free) name pattern.
+ *
+ * `maxDots` constrains the dotted-component budget (see
+ * {@link validatePattern}); defaults to 2 (the standard schema-qualified
+ * pattern). Commands accepting only single-component patterns pass `0`.
  */
 const runWithPattern = async (
   ctx: BackslashContext,
   pattern: string | null,
   query: import('../describe/queries.js').DescribeQuery,
   patternOpts: Omit<Parameters<typeof processSQLNamePattern>[0], 'pattern'>,
+  maxDots = 2,
 ): Promise<BackslashResult> => {
   const c = conn(ctx);
   if (!c) return noConn(ctx);
   const result = processSQLNamePattern({ ...patternOpts, pattern });
+  const dotErr = validatePattern(pattern, result, maxDots, currentDb(c));
+  if (dotErr !== null) {
+    writeErr(`${dotErr}\n`);
+    return { status: 'error' };
+  }
   try {
     await runListQuery(c, query, result, process.stdout, ctx.settings.popt);
     return { status: 'ok' };
@@ -224,6 +284,8 @@ const runDualPatternList = async (
     nameConditions: [],
     visibilityConditions: [],
     params: [],
+    dotCount: 0,
+    dbLiteral: null,
   };
   try {
     await runListQuery(c, finalQuery, empty, process.stdout, ctx.settings.popt);
@@ -665,6 +727,8 @@ const cmdListDbRoleSettings: BackslashCmdSpec = {
         nameConditions: [],
         visibilityConditions: [],
         params: [],
+        dotCount: 0,
+        dbLiteral: null,
       };
       await runListQuery(
         c,

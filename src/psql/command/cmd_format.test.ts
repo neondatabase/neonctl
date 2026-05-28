@@ -105,6 +105,17 @@ describe('\\C', () => {
     await run(cmdC, makeMockCtx('C', '', settings));
     expect(settings.popt.topt.title).toBeNull();
   });
+
+  test('emits upstream status lines via printPsetInfo', async () => {
+    // Upstream `exec_command_C` dispatches via `do_pset("title", …)`;
+    // `printPsetInfo("title")` emits the confirmation line.
+    const settings = defaultSettings(createVarStore());
+    await run(cmdC, makeMockCtx('C', "'my title'", settings));
+    expect(stdout()).toContain('Title is "my title".\n');
+    stdoutChunks.length = 0;
+    await run(cmdC, makeMockCtx('C', '', settings));
+    expect(stdout()).toContain('Title is unset.\n');
+  });
 });
 
 describe('\\f', () => {
@@ -136,12 +147,17 @@ describe('\\t', () => {
     expect(stdout()).toMatch(/Tuples only is on\./);
   });
 
-  test('explicit on / off', async () => {
+  test('explicit on / off mutates state silently — matches upstream', async () => {
+    // Upstream `do_pset("tuples_only", value, …)` returns directly
+    // from `ParseVariableBool` when a value is supplied, bypassing
+    // `printPsetInfo`. So `\t on`/`\t off` mutate state without
+    // printing the confirmation line.
     const settings = defaultSettings(createVarStore());
     await run(cmdT, makeMockCtx('t', 'on', settings));
     expect(settings.popt.topt.tuplesOnly).toBe(true);
     await run(cmdT, makeMockCtx('t', 'off', settings));
     expect(settings.popt.topt.tuplesOnly).toBe(false);
+    expect(stdout()).toBe('');
   });
 
   test('unknown value errors', async () => {
@@ -158,6 +174,17 @@ describe('\\T', () => {
     expect(settings.popt.topt.tableAttr).toBe('border=1');
     await run(cmdTitleAttr, makeMockCtx('T', '', settings));
     expect(settings.popt.topt.tableAttr).toBeNull();
+  });
+
+  test('emits upstream status lines via printPsetInfo', async () => {
+    // Upstream `exec_command_T` dispatches via `do_pset("tableattr", …)`;
+    // `printPsetInfo` emits the confirmation line.
+    const settings = defaultSettings(createVarStore());
+    await run(cmdTitleAttr, makeMockCtx('T', "'baz'", settings));
+    expect(stdout()).toContain('Table attributes are "baz".\n');
+    stdoutChunks.length = 0;
+    await run(cmdTitleAttr, makeMockCtx('T', '', settings));
+    expect(stdout()).toContain('Table attributes unset.\n');
   });
 });
 
@@ -409,5 +436,170 @@ describe('\\pset misc', () => {
       makeMockCtx('pset', 'xheader_width -5', settings),
     );
     expect(r.status).toBe('error');
+  });
+});
+
+// Upstream-parity wording smoke tests. Each entry verifies that the
+// status line emitted by `\pset NAME [VALUE]` byte-matches what vanilla
+// psql 18 prints (`printPsetInfo` in `src/bin/psql/command.c`). These
+// were divergent enough to warrant their own dedicated coverage:
+// `csv_fieldsep`, `pager_min_lines`, `recordsep` <newline>, `columns`
+// unset, `unicode_*_linestyle` ("line style" with the space),
+// `xheader_width` named-enum quoting, and the boolean opts that
+// upstream silences when a value is supplied (`tuples_only`, `footer`,
+// `numericlocale`).
+describe('\\pset upstream wording', () => {
+  test('recordsep shows <newline> for "\\n"', async () => {
+    const settings = defaultSettings(createVarStore());
+    settings.popt.topt.recordSep = '\n';
+    await run(cmdPset, makeMockCtx('pset', 'recordsep', settings));
+    expect(stdout()).toContain('Record separator is <newline>.\n');
+  });
+
+  test('recordsep shows quoted form for non-newline', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'recordsep Y', settings));
+    expect(stdout()).toContain('Record separator is "Y".\n');
+  });
+
+  test('columns shows "unset" when 0, integer otherwise', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'columns', settings));
+    expect(stdout()).toContain('Target width is unset.\n');
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'columns 100', settings));
+    expect(stdout()).toContain('Target width is 100.\n');
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'columns 0', settings));
+    expect(stdout()).toContain('Target width is unset.\n');
+  });
+
+  test('unicode_*_linestyle uses "line style" wording', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(
+      cmdPset,
+      makeMockCtx('pset', 'unicode_border_linestyle', settings),
+    );
+    expect(stdout()).toContain('Unicode border line style is "single".\n');
+    stdoutChunks.length = 0;
+    await run(
+      cmdPset,
+      makeMockCtx('pset', 'unicode_column_linestyle double', settings),
+    );
+    expect(stdout()).toContain('Unicode column line style is "double".\n');
+    stdoutChunks.length = 0;
+    await run(
+      cmdPset,
+      makeMockCtx('pset', 'unicode_header_linestyle single', settings),
+    );
+    expect(stdout()).toContain('Unicode header line style is "single".\n');
+  });
+
+  test('pager_min_lines pluralizes "line" vs "lines"', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'pager_min_lines 1', settings));
+    expect(stdout()).toContain("Pager won't be used for less than 1 line.\n");
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'pager_min_lines 0', settings));
+    expect(stdout()).toContain("Pager won't be used for less than 0 lines.\n");
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'pager_min_lines 5', settings));
+    expect(stdout()).toContain("Pager won't be used for less than 5 lines.\n");
+  });
+
+  test('csv_fieldsep uses "Field separator for CSV" wording', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'csv_fieldsep', settings));
+    expect(stdout()).toContain('Field separator for CSV is ",".\n');
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'csv_fieldsep ;', settings));
+    expect(stdout()).toContain('Field separator for CSV is ";".\n');
+  });
+
+  test('xheader_width quotes named values, not numeric', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'xheader_width', settings));
+    expect(stdout()).toContain('Expanded header width is "full".\n');
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'xheader_width page', settings));
+    expect(stdout()).toContain('Expanded header width is "page".\n');
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'xheader_width column', settings));
+    expect(stdout()).toContain('Expanded header width is "column".\n');
+    stdoutChunks.length = 0;
+    await run(cmdPset, makeMockCtx('pset', 'xheader_width 33', settings));
+    expect(stdout()).toContain('Expanded header width is 33.\n');
+  });
+
+  test('tuples_only is silent when value supplied', async () => {
+    // Vanilla `do_pset("tuples_only", value, …)` early-returns via
+    // `ParseVariableBool`, bypassing `printPsetInfo`. The toggle path
+    // (no value) still prints.
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'tuples_only on', settings));
+    expect(settings.popt.topt.tuplesOnly).toBe(true);
+    expect(stdout()).toBe('');
+    await run(cmdPset, makeMockCtx('pset', 'tuples_only off', settings));
+    expect(settings.popt.topt.tuplesOnly).toBe(false);
+    expect(stdout()).toBe('');
+    // Toggle (no value) still prints.
+    await run(cmdPset, makeMockCtx('pset', 'tuples_only', settings));
+    expect(stdout()).toContain('Tuples only is on.\n');
+  });
+
+  test('footer is silent when value supplied', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'footer off', settings));
+    expect(settings.popt.topt.defaultFooter).toBe(false);
+    expect(stdout()).toBe('');
+    await run(cmdPset, makeMockCtx('pset', 'footer on', settings));
+    expect(settings.popt.topt.defaultFooter).toBe(true);
+    expect(stdout()).toBe('');
+    // Toggle (no value) still prints.
+    await run(cmdPset, makeMockCtx('pset', 'footer', settings));
+    expect(stdout()).toContain('Default footer is off.\n');
+  });
+
+  test('numericlocale is silent when value supplied', async () => {
+    const settings = defaultSettings(createVarStore());
+    await run(cmdPset, makeMockCtx('pset', 'numericlocale on', settings));
+    expect(settings.popt.topt.numericLocale).toBe(true);
+    expect(stdout()).toBe('');
+    await run(cmdPset, makeMockCtx('pset', 'numericlocale off', settings));
+    expect(settings.popt.topt.numericLocale).toBe(false);
+    expect(stdout()).toBe('');
+    // Toggle (no value) still prints.
+    await run(cmdPset, makeMockCtx('pset', 'numericlocale', settings));
+    expect(stdout()).toContain('Locale-adjusted numeric output is on.\n');
+  });
+
+  test('show variants match vanilla wording for defaults', async () => {
+    // Defensive: every default-state show variant should print the
+    // exact upstream string. Compare against a fresh settings each call
+    // because some toggles mutate state.
+    const baseShow = (opt: string) => {
+      const settings = defaultSettings(createVarStore());
+      return run(cmdPset, makeMockCtx('pset', opt, settings));
+    };
+    await baseShow('border');
+    expect(stdout()).toContain('Border style is 1.\n');
+    stdoutChunks.length = 0;
+    await baseShow('format');
+    expect(stdout()).toContain('Output format is aligned.\n');
+    stdoutChunks.length = 0;
+    await baseShow('fieldsep');
+    expect(stdout()).toContain('Field separator is "|".\n');
+    stdoutChunks.length = 0;
+    await baseShow('null');
+    expect(stdout()).toContain('Null display is "".\n');
+    stdoutChunks.length = 0;
+    await baseShow('linestyle');
+    expect(stdout()).toContain('Line style is ascii.\n');
+    stdoutChunks.length = 0;
+    await baseShow('title');
+    expect(stdout()).toContain('Title is unset.\n');
+    stdoutChunks.length = 0;
+    await baseShow('tableattr');
+    expect(stdout()).toContain('Table attributes unset.\n');
   });
 });

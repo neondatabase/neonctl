@@ -300,6 +300,8 @@ describe('applyPattern', () => {
       nameConditions: [],
       visibilityConditions: [],
       params: [],
+      dotCount: 0,
+      dbLiteral: null,
     });
     expect(r.sql).toBe('SELECT 1;');
     expect(r.params).toEqual([]);
@@ -312,6 +314,8 @@ describe('applyPattern', () => {
       nameConditions: [],
       visibilityConditions: [],
       params: [],
+      dotCount: 0,
+      dbLiteral: null,
     });
     expect(r.sql).toBe(sql);
   });
@@ -323,6 +327,8 @@ describe('applyPattern', () => {
       nameConditions: ['c.relname OPERATOR(pg_catalog.~) $1'],
       visibilityConditions: [],
       params: ['^(foo)$'],
+      dotCount: 0,
+      dbLiteral: null,
     });
     expect(r.sql).toBe(
       'SELECT * FROM t WHERE (c.relname OPERATOR(pg_catalog.~) $1) ORDER BY 1;',
@@ -337,6 +343,8 @@ describe('applyPattern', () => {
       nameConditions: ['c.relname OPERATOR(pg_catalog.~) $1'],
       visibilityConditions: [],
       params: ['^(foo)$'],
+      dotCount: 0,
+      dbLiteral: null,
     });
     expect(r.sql).toBe(
       'WHERE (c.relname OPERATOR(pg_catalog.~) $1) OR (c.relname OPERATOR(pg_catalog.~) $2)',
@@ -353,6 +361,8 @@ describe('applyPattern', () => {
         nameConditions: ['c.relname OPERATOR(pg_catalog.~) $1'],
         visibilityConditions: [],
         params: ['^(foo)$'],
+        dotCount: 0,
+        dbLiteral: null,
       },
       ['extra'],
     );
