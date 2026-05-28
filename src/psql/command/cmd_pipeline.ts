@@ -250,6 +250,33 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
   return { status: 'error', errorWritten: true };
 };
 
+/**
+ * Coerce any thrown / rejected value into a printable string. The
+ * extended-protocol driver in `PgConnection` rejects with raw
+ * ConnectError records (`{severity, code, message, detail, ...}`) —
+ * not `Error` instances — so `String(err)` would produce
+ * `[object Object]` in the conformance output. We probe for a
+ * `.message` property (covering both `Error` and the ConnectError
+ * shape) and fall back to JSON.stringify only when there's no
+ * message field at all.
+ */
+const errorToMessage = (err: unknown): string => {
+  if (err instanceof Error) return err.message;
+  if (
+    err !== null &&
+    typeof err === 'object' &&
+    'message' in err &&
+    typeof (err as { message: unknown }).message === 'string'
+  ) {
+    return (err as { message: string }).message;
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+};
+
 const readAllArgs = (ctx: BackslashContext): string[] => {
   const out: string[] = [];
   for (;;) {
@@ -351,8 +378,7 @@ export const cmdParse: BackslashCmdSpec = {
         bumpCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT', 1);
         return { status: 'reset-buf', newBuf: '' };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return errResult(ctx, msg);
+        return errResult(ctx, errorToMessage(err));
       }
     }
     try {
@@ -372,8 +398,7 @@ export const cmdParse: BackslashCmdSpec = {
       ctx.settings.lastQuery = sql;
       return { status: 'reset-buf', newBuf: '' };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      return errResult(ctx, errorToMessage(err));
     }
   },
 };
@@ -418,8 +443,7 @@ export const cmdClosePrepared: BackslashCmdSpec = {
       dropPrepared(ctx.settings, name);
       return { status: 'ok' };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      return errResult(ctx, errorToMessage(err));
     }
   },
 };
@@ -460,8 +484,7 @@ export const cmdStartPipeline: BackslashCmdSpec = {
       resetPipelineCounters(ctx.settings);
       return Promise.resolve({ status: 'ok' });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return Promise.resolve(errResult(ctx, msg));
+      return Promise.resolve(errResult(ctx, errorToMessage(err)));
     }
   },
 };
@@ -524,8 +547,7 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       // mirror upstream and clear the counters — the pipeline state is
       // gone, so any non-zero value would be misleading.
       resetPipelineCounters(ctx.settings);
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      return errResult(ctx, errorToMessage(err));
     }
   },
 };
@@ -554,8 +576,7 @@ export const cmdSyncPipeline: BackslashCmdSpec = {
       bumpCounter(ctx.settings, 'PIPELINE_SYNC_COUNT', 1);
       return { status: 'ok' };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      return errResult(ctx, errorToMessage(err));
     }
   },
 };
@@ -577,8 +598,7 @@ export const cmdFlushRequest: BackslashCmdSpec = {
       bumpCounter(ctx.settings, 'PIPELINE_RESULT_COUNT', queued);
       return { status: 'ok' };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      return errResult(ctx, errorToMessage(err));
     }
   },
 };
@@ -663,8 +683,7 @@ export const cmdSendPipeline: BackslashCmdSpec = {
       ps.pending.push(exec);
       return { status: 'reset-buf', newBuf: '' };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      return errResult(ctx, errorToMessage(err));
     }
   },
 };
@@ -752,8 +771,7 @@ export const cmdGetResults: BackslashCmdSpec = {
       }
       return { status: 'ok' };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return errResult(ctx, msg);
+      return errResult(ctx, errorToMessage(err));
     }
   },
 };
