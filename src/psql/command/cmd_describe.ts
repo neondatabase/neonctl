@@ -807,7 +807,23 @@ const cmdDescribeAccessMethods = (cmdName: string): BackslashCmdSpec => ({
     });
     // Access methods are global, never schema-qualified; first dot is
     // "too many dotted names".
-    return runWithPattern(ctx, pattern, query, { namevar: 'amname' }, 0);
+    const result = await runWithPattern(
+      ctx,
+      pattern,
+      query,
+      { namevar: 'amname' },
+      0,
+    );
+    // Upstream `exec_command_d` drains any args past the first AFTER
+    // running the query and writing the result, emitting one warning
+    // per leftover token via `pg_log_warning`. Mirror that ordering so
+    // `\dA foo bar` prints the (empty) result first, then
+    // `\dA: extra argument "bar" ignored` to stderr.
+    for (let extra = ctx.nextArg('normal'); extra !== null; ) {
+      writeErr(`\\${base}: extra argument "${extra}" ignored\n`);
+      extra = ctx.nextArg('normal');
+    }
+    return result;
   },
 });
 

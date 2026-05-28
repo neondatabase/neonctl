@@ -424,6 +424,32 @@ describe('cmd_describe', () => {
     expect(spy[0].params).toContain('^(btree)$');
   });
 
+  it('\\dA foo bar emits "extra argument" warning, runs with first arg', async () => {
+    const spy: QuerySpy[] = [];
+    const conn = mkConnection(
+      [
+        {
+          match: (s) => s.includes('FROM pg_catalog.pg_am'),
+          rs: mkResultSet(['Name', 'Type'], []),
+        },
+      ],
+      spy,
+    );
+    const r = buildRegistry();
+    const spec = mustLookup(r, 'dA');
+    const ctx = mkCtx('dA', 'foo bar baz', mkSettings(conn));
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    expect(stderrChunks.join('')).toContain(
+      '\\dA: extra argument "bar" ignored\n',
+    );
+    expect(stderrChunks.join('')).toContain(
+      '\\dA: extra argument "baz" ignored\n',
+    );
+    // First arg still used as the pattern.
+    expect(spy[0].params).toContain('^(foo)$');
+  });
+
   it('\\dAm renders the verbose access-methods columns even without a +', async () => {
     const spy: QuerySpy[] = [];
     const conn = mkConnection(
