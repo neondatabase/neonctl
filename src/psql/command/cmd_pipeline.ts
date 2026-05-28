@@ -48,6 +48,7 @@ import type {
 
 import { writeErr } from './shared.js';
 import { alignedPrinter } from '../print/aligned.js';
+import { clearPipelineGateErrors } from './cmd_io.js';
 import { PipelineSession } from '../wire/pipeline.js';
 
 // ---------------------------------------------------------------------------
@@ -642,6 +643,11 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       // pipeline has drained — mirrors the empirical behaviour of vanilla
       // psql 18.4 where `\echo :PIPELINE_*` reads "0" after `\endpipeline`.
       resetPipelineCounters(ctx.settings);
+      // Drop any accumulated pipeline-gate diagnostics (`\gdesc not
+      // allowed in pipeline mode` etc.) so a future pipeline starts
+      // with a clean error log. Upstream resets the equivalent
+      // libpq-side error stack at the same boundary.
+      clearPipelineGateErrors(ctx.settings);
       // Walk the per-USER-command slots in issue order, interleaving
       // ErrorResponse renderings with successful ResultSets. Upstream
       // psql 18.4 emits errors EXACTLY where the failed op sat in the
@@ -799,8 +805,10 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       ctx.settings.sendMode = 'extended-query';
       // Even on a failed `\endpipeline` (e.g. server hung up mid-drain),
       // mirror upstream and clear the counters — the pipeline state is
-      // gone, so any non-zero value would be misleading.
+      // gone, so any non-zero value would be misleading. Same for the
+      // pipeline-gate error log.
       resetPipelineCounters(ctx.settings);
+      clearPipelineGateErrors(ctx.settings);
       return errResult(ctx, errorToMessage(err));
     }
   },

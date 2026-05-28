@@ -232,7 +232,43 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
  *
  * Returns `null` when not in pipeline mode (caller proceeds); otherwise
  * returns a populated error result the caller should bubble up.
+ *
+ * Upstream psql 18.4 leaks gate diagnostics through `pg_log_error_internal`
+ * which appends to the libpq result error log on the underlying PGresult;
+ * each subsequent gate hit RE-EMITS the full accumulated log plus its own
+ * line ("Error messages accumulate and are repeated" — the regress comment
+ * is the spec). Two `\gdesc` calls back-to-back therefore emit 3 lines
+ * total: 1 for the first call, 2 for the second (one accumulated + one
+ * own). Mirror that with a settings-stashed accumulator keyed off the
+ * current pipeline session; reset when the pipeline ends.
  */
+const PIPELINE_GATE_ERRORS_KEY = Symbol.for('neonctl.psql.pipelineGateErrors');
+
+type GateErrorsStash = Record<symbol, unknown> & {
+  [PIPELINE_GATE_ERRORS_KEY]?: string[];
+};
+
+const getGateErrors = (settings: PsqlSettings): string[] => {
+  const s = settings as unknown as GateErrorsStash;
+  let cur = s[PIPELINE_GATE_ERRORS_KEY];
+  if (!cur) {
+    cur = [];
+    s[PIPELINE_GATE_ERRORS_KEY] = cur;
+  }
+  return cur;
+};
+
+/**
+ * Drop the accumulated pipeline-gate errors. Called from
+ * `\endpipeline` so the next pipeline session starts fresh — without
+ * this, gate errors from a closed pipeline would leak into the next
+ * one.
+ */
+export const clearPipelineGateErrors = (settings: PsqlSettings): void => {
+  const s = settings as unknown as GateErrorsStash;
+  s[PIPELINE_GATE_ERRORS_KEY] = undefined;
+};
+
 const pipelineGate = (ctx: BackslashContext): BackslashResult | null => {
   if (ctx.settings.sendMode !== 'extended-pipeline') return null;
   const message =
@@ -241,7 +277,23 @@ const pipelineGate = (ctx: BackslashContext): BackslashResult | null => {
       : `\\${ctx.cmdName} not allowed in pipeline mode`;
   ctx.settings.lastErrorResult = { message };
   const prefix = psqlErrorPrefix(ctx.settings);
-  writeErr(`${prefix}${message}\n`);
+  // Only `\gdesc` accumulates: each call appends its own line to the
+  // log AND re-emits the full log to stderr ("Error messages
+  // accumulate and are repeated" — regress spec at expected line 648:
+  // two consecutive `\gdesc` emit 1+2 = 3 lines total). Upstream's
+  // underlying `PQdescribePrepared` path is the one that leaks into
+  // the session-scoped error log; other gated commands (`\g`, `\gx`,
+  // `\gset`, `\gexec`, `\watch`) emit a single line per invocation
+  // and do NOT participate in the accumulator.
+  if (ctx.cmdName === 'gdesc') {
+    const log = getGateErrors(ctx.settings);
+    log.push(message);
+    for (const m of log) {
+      writeErr(`${prefix}${m}\n`);
+    }
+  } else {
+    writeErr(`${prefix}${message}\n`);
+  }
   return { status: 'error', errorWritten: true };
 };
 
@@ -357,6 +409,32 @@ const stripLeadingCommentsAndWS = (sql: string): string => {
   }
   return i === 0 ? sql : sql.slice(i);
 };
+
+/**
+ * Strip line and block comments from `sql` so a COPY-shaped token inside a
+ * comment (e.g. dash-dash `COPY t TO STDOUT`) doesn't trigger the
+ * `\g FILE` mid-batch sink. Mirrors the cheap normaliser the mainloop uses
+ * before wiring `copyOutMidBatchSink`. Embedded literals are NOT stripped —
+ * `'COPY x TO STDOUT'` would still match `hasCopyToStdout`, but that's the
+ * same false-positive shape upstream tolerates (the regex sweep is
+ * intentionally conservative, and the worst-case outcome is "route bytes
+ * that never arrive to the file" — harmless).
+ */
+const stripSqlCommentsForCopyScan = (sql: string): string =>
+  sql.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/--[^\n]*/gu, '');
+
+/**
+ * True when `sql` contains at least one `COPY ... TO STDOUT` segment.
+ * Used by `runGCore` to install a CopyData sink while `\g` / `\gx` /
+ * `\g FILE` / `\g |cmd` dispatches a `\;`-chained batch that mixes
+ * COPY-OUT with regular SELECT statements. Without the sink the wire
+ * layer drops the CopyData bytes on the floor, and the file/pipe ends
+ * up with the surrounding tuple results only — see regress/psql lines
+ * 5760-5787 (`COPY (SELECT 'foo') TO STDOUT \; COPY (SELECT 'bar') TO
+ * STDOUT \g :g_out_file`).
+ */
+const hasCopyToStdout = (sql: string): boolean =>
+  /\bCOPY\b[\s\S]*?\bTO\s+STDOUT\b/iu.test(stripSqlCommentsForCopyScan(sql));
 
 /**
  * Render a server-side error in upstream psql's 3-line shape (severity +
@@ -1066,6 +1144,11 @@ const runGCore = async (
   const bindState = consumeBindState(ctx.settings);
 
   let execError: unknown = null;
+  // Track whether we wired the mid-batch COPY-OUT sink so the `finally`
+  // can clear it deterministically — even if `execSimple` threw.
+  let copyOutSinkConn: {
+    copyOutMidBatchSink?: ((chunk: Buffer) => void) | null;
+  } | null = null;
   try {
     const out = pickOut(ctx.settings, oneShot?.stream ?? null);
     if (bindState?.byName) {
@@ -1098,6 +1181,25 @@ const runGCore = async (
       await renderResult(ctx.settings, rs, out);
     } else {
       // Plain `\g` / `\gx`: simple-query dispatch.
+      //
+      // When the batch contains `COPY ... TO STDOUT`, the wire layer
+      // forwards CopyData bytes via `copyOutMidBatchSink`. Mainloop wires
+      // that sink to `ctx.stdout` for top-level dispatches; here in `\g`
+      // we redirect it to the current output target (`\g FILE`,
+      // `\g |cmd`, or `\o`-stashed stream when neither is set). Without
+      // this, `COPY (SELECT 'foo') TO STDOUT \g :file` silently drops
+      // `foo` on the floor and the file ends up with only the empty
+      // `(0 rows)` shape printed by `renderResult` for the wire's empty
+      // ResultSet. Matches upstream's `do_copy` / `handleCopyOut` path:
+      // the COPY OUT bytes go wherever the active queryFout points.
+      if (hasCopyToStdout(sql)) {
+        copyOutSinkConn = ctx.settings.db as unknown as {
+          copyOutMidBatchSink?: ((chunk: Buffer) => void) | null;
+        };
+        copyOutSinkConn.copyOutMidBatchSink = (chunk: Buffer): void => {
+          out.write(chunk);
+        };
+      }
       const results = await ctx.settings.db.execSimple(sql);
       for (const rs of results) {
         await renderResult(ctx.settings, rs, out);
@@ -1110,6 +1212,11 @@ const runGCore = async (
     // `expanded = 'on'` swap and any `\g (...)` pset overrides, so a
     // subsequent plain `\g` runs in the user's persistent print mode.
     Object.assign(topt, toptSnapshot);
+    // Tear down the COPY-OUT sink so subsequent top-level batches reach
+    // mainloop's installer with a clean slate. (Mainloop reinstalls per
+    // batch; leaving ours pointed at a now-closed file would cause a
+    // write-after-close on the next CopyData burst.)
+    if (copyOutSinkConn) copyOutSinkConn.copyOutMidBatchSink = null;
   }
 
   // Close the one-shot writer regardless of execution success so any
