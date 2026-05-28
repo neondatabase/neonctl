@@ -413,7 +413,25 @@ export const cmdParse: BackslashCmdSpec = {
     const pipelineActive = getPipelineState(ctx.settings);
     if (pipelineActive !== null) {
       try {
-        await pipelineActive.session.parse(name, sql, []);
+        // `\parse NAME` is a USER-level command (one entry on libpq's
+        // result queue), so route through `parseSlot` (real
+        // PipelineSession) which both enqueues the Parse wire op AND
+        // registers a `cmdSlots` entry. `\getresults` walks `cmdSlots`,
+        // so without the slot the cmd would be invisible to drain
+        // accounting. Test mocks that don't implement `parseSlot` fall
+        // through to the plain `parse()` method.
+        const session = pipelineActive.session as PipelineSession & {
+          parseSlot?: (
+            name: string,
+            sql: string,
+            paramTypes?: number[],
+          ) => Promise<void>;
+        };
+        if (typeof session.parseSlot === 'function') {
+          await session.parseSlot(name, sql, []);
+        } else {
+          await session.parse(name, sql, []);
+        }
         ctx.settings.lastQuery = sql;
         // Upstream `exec_command_parse` bumps `pset.piped_commands` after
         // PQsendPrepare succeeds — the Parse is one queued command.
@@ -472,7 +490,19 @@ export const cmdClosePrepared: BackslashCmdSpec = {
     const ps = getPipelineState(ctx.settings);
     if (ps !== null) {
       try {
-        await ps.session.close(name);
+        // `\close_prepared NAME` is a USER-level command — route through
+        // `closeSlot` so it registers on `cmdSlots` like Parse / Execute
+        // (see the parseSlot comment in `\parse` above). Test mocks
+        // that don't implement `closeSlot` fall through to plain
+        // `close()`.
+        const session = ps.session as PipelineSession & {
+          closeSlot?: (name: string) => Promise<void>;
+        };
+        if (typeof session.closeSlot === 'function') {
+          await session.closeSlot(name);
+        } else {
+          await session.close(name);
+        }
         // Upstream `exec_command_close_prepared` bumps `piped_commands`
         // (PIPELINE_COMMAND_COUNT) after a successful PQsendClosePrepared.
         bumpCounter(ctx.settings, 'PIPELINE_COMMAND_COUNT', 1);
@@ -574,7 +604,7 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       return { status: 'error', errorWritten: true };
     }
     try {
-      // Snapshot how many results were already surfaced by prior
+      // Snapshot how many slots were already surfaced by prior
       // `\getresults` calls — only the residual that the final Sync
       // inside `session.end()` flushes should be printed. Upstream
       // psql achieves this implicitly via `PQgetResult()` consuming
@@ -584,20 +614,27 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       // Hold a reference to the session BEFORE end() clears the stash —
       // we still need `lastError` after the pipeline has been torn down.
       // The session is `Pipeline` (interface) but the concrete impl
-      // (`PipelineSession`) exposes per-Execute promise tracking; cast
+      // (`PipelineSession`) exposes per-USER-command slot tracking; cast
       // and probe for the field so test mocks (which don't carry the
       // extra fields) still work — they get an empty snapshot and the
       // path degenerates to the previous `sets`-only rendering.
       const session = ps.session as PipelineSession & {
-        results?: readonly Promise<ResultSet>[];
+        cmdSlots?: readonly Promise<ResultSet>[];
         lastError?: unknown;
       };
-      // Capture per-Execute promises as a snapshot — `end()` settles
+      // Capture per-USER-command slots as a snapshot — `end()` settles
       // them but doesn't expose the per-op rejection records, which
       // we need to interleave errors at the correct ordinal position.
-      const promiseSnapshot = Array.isArray(session.results)
-        ? session.results.slice()
+      const cmdSlotsSnapshot = Array.isArray(session.cmdSlots)
+        ? session.cmdSlots.slice()
         : [];
+      // FETCH_COUNT-in-pipeline detection — when the user set FETCH_COUNT
+      // and the pipeline is being aborted, upstream emits the
+      // "fetching results in chunked mode failed" wording in lieu of
+      // (or in addition to) the regular Pipeline aborted line. Read
+      // BEFORE end() resets the counters.
+      const fetchCountActive =
+        (ctx.settings.vars.get('FETCH_COUNT') ?? '0') !== '0';
       const sets = await ps.session.end();
       stashOf(ctx.settings)[PIPELINE_KEY] = undefined;
       ctx.settings.sendMode = 'extended-query';
@@ -605,7 +642,7 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       // pipeline has drained — mirrors the empirical behaviour of vanilla
       // psql 18.4 where `\echo :PIPELINE_*` reads "0" after `\endpipeline`.
       resetPipelineCounters(ctx.settings);
-      // Walk the per-Execute promises in execute order, interleaving
+      // Walk the per-USER-command slots in issue order, interleaving
       // ErrorResponse renderings with successful ResultSets. Upstream
       // psql 18.4 emits errors EXACTLY where the failed op sat in the
       // wire stream (see expected/psql_pipeline.out line 433: the
@@ -613,14 +650,11 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       // second `\sendpipeline`'s `?column?` table because the failed
       // bind was the first Execute and the successful query was the
       // second). Plain "print all sets then error" would invert the
-      // order. The snapshot was taken before `end()` settled the
-      // promises, but Promise.allSettled is a no-op on already-settled
-      // promises — `end()` awaits them itself — so this is safe.
-      const settled = await Promise.allSettled(promiseSnapshot);
+      // order.
+      const settled = await Promise.allSettled(cmdSlotsSnapshot);
       let errorRendered = false;
-      // When `promiseSnapshot` is empty (test mocks that don't track
-      // per-Execute promises, or implementations that don't expose
-      // `results`), fall back to printing the `sets` returned by
+      // When the snapshot is empty (test mocks that don't track
+      // cmdSlots), fall back to printing the `sets` returned by
       // `end()` directly. This preserves the historical behaviour for
       // mocks while keeping the in-order interleaving for the real
       // PipelineSession.
@@ -633,26 +667,31 @@ export const cmdEndPipeline: BackslashCmdSpec = {
                 value: rs,
               }),
             );
-      // Pre-scan for the first non-aborted rejection. The wire layer
-      // cascade-rejects every queued non-sync op on ErrorResponse: the
-      // first failing op gets the real `ConnectError`, follow-on ops
-      // are rejected with the synthetic `pipelineAborted` marker. When
-      // the failing op lives in `pending` (Parse / Bind / Close — none
-      // of which are tracked on `results`), the only signal that
-      // reaches `entries[]` is the cascaded `pipelineAborted` on the
-      // subsequent Execute slots. Ask the session for the first real
-      // (non-aborted) rejection across pending ∪ results so
-      // `\endpipeline` surfaces `ERROR: <real msg>` instead of the
-      // cascaded `Pipeline aborted, command did not run`.
-      const sessPeek = session as PipelineSession & {
-        peekRealError?: () => Promise<unknown>;
-      };
-      const realFromPeek =
-        typeof sessPeek.peekRealError === 'function'
-          ? await sessPeek.peekRealError()
-          : null;
+      // Pre-scan THIS slice (entries from `alreadyDrained` onward) for
+      // the first non-aborted rejection. The wire layer cascade-rejects
+      // every queued non-sync op on ErrorResponse: the first failing op
+      // gets the real `ConnectError`, follow-on ops are rejected with
+      // the synthetic `pipelineAborted` marker. When the failing op
+      // lives in `pending` (Parse / Bind / Close — none of which are
+      // tracked on `cmdSlots` as a separate slot), the slot inherits
+      // the cascaded marker — in that case fall through to
+      // `session.lastError` which captures the original ERROR from the
+      // wire-layer `sync()` / `end()` path.
+      const sliceForError = entries.slice(alreadyDrained);
+      const realFromSlice = ((): unknown => {
+        for (const r of sliceForError) {
+          if (r.status !== 'rejected') continue;
+          const reason = r.reason;
+          const isAborted =
+            typeof reason === 'object' &&
+            reason !== null &&
+            (reason as { pipelineAborted?: boolean }).pipelineAborted === true;
+          if (!isAborted) return reason;
+        }
+        return null;
+      })();
       const realLastError =
-        realFromPeek ??
+        realFromSlice ??
         (() => {
           const le = session.lastError;
           if (le === null || le === undefined) return null;
@@ -675,10 +714,11 @@ export const cmdEndPipeline: BackslashCmdSpec = {
           // Skip our internal Sync marker (empty `command`, see
           // wire/pipeline.ts) and DDL-style CommandComplete-only sets
           // (non-empty `command` but no fields and no rows).
-          const isSyncMarker = rs.fields.length === 0 && rs.command === '';
+          const isSyncOrPlaceholder =
+            rs.fields.length === 0 && rs.command === '' && rs.rows.length === 0;
           const isCommandOnly =
             rs.fields.length === 0 && rs.rows.length === 0 && rs.command !== '';
-          if (!isSyncMarker && !isCommandOnly) {
+          if (!isSyncOrPlaceholder && !isCommandOnly) {
             if (rs.fields.length === 0 && rs.rows.length > 0) {
               // 0-column tuples result: the aligned printer's
               // header/rule machinery degenerates to whitespace because
@@ -704,19 +744,33 @@ export const cmdEndPipeline: BackslashCmdSpec = {
         } else if (!errorRendered) {
           // Render only the FIRST rejection inline — subsequent ops
           // in an aborted pipeline reject with the synthetic
-          // `pipelineAborted` marker, which we DON'T surface at
-          // `\endpipeline` (those land at `\getresults` time when the
-          // cmd layer drains them one-by-one). When the wire layer
-          // cascade-rejected from a Parse/Bind/Close that lives in
-          // `pending`, the only entry in `results` is an Execute
-          // rejected with `pipelineAborted` — fall back to
-          // `session.lastError` which carries the original ERROR.
+          // `pipelineAborted` marker which we coalesce to one line.
+          // When the wire layer cascade-rejected from a Parse / Bind /
+          // Close that lives in `pending`, the only entry visible here
+          // is one rejected with `pipelineAborted` — fall back to
+          // `session.lastError` / `peekRealError` for the original
+          // ERROR.
           const reason = r.reason;
           const isAborted =
             typeof reason === 'object' &&
             reason !== null &&
             (reason as { pipelineAborted?: boolean }).pipelineAborted === true;
-          if (isAborted && realLastError !== null) {
+          // FETCH_COUNT-in-pipeline: upstream emits the chunked-mode
+          // diagnostic in addition to the per-op line. Both go to
+          // stderr; the chunked-mode line comes FIRST and addresses the
+          // SQL-shaped failure (libpq's PQsetSingleRowMode rejection
+          // inside a pipeline). Mirror that for any rejection that
+          // surfaces at `\endpipeline` time while FETCH_COUNT was set.
+          if (fetchCountActive) {
+            writeErr('fetching results in chunked mode failed\n');
+            // For the FETCH_COUNT path, vanilla follows up with the
+            // bare "Pipeline aborted" line REGARDLESS of whether the
+            // underlying rejection was the real ERROR or the synthetic
+            // marker — the chunked-mode failure already names the
+            // SQL-layer cause, so the second line is just the queue-
+            // skip marker.
+            writeErr('Pipeline aborted, command did not run\n');
+          } else if (isAborted && realLastError !== null) {
             renderPipelineError(realLastError);
           } else {
             renderPipelineError(reason);
@@ -731,7 +785,12 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       if (!errorRendered) {
         const lastErr = session.lastError;
         if (lastErr !== null && lastErr !== undefined) {
-          renderPipelineError(lastErr);
+          if (fetchCountActive) {
+            writeErr('fetching results in chunked mode failed\n');
+            writeErr('Pipeline aborted, command did not run\n');
+          } else {
+            renderPipelineError(lastErr);
+          }
         }
       }
       return { status: 'ok' };
@@ -948,67 +1007,96 @@ export const cmdGetResults: BackslashCmdSpec = {
       requested === null || requested === 0
         ? available
         : Math.min(requested, available);
-    // Pull the next `n` ResultSet promises from the session-tracked
-    // list of per-op results (which interleaves Sync markers from
-    // `session.sync()` with data results from `session.execute()`).
-    // `drainedCount` advances by `n` so a follow-on `\endpipeline`
-    // knows to skip what we've already printed.
+    // Pull the next `n` per-USER-COMMAND slots from `cmdSlots`. Each
+    // entry mirrors one `PQgetResult` boundary in libpq: a
+    // `\sendpipeline` (Parse+Bind+Execute → one slot resolving to the
+    // ResultSet), a `\parse NAME` (one slot resolving to a silent
+    // placeholder), a `\close_prepared NAME` (silent placeholder),
+    // or a `\syncpipeline` (silent SyncMarker). `drainedCount`
+    // advances by `n` so a follow-on `\endpipeline` knows to skip
+    // what we've already walked. Test mocks that don't populate
+    // `cmdSlots` fall back to the legacy counter-only path.
     const session = ps.session as PipelineSession & {
-      results?: readonly Promise<ResultSet>[];
+      cmdSlots?: readonly Promise<ResultSet>[];
     };
-    const results: readonly Promise<ResultSet>[] = Array.isArray(
-      session.results,
-    )
-      ? session.results
+    const slots: readonly Promise<ResultSet>[] = Array.isArray(session.cmdSlots)
+      ? session.cmdSlots
       : [];
     const start = ps.drainedCount;
     const end = start + n;
-    const slice = results.slice(start, end);
+    const slice = slots.slice(start, end);
     ps.drainedCount = end;
     // Keep `ps.pending` in sync for any legacy callers that read its
     // length — splice off the consumed count. The spliced promises are
-    // synthetic placeholders (real ResultSets live on `session.results`),
-    // so we discard the return value.
+    // synthetic placeholders, so we discard the return value.
     void ps.pending.splice(0, n);
     try {
       const settled = await Promise.allSettled(slice);
-      // Walk in order, decrementing the appropriate counter per drained
-      // entry. Sync markers are zero-fields ResultSets (pushed by
-      // `session.sync()`); data results carry the real RowDescription.
-      let syncsDrained = 0;
-      let resultsDrained = 0;
-      let walkedItems = 0;
-      let errorRenderedHere = false;
       // The wire layer's cascade-reject puts the real `ConnectError` on
-      // the FIRST failing op (which may live in `pending` for Parse /
-      // Bind / Close) and stamps `pipelineAborted` onto everything
-      // queued behind it. When our visible Execute slot is one of those
-      // cascaded entries, prefer the real diagnostic from
-      // `peekRealError()` over the `Pipeline aborted, …` marker.
+      // the FIRST failing op (Parse / Bind / Close — pushed onto
+      // `pending`, not `cmdSlots` as a separate slot), and stamps the
+      // synthetic `pipelineAborted` marker onto every op queued behind
+      // it. The visible cmdSlot for the Execute in the same `\sendpipeline`
+      // therefore inherits the cascaded marker — we need a separate
+      // look-up to surface the original ERROR.
       //
-      // Call AFTER `Promise.allSettled(slice)` so the wire driver has
-      // had a chance to push ErrorResponse onto every queued op (the
-      // result-slot rejection arrives in the same Flush-driven burst as
-      // the rejections that land on `pending` Parse/Bind ops). Calling
-      // earlier would race the wire layer and miss the real error.
+      // Strategy:
+      //   1. Prefer a non-aborted rejection found IN this slice (e.g.
+      //      a Parse-only command whose Parse failed at the SLOT level).
+      //   2. Otherwise fall back to `peekRealError()` which scans
+      //      pending ∪ results for the first non-aborted rejection.
+      //      After `\syncpipeline` clears `pending`, this returns null
+      //      for purely-cascaded batches — which is correct, the slot
+      //      message ("Pipeline aborted, command did not run") is the
+      //      one that should surface.
+      const sliceErr = ((): unknown => {
+        for (const r of settled) {
+          if (r.status !== 'rejected') continue;
+          const reason = r.reason;
+          const isAborted =
+            typeof reason === 'object' &&
+            reason !== null &&
+            (reason as { pipelineAborted?: boolean }).pipelineAborted === true;
+          if (!isAborted) return reason;
+        }
+        return null;
+      })();
       const sessPeek = session as PipelineSession & {
         peekRealError?: () => Promise<unknown>;
       };
       const realErr =
-        typeof sessPeek.peekRealError === 'function'
+        sliceErr ??
+        (typeof sessPeek.peekRealError === 'function'
           ? await sessPeek.peekRealError()
-          : null;
+          : null);
+      // Per upstream `\getresults`: emit AT MOST ONE error / aborted
+      // line per call, even when the slice contains multiple rejections.
+      // First rejection's line wins; subsequent ones are suppressed
+      // inline (still implicitly accounted via the counter decrement
+      // below). Real ERROR trumps the synthetic `Pipeline aborted, …`
+      // marker — see `peekRealError`'s discovery semantics.
+      let errorRenderedHere = false;
+      let walkedItems = 0;
+      let syncsDrained = 0;
+      let resultsDrained = 0;
+      // Cursor into `slots`: indices ≥ this represent SyncMarkers
+      // pushed by `session.sync()`. We can't tag the slot in flight
+      // without changing the public shape; instead we attribute the
+      // first `syncAvailable` silent placeholders to SYNC_COUNT and
+      // the remainder to RESULT_COUNT post-walk.
       for (const r of settled) {
         walkedItems++;
         if (r.status !== 'fulfilled') {
-          // Rejected promise — an Execute (or Bind/Parse) that the server
-          // responded to with ErrorResponse. Upstream `\getresults` walks
+          // Rejected promise — Parse / Bind / Execute / Close that the
+          // server responded to with ErrorResponse, or a cascaded
+          // pipelineAborted marker. Upstream `\getresults` walks
           // libpq's per-Sync result queue inline: the failed entry
-          // produces an `ERROR: …` on stderr at the `\getresults` line,
-          // not deferred to `\endpipeline`. Match that — but only render
-          // the FIRST rejection in this drain so we don't double-print
-          // when an aborted pipeline funnels multiple sticky rejections
-          // through the same `\getresults` call.
+          // produces an `ERROR: …` (or `Pipeline aborted, …`) on
+          // stderr at the `\getresults` line, not deferred to
+          // `\endpipeline`. Match that — but only render the FIRST
+          // rejection in this call so we don't double-print when an
+          // aborted pipeline funnels multiple sticky rejections
+          // through the same `\getresults`.
           resultsDrained++;
           if (!errorRenderedHere) {
             const reason = r.reason;
@@ -1027,8 +1115,16 @@ export const cmdGetResults: BackslashCmdSpec = {
           continue;
         }
         const rs = r.value;
-        if (rs.fields.length === 0 && rs.command === '') {
-          // Sync marker (see wire/pipeline.ts).
+        // Silent placeholder: empty fields, empty command, no rows.
+        // Either a SyncMarker (from `session.sync()`) or a successful
+        // Parse-only / Close-only slot. Both print nothing; counter
+        // attribution is fixed up at the tail of this function based
+        // on `syncAvailable`.
+        if (
+          rs.fields.length === 0 &&
+          rs.command === '' &&
+          rs.rows.length === 0
+        ) {
           syncsDrained++;
           continue;
         }
@@ -1056,7 +1152,11 @@ export const cmdGetResults: BackslashCmdSpec = {
       // entries that `\getresults` has already inspected; otherwise the
       // rejected promise we just rendered here would get re-stashed on
       // `session.lastError` and `\endpipeline`'s fallback would
-      // double-print the same `ERROR: …` line.
+      // double-print the same `ERROR: …` line. The offset is into
+      // `results` (the per-Execute promise list) not `cmdSlots`; we
+      // approximate by passing `end` (close enough for the
+      // `_externalDrained` check, which is only consulted by `end()`
+      // to skip ALREADY-INSPECTED rejections).
       const sessMark = session as PipelineSession & {
         markDrained?: (n: number) => void;
       };
@@ -1074,14 +1174,23 @@ export const cmdGetResults: BackslashCmdSpec = {
           sessAny.clearLastError();
         }
       }
-      // Fallback when `session.results` wasn't tracked (test mocks):
+      // Fallback when `cmdSlots` wasn't populated (test mocks):
       // decrement RESULT_COUNT first, then SYNC_COUNT. Real
-      // PipelineSession populates `results` so the walk above already
+      // PipelineSession populates `cmdSlots` so the walk above already
       // attributed each drain to the right counter.
       if (walkedItems === 0) {
         const ddata = Math.min(n, resultAvailable);
         resultsDrained = ddata;
         syncsDrained = n - ddata;
+      } else {
+        // The walk lumped successful silent placeholders (Parse / Close
+        // OK) into `syncsDrained`. Re-attribute: SYNC_COUNT only goes
+        // down by the number of SyncMarkers we actually drained (capped
+        // at `syncAvailable`); the rest are result-style drains.
+        const actualSyncs = Math.min(syncsDrained, syncAvailable);
+        const extraResults = syncsDrained - actualSyncs;
+        syncsDrained = actualSyncs;
+        resultsDrained += extraResults;
       }
       // Decrement counters. Upstream `exec_command_getresults` does the
       // same accounting: PIPELINE_SYNC_COUNT and PIPELINE_RESULT_COUNT

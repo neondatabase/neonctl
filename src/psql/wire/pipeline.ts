@@ -77,12 +77,47 @@ export class PipelineSession implements Pipeline {
    * their own "drained count" so already-printed results are skipped.
    */
   public readonly results: Promise<ResultSet>[] = [];
+  /**
+   * Per-USER-COMMAND result slots, one entry per `\sendpipeline` /
+   * `\parse NAME` / `\close_prepared NAME` / `\syncpipeline`. Mirrors
+   * libpq's per-PQsendQueryParams / PQsendPrepare / PQsendClosePrepared
+   * result queue: a single `PQgetResult` call produces one entry from
+   * this list (NOT one per wire op — Parse/Bind/Execute together count
+   * as ONE entry under `PQsendQueryParams`). The cmd layer drains this
+   * via `\getresults` / `\endpipeline` instead of walking `results`
+   * directly, so Parse-only and Close-only commands occupy a slot even
+   * though they don't push onto `results`.
+   *
+   * For successful Parse-only / Close-only commands, the slot resolves
+   * with a placeholder ResultSet (zero fields, empty `command`); for
+   * Execute-bearing commands it resolves with the real ResultSet. On
+   * error, the slot rejects with the same `ConnectError` /
+   * `pipelineAborted` marker the wire layer cascade-rejects with.
+   * SyncMarker slots are `Promise.resolve(syncMarker)` so the drain
+   * loop walks past them silently.
+   */
+  public readonly cmdSlots: Promise<ResultSet>[] = [];
+
   // Promises for ops whose server-side completion we still need to
   // observe (Parse, Bind, Describe, Close). In pipeline mode the
   // server doesn't reply until the next Sync, so awaiting them in
   // these methods would deadlock — we keep them and let `sync()` /
   // `end()` drain them.
   private readonly pending: Promise<unknown>[] = [];
+
+  /**
+   * Per-USER-command "wire ops staged but not yet bound to a cmdSlot".
+   * `parse()` / `bind()` push their wire op promise here; the next
+   * call that closes the user-level command (`execute()` for
+   * `\sendpipeline` / `;`-queries, `parseSlot()` for `\parse NAME`,
+   * `closeSlot()` for `\close_prepared NAME`) consumes the staged
+   * ops and combines them via `Promise.all` with the final wire op
+   * — that way the slot rejects with the FIRST wire-op rejection in
+   * the group (which carries the real `ConnectError` for the actual
+   * server-side failure) rather than the cascaded `pipelineAborted`
+   * marker on the trailing Execute / Close.
+   */
+  private currentGroup: Promise<unknown>[] = [];
 
   public constructor(private readonly conn: PipelineHost) {
     this.conn._extPipelineActive = true;
@@ -101,7 +136,94 @@ export class PipelineSession implements Pipeline {
     return p;
   }
 
+  /**
+   * Push a synthetic ResultSet slot onto `cmdSlots`. The slot's
+   * effective rejection is taken from the FIRST wire-op rejection in
+   * the current user-command group ({@link currentGroup}) followed by
+   * the final ResultSet promise — mirroring libpq's per-PGresult
+   * shape, where the real `ConnectError` lands on the failing wire op
+   * (often a Bind / Parse on `pending`, NOT the trailing Execute on
+   * `results`). Without this combining, the slot would inherit the
+   * cascaded `pipelineAborted` marker from the Execute and the real
+   * diagnostic would never reach the cmd layer.
+   *
+   * The group is reset after consumption so the next user command
+   * starts fresh.
+   */
+  private pushCmdSlot(p: Promise<ResultSet>): void {
+    const group = this.currentGroup.splice(0);
+    if (group.length === 0) {
+      this.cmdSlots.push(PipelineSession.silenceUnhandled(p));
+      return;
+    }
+    // `Promise.all` rejects with the FIRST rejection (in iteration
+    // order), so put the group BEFORE the final result: a bind error
+    // on `bind` will surface before the cascaded execute marker.
+    const combined = Promise.all([...group, p]).then(
+      (arr) => arr[arr.length - 1] as ResultSet,
+    );
+    this.cmdSlots.push(PipelineSession.silenceUnhandled(combined));
+  }
+
+  /**
+   * Map a wire-op `Promise<void>` to a `Promise<ResultSet>` that
+   * resolves with a silent zero-field placeholder when the op
+   * completes, or rejects with the same reason if it fails. Used by
+   * `parseSlot` / `closeSlot` so a successful Parse / Close walks the
+   * `\getresults` drain loop without emitting any output (matching
+   * upstream `PQgetResult` for PGRES_COMMAND_OK on Parse / Close).
+   */
+  private static voidToPlaceholderResult(p: Promise<void>): Promise<ResultSet> {
+    return p.then(
+      (): ResultSet => ({
+        command: '',
+        rowCount: null,
+        oid: null,
+        fields: [],
+        rows: [],
+        notices: [],
+      }),
+    );
+  }
+
   public parse(
+    name: string,
+    sql: string,
+    paramTypes?: number[],
+  ): Promise<void> {
+    // parseRaw already retains the wire promise in `pending` (and
+    // silences unhandled rejection); the void return here matches the
+    // public Pipeline interface.
+    void this.parseRaw(name, sql, paramTypes);
+    return Promise.resolve();
+  }
+
+  /**
+   * Enqueue a Parse op AND register it as a USER-level command slot
+   * (one entry on `cmdSlots`). Mirrors {@link parse} — RESOLVES
+   * IMMEDIATELY; the underlying wire-op promise's outcome surfaces
+   * via `cmdSlots` (drained by `\getresults` / `\endpipeline`).
+   * Returning a slot-bound promise would deadlock callers that await
+   * it before Sync.
+   *
+   * Used by `\parse NAME` (standalone Parse). Do NOT use from inside
+   * `\sendpipeline` — that path issues an internal `parse('')` for the
+   * SQL buffer; the Execute downstream is the user-visible command.
+   */
+  public async parseSlot(
+    name: string,
+    sql: string,
+    paramTypes?: number[],
+  ): Promise<void> {
+    const p = this.parseRaw(name, sql, paramTypes);
+    const slot = PipelineSession.voidToPlaceholderResult(p);
+    this.pushCmdSlot(slot);
+    // Resolve immediately, like `parse()`. The slot's outcome flows
+    // through `cmdSlots`.
+    await Promise.resolve();
+  }
+
+  private parseRaw(
     name: string,
     sql: string,
     paramTypes?: number[],
@@ -114,8 +236,14 @@ export class PipelineSession implements Pipeline {
     // catch so a server-side reject (ParseError) doesn't fire an
     // UnhandledPromiseRejection at process scope before end()/sync()
     // get a chance to allSettle the list.
-    this.pending.push(PipelineSession.silenceUnhandled(p));
-    return Promise.resolve();
+    const silenced = PipelineSession.silenceUnhandled(p);
+    this.pending.push(silenced);
+    // Stage on the current command group so a downstream cmdSlot push
+    // can fold this Parse's rejection into the slot (e.g. a Parse-error
+    // in `\sendpipeline`'s internal `parse('', sql)` must surface as
+    // the slot's rejection, not the cascaded marker on Execute).
+    this.currentGroup.push(silenced);
+    return p;
   }
 
   public bind(name: string, values: unknown[]): Promise<void> {
@@ -123,7 +251,12 @@ export class PipelineSession implements Pipeline {
     const p = this.conn.enqueueBind();
     const encoded = values.map(toBindValue);
     this.conn.writeRaw(Bind('', name, [], encoded, [0]));
-    this.pending.push(PipelineSession.silenceUnhandled(p));
+    const silenced = PipelineSession.silenceUnhandled(p);
+    this.pending.push(silenced);
+    // Stage on the current command group so the next slot-pushing op
+    // (typically `execute()` for `\sendpipeline`) combines this
+    // Bind's rejection into the slot — see {@link pushCmdSlot}.
+    this.currentGroup.push(silenced);
     return Promise.resolve();
   }
 
@@ -135,10 +268,20 @@ export class PipelineSession implements Pipeline {
     // columns). The Describe op pipes its resolved fields directly onto
     // the upcoming Execute op (see enqueueDescribePortalIntoNextExecute).
     const dp = this.conn.enqueueDescribePortalIntoNextExecute();
-    this.pending.push(PipelineSession.silenceUnhandled(dp));
+    const silencedDp = PipelineSession.silenceUnhandled(dp);
+    this.pending.push(silencedDp);
+    // Stage DescribePortal on the current group too — its rejection
+    // would otherwise be invisible to the slot.
+    this.currentGroup.push(silencedDp);
     this.conn.writeRaw(Describe('P', name));
     const ep = this.conn.enqueueExecute();
     this.results.push(PipelineSession.silenceUnhandled(ep));
+    // Each Execute is one libpq-level user command (the Parse + Bind
+    // that precede it are accounted to the same PQsendQueryParams /
+    // `\sendpipeline` slot). Mirror that on `cmdSlots` so `\getresults`
+    // walks one entry per user command; the slot folds in any group
+    // ops staged by parse() / bind() / DescP above.
+    this.pushCmdSlot(ep);
     this.conn.writeRaw(Execute(name, maxRows ?? 0));
     // Don't await: the ResultSet promise resolves after Sync. It's
     // already in `results` so end() / sync() will surface it.
@@ -155,11 +298,30 @@ export class PipelineSession implements Pipeline {
   }
 
   public close(name: string): Promise<void> {
+    void this.closeRaw(name);
+    return Promise.resolve();
+  }
+
+  /**
+   * Enqueue a Close op AND register it as a user-level command slot.
+   * Resolves immediately (see {@link parseSlot} for rationale); the
+   * slot's outcome surfaces via `cmdSlots`.
+   */
+  public async closeSlot(name: string): Promise<void> {
+    const p = this.closeRaw(name);
+    const slot = PipelineSession.voidToPlaceholderResult(p);
+    this.pushCmdSlot(slot);
+    await Promise.resolve();
+  }
+
+  private closeRaw(name: string): Promise<void> {
     this.conn.startExtendedBatch();
     const p = this.conn.enqueueClose();
     this.conn.writeRaw(Close('S', name));
-    this.pending.push(PipelineSession.silenceUnhandled(p));
-    return Promise.resolve();
+    const silenced = PipelineSession.silenceUnhandled(p);
+    this.pending.push(silenced);
+    this.currentGroup.push(silenced);
+    return p;
   }
 
   public async flush(): Promise<void> {
@@ -192,6 +354,17 @@ export class PipelineSession implements Pipeline {
       notices: [],
     };
     this.results.push(Promise.resolve(syncMarker));
+    // Mirror libpq's per-command result queue: each `\syncpipeline`
+    // adds exactly one PGRES_PIPELINE_SYNC entry that `\getresults`
+    // walks past silently (counted, but not printed). See {@link cmdSlots}.
+    // SyncMarker is its own slot, so clear any half-built command
+    // group (e.g. a stray `bind()` that wasn't followed by `execute()`)
+    // before pushing — otherwise the SyncMarker slot would inherit
+    // stale group rejections. Spliced promises were already silenced
+    // and tracked on `pending`, so discarding the splice return is
+    // safe (no unhandled-rejection escape).
+    void this.currentGroup.splice(0);
+    this.cmdSlots.push(Promise.resolve(syncMarker));
     // Don't propagate a non-FATAL ErrorResponse here: upstream
     // `\syncpipeline` is silent on stderr — the server-side error
     // surfaces at `\endpipeline` time (see expected/psql_pipeline.out

@@ -2291,11 +2291,22 @@ export class PgConnection implements Connection {
       return;
     }
 
+    // Drain any ops added to the queue AFTER the initial cascade-reject
+    // (e.g. a `\sendpipeline` issued by the user once `\getresults`
+    // returned the first ErrorResponse) — those ops were never visible
+    // to the original cascade loop, but the server skipped them too
+    // because it stays in PIPELINE_ABORTED until the next Sync. Mark
+    // them as cascaded (`pipelineAborted`) rather than the real error:
+    // libpq surfaces the real error only on the OP that actually
+    // failed, and stamps every subsequent skipped op with the
+    // PGRES_PIPELINE_ABORTED marker. The cmd layer's `\getresults` /
+    // `\endpipeline` paths render the marker as
+    // `Pipeline aborted, command did not run` (no `ERROR:` prefix).
     while (driver.error !== null) {
       const head = driver.queue[0];
       if (!head || head.kind === 'sync') break;
       driver.queue.shift();
-      head.reject(driver.error);
+      head.reject(pipelineAbortedError());
     }
 
     const head = driver.queue[0];
