@@ -22,6 +22,7 @@
  * `{ status: 'error' }`.
  */
 
+import { scanSlashArgs } from '../scanner/slash.js';
 import type {
   BackslashCmdSpec,
   BackslashContext,
@@ -761,9 +762,17 @@ const printAllPset = (topt: PrintTableOpts): void => {
  * `:'foo'`, and `` `cmd` `` becomes `cmd` (backticks dropped, body kept
  * unevaluated). Stops at the next backslash so the next command isn't
  * eaten.
+ *
+ * Returns a list of `{ arg, endIdx }` entries so callers can also recover
+ * the byte position where each parsed token ends in the original `tail` —
+ * useful for splitting the rest-of-line into "consumed prefix" vs "extras
+ * we'll warn about" without re-lexing the whole thing through the proper
+ * (eval-mode) scanner.
  */
-const lexExtraArgs = (tail: string): string[] => {
-  const out: string[] = [];
+type RawArg = { arg: string; endIdx: number };
+
+const lexRawArgs = (tail: string): RawArg[] => {
+  const out: RawArg[] = [];
   let i = 0;
   const isSpace = (c: string | undefined): boolean =>
     c === ' ' ||
@@ -823,7 +832,7 @@ const lexExtraArgs = (tail: string): string[] => {
       arg += c;
       i++;
     }
-    out.push(arg);
+    out.push({ arg, endIdx: i });
   }
   return out;
 };
@@ -854,12 +863,45 @@ export const cmdPset: BackslashCmdSpec = {
   name: 'pset',
   helpKey: 'pset',
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
-    const option = ctx.nextArg('normal');
+    // Upstream `exec_command_pset` calls `psql_scan_slash_option` twice
+    // (with `OT_NORMAL`, `evaluate=true`) for option + value, then loops
+    // `psql_scan_slash_option(scan_state, OT_NORMAL, NULL, false)` with
+    // `evaluate=false` over the remainder to emit the "extra argument …
+    // ignored" warnings. Our `BackslashContext.nextArg('normal')` route
+    // pre-parses the entire `rawArgs` through `scanSlashArgs` on the
+    // first call, which evaluates EVERY backtick — so an invocation
+    // like `\pset fieldsep | \`nosuchcommand\` :foo` would spawn the
+    // shell for `nosuchcommand` even though upstream never runs it.
+    //
+    // To match upstream's no-eval semantics we split the lex in two:
+    //   1. Walk `rawArgs` no-eval with {@link lexRawArgs} to recover the
+    //      byte boundary that ends arg #2 (option + value).
+    //   2. Re-parse the truncated prefix with `scanSlashArgs('normal')`
+    //      so option/value get their proper `:var` / `` ` ` `` expansion.
+    //   3. Walk the tail with `lexRawArgs` no-eval and emit one
+    //      "extra argument … ignored" warning per token, using the raw
+    //      (unexpanded) text so `:foo` stays `:foo` and `` `cmd` ``
+    //      collapses to `cmd` without running.
+    const rawEntries = lexRawArgs(ctx.rawArgs);
+    if (rawEntries.length === 0) {
+      printAllPset(ctx.settings.popt.topt);
+      return Promise.resolve({ status: 'ok' });
+    }
+    // Slice rawArgs up to the end of arg #2 (or arg #1 if only one was
+    // provided) and feed THAT to the eval-mode scanner. Anything past
+    // that boundary lives in the no-eval extras zone.
+    const headEndIdx =
+      rawEntries.length >= 2 ? rawEntries[1].endIdx : rawEntries[0].endIdx;
+    const headSlice = ctx.rawArgs.slice(0, headEndIdx);
+    const varLookup = (name: string): string | undefined =>
+      ctx.settings.vars.get(name);
+    const headArgs = scanSlashArgs(headSlice, 'normal', varLookup);
+    const option = headArgs[0] ?? null;
     if (option === null) {
       printAllPset(ctx.settings.popt.topt);
       return Promise.resolve({ status: 'ok' });
     }
-    const value = ctx.nextArg('normal');
+    const value = headArgs[1] ?? null;
     // Under `--quiet` / `\set QUIET on`, upstream `exec_command_pset`
     // (and the printPsetInfo helper it delegates to) suppresses the
     // confirmation lines like `Null display is "…".` and `Tuples only
@@ -872,13 +914,12 @@ export const cmdPset: BackslashCmdSpec = {
       ctx.cmdName,
       ctx.settings.quiet,
     );
-    // Drain extras. Re-lex `rawArgs` raw so the warning text is the
-    // original (unexpanded, un-executed) token; the option/value were
-    // already consumed by the two `nextArg` calls above, so we skip
-    // the first two raw tokens and emit a warning per remaining one.
-    const rawTokens = lexExtraArgs(ctx.rawArgs);
-    for (let i = 2; i < rawTokens.length; i++) {
-      writeErr(`\\${ctx.cmdName}: extra argument "${rawTokens[i]}" ignored\n`);
+    // Drain extras. Index 2+ in the no-eval lex are the tokens past
+    // option+value; emit one warning per raw token.
+    for (let i = 2; i < rawEntries.length; i++) {
+      writeErr(
+        `\\${ctx.cmdName}: extra argument "${rawEntries[i].arg}" ignored\n`,
+      );
     }
     return Promise.resolve(result);
   },
