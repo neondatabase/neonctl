@@ -822,12 +822,13 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       if (line === null) break;
       if (line.replace(/\s+$/, '') === '\\.') break;
       lines.push(line);
-      // ECHO=all echoes COPY data lines too (upstream `--echo-all` does
-      // the same: each non-empty input line is echoed before any
-      // protocol-level handling).
-      if (ctx.settings.echo === 'all') {
-        ctx.stdout.write(line + '\n');
-      }
+      // Upstream `handleCopyIn` in copy.c reads COPY data lines straight
+      // off `copystream` with `fgets` and ships them to the server via
+      // `PQputCopyData` — there is no `--echo-all` branch on this path.
+      // Suppressing the echo here keeps the COPY-FROM-STDIN data out of
+      // the echo stream, matching vanilla: only the surrounding SQL
+      // statement (`COPY ... FROM STDIN`) lands in stdout, not its
+      // payload.
     }
     // Each line plus a trailing newline — matches the byte stream COPY
     // expects on its input side.
@@ -1113,13 +1114,42 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       }
       if (line === null) break; // EOF
 
+      // Upstream `mainloop.c` MainLoop():
+      //
+      //   if (line[0] == '\0' && !psql_scan_in_quote(scan_state))
+      //   {
+      //       free(line);
+      //       continue;
+      //   }
+      //
+      // I.e., bare-empty lines are skipped entirely (no echo, no scanner
+      // pass) UNLESS the scanner is mid-quote (single-, double-, dollar-,
+      // or block-comment continuation). Inside a quote we keep the empty
+      // line so it lands in the assembled query buffer (e.g. a quoted
+      // identifier `"ab\n\nc"` spans multiple input lines including blanks),
+      // and `--echo-all` surfaces it so the echo stream tracks the source
+      // verbatim.
+      //
+      // `psql_scan_in_quote` returns true for all start_states except
+      // INITIAL and xqs — we approximate with the scanner-state fields
+      // that track each quoted construct. `parenDepth` is intentionally
+      // omitted (upstream doesn't count it as in-quote).
+      const scanInQuote =
+        scanState.inBlockComment > 0 ||
+        scanState.inSingleQuote ||
+        scanState.inDoubleQuote ||
+        scanState.dollarTag !== null;
+      if (line.length === 0 && !scanInQuote) {
+        continue;
+      }
+
       // 2'. ECHO=all — upstream `--echo-all` / `\set ECHO all` echoes every
-      // non-empty input line to stdout *before* it's processed, including
-      // comments. Pure-blank lines are skipped (matches `MainLoop()`'s
-      // `echo_hidden` branch in `mainloop.c`: the scanner consumes them
-      // as no-op without surfacing to the echo path). ECHO=queries echoes
-      // only completed queries — handled separately by the exec path.
-      if (ctx.settings.echo === 'all' && line.trim().length > 0) {
+      // input line to stdout *before* it's processed. Blank lines outside a
+      // quote already short-circuited above, so a blank reaching here means
+      // the scanner is mid-quote and the line is part of the assembled
+      // statement. ECHO=queries echoes only completed queries — handled
+      // separately by the exec path.
+      if (ctx.settings.echo === 'all') {
         ctx.stdout.write(line + '\n');
       }
 
