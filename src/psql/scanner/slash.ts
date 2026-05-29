@@ -156,6 +156,22 @@ const tryConsumeVarSubstitution = (
   if (varLookup === undefined) return null;
   if (s[i] !== ':') return null;
 
+  // :{?varname} — defined-variable test, emits literal TRUE / FALSE.
+  // Mirrors upstream `psqlscanslash.l`'s `:\{\?{variable_char}+\}` rule
+  // (calls `psqlscan_test_variable`). A malformed expression (missing
+  // closing `}` or empty name) falls through to `null` so the caller emits
+  // the literal `:` and continues.
+  if (s[i + 1] === '{' && s[i + 2] === '?') {
+    let j = i + 3;
+    while (j < s.length && isVarChar(s[j])) j++;
+    if (j > i + 3 && s[j] === '}') {
+      const name = s.slice(i + 3, j);
+      const value = varLookup(name);
+      return { end: j + 1, text: value !== undefined ? 'TRUE' : 'FALSE' };
+    }
+    return null;
+  }
+
   // :"varname" — SQL identifier quote
   if (s[i + 1] === '"') {
     let j = i + 2;

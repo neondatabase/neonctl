@@ -1197,4 +1197,38 @@ describe('scanSql — :NAME variable substitution', () => {
     if (r.kind !== 'semicolon') return;
     expect(r.sql).toBe('SELECT (99);');
   });
+
+  // :{?NAME} — upstream's defined-variable form, fired by SQL contexts
+  // (psqlscan.l line 757) the same way it fires inside slash arguments.
+  test(':{?NAME} emits TRUE when the variable is defined', () => {
+    const r = scanSql('SELECT :{?i} AS x;', undefined, lookup({ i: '1' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT TRUE AS x;');
+  });
+
+  test(':{?NAME} emits FALSE when the variable is unset', () => {
+    const r = scanSql(
+      'SELECT NOT :{?no_such_var} AS y;',
+      undefined,
+      lookup({}),
+    );
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT NOT FALSE AS y;');
+  });
+
+  test(':{?NAME} inside a single-quoted string is NOT substituted', () => {
+    const r = scanSql("SELECT ':{?i}';", undefined, lookup({ i: '1' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe("SELECT ':{?i}';");
+  });
+
+  test(':{?} malformed (empty name) emits literal text', () => {
+    const r = scanSql('SELECT :{?};', undefined, lookup({ i: '1' }));
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toBe('SELECT :{?};');
+  });
 });

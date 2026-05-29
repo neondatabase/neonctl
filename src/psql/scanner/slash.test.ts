@@ -145,6 +145,23 @@ describe('scanSlashArgs — variable substitution', () => {
       'premidpost',
     ]);
   });
+
+  // :{?NAME} — defined-variable test, also recognised in slash-arg context
+  // (psqlscanslash.l line 282). Required so `\if :{?i}` resolves on the
+  // scanner side rather than via cmd_cond's post-join regex fallback.
+  test(':{?NAME} emits TRUE when the variable is defined', () => {
+    expect(scanSlashArgs(':{?i}', 'normal', lookup({ i: '1' }))).toEqual([
+      'TRUE',
+    ]);
+  });
+
+  test(':{?NAME} emits FALSE when the variable is unset', () => {
+    expect(scanSlashArgs(':{?nope}', 'normal', lookup({}))).toEqual(['FALSE']);
+  });
+
+  test(':{?} with empty NAME is emitted as literal text', () => {
+    expect(scanSlashArgs(':{?}', 'normal', lookup({}))).toEqual([':{?}']);
+  });
 });
 
 describe('scanSlashArgs — filepipe mode', () => {

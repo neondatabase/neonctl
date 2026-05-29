@@ -292,4 +292,30 @@ describe('tryConsumeVarSubstitution', () => {
     );
     expect(r).toEqual({ end: 8, text: 'X' });
   });
+
+  // :{?NAME} — defined-variable test (upstream `psqlscan_test_variable`).
+  test(':{?NAME} emits TRUE when the variable is defined', () => {
+    const r = tryConsumeVarSubstitution(':{?i}', 0, lookup({ i: '1' }));
+    expect(r).toEqual({ end: 5, text: 'TRUE' });
+  });
+
+  test(':{?NAME} emits FALSE when the variable is unset', () => {
+    const r = tryConsumeVarSubstitution(':{?nope}', 0, lookup({}));
+    expect(r).toEqual({ end: 8, text: 'FALSE' });
+  });
+
+  test(':{?NAME} treats empty string as defined (TRUE)', () => {
+    const r = tryConsumeVarSubstitution(':{?empty}', 0, lookup({ empty: '' }));
+    expect(r).toEqual({ end: 9, text: 'TRUE' });
+  });
+
+  test(':{?} with empty NAME returns null', () => {
+    expect(tryConsumeVarSubstitution(':{?}', 0, lookup({}))).toBeNull();
+  });
+
+  test(':{?NAME with no closing brace returns null', () => {
+    expect(
+      tryConsumeVarSubstitution(':{?foo', 0, lookup({ foo: 'x' })),
+    ).toBeNull();
+  });
 });

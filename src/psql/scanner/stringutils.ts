@@ -306,11 +306,14 @@ export const quoteSqlIdent = (value: string): string => {
 // Variable-name character class. Upstream's `variable_char` flex rule matches
 // `[A-Za-z0-9_\x80-\xff]+`. We do not allow a leading digit (matches
 // `VarStore`'s `[A-Za-z_][A-Za-z0-9_]*` validation rule) — a token like `:1`
-// is not a substitution. The literal `\xff` end-of-range char is written as
-// `ÿ` (U+00FF) in JS regex source — equivalent and avoids escape-handling
-// quirks across editors.
-const VAR_NAME_CONT_RE = /[A-Za-z0-9_-ÿ]/;
-const VAR_NAME_START_RE = /[A-Za-z_-ÿ]/;
+// is not a substitution. The high-byte range `\x80-\xff` is spelled with
+// explicit `\x..` escapes so the `_` and the range stay separated; an earlier
+// `[A-Za-z0-9_-ÿ]` form silently included `{`, `|`, `}`, `~` via the
+// dash-range bridge between `_` (0x5F) and `ÿ` (0xFF), which broke the
+// `:{?NAME}` brace-form lookup whose closing `}` would be eaten as part of
+// the name.
+const VAR_NAME_CONT_RE = /[A-Za-z0-9_\x80-\xff]/;
+const VAR_NAME_START_RE = /[A-Za-z_\x80-\xff]/;
 
 const isVarNameStart = (c: string | undefined): boolean =>
   c !== undefined && VAR_NAME_START_RE.test(c);
@@ -354,6 +357,26 @@ export const tryConsumeVarSubstitution = (
   if (next === undefined) return null;
   // `::` cast operator — never a substitution.
   if (next === ':') return null;
+
+  // :{?NAME} — defined-variable test. Emits literal `TRUE` if the named
+  // variable is set, `FALSE` otherwise. Mirrors upstream's
+  // `psqlscan_test_variable` (flex rule `:\{\?{variable_char}+\}` in
+  // `psqlscan.l`). Unlike the other forms we recognise here, an unset variable
+  // is NOT echoed back as a literal — the whole point of `:{?NAME}` is to
+  // produce a boolean regardless of definedness. A malformed brace expression
+  // (missing closing `}`, empty NAME, or non-variable_char content) returns
+  // `null` so the caller emits the literal `:` and continues, matching the
+  // upstream flex fallback rule `:\{\?{variable_char}*`.
+  if (next === '{' && s[i + 2] === '?') {
+    let j = i + 3;
+    while (j < s.length && isVarNameCont(s[j])) j++;
+    if (j > i + 3 && s[j] === '}') {
+      const name = s.slice(i + 3, j);
+      const value = varLookup(name);
+      return { end: j + 1, text: value !== undefined ? 'TRUE' : 'FALSE' };
+    }
+    return null;
+  }
 
   // :"NAME" — SQL identifier quote
   if (next === '"') {
