@@ -163,3 +163,7 @@ To run commands from the local build, replace the `neonctl` command with `node d
 ```shell
 node dist branches --help
 ```
+
+## Releasing
+
+Maintainers: see [`RELEASING.md`](./RELEASING.md) for the two-stage publish flow.
