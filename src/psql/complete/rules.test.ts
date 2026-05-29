@@ -972,3 +972,37 @@ describe('findCompletions: CREATE <prefix> picks sub-object keyword', () => {
     expect(r.candidates).toEqual(['TYPE']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CREATE TABLE <prefix> — words_after_create hint: surface existing table
+// names so the user can pick a similar one. Mirrors 010_tab_completion.pl
+// line 344 `CREATE TABLE mytab<tab><tab>` → `mytab123 mytab246` listing.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: CREATE TABLE name hints via existing tables', () => {
+  it('CREATE TABLE mytab → mytab123, mytab246 (existing-table hint)', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_class': ['mytab123', 'mytab246'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['CREATE', 'TABLE'], 'mytab', ctx);
+    expect(r.candidates).toContain('mytab123');
+    expect(r.candidates).toContain('mytab246');
+  });
+
+  it('CREATE TABLE → all existing tables (empty prefix)', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_class': ['users', 'orders'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['CREATE', 'TABLE'], '', ctx);
+    expect(r.candidates).toContain('users');
+    expect(r.candidates).toContain('orders');
+  });
+
+  it('CREATE TABLE returns empty list without a connection', async () => {
+    const ctx = { settings: makeSettings(null) };
+    const r = await findCompletions(['CREATE', 'TABLE'], 'foo', ctx);
+    expect(r.candidates).toEqual([]);
+  });
+});

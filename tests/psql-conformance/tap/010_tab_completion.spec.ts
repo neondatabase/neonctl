@@ -640,12 +640,20 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
     await checkCompletion('CREATE TY\t', /CREATE TYPE /);
   });
 
-  // words_after_create (line 344). CREATE TABLE name suggestion uses the
-  // table list as a hint set; our rule returns no candidates for
-  // CREATE TABLE.
-  it.todo(
-    'check words_after_create — CREATE TABLE mytab<tab><tab> → mytab123 + mytab246 (line 344; needs words_after_create rule)',
-  );
+  // words_after_create (line 344). CREATE TABLE <prefix> surfaces
+  // existing table names as a HINT (the user can pick a similar name
+  // as a starting point). The rule mirrors upstream's
+  // `words_after_create` fallback dispatching to `Query_for_list_of_tables`
+  // when the prev_wd is `TABLE`.
+  it('check words_after_create — CREATE TABLE mytab<tab><tab> → mytab123 + mytab246 (line 344)', async () => {
+    // First Tab inserts the common prefix `mytab`, second prints the
+    // candidate listing below the prompt.
+    h.clear();
+    sendKeys(h, 'CREATE TABLE mytab\t\t\t');
+    await new Promise<void>((r) => setTimeout(r, 500));
+    const buf = h.clean();
+    expect(buf).toMatch(/mytab123\s+mytab246/);
+  });
 
   // VersionedQuery (line 352). Two-step completion DROP PUBLIC<tab> →
   // DROP PUBLICATION, then publication name. We have the publication

@@ -1965,8 +1965,15 @@ const sqlRules = async (
     };
   }
   if (TailMatches(prevWords, ['CREATE', 'TABLE'])) {
-    // Free-form table name; no completion.
-    return { candidates: [] };
+    // Upstream's `words_after_create` fallback (tab-complete.in.c
+    // ~lines 2062-2082) runs `Query_for_list_of_tables` when the
+    // word immediately before the cursor is `TABLE`. The intent is to
+    // surface existing table names as a HINT — the user can pick a
+    // similar name as a starting point. The completion is non-binding;
+    // psql doesn't actually insert one of these on a single Tab if
+    // the prefix is ambiguous, but the listing on Tab-Tab matches
+    // upstream's `qr/mytab123 +mytab246/`.
+    return completeTables();
   }
   // Inside CREATE TABLE column-list parens: `<col_name> <TAB>` → types.
   if (
