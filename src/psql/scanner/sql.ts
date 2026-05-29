@@ -441,11 +441,31 @@ const computePromptStatus = (state: ScanState): PromptStatus => {
  * Unknown variables echo the literal `:NAME` form. Omit `varLookup` to
  * disable substitution; pre-existing call sites that pre-date the API gain
  * keep their literal-`:NAME` behaviour.
+ *
+ * `slashCmdMode` (optional): when supplied, the scanner consults it after
+ * peeling the command name off a `\cmd` boundary to decide whether the
+ * argument run should swallow internal `\` characters (whole-line / filepipe
+ * commands) or terminate at the next `\` (normal commands). Upstream's
+ * `psqlscanslash.l` flips state between `<xslasharg>` and `<xslashwholeline>`
+ * for the same reason: `\!`, `\sf`, `\sv`, `\copy`, and the `OT_FILEPIPE`
+ * `\w` / `\o` slurp the rest of the line verbatim, while normal commands
+ * stop at the next `\`. Returning `'whole-line'` consumes through end-of-line;
+ * returning `'filepipe'` mirrors the same shape (`\w |/no/such/file \else`
+ * needs `\else` captured as argument text); `'normal'` or `undefined` keeps
+ * the legacy `\`-boundary behaviour. The callback is invoked at most once
+ * per backslash dispatch.
  */
+export type SlashCmdArgMode = 'normal' | 'whole-line' | 'filepipe';
+
+export type SlashCmdModeLookup = (
+  cmdName: string,
+) => SlashCmdArgMode | undefined;
+
 export const scanSql = (
   input: string,
   state?: ScanState,
   varLookup?: VarLookup,
+  slashCmdMode?: SlashCmdModeLookup,
 ): ScanResult => {
   // Local working copy; we mutate freely and clone at exit.
   const st = cloneState(state ?? initialScanState());
@@ -714,12 +734,33 @@ export const scanSql = (
         cmdEnd = i;
       }
       const cmd = input.slice(i, cmdEnd);
-      // Rest of the line — up to a newline OR the next unquoted backslash
-      // command on the same line. Mirrors upstream `psqlscanslash.l`'s
-      // <xslasharg> exit-on-`\` rule: a second backslash on the same line
-      // STARTS a new slash command and terminates the previous one's
-      // arg list. We track minimal quote state (single, double, back) so
-      // backslashes inside arg quotes don't trigger the boundary.
+      // Determine the command's argument-mode hint (if any). Upstream's
+      // psqlscanslash.l flips between `<xslasharg>` (default; breaks on `\`)
+      // and `<xslashwholeline>` (no `\` break) based on `option_type`. We
+      // recreate that decision here so commands declared with `argMode:
+      // 'whole-line'` (`\!`, `\sf`, `\sv`, `\copy`, `\help`, etc.) capture
+      // embedded `\else` / `\endif` etc. as plain argument text instead of
+      // having the scanner treat them as a new command boundary. Filepipe
+      // commands enter whole-line mode only when the first non-whitespace
+      // character is `|` — matching upstream's `<xslashargstart>` rule.
+      const argMode = slashCmdMode?.(cmd);
+      let consumeWholeLine = argMode === 'whole-line';
+      if (argMode === 'filepipe') {
+        // Skip leading whitespace inside the arg; if the next char is `|`,
+        // upstream switches into `<xslashwholeline>` for the rest of the line.
+        let p = cmdEnd;
+        while (p < input.length && (input[p] === ' ' || input[p] === '\t')) {
+          p++;
+        }
+        if (input[p] === '|') consumeWholeLine = true;
+      }
+      // Rest of the line — up to a newline OR (for normal-mode commands)
+      // the next unquoted backslash command on the same line. Mirrors
+      // upstream `psqlscanslash.l`'s <xslasharg> exit-on-`\` rule: a second
+      // backslash on the same line STARTS a new slash command and
+      // terminates the previous one's arg list. We track minimal quote
+      // state (single, double, back) so backslashes inside arg quotes
+      // don't trigger the boundary.
       //
       // Upstream special: `\\` (two consecutive backslashes) is the
       // "flush-and-continue" separator. It terminates the current command's
@@ -729,6 +770,12 @@ export const scanSql = (
       // (and the dispatcher would log "invalid command \"), spuriously
       // doubling diagnostics for shapes like `\gset pref \\ \echo foo`.
       // See psqlscanslash.l <xslasharg> rule for the upstream equivalent.
+      //
+      // Whole-line mode (`\!`, `\sf`, `\sv`, `\help`, `\copy`, and filepipe
+      // commands with a leading `|`) skips the `\` boundary entirely:
+      // upstream's `<xslashwholeline>` state only matches `{space}+` and
+      // `{other}`, with no rule for `\` — so `\` characters end up in the
+      // ECHO sink as plain argument text.
       let restEnd = cmdEnd;
       let inSingle = false;
       let inDouble = false;
@@ -743,6 +790,12 @@ export const scanSql = (
         input[restEnd] !== '\r'
       ) {
         const ch = input[restEnd];
+        if (consumeWholeLine) {
+          // Whole-line / filepipe-pipe path: never break on `\`. Just walk
+          // to end of line so the entire tail lands in `rest`.
+          restEnd++;
+          continue;
+        }
         if (inSingle) {
           // C-style `\'` escape inside single quotes.
           if (ch === '\\' && input[restEnd + 1] !== undefined) {
@@ -899,6 +952,7 @@ export const scanSql = (
 export const splitStatements = (
   input: string,
   varLookup?: VarLookup,
+  slashCmdMode?: SlashCmdModeLookup,
 ): string[] => {
   const out: string[] = [];
   let remaining = input;
@@ -908,7 +962,7 @@ export const splitStatements = (
   let safety = 0;
   while (remaining.length > 0) {
     if (++safety > input.length + 10) break;
-    const r = scanSql(remaining, state, varLookup);
+    const r = scanSql(remaining, state, varLookup, slashCmdMode);
     if (r.kind === 'semicolon') {
       // When the caller requested variable substitution, the scanner has
       // already applied it to `r.sql` — we must push the transformed text,

@@ -960,6 +960,110 @@ describe('scanSql — `\\\\` separator inside slash args', () => {
 });
 
 // ---------------------------------------------------------------------------
+// `slashCmdMode` callback — whole-line and filepipe argument capture.
+//
+// Upstream's psqlscanslash.l flips between `<xslasharg>` and
+// `<xslashwholeline>` depending on the command's `OT_*` declaration. The
+// scanner here mirrors that via the optional `slashCmdMode` lookup so
+// commands like `\!`, `\sf`, `\sv`, `\copy`, `\help` (whole-line) and `\w`,
+// `\o` (filepipe with leading `|`) capture embedded `\else` / `\endif` /
+// `\next` as plain argument text rather than treating them as fresh
+// backslash commands.
+// ---------------------------------------------------------------------------
+
+describe('scanSql — slashCmdMode whole-line / filepipe arg capture', () => {
+  const wholeLineLookup = (cmd: string) =>
+    cmd === '!' || cmd === 'sf' || cmd === 'sv' ? 'whole-line' : undefined;
+  const filepipeLookup = (cmd: string) =>
+    cmd === 'w' || cmd === 'o' ? 'filepipe' : undefined;
+
+  test('default (no lookup) keeps the legacy `\\`-boundary behaviour', () => {
+    const r = scanSql('\\! whole_line \\endif');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('!');
+    expect(r.rest).toBe(' whole_line ');
+  });
+
+  test('whole-line `\\!` captures embedded `\\else` as argument text', () => {
+    const r = scanSql(
+      '\\! whole_line \\endif',
+      undefined,
+      undefined,
+      wholeLineLookup,
+    );
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('!');
+    expect(r.rest).toBe(' whole_line \\endif');
+  });
+
+  test('whole-line `\\sf` captures embedded `\\next`', () => {
+    const r = scanSql(
+      '\\sf my_fn \\next',
+      undefined,
+      undefined,
+      wholeLineLookup,
+    );
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('sf');
+    expect(r.rest).toBe(' my_fn \\next');
+  });
+
+  test('whole-line stops at newline', () => {
+    const input = '\\! whole_line \\endif\nSELECT 1;';
+    const r = scanSql(input, undefined, undefined, wholeLineLookup);
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('!');
+    expect(r.rest).toBe(' whole_line \\endif');
+    // The `\n` is not consumed; the next scan picks it up cleanly.
+    expect(input.slice(r.consumed).startsWith('\n')).toBe(true);
+  });
+
+  test('filepipe `\\w` with leading `|` slurps the rest of the line', () => {
+    const r = scanSql(
+      '\\w |/no/such/file \\else',
+      undefined,
+      undefined,
+      filepipeLookup,
+    );
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('w');
+    expect(r.rest).toBe(' |/no/such/file \\else');
+  });
+
+  test('filepipe `\\w` without leading `|` still breaks on `\\`', () => {
+    const r = scanSql(
+      '\\w out.txt \\next',
+      undefined,
+      undefined,
+      filepipeLookup,
+    );
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('w');
+    expect(r.rest).toBe(' out.txt ');
+  });
+
+  test('non-whole-line command with the lookup keeps default boundary', () => {
+    // `\echo` is not in the whole-line set, so `\next` still breaks the arg.
+    const r = scanSql(
+      '\\echo hi \\next',
+      undefined,
+      undefined,
+      wholeLineLookup,
+    );
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('echo');
+    expect(r.rest).toBe(' hi ');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // <xqs> quote-continuation behavior — scanner-level state assertions.
 // ---------------------------------------------------------------------------
 

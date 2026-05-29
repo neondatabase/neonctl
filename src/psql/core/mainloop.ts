@@ -881,6 +881,29 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   const sqlVarLookup = (name: string): string | undefined =>
     ctx.settings.vars.get(name);
 
+  // Resolves a backslash-command's argument-mode hint so scanSql can
+  // consume the rest of the line correctly for whole-line / filepipe
+  // commands. Upstream's psqlscanslash.l flips between `<xslasharg>` and
+  // `<xslashwholeline>` based on the same hint — without it, the SQL
+  // scanner would terminate a `\!` or `\sf` arg at the next `\` (e.g.
+  // `\! whole_line \endif` would split into `\!` + `\endif`).
+  const slashCmdMode = (
+    cmdName: string,
+  ): 'normal' | 'whole-line' | 'filepipe' | undefined => {
+    const spec = ctx.registry.lookup(cmdName);
+    if (!spec) return undefined;
+    if (spec.argMode === 'whole-line') return 'whole-line';
+    // Backslash registry currently only distinguishes whole-line vs the
+    // default `lex` mode. Filepipe is signalled per-call via
+    // `nextArg('filepipe')` inside cmd implementations rather than the
+    // spec, so we infer it from a small allow-list of commands that
+    // upstream declares as `OT_FILEPIPE` (`\w` and `\o`). Without this,
+    // `\w |/no/such/file \else` would split off `\else` as a separate
+    // command instead of capturing it as the file's whole-line arg.
+    if (cmdName === 'w' || cmdName === 'o') return 'filepipe';
+    return undefined;
+  };
+
   /**
    * Strip block / line comments cheaply before scanning so a COPY-shaped
    * comment doesn't trigger pre-buffering or sink wiring.
@@ -957,7 +980,7 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   const processChunk = async (chunk: string): Promise<void> => {
     let working = chunk;
     while (working.length > 0) {
-      const result = scanSql(working, scanState, sqlVarLookup);
+      const result = scanSql(working, scanState, sqlVarLookup, slashCmdMode);
       scanState = result.nextState;
 
       if (result.kind === 'semicolon') {
