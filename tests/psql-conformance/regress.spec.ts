@@ -198,15 +198,22 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
         PG_ABS_SRCDIR: REGRESS_ABS_SRCDIR,
         // Mirror upstream pg_regress's process-environment seed. The
         // regression test cluster is initdb'd with these as the GUC
-        // defaults; psql inherits them via libpq so date/time literals
-        // render exactly the way the vendored expected output captured.
-        // Without `PGDATESTYLE=Postgres, MDY`, `SELECT '2000-01-01'::date`
-        // renders as `2000-01-01` (ISO) rather than the vendored
-        // `01-01-2000`. `PGTIMEZONE=PST8PDT` is harmless for psql.sql
-        // (no `now()`-style queries) but it's the upstream contract and
-        // pairs with the date style.
-        PGDATESTYLE: 'Postgres, MDY',
-        PGTIMEZONE: 'PST8PDT',
+        // defaults; the vendored expected output captures the resulting
+        // rendering. Without `datestyle=Postgres,MDY`, `SELECT
+        // '2000-01-01'::date` renders as `2000-01-01` (ISO) rather than
+        // the vendored `01-01-2000`. `timezone=PST8PDT` is harmless for
+        // psql.sql (no `now()`-style queries in scope) but pairs with
+        // the date style as the upstream contract.
+        //
+        // Real libpq picks up `PGDATESTYLE` / `PGTIMEZONE` as known
+        // env-var keys. Our neonctl psql honours only the connection-info
+        // env-var subset (PGHOST/PGPORT/PGOPTIONS/...) and would silently
+        // ignore PGDATESTYLE, so we route both through `PGOPTIONS` —
+        // libpq's general-purpose options forwarder. The startup
+        // message stamps them as GUC overrides before the first query
+        // runs, equivalent to a leading `SET datestyle = ...` but without
+        // emitting a row in `--echo-all` output.
+        PGOPTIONS: '-c datestyle=Postgres,MDY -c timezone=PST8PDT',
       },
       encoding: 'utf8',
       maxBuffer: 1024 * 1024 * 64,
