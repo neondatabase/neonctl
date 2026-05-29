@@ -134,10 +134,10 @@ describe('csvPrinter', () => {
     expect(out).toBe('a,b\n,x\ny,\n');
   });
 
-  test('ignores tuplesOnly — header is always emitted', async () => {
+  test('tuplesOnly suppresses the header row', async () => {
     const rs = makeResultSet({
       columns: [{ name: 'col' }],
-      rows: [['x']],
+      rows: [['x'], ['y']],
     });
     const out = await capture((s) =>
       csvPrinter.printQuery(
@@ -146,7 +146,22 @@ describe('csvPrinter', () => {
         s,
       ),
     );
-    expect(out).toBe('col\nx\n');
+    expect(out).toBe('x\ny\n');
+  });
+
+  test('!startTable suppresses the header row (mid-stream chunk)', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'col' }],
+      rows: [['x']],
+    });
+    const out = await capture((s) =>
+      csvPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { startTable: false }),
+        s,
+      ),
+    );
+    expect(out).toBe('x\n');
   });
 
   test('honors a custom csv_fieldsep', async () => {

@@ -13,9 +13,12 @@ import { formatNumericLocale } from './units.js';
  *   `\r` (matches the psql `\pset csv_fieldsep` check).
  * - Line ending is always `\n` regardless of `topt.recordSep`, since
  *   `print_csv_text` writes `'\n'` literally.
- * - First line is always the header (CSV ignores `tuplesOnly`; psql
- *   never honored `\t` in CSV mode).
+ * - Header row is printed only when `startTable && !tuplesOnly`
+ *   (matches `print_csv_text` — see the `start_table && !tuples_only`
+ *   guard upstream). `\pset tuples_only true` suppresses the header.
  * - No footer in CSV.
+ * - Expanded mode (`print_csv_vertical`) prints `name,value` lines and
+ *   never emits a standalone header row.
  *
  * Quoting rule (from `csv_print_field`): wrap in double quotes if the
  * value contains the separator, a `"`, `\n`, or `\r`; inside quotes,
@@ -59,7 +62,10 @@ export const csvPrinter: Printer = {
         });
       }
     } else {
-      outBuf += headers.map((h) => csvField(h, sep)).join(sep) + '\n';
+      // Header is gated on startTable && !tuplesOnly (cf. print.c).
+      if (topt.startTable && !topt.tuplesOnly) {
+        outBuf += headers.map((h) => csvField(h, sep)).join(sep) + '\n';
+      }
       for (const row of cells) {
         outBuf += row.map((c) => csvField(c, sep)).join(sep) + '\n';
       }
