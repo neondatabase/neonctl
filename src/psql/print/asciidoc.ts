@@ -6,9 +6,9 @@ import { formatNumericLocale } from './units.js';
 /**
  * AsciiDoc printer.
  *
- * Mirrors print.c `print_asciidoc_text`.
+ * Mirrors print.c `print_asciidoc_text` and `print_asciidoc_vertical`.
  *
- * Output shape:
+ * Output shape (flat):
  *   .title
  *   [options="header",cols="<l,<l,>l",frame="all",grid="all"]
  *   |====
@@ -20,6 +20,17 @@ import { formatNumericLocale } from './units.js';
  *   (N rows)
  *   ....
  *
+ * Output shape (expanded, `\pset expanded on`):
+ *   .title
+ *   [cols="h,l",frame="all",grid="all"]
+ *   |====
+ *   2+^|Record 1
+ *   <l|col1 <l|val1
+ *   <l|col2 >l|val2
+ *   ...
+ *   |====
+ *   (no row count footer)
+ *
  * - `topt.border`:
  *     0 → `,frame="none",grid="none"`
  *     1 → `,frame="none"`
@@ -27,13 +38,17 @@ import { formatNumericLocale } from './units.js';
  *   Borders outside 0..2 fall back to "no extra clause" (matches the
  *   switch with no default in print.c).
  * - Numeric columns (per the OID heuristic) get `>l`, others `<l`.
- *   Headers are always centered with `^l|`.
+ *   Headers in flat mode are centered with `^l|`. In expanded mode
+ *   header cells render with `<l|` and value cells use the alignment
+ *   letter from the data column.
  * - AsciiDoc's only structurally hostile character is `|` (it ends a
  *   cell), so the escape helper only rewrites that to `\|`. Newlines
  *   pass through — AsciiDoc continues a cell over an embedded newline.
  * - Whitespace-only cells are emitted as just `|` (with a trailing
  *   space for inter-cell separation), matching the upstream
  *   "protect against needless spaces" branch.
+ * - Expanded mode never emits the `(N rows)` footer; only user-set
+ *   footers appear (matches upstream `print_asciidoc_vertical`).
  */
 
 // INT2, INT4, INT8, FLOAT4, FLOAT8, NUMERIC, INTERVAL.
@@ -47,91 +62,176 @@ export const asciidocPrinter: Printer = {
     out: NodeJS.WritableStream,
   ): Promise<void> {
     const topt = opts.topt;
-    const tuplesOnly = topt.tuplesOnly;
-    const startTable = topt.startTable;
-    const stopTable = topt.stopTable;
-    const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
-    const title = opts.title ?? topt.title;
-    const footers = opts.footers ?? topt.footers;
+    if (topt.expanded === 'on') {
+      return printExpanded(rs, opts, out);
+    }
+    return printFlat(rs, opts, out);
+  },
+};
 
-    const headers = rs.fields.map((f) => f.name);
-    const aligns: ('l' | 'r')[] = rs.fields.map((f) =>
-      NUMERIC_OIDS.has(f.dataTypeID) ? 'r' : 'l',
-    );
-    const ncols = rs.fields.length;
-    const cells: string[][] = rs.rows.map((row) =>
-      row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
-    );
+const printFlat = (
+  rs: ResultSet,
+  opts: PrintQueryOpts,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const topt = opts.topt;
+  const tuplesOnly = topt.tuplesOnly;
+  const startTable = topt.startTable;
+  const stopTable = topt.stopTable;
+  const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
+  const title = opts.title ?? topt.title;
+  const footers = opts.footers ?? topt.footers;
 
-    let buf = '';
+  const headers = rs.fields.map((f) => f.name);
+  const aligns: ('l' | 'r')[] = rs.fields.map((f) =>
+    NUMERIC_OIDS.has(f.dataTypeID) ? 'r' : 'l',
+  );
+  const ncols = rs.fields.length;
+  const cells: string[][] = rs.rows.map((row) =>
+    row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
+  );
 
-    if (startTable) {
-      // Force a paragraph break (upstream always emits a leading "\n").
-      buf += '\n';
+  let buf = '';
 
-      if (!tuplesOnly && title) {
-        buf += '.' + title + '\n';
-      }
+  if (startTable) {
+    // Force a paragraph break (upstream always emits a leading "\n").
+    buf += '\n';
 
-      buf += '[';
-      if (!tuplesOnly) buf += 'options="header",';
-      buf += 'cols="';
-      buf += aligns.map((a) => (a === 'r' ? '>l' : '<l')).join(',');
-      buf += '"';
-      switch (topt.border) {
-        case 0:
-          buf += ',frame="none",grid="none"';
-          break;
-        case 1:
-          buf += ',frame="none"';
-          break;
-        case 2:
-          buf += ',frame="all",grid="all"';
-          break;
-        default:
-          break;
-      }
-      buf += ']\n';
-      buf += '|====\n';
-
-      if (!tuplesOnly) {
-        headers.forEach((h, idx) => {
-          if (idx !== 0) buf += ' ';
-          buf += '^l|' + escapeAsciidoc(h);
-        });
-        buf += '\n';
-      }
+    if (!tuplesOnly && title) {
+      buf += '.' + title + '\n';
     }
 
-    for (const row of cells) {
-      row.forEach((value, idx) => {
+    buf += '[';
+    if (!tuplesOnly) buf += 'options="header",';
+    buf += 'cols="';
+    buf += aligns.map((a) => (a === 'r' ? '>l' : '<l')).join(',');
+    buf += '"';
+    buf += borderClause(topt.border);
+    buf += ']\n';
+    buf += '|====\n';
+
+    if (!tuplesOnly) {
+      headers.forEach((h, idx) => {
         if (idx !== 0) buf += ' ';
-        buf += '|';
-        if (isWhitespaceOnly(value)) {
-          // The upstream code emits a trailing space only for cells
-          // that are not the last in their row.
-          if (idx !== ncols - 1) buf += ' ';
-        } else {
-          buf += escapeAsciidoc(value);
-        }
+        buf += '^l|' + escapeAsciidoc(h);
       });
       buf += '\n';
     }
+  }
 
-    buf += '|====\n';
-
-    if (stopTable && !tuplesOnly) {
-      const effective = effectiveFooters(rs, topt, footers);
-      if (effective.length > 0) {
-        buf += '\n....\n';
-        for (const f of effective) buf += f + '\n';
-        buf += '....\n';
+  for (const row of cells) {
+    row.forEach((value, idx) => {
+      if (idx !== 0) buf += ' ';
+      buf += '|';
+      if (isWhitespaceOnly(value)) {
+        // The upstream code emits a trailing space only for cells
+        // that are not the last in their row.
+        if (idx !== ncols - 1) buf += ' ';
+      } else {
+        buf += escapeAsciidoc(value);
       }
+    });
+    buf += '\n';
+  }
+
+  buf += '|====\n';
+
+  if (stopTable && !tuplesOnly) {
+    const effective = effectiveFooters(rs, topt, footers);
+    if (effective.length > 0) {
+      buf += '\n....\n';
+      for (const f of effective) buf += f + '\n';
+      buf += '....\n';
+    }
+  }
+
+  out.write(buf);
+  return Promise.resolve();
+};
+
+const printExpanded = (
+  rs: ResultSet,
+  opts: PrintQueryOpts,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const topt = opts.topt;
+  const tuplesOnly = topt.tuplesOnly;
+  const startTable = topt.startTable;
+  const stopTable = topt.stopTable;
+  const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
+  const title = opts.title ?? topt.title;
+  const footers = opts.footers ?? topt.footers;
+
+  const headers = rs.fields.map((f) => f.name);
+  const aligns: ('l' | 'r')[] = rs.fields.map((f) =>
+    NUMERIC_OIDS.has(f.dataTypeID) ? 'r' : 'l',
+  );
+  const cells: string[][] = rs.rows.map((row) =>
+    row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
+  );
+
+  let buf = '';
+
+  if (startTable) {
+    buf += '\n';
+
+    if (!tuplesOnly && title) {
+      buf += '.' + title + '\n';
     }
 
-    out.write(buf);
-    return Promise.resolve();
-  },
+    buf += '[cols="h,l"';
+    buf += borderClause(topt.border);
+    buf += ']\n';
+    buf += '|====\n';
+  }
+
+  let record = topt.prior + 1;
+  cells.forEach((row) => {
+    if (!tuplesOnly) {
+      buf += `2+^|Record ${String(record)}\n`;
+      record += 1;
+    } else {
+      buf += '2+|\n';
+    }
+    row.forEach((value, idx) => {
+      buf += '<l|' + escapeAsciidoc(headers[idx]);
+      buf += ' ' + (aligns[idx] === 'r' ? '>l' : '<l') + '|';
+      if (isWhitespaceOnly(value)) {
+        buf += ' ';
+      } else {
+        buf += escapeAsciidoc(value);
+      }
+      buf += '\n';
+    });
+  });
+
+  buf += '|====\n';
+
+  if (stopTable && !tuplesOnly) {
+    // Expanded mode does NOT emit the default "(N rows)" footer —
+    // only user-supplied footers (matches print_asciidoc_vertical).
+    if (footers && footers.length > 0) {
+      buf += '\n....\n';
+      for (const f of footers) buf += f + '\n';
+      buf += '....\n';
+    }
+  }
+
+  out.write(buf);
+  return Promise.resolve();
+};
+
+const borderClause = (border: number): string => {
+  switch (border) {
+    case 0:
+      return ',frame="none",grid="none"';
+    case 1:
+      return ',frame="none"';
+    case 2:
+      return ',frame="all",grid="all"';
+    default:
+      return '';
+  }
 };
 
 const effectiveFooters = (
