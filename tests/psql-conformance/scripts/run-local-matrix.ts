@@ -42,6 +42,13 @@ const DEFAULT_MATRIX: readonly { pg: MajorVersion; image: string }[] = [
   { pg: '18', image: 'postgres:18.0' },
 ];
 
+type PerSpecRollup = {
+  spec: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+};
+
 type PerVersionResult = {
   pg: MajorVersion;
   passed: number;
@@ -51,6 +58,7 @@ type PerVersionResult = {
   failedAny: boolean;
   errored: boolean;
   message?: string;
+  bySpec?: readonly PerSpecRollup[];
 };
 
 type Args = {
@@ -343,6 +351,7 @@ const runConformance = (
     numPassedTests?: number;
     numFailedTests?: number;
     testResults?: readonly {
+      name?: string;
       assertionResults?: readonly {
         status?: string;
         title?: string;
@@ -374,11 +383,31 @@ const runConformance = (
   // in the summary). Surfacing the count keeps the matrix output
   // honest when version-conditional specs opt out on older PGs.
   let skipped = 0;
+  const bySpec: PerSpecRollup[] = [];
   for (const tr of report.testResults ?? []) {
+    // Strip path + suffix so the rollup is "001_basic" not the full
+    // absolute path of `tap/001_basic.spec.ts`. Stays stable across
+    // runs and short enough to fit the summary table.
+    const spec = (tr.name ?? '')
+      .split('/')
+      .pop()!
+      .replace(/\.(spec|test)\.ts$/, '');
+    const rollup: PerSpecRollup = { spec, passed: 0, failed: 0, skipped: 0 };
     for (const a of tr.assertionResults ?? []) {
-      if (a.status === 'skipped' || a.status === 'pending') skipped += 1;
+      if (a.status === 'passed') rollup.passed += 1;
+      else if (a.status === 'failed') rollup.failed += 1;
+      else if (a.status === 'skipped' || a.status === 'pending') {
+        rollup.skipped += 1;
+        skipped += 1;
+      }
     }
+    bySpec.push(rollup);
   }
+  // Stable ordering: failures first (visibility), then by spec name.
+  bySpec.sort((a, b) => {
+    if (a.failed !== b.failed) return b.failed - a.failed;
+    return a.spec.localeCompare(b.spec);
+  });
 
   // Write the full report alongside the cwd for triage.
   const persistedDir = join(process.cwd(), 'tmp', 'psql-conformance');
@@ -400,6 +429,7 @@ const runConformance = (
     total,
     failedAny,
     errored: false,
+    bySpec,
   };
 };
 
@@ -417,6 +447,18 @@ const renderSummary = (results: readonly PerVersionResult[]): string => {
       `  ${r.pg.padEnd(4)}  ${String(r.total).padStart(6)}  ${String(r.passed).padStart(7)}  ${String(r.failed).padStart(7)}  ${String(r.skipped).padStart(8)}  ${status}`,
     );
     if (r.message) lines.push(`        └─ ${r.message}`);
+    // Per-spec breakdown. Only printed when there's a failure OR the
+    // spec has at least one skipped/pending — keeps the summary tight
+    // in the all-green-no-skips case while still surfacing what's
+    // skipped so the aggregate "passed" can be interpreted honestly.
+    for (const s of r.bySpec ?? []) {
+      if (s.failed === 0 && s.skipped === 0) continue;
+      const parts: string[] = [];
+      parts.push(`pass=${s.passed}`);
+      if (s.failed > 0) parts.push(`fail=${s.failed}`);
+      if (s.skipped > 0) parts.push(`skip=${s.skipped}`);
+      lines.push(`        └─ ${s.spec.padEnd(28)} ${parts.join(' ')}`);
+    }
   }
   lines.push('');
   lines.push(
