@@ -509,23 +509,22 @@ describe('sendQuery — FETCH_COUNT', () => {
   });
 
   test('FETCH_COUNT after a prior backslash line: sqlText trimmed and LINE counter starts at 1', async () => {
-    // Our mainloop carries a `\n` over from prior backslash-only lines
-    // (upstream's mainloop.c strips that; ours doesn't — yet). So the SQL
-    // passed in here looks like `\nSELECT error;`. We sent
-    // `DECLARE _psql_cursor NO SCROLL CURSOR FOR \nSELECT error` to the
-    // server; the position points at the `error` token inside the wrapper.
-    // After capture, `lastErrorResult.sqlText` must be the trimmed form
-    // (`SELECT error;`) so `\errverbose` renders `LINE 1: SELECT error;`
-    // — matching upstream where the blank line is invisible.
+    // Our mainloop carries a `\n` over from prior backslash-only lines.
+    // `sendQuery` strips that prelude up-front before the wrap so the wire
+    // sees `DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT error` and the
+    // server's reported position lines up with the user's `SELECT error;`
+    // coordinates. `lastErrorResult.sqlText` must reflect the trimmed form
+    // so `\errverbose` renders `LINE 1: SELECT error;` — matching upstream
+    // where the blank line is invisible.
     const declaredSql =
-      'DECLARE _psql_cursor NO SCROLL CURSOR FOR \nSELECT error';
+      'DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT error';
     const errorTokenPosInDeclare = declaredSql.indexOf('error') + 1;
     const err = Object.assign(new Error('column "error" does not exist'), {
       severity: 'ERROR',
       code: '42703',
       position: String(errorTokenPosInDeclare),
     });
-    const canned = new Map<string, Canned>([[declaredSql.trim(), err]]);
+    const canned = new Map<string, Canned>([[declaredSql, err]]);
     const { ctx, stderr } = buildCtxWithBuffers({
       canned,
       settingsOverride: (s) => {
@@ -738,10 +737,10 @@ describe('sendQuery — errors', () => {
     // Mainloop's queryBuf may carry leading whitespace + `--` comments
     // (upstream's psqlscan suppresses these from query_buf until non-
     // whitespace content arrives; our scanner accumulates verbatim).
-    // The STATEMENT echo must match upstream's bare form anyway, so the
-    // sendQuery tail strips leading whitespace + comments before printing.
+    // `sendQuery` strips the prelude up-front so the wire send and STATEMENT
+    // echo are both `SELECT bad;\n` — the canned key matches that shape.
     const noisySql = '-- leading comment\n\n  -- another\nSELECT bad;\n';
-    const canned = new Map<string, Canned>([[noisySql.trim(), new Error('x')]]);
+    const canned = new Map<string, Canned>([['SELECT bad;', new Error('x')]]);
     const { ctx, stderr } = buildCtxWithBuffers({
       canned,
       settingsOverride: (s) => {

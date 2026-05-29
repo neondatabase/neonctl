@@ -109,7 +109,11 @@ import {
   lookupPrepared,
   stagedNamedBindPresent,
 } from './cmd_pipeline.js';
-import { captureLastError, refreshErrorVars } from '../core/common.js';
+import {
+  captureLastError,
+  refreshErrorVars,
+  stripLeadingCommentsAndWS,
+} from '../core/common.js';
 
 // ---------------------------------------------------------------------------
 // Query-output (queryFout) stash.
@@ -344,71 +348,9 @@ const UPSTREAM_SPECIAL_VAR_NAMES: ReadonlySet<string> = new Set([
 const isSpeciallyTreatedVar = (settings: PsqlSettings, name: string): boolean =>
   settings.vars.hasSubstituteHook(name) || UPSTREAM_SPECIAL_VAR_NAMES.has(name);
 
-/**
- * Strip leading whitespace and `--` line / slash-star block comments from
- * `sql`. Mirrors what upstream psql's scanner advances past before handing
- * a statement to `PQexec` — the server-reported error `position` is a
- * 1-based offset into THAT trimmed buffer, so the `LINE N:` re-print
- * computed from `count('\n')` in `sql.slice(0, position - 1)` aligns with
- * vanilla output only when the same leading prelude is stripped here too.
- *
- * Without this, queryBuf accumulated across `\bind` re-entries carries the
- * preceding blank lines + `-- comment` lines, and the server-relative
- * position (which points inside the stripped server-side buffer) lands on
- * a line index that's offset by however many comment lines preceded the
- * SELECT — producing `LINE 3: SELECT foo` where vanilla emits `LINE 1`.
- *
- * Block comments support nested depths (PG extension). Embedded comments
- * mid-statement are intentionally NOT stripped — they participate in the
- * line count of the executing statement, same as upstream.
- */
-const stripLeadingCommentsAndWS = (sql: string): string => {
-  let i = 0;
-  const n = sql.length;
-  while (i < n) {
-    const c = sql.charCodeAt(i);
-    // Whitespace per psql_scan: space, tab, CR, LF, form-feed, vertical-tab.
-    if (
-      c === 0x20 ||
-      c === 0x09 ||
-      c === 0x0a ||
-      c === 0x0d ||
-      c === 0x0c ||
-      c === 0x0b
-    ) {
-      i++;
-      continue;
-    }
-    // `--` line comment: consume up to (but not including) the next \n.
-    if (c === 0x2d && sql.charCodeAt(i + 1) === 0x2d) {
-      i += 2;
-      while (i < n && sql.charCodeAt(i) !== 0x0a) i++;
-      continue;
-    }
-    // `/* … */` block comment with nested depth tracking.
-    if (c === 0x2f && sql.charCodeAt(i + 1) === 0x2a) {
-      i += 2;
-      let depth = 1;
-      while (i < n && depth > 0) {
-        if (sql.charCodeAt(i) === 0x2f && sql.charCodeAt(i + 1) === 0x2a) {
-          depth++;
-          i += 2;
-        } else if (
-          sql.charCodeAt(i) === 0x2a &&
-          sql.charCodeAt(i + 1) === 0x2f
-        ) {
-          depth--;
-          i += 2;
-        } else {
-          i++;
-        }
-      }
-      continue;
-    }
-    break;
-  }
-  return i === 0 ? sql : sql.slice(i);
-};
+// `stripLeadingCommentsAndWS` lives in core/common.ts so the wire path
+// (sendQuery / executeAndPrint) and the slash-command paths share one
+// implementation. Re-imported from there at the top of the file.
 
 /**
  * Strip line and block comments from `sql` so a COPY-shaped token inside a
