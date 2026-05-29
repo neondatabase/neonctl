@@ -78,7 +78,13 @@
  */
 
 import { spawn } from 'node:child_process';
-import { promises as fsPromises, createWriteStream, openSync } from 'node:fs';
+import {
+  promises as fsPromises,
+  closeSync,
+  createWriteStream,
+  fsyncSync,
+  openSync,
+} from 'node:fs';
 import * as path from 'node:path';
 
 import type {
@@ -494,21 +500,52 @@ const openWriter = (target: string): QueryFoutEntry => {
   // need to mirror for `\g FILE`, `\o FILE`, `\w FILE` and friends.
   //
   // Wrapping the resulting fd in `createWriteStream({ fd })` retains
-  // the streaming write interface the rest of the code expects.
+  // the streaming write interface the rest of the code expects. Disable
+  // `autoClose` so we control the close order — we fsync before close so
+  // a follow-on server-side `COPY FROM` (Docker bind-mount on macOS) sees
+  // the fully flushed file even when the next command immediately follows
+  // the `\g`.
   const fd = openSync(target, 'w');
   const stream = createWriteStream(target, {
     encoding: 'utf8',
     fd,
-    autoClose: true,
+    autoClose: false,
   });
   return {
     stream,
     isPipe: false,
     close: () =>
       new Promise<Record<string, never>>((resolve, reject) => {
+        // `stream.end(cb)` fires after the internal buffer drains to the
+        // underlying fd. Once that returns, the fd still holds dirty data
+        // in the kernel buffer cache; on macOS + Docker bind mounts the
+        // server inside the container can read the file before the cache
+        // flushes through to the bind mount, returning a partial view.
+        // Force an fsync against the open fd before closing so the
+        // bytes are guaranteed visible to subsequent reads — including
+        // server-side `COPY FROM` reading via the mount.
         stream.end((err?: Error | null) => {
-          if (err) reject(err);
-          else resolve({});
+          if (err) {
+            try {
+              closeSync(fd);
+            } catch {
+              // swallow — the original error takes precedence
+            }
+            reject(err);
+            return;
+          }
+          try {
+            fsyncSync(fd);
+          } catch {
+            // ignore — fsync best-effort; the close below still cleans up.
+          }
+          try {
+            closeSync(fd);
+          } catch (closeErr) {
+            reject(closeErr as Error);
+            return;
+          }
+          resolve({});
         });
       }),
   };
@@ -677,6 +714,13 @@ const renderResult = async (
   rs: ResultSet,
   out: NodeJS.WritableStream,
 ): Promise<void> => {
+  // `COPY ... TO STDOUT` segment — emit the accumulated CopyData payloads
+  // in arrival order at this result's position in the `\;`-chain.
+  if (rs.copyOutBytes && rs.copyOutBytes.length > 0) {
+    for (const chunk of rs.copyOutBytes) {
+      out.write(chunk);
+    }
+  }
   if (rs.fields.length === 0) {
     // Mirrors `renderResultSets`'s zero-fields branch: emit the tag (e.g.
     // `COPY 1`) unless quiet / tuples-only suppresses it. Without this
@@ -686,7 +730,10 @@ const renderResult = async (
     // sink and the tag goes to the user's status stream, not the
     // queryFout). The regress fixture sets QUIET=true before the
     // COPY-OUT `\g` shape so the tag stays out of the file under test.
-    if (!settings.popt.topt.tuplesOnly && !settings.quiet) {
+    // For COPY-out results, the tag is suppressed regardless — the bytes
+    // already flowed; upstream's `handleCopyOut` doesn't emit `COPY N`
+    // on the queryFout.
+    if (!settings.popt.topt.tuplesOnly && !settings.quiet && !rs.copyOutBytes) {
       const tag = formatCommandTagText(rs);
       if (tag.length > 0) out.write(`${tag}\n`);
     }
@@ -1404,6 +1451,21 @@ export const cmdGset: BackslashCmdSpec = {
       return formatServerError(ctx, err, bufSql.length > 0 ? trimmedBuf : sql);
     }
 
+    // `\;`-chained batches: render every result EXCEPT the last to the
+    // active output before `\gset` captures the last. Upstream's
+    // `ExecQueryAndProcessResults` walks the libpq result list and runs
+    // `PrintQueryResults` on each one in order; the trailing `\gset`
+    // applies to the FINAL result (`StoreQueryTuple` in common.c) and
+    // suppresses its print. Without this loop, a script like
+    // `SELECT 3 AS three \; SELECT warn('3.5') \; SELECT 4 AS four \gset`
+    // would silently drop the `three` table + the warn NOTICE's
+    // surrounding tuples row.
+    if (results.length > 1) {
+      const out = pickOut(ctx.settings, null);
+      for (let i = 0; i < results.length - 1; i++) {
+        await renderResult(ctx.settings, results[i], out);
+      }
+    }
     // Use the last result that returned rows. Upstream uses the most-recent
     // tuples-producing statement; results without a row descriptor (e.g.
     // pure DDL) are skipped.

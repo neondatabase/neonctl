@@ -1866,25 +1866,34 @@ export class PgConnection implements Connection {
         }
         // CopyOutResponse during execSimple (no active CopyOut driver) — the
         // common path is `COPY ... TO STDOUT` as one segment of a `\;`-chained
-        // simple-query batch. Upstream `handleCopyOut` writes the bytes
-        // verbatim to the caller's output stream; with no sink configured we
-        // still consume the CopyData / CopyDone frames off the wire so the
-        // protocol returns to ReadyForQuery, but drop the payload silently.
+        // simple-query batch. We accumulate the CopyData payloads onto the
+        // current ResultSet's `copyOutBytes` so the renderer emits them at
+        // the result's position in the chain — instead of streaming them
+        // straight to a sink at receive time, which would hoist the COPY
+        // bytes above any tuples-producing results that haven't been
+        // rendered yet (see hunk 5722-5730 in regress/psql).
         this.copyOutMidBatchActive = true;
+        q.current = q.current ?? {
+          command: '',
+          rowCount: null,
+          oid: null,
+          fields: [],
+          rows: [],
+          notices: [],
+        };
+        q.current.copyOutBytes = q.current.copyOutBytes ?? [];
         return;
       }
       case 'CopyData': {
         // CopyData arrives during execSimple only when we're in the mid-batch
-        // COPY-OUT phase (CopyOutResponse flipped the flag above). Forward to
-        // the configured sink, or drop. Anything else is a protocol error.
+        // COPY-OUT phase (CopyOutResponse flipped the flag above). Stash the
+        // payload on the current result's `copyOutBytes` so the caller can
+        // render in order. Anything else is a protocol error.
         if (this.copyOutMidBatchActive) {
-          if (this.copyOutMidBatchSink) {
-            try {
-              this.copyOutMidBatchSink(msg.data);
-            } catch {
-              // ignore sink-side write failures; the COPY drain itself
-              // continues so the connection returns to idle cleanly.
-            }
+          const cur = q.current;
+          if (cur) {
+            cur.copyOutBytes = cur.copyOutBytes ?? [];
+            cur.copyOutBytes.push(msg.data);
           }
           return;
         }

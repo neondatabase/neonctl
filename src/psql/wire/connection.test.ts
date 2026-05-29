@@ -1202,7 +1202,7 @@ describe('PgConnection', () => {
     await conn.close();
   });
 
-  test('execSimple forwards CopyData to copyOutMidBatchSink on TO STDOUT', async () => {
+  test('execSimple accumulates CopyData onto rs.copyOutBytes for TO STDOUT', async () => {
     server = await startFakeServer((msg, client) => {
       if (msg.type === 'Startup') {
         client.send(authenticationOk());
@@ -1228,17 +1228,10 @@ describe('PgConnection', () => {
       database: 'db',
       ssl: 'disable',
     });
-    const captured: string[] = [];
-    (
-      conn as unknown as {
-        copyOutMidBatchSink: ((chunk: Buffer) => void) | null;
-      }
-    ).copyOutMidBatchSink = (chunk: Buffer): void => {
-      captured.push(chunk.toString('utf8'));
-    };
     const sets = await conn.execSimple('COPY t TO STDOUT');
-    expect(captured.join('')).toBe('Calvin\nHobbes\n');
     expect(sets[0]?.command).toBe('COPY');
+    const bytes = sets[0]?.copyOutBytes ?? [];
+    expect(Buffer.concat(bytes).toString('utf8')).toBe('Calvin\nHobbes\n');
     await conn.close();
   });
 

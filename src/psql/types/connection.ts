@@ -15,6 +15,18 @@ export type ResultSet = {
   fields: FieldDescription[];
   rows: unknown[][];
   notices: Notice[];
+  /**
+   * COPY ... TO STDOUT payload bytes when this result represents a COPY
+   * out segment of a `\;`-chained simple-query batch. The wire layer
+   * accumulates each CopyData payload here in arrival order so the
+   * renderer can emit them at the result's position in the chain (vs
+   * streaming them straight to stdout at receive time, which would
+   * hoist the COPY bytes above any tuples-producing results that haven't
+   * been rendered yet).
+   *
+   * Unset for non-COPY results.
+   */
+  copyOutBytes?: Buffer[];
 };
 
 export type Notice = {

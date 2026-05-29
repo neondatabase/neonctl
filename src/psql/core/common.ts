@@ -730,14 +730,37 @@ const renderResultSets = async (
     for (let i = 0; i < results.length; i++) {
       const rs = results[i];
       const shouldEmit = showAll || i === lastIdx;
+      if (rs.copyOutBytes && rs.copyOutBytes.length > 0) {
+        // `COPY ... TO STDOUT` segment of a `\;`-chained batch — emit the
+        // accumulated CopyData payloads at the result's position in the
+        // chain (upstream `handleCopyOut` writes the bytes to
+        // `pset.queryFout`, which under a normal dispatch is the active
+        // stdout). Render unconditionally regardless of SHOW_ALL_RESULTS:
+        // upstream gates `\;`-chain row tables on `show_all_results`, but
+        // the COPY data flows directly to the output stream and is not
+        // affected by the flag. Matches the regress baseline ordering for
+        // `... \; COPY x TO STDOUT \; ...`.
+        for (const chunk of rs.copyOutBytes) {
+          sink.write(chunk);
+        }
+      }
       if (rs.fields.length === 0) {
         // Non-tuples-producing commands (INSERT/UPDATE/DELETE/DDL) — emit the
         // CommandComplete tag instead of running the table printer (which
         // would render an empty `(0 rows)` block). Suppressed in tuples-only
         // mode (`\t`) and in `--quiet` mode to match upstream
         // (PSQLexec calls SetResultVariables which only prints the tag
-        // when !pset.quiet).
-        if (shouldEmit && !tuplesOnly && !ctx.settings.quiet) {
+        // when !pset.quiet). Also suppressed when the result represents a
+        // COPY-out segment whose bytes we already streamed above —
+        // upstream's `handleCopyOut` doesn't emit the `COPY N` tag on the
+        // queryFout stream; the tag goes to the status stream which we
+        // route through the diagnostic vars rather than stdout.
+        if (
+          shouldEmit &&
+          !tuplesOnly &&
+          !ctx.settings.quiet &&
+          !rs.copyOutBytes
+        ) {
           const tag = formatCommandTag(rs);
           if (tag.length > 0) sink.write(`${tag}\n`);
         }
