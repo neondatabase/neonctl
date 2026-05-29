@@ -627,8 +627,15 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   // via `Query_for_list_of_set_vars`; the failing cases are around
   // qualified GUCs (`plpgsql.variable_conflict`) and value completion
   // (`iso<tab>` → `iso_8601`), neither of which has a rule today.
+  // `set interval<tab>` → `intervalstyle ` is correct (unique GUC),
+  // and the second tab DOES insert `to` — but in lowercase. Upstream
+  // expects `TO` uppercase. The discrepancy is in our preserve-upper
+  // case-folding for the empty-input case: we fall back to lowercase
+  // (see filterAndCase in src/psql/complete/rules.ts line 898),
+  // upstream falls back to uppercase. Engine-level fix; left as
+  // `it.todo` until that case-folding behavior is reconciled.
   it.todo(
-    'complete a GUC name — set interval<tab><tab> → intervalstyle TO (line 366; works but listing format differs)',
+    'complete a GUC name — set interval<tab><tab> → intervalstyle TO (line 366; engine: empty-input preserve-upper case-folding diverges from upstream)',
   );
   it.todo(
     'complete a GUC enum value — iso<tab> → iso_8601 (line 370; needs GUC-value completion)',
@@ -653,12 +660,20 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   // rule (we have basic `:` expansion but the interpolation context
   // around `\echo` doesn't trigger it correctly today), and `:{?VERB<tab>`
   // needs a separate test-form rule.
-  it.todo(
-    'complete a psql variable name — \\set VERB<tab> → VERBOSITY (line 392; works but rule produces trailing space mismatch)',
-  );
-  it.todo(
-    'complete a psql variable value — def<tab> → default (line 394; needs follow-on test design)',
-  );
+  // `\set VERB<tab>` → `\set VERBOSITY ` — the SPECIAL_VARIABLES list
+  // contains VERBOSITY; our rule produces the right output. Upstream
+  // matches `qr/VERBOSITY /` (with the trailing space the engine
+  // appends after a unique match).
+  it('complete a psql variable name — \\set VERB<tab> → VERBOSITY (line 392)', async () => {
+    await checkCompletion('\\set VERB\t', /VERBOSITY /);
+  });
+  // After `\set VERBOSITY` is typed, `def<tab>` resolves to `default`
+  // via the var-value completion (the ON_ERROR_ROLLBACK / VERBOSITY
+  // value table includes `default`). Send the whole sequence in one
+  // call so it doesn't chain on prior test state.
+  it('complete a psql variable value — \\set VERBOSITY def<tab> → default (line 394)', async () => {
+    await checkCompletion('\\set VERBOSITY def\t', /default /);
+  });
   it.todo(
     'complete interpolated psql variable name — \\echo :VERB<tab> → :VERBOSITY (line 398; needs `:`-interpolation context)',
   );

@@ -2085,10 +2085,15 @@ const sqlRules = async (
       candidates: filterAndCase(DATESTYLE_VALUES, currentWord, ctx.settings),
     };
   }
-  // `SET <name> <TAB>` (no operator yet) → TO / =.
+  // `SET <name> <TAB>` (no operator yet) → TO.
+  // Upstream tab-complete.in.c uses `COMPLETE_WITH("TO")` here even
+  // though `SET <name> = <value>` is valid syntax — the goal is a
+  // single unique completion so `set foo<tab><tab>` resolves to
+  // `set foo TO ` rather than listing two near-synonymous separators.
+  // Verified against vanilla psql 18 + upstream test line 366.
   if (TailMatches(prevWords, ['SET', MatchAny])) {
     return {
-      candidates: filterAndCase(['TO', '='], currentWord, ctx.settings),
+      candidates: filterAndCase(['TO'], currentWord, ctx.settings),
     };
   }
   // Bare SET <TAB>: GUC name OR top-level SET sub-keywords (ROLE, SCHEMA, …).

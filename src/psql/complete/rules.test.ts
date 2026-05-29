@@ -652,11 +652,14 @@ describe('findCompletions: GUC names via pg_settings', () => {
     expect(r.candidates).toContain('statement_timeout');
   });
 
-  it('SET work_mem → TO / =', async () => {
+  it('SET work_mem → TO (upstream tab-complete.in.c emits just TO)', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['SET', 'work_mem'], '', ctx);
     expect(r.candidates).toContain('to');
-    expect(r.candidates).toContain('=');
+    // `=` is valid SET syntax but upstream completes to `TO` only —
+    // a single unique candidate so `set foo<tab><tab>` resolves to
+    // `set foo TO ` rather than listing two near-synonymous separators.
+    expect(r.candidates).not.toContain('=');
   });
 
   it('SET DateStyle TO → ISO/GERMAN/SQL/POSTGRES', async () => {
