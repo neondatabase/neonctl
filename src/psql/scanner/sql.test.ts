@@ -198,6 +198,64 @@ const corpus: CorpusCase[] = [
     expectedSplits: ['SELECT $1;', ' SELECT 2;'],
   },
 
+  // --- BEGIN ATOMIC / BEGIN .. END inside CREATE FUNCTION / PROCEDURE ---
+  // Upstream `psqlscan.l` keeps a `begin_depth` counter and gates it on a
+  // leading CREATE [OR REPLACE] {FUNCTION|PROCEDURE} prefix. Inside the
+  // block, embedded `;` does not terminate the surrounding CREATE.
+  {
+    name: 'CREATE FUNCTION ... BEGIN ATOMIC select; END',
+    input:
+      'CREATE FUNCTION psql_df_sql (x integer)\n  RETURNS integer\n  BEGIN ATOMIC SELECT x + 1; END;',
+    expectedSplits: [
+      'CREATE FUNCTION psql_df_sql (x integer)\n  RETURNS integer\n  BEGIN ATOMIC SELECT x + 1; END;',
+    ],
+  },
+  {
+    name: 'CREATE OR REPLACE FUNCTION ... BEGIN ATOMIC ... END',
+    input:
+      'CREATE OR REPLACE FUNCTION f(x int) RETURNS int BEGIN ATOMIC SELECT x; SELECT x + 1; END;',
+    expectedSplits: [
+      'CREATE OR REPLACE FUNCTION f(x int) RETURNS int BEGIN ATOMIC SELECT x; SELECT x + 1; END;',
+    ],
+  },
+  {
+    name: 'CREATE PROCEDURE ... BEGIN ATOMIC ... END',
+    input: 'CREATE PROCEDURE p() BEGIN ATOMIC SELECT 1; SELECT 2; END;',
+    expectedSplits: [
+      'CREATE PROCEDURE p() BEGIN ATOMIC SELECT 1; SELECT 2; END;',
+    ],
+  },
+  {
+    name: 'plain transaction BEGIN; is NOT depth-tracked',
+    // BEGIN at the top of the statement (no CREATE FUNCTION prefix) must
+    // terminate normally.
+    input: 'BEGIN;\nSELECT 1;\nCOMMIT;',
+    expectedSplits: ['BEGIN;', '\nSELECT 1;', '\nCOMMIT;'],
+  },
+  {
+    name: 'SELECT CASE WHEN ... END outside a function body is NOT depth-tracked',
+    // CASE is only depth-tracked when already inside a BEGIN, so a bare
+    // `SELECT CASE` does not unbalance and `;` terminates as usual.
+    input: "SELECT CASE WHEN 1=1 THEN 'a' ELSE 'b' END; SELECT 2;",
+    expectedSplits: [
+      "SELECT CASE WHEN 1=1 THEN 'a' ELSE 'b' END;",
+      ' SELECT 2;',
+    ],
+  },
+  {
+    name: 'BEGIN ATOMIC with nested CASE',
+    input:
+      'CREATE FUNCTION f(x int) RETURNS int BEGIN ATOMIC SELECT CASE x WHEN 1 THEN 1; ELSE 0; END CASE; END;',
+    expectedSplits: [
+      'CREATE FUNCTION f(x int) RETURNS int BEGIN ATOMIC SELECT CASE x WHEN 1 THEN 1; ELSE 0; END CASE; END;',
+    ],
+  },
+  {
+    name: 'BEGIN ATOMIC mid-block reaches EOF as incomplete',
+    input: 'CREATE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1;',
+    expectedFinalKind: 'eof', // beginDepth > 0 doesn't open a quote/paren/etc
+  },
+
   // --- Multi-line ---
   {
     name: 'multi-line single statement',

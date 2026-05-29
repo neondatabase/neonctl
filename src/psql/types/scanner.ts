@@ -69,6 +69,32 @@ export type ScanState = {
   inSingleQuote: boolean;
   inDoubleQuote: boolean;
   inEscapeString: boolean;
+  /**
+   * Tracks nesting of `BEGIN ... END` blocks inside the body of a
+   * `CREATE [OR REPLACE] {FUNCTION|PROCEDURE}` statement. When `> 0`, a
+   * top-level `;` does NOT terminate the statement — it's just the inner
+   * `;` separating SQL function-body statements. Mirrors upstream
+   * `psqlscan.l`'s `cur_state->begin_depth`.
+   */
+  beginDepth: number;
+  /**
+   * Lowercased first letter of each leading identifier in the current
+   * statement, capped at 4 slots. Upstream `psqlscan.l` uses this to gate
+   * `BEGIN ATOMIC`-style depth tracking to statements that LOOK like a
+   * function body — specifically those whose leading identifier sequence
+   * matches `c f`, `c p`, `c o r f`, or `c o r p` (CREATE FUNCTION /
+   * PROCEDURE / OR REPLACE FUNCTION / PROCEDURE). The same gating means a
+   * plain transaction `BEGIN;` does NOT enter the depth-tracked mode.
+   * Reset to all-zero on every statement boundary.
+   */
+  identifierLetters: [string, string, string, string];
+  /**
+   * Count of identifiers consumed so far in the current statement (capped
+   * at the length of `identifierLetters`). Drives the slot index where the
+   * next leading-keyword letter is written. Mirrors upstream
+   * `identifier_count`.
+   */
+  identifierCount: number;
 };
 
 export const initialScanState = (): ScanState => ({
@@ -80,6 +106,9 @@ export const initialScanState = (): ScanState => ({
   inSingleQuote: false,
   inDoubleQuote: false,
   inEscapeString: false,
+  beginDepth: 0,
+  identifierLetters: ['', '', '', ''],
+  identifierCount: 0,
 });
 
 export type SlashArgMode =

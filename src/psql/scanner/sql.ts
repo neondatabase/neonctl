@@ -149,7 +149,98 @@ const cloneState = (s: ScanState): ScanState => ({
   inSingleQuote: s.inSingleQuote,
   inDoubleQuote: s.inDoubleQuote,
   inEscapeString: s.inEscapeString,
+  beginDepth: s.beginDepth,
+  identifierLetters: [
+    s.identifierLetters[0],
+    s.identifierLetters[1],
+    s.identifierLetters[2],
+    s.identifierLetters[3],
+  ],
+  identifierCount: s.identifierCount,
 });
+
+// ---------------------------------------------------------------------------
+// `BEGIN ... END` block tracking for SQL function bodies.
+//
+// Upstream `psqlscan.l` keeps a per-statement counter (`begin_depth`) plus a
+// short prefix of the first letters of each leading identifier
+// (`identifiers[0..N]`, `identifier_count`). The counter is only adjusted
+// when the prefix looks like `CREATE [OR REPLACE] {FUNCTION|PROCEDURE}` —
+// i.e. exactly one of `c f`, `c p`, `c o r f`, `c o r p`. Inside that
+// window, `BEGIN` increments depth, `CASE` increments depth ONLY when
+// already inside a BEGIN (so that bare `SELECT CASE ... END` outside a
+// function body doesn't unbalance the counter), and `END` decrements depth.
+// While `begin_depth > 0`, a top-level `;` is not a statement terminator —
+// see the gated `LEXRES_SEMI` return in `scanSql`.
+//
+// We mirror this behaviour with {@link maybeTrackBeginEnd}, which is fed
+// every lexed identifier at top level (outside quotes, comments, paren
+// blocks, dollar-quoted bodies). Identifier letters are stored lower-cased.
+// ---------------------------------------------------------------------------
+
+const KEYWORD_PREFIX_LETTERS = new Set([
+  'c', // create
+  'f', // function
+  'p', // procedure
+  'o', // or
+  'r', // replace
+]);
+
+const PREFIX_MATCHES_CREATE_FN_OR_PROC = (
+  letters: readonly [string, string, string, string],
+): boolean => {
+  if (letters[0] !== 'c') return false;
+  // CREATE FUNCTION
+  if (letters[1] === 'f') return true;
+  // CREATE PROCEDURE
+  if (letters[1] === 'p') return true;
+  // CREATE OR REPLACE FUNCTION / PROCEDURE
+  if (
+    letters[1] === 'o' &&
+    letters[2] === 'r' &&
+    (letters[3] === 'f' || letters[3] === 'p')
+  ) {
+    return true;
+  }
+  return false;
+};
+
+const maybeTrackBeginEnd = (st: ScanState, word: string): void => {
+  if (word.length === 0) return;
+
+  // Only track identifiers at paren depth 0 — upstream's flex rule guards
+  // the whole identifier block on `cur_state->paren_depth == 0`.
+  if (st.parenDepth !== 0) return;
+
+  const lower = word.toLowerCase();
+  // Record the leading letter of select keywords into the first few slots
+  // so we can decide whether this statement is a CREATE FUNCTION /
+  // PROCEDURE shape. Subsequent identifiers still bump `identifierCount`
+  // — that lets the prefix slots stay aligned with the first 4 idents only.
+  if (st.identifierCount === 0) {
+    st.identifierLetters = ['', '', '', ''];
+  }
+  if (
+    st.identifierCount < st.identifierLetters.length &&
+    KEYWORD_PREFIX_LETTERS.has(lower[0])
+  ) {
+    st.identifierLetters[st.identifierCount] = lower[0];
+  }
+  st.identifierCount++;
+
+  if (!PREFIX_MATCHES_CREATE_FN_OR_PROC(st.identifierLetters)) return;
+
+  if (lower === 'begin') {
+    st.beginDepth++;
+  } else if (lower === 'case') {
+    // Upstream comment: "CASE also ends with END. We only need to track
+    // this if we are already inside a BEGIN." Guard so `SELECT CASE WHEN
+    // ... END` outside a function body doesn't double-bump the counter.
+    if (st.beginDepth >= 1) st.beginDepth++;
+  } else if (lower === 'end') {
+    if (st.beginDepth > 0) st.beginDepth--;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Dollar-quote tag matching.
@@ -542,12 +633,20 @@ export const scanSql = (
       continue;
     }
 
-    // Top-level semicolon — boundary!
-    if (c === ';' && st.parenDepth === 0) {
+    // Top-level semicolon — boundary, but only when we are NOT inside a
+    // `BEGIN ... END` function body. Upstream `psqlscan.l` gates `LEXRES_SEMI`
+    // on `paren_depth == 0 && begin_depth == 0` so that semicolons separating
+    // statements inside a SQL function body (`CREATE FUNCTION f() ... BEGIN
+    // ATOMIC SELECT 1; SELECT 2; END;`) do not terminate the surrounding
+    // CREATE statement. The depth-gated case falls through to the catch-all,
+    // which emits the `;` and continues scanning.
+    if (c === ';' && st.parenDepth === 0 && st.beginDepth === 0) {
       sql += ';';
       i++;
       // Reset per-statement state. (parenDepth, dollarTag, comment depths,
-      // and quote flags are already zero here by construction.)
+      // quote flags, beginDepth, and identifier tracking are all zero here
+      // by construction — but use initialScanState() so future fields are
+      // wiped automatically.)
       const next = initialScanState();
       // The post-semicolon residue stays unread; the caller passes it back in
       // on the next call. We do NOT continue scanning — upstream returns
@@ -720,9 +819,26 @@ export const scanSql = (
       }
     }
 
+    // Identifier — lexed as a whole token so we can run upstream's
+    // `psqlscan.l` `{identifier}` rule that gates `BEGIN`/`CASE`/`END`
+    // depth tracking on a leading `CREATE [OR REPLACE] {FUNCTION|PROCEDURE}`
+    // signature. We consume `[A-Za-z_][A-Za-z0-9_]*` greedily; ASCII letters
+    // are sufficient for the keywords we recognise (upstream's `identifier`
+    // class is wider but the BEGIN-tracking logic only cares about lowercased
+    // letter prefixes of these specific keywords).
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i + 1;
+      while (j < input.length && /[A-Za-z0-9_]/.test(input[j])) j++;
+      const word = input.slice(i, j);
+      maybeTrackBeginEnd(st, word);
+      sql += word;
+      i = j;
+      continue;
+    }
+
     // Anything else: just emit. This is the catch-all matching upstream's
-    // `{self}`, `{operator}`, `{identifier}`, `{numeric}`, `{other}` rules —
-    // none of which can change scanner state at the top level.
+    // `{self}`, `{operator}`, `{numeric}`, `{other}` rules — none of which
+    // can change scanner state at the top level.
     sql += c;
     i++;
   }
