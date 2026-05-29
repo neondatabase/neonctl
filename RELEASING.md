@@ -21,10 +21,11 @@
 ### 1. Dispatch Stage 1
 
 ```bash
+# Use patch, minor, or major for the bump input.
 gh workflow run prepare-release.yml \
   --repo neondatabase/neonctl \
   --ref main \
-  -f bump=patch \      # or minor | major
+  -f bump=patch \
   -f beta=false        # set to true for X.Y.Z-beta
 ```
 
