@@ -17,6 +17,20 @@ export type BackslashResult = {
    * `false`, so the mainloop still surfaces the diagnostic.
    */
   errorWritten?: boolean;
+  /**
+   * Truncate the mainloop's `queryBuf` to this byte length BEFORE continuing
+   * the scan loop. Used exclusively by the cond commands to implement
+   * upstream's `discard_query_text` — when `\elif`/`\else`/`\endif` is
+   * leaving a branch that was INACTIVE, the SQL text appended during that
+   * branch's scope must be rolled back so a subsequent semicolon (or `\g`)
+   * doesn't dispatch the skipped fragment.
+   *
+   * Distinct from `status: 'reset-buf'`, which also resets `scanState` and
+   * `stmtLineNumber`. The truncation here is a buffer-only edit — the
+   * surrounding statement may still be mid-flight (a `\if` inside the
+   * middle of a `select ... ;` expression).
+   */
+  truncateBufTo?: number;
 };
 
 export type BackslashArgMode = 'lex' | 'raw' | 'whole-line';

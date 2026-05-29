@@ -639,6 +639,88 @@ describe('runMainLoop — conditional dispatch', () => {
     await runMainLoop(ctx);
     expect(stderr.text()).toMatch(/reached EOF without finding closing/);
   });
+
+  // -------------------------------------------------------------------------
+  // save_query_text_state / discard_query_text — \if-inside-statement.
+  //
+  // Upstream regress: `select \if true 42 \else (bogus \endif forty_two;`
+  // dispatches `select  42  forty_two;` (the inactive `(bogus` is rolled
+  // back via discard_query_text). Without the fix the `(bogus` survived in
+  // queryBuf AND `parenDepth` stayed at 1, so the trailing `;` failed to
+  // trigger a boundary and the whole rest of the script accumulated into
+  // a single giant dispatch.
+  // -------------------------------------------------------------------------
+
+  test('inactive branch text is discarded mid-statement (\\if/\\else/\\endif inside SELECT)', async () => {
+    const { ctx, db } = buildCtx({
+      lines: [
+        'select',
+        '  \\if true',
+        '    42',
+        '  \\else',
+        '    (bogus',
+        '  \\endif',
+        '  forty_two;',
+      ],
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // The assembled SQL must NOT contain `(bogus` — that text was inside an
+    // inactive `\else` branch and should be rolled back by \endif. The
+    // exact whitespace mirrors the source lines: scanSql preserves the
+    // newlines/indent the user typed (minus the discarded branch).
+    expect(db?.calls).toEqual(['select\n  \n    42\n  \n  forty_two;']);
+  });
+
+  test('inline \\if false / \\\\ ... \\else / \\\\ ... \\endif rolls back the inactive branch', async () => {
+    // Single line: `select \if false \\ (bogus \else \\ 42 \endif \\ forty_two;`
+    // Parses as: select, \if false, \\ separator, (bogus, \else (was inactive
+    // → truncate), \\, 42, \endif (just-completed was active → no truncate),
+    // \\, forty_two; → assembled: `select 42 forty_two;`.
+    const { ctx, db } = buildCtx({
+      lines: [
+        'select \\if false \\\\ (bogus \\else \\\\ 42 \\endif \\\\ forty_two;',
+      ],
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // Buffer assembled with the literal whitespace seen by the scanner.
+    // The key assertion is the absence of `(bogus`.
+    expect(db?.calls).toHaveLength(1);
+    expect(db?.calls?.[0]).not.toContain('(bogus');
+    expect(db?.calls?.[0]).toMatch(/select\s+42\s+forty_two;/);
+  });
+
+  test('inactive branch with `(` does not leak parenDepth into surrounding statement', async () => {
+    // Regression test: without restoring scanState on truncate, the `(` in
+    // `(bogus` increments parenDepth, the trailing `;` never triggers a
+    // statement boundary, and the next dispatch concatenates many statements
+    // into a single giant query.
+    const { ctx, db } = buildCtx({
+      lines: [
+        'select',
+        '  \\if true',
+        '    42',
+        '  \\else',
+        '    (bogus',
+        '  \\endif',
+        '  forty_two;',
+        'SELECT 1;',
+      ],
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // Both queries must dispatch independently — they must NOT have merged
+    // into a single payload because of stale parenDepth.
+    expect(db?.calls).toHaveLength(2);
+    expect(db?.calls?.[1]).toBe('SELECT 1;');
+    // First call is the partial-query result; assert it doesn't contain
+    // `(bogus` (was discarded) AND that the second statement didn't bleed
+    // into it (the trailing `SELECT 1;` would otherwise be appended when
+    // parenDepth stayed > 0 across the truncate).
+    expect(db?.calls?.[0]).not.toContain('(bogus');
+    expect(db?.calls?.[0]).not.toContain('SELECT 1');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -90,8 +90,12 @@ export const createCondStack = (): CondStack => {
     state === 'true' || state === 'else-true';
 
   return {
-    push(state: IfState): void {
-      frames.push({ state, branchTaken: branchTakenForInitial(state) });
+    push(state: IfState, savedQueryBufLen = 0): void {
+      frames.push({
+        state,
+        branchTaken: branchTakenForInitial(state),
+        savedQueryBufLen,
+      });
     },
     pop(): CondStackFrame | undefined {
       return frames.pop();
@@ -111,6 +115,10 @@ export const createCondStack = (): CondStack => {
       const top = frames[frames.length - 1];
       top.state = state;
       if (state === 'true' || state === 'else-true') top.branchTaken = true;
+    },
+    setSavedQueryBufLen(len: number): void {
+      if (frames.length === 0) return;
+      frames[frames.length - 1].savedQueryBufLen = len;
     },
     depth(): number {
       return frames.length;
@@ -287,22 +295,51 @@ const errResult = (ctx: BackslashContext, message: string): BackslashResult => {
 
 const okResult = (): BackslashResult => ({ status: 'ok' });
 
+/**
+ * Build an `{ status: 'ok' }` result that also asks the mainloop to truncate
+ * `queryBuf` back to `len`. Mirrors upstream `discard_query_text` — called
+ * by `\elif` / `\else` / `\endif` when the just-completed branch was
+ * INACTIVE, so the SQL text the skipped branch accumulated doesn't bleed
+ * into the surrounding statement.
+ */
+const truncResult = (len: number): BackslashResult => ({
+  status: 'ok',
+  truncateBufTo: len,
+});
+
+/**
+ * `true` when {@link IfState} corresponds to a branch that was skipping
+ * statements. Upstream `conditional_active` returns false for these. Used
+ * by the elif/else/endif commands to decide whether the
+ * `discard_query_text` step should fire on transition out of the branch.
+ */
+const isInactiveState = (state: IfState): boolean =>
+  state === 'false' || state === 'else-false' || state === 'ignored';
+
 export const cmdIf: BackslashCmdSpec = {
   name: 'if',
   argMode: 'lex',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
     const cond = getCondStack(ctx);
+    // Save the queryBuf state at the point the `\if` was encountered. The
+    // mainloop dispatches the cond command AFTER folding any preceding
+    // text into `queryBuf` (e.g. the "select" in `select \if true 42 ...`),
+    // so `ctx.queryBuf.length` is exactly upstream `save_query_text_state`'s
+    // snapshot. Inactive branches will accumulate scan-time SQL we'll later
+    // roll back via `discard_query_text` (the truncate-to-saved step in the
+    // matching `\elif`/`\else`/`\endif`).
+    const savedLen = ctx.queryBuf.length;
     if (!cond.isActive()) {
       // Suppressed by outer: push IGNORED and drop the expression WITHOUT
       // expanding it. Upstream `ignore_boolean_expression` calls the lexer
       // with backticks/vars disabled (psql.sql:1028 covers this with
       // `\if false { \if \`nosuchcommand\` ... }`).
       dropExpr();
-      cond.push('ignored');
+      cond.push('ignored', savedLen);
       return Promise.resolve(okResult());
     }
     const truthy = evalExpr(ctx, 'if');
-    cond.push(truthy ? 'true' : 'false');
+    cond.push(truthy ? 'true' : 'false', savedLen);
     return Promise.resolve(okResult());
   },
 };
@@ -317,12 +354,22 @@ export const cmdElif: BackslashCmdSpec = {
       dropExpr();
       return Promise.resolve(errResult(ctx, '\\elif: no matching \\if'));
     }
+    // If the branch we're leaving was INACTIVE, anything its body added to
+    // `queryBuf` is scan-time accumulation we don't want — discard back to
+    // the snapshot captured at the matching `\if`/`\elif`. The truncate is
+    // applied by the mainloop; we just report the target length.
+    const wasInactive = isInactiveState(top.state);
+    const savedLen = top.savedQueryBufLen;
     switch (top.state) {
       case 'true': {
         // Branch already taken — flip to IGNORED. Drop the expression
         // without expansion (regress suite: `\if true \elif \`bad\` ...`).
         dropExpr();
         cond.setState('ignored');
+        // Active branch — keep buffer text. Re-anchor savedQueryBufLen
+        // to the start of the new (ignored) branch so a later `\else`/
+        // `\endif` discards just this branch's additions.
+        cond.setSavedQueryBufLen(ctx.queryBuf.length);
         return Promise.resolve(okResult());
       }
       case 'false': {
@@ -331,12 +378,21 @@ export const cmdElif: BackslashCmdSpec = {
         // and falls through to false, mirroring upstream.
         const truthy = evalExpr(ctx, 'elif');
         cond.setState(truthy ? 'true' : 'false');
-        return Promise.resolve(okResult());
+        // Apply the discard (was INACTIVE) and re-anchor at the rolled-back
+        // length so the new branch's bookkeeping starts fresh.
+        cond.setSavedQueryBufLen(savedLen);
+        return wasInactive
+          ? Promise.resolve(truncResult(savedLen))
+          : Promise.resolve(okResult());
       }
       case 'ignored': {
         // Outer is suppressed — stay ignored, drop args without expanding.
+        // Still discard accumulated buffer text and re-anchor.
         dropExpr();
-        return Promise.resolve(okResult());
+        cond.setSavedQueryBufLen(savedLen);
+        return wasInactive
+          ? Promise.resolve(truncResult(savedLen))
+          : Promise.resolve(okResult());
       }
       case 'else-true':
       case 'else-false':
@@ -360,16 +416,28 @@ export const cmdElse: BackslashCmdSpec = {
     if (top === undefined) {
       return Promise.resolve(errResult(ctx, '\\else: no matching \\if'));
     }
+    const wasInactive = isInactiveState(top.state);
+    const savedLen = top.savedQueryBufLen;
     switch (top.state) {
       case 'true':
         cond.setState('else-false');
+        // Was ACTIVE — keep buffer text. Re-anchor at the current length so
+        // the upcoming else-false branch's additions can be discarded by
+        // the matching `\endif`.
+        cond.setSavedQueryBufLen(ctx.queryBuf.length);
         return Promise.resolve(okResult());
       case 'false':
         cond.setState('else-true');
-        return Promise.resolve(okResult());
+        cond.setSavedQueryBufLen(savedLen);
+        return wasInactive
+          ? Promise.resolve(truncResult(savedLen))
+          : Promise.resolve(okResult());
       case 'ignored':
         cond.setState('else-false');
-        return Promise.resolve(okResult());
+        cond.setSavedQueryBufLen(savedLen);
+        return wasInactive
+          ? Promise.resolve(truncResult(savedLen))
+          : Promise.resolve(okResult());
       case 'else-true':
       case 'else-false':
         return Promise.resolve(
@@ -386,11 +454,16 @@ export const cmdEndif: BackslashCmdSpec = {
   argMode: 'lex',
   async run(ctx: BackslashContext): Promise<BackslashResult> {
     const cond = getCondStack(ctx);
-    if (cond.top() === undefined) {
+    const top = cond.top();
+    if (top === undefined) {
       return Promise.resolve(errResult(ctx, '\\endif: no matching \\if'));
     }
+    const wasInactive = isInactiveState(top.state);
+    const savedLen = top.savedQueryBufLen;
     cond.pop();
-    return Promise.resolve(okResult());
+    return wasInactive
+      ? Promise.resolve(truncResult(savedLen))
+      : Promise.resolve(okResult());
   },
 };
 

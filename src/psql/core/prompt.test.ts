@@ -17,9 +17,12 @@ const ORIG_PROMPT_EXECUTOR = PROMPT_BACKTICK_EXECUTOR.current;
 /** Minimal in-memory CondStack stub for tests. */
 const makeCond = (initial?: IfState): CondStack => {
   const stack: CondStackFrame[] = [];
-  if (initial !== undefined) stack.push({ state: initial, branchTaken: false });
+  if (initial !== undefined) {
+    stack.push({ state: initial, branchTaken: false, savedQueryBufLen: 0 });
+  }
   return {
-    push: (state) => stack.push({ state, branchTaken: false }),
+    push: (state, savedQueryBufLen = 0) =>
+      stack.push({ state, branchTaken: false, savedQueryBufLen }),
     pop: () => stack.pop(),
     top: () => (stack.length === 0 ? undefined : stack[stack.length - 1]),
     isActive: () => {
@@ -32,6 +35,10 @@ const makeCond = (initial?: IfState): CondStack => {
     setState: (state) => {
       const top = stack[stack.length - 1];
       if (top) top.state = state;
+    },
+    setSavedQueryBufLen: (len) => {
+      const top = stack[stack.length - 1];
+      if (top) top.savedQueryBufLen = len;
     },
     depth: () => stack.length,
   };

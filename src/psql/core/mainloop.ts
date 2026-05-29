@@ -822,6 +822,15 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   // is off (mirrors `\timing on; SELECT error` exiting non-zero).
   let lastWasError = false;
 
+  // Parallel stack of saved scanner states keyed to cond.depth(). Upstream
+  // `save_query_text_state` captures both `query_buf->len` AND the scanner
+  // state at the `\if` (and at each branch transition); `discard_query_text`
+  // restores both. The cond stack frame already carries `savedQueryBufLen`;
+  // we keep the matching scanState here so the cond commands stay decoupled
+  // from the scanner type. The two arrays are pushed / popped / re-anchored
+  // in lock-step with cond.push / cond.pop / cond.setSavedQueryBufLen.
+  const condScanStateStack: ScanState[] = [];
+
   const resetBuf = (): void => {
     queryBuf = '';
     scanState = initialScanState();
@@ -1100,6 +1109,12 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         // Cond commands run unconditionally; everything else respects
         // cond.isActive().
         if (COND_COMMAND_NAMES.has(cmdName)) {
+          // Snapshot scanState BEFORE the cond command runs — `\if` will
+          // want the snapshot taken at its dispatch point (matches upstream
+          // `save_query_text_state` capturing the scanner's input lexer
+          // state). Cheap shallow copy: ScanState fields are primitives or
+          // small immutable objects.
+          const scanStateBefore = { ...scanState };
           const r = await dispatchCondCommand(
             ctx,
             cmdName,
@@ -1109,6 +1124,52 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           if (r.handled && r.result?.status === 'exit') {
             exitRequested = true;
             return;
+          }
+          // Cond commands implement upstream's `discard_query_text` via
+          // the `truncateBufTo` field: when `\elif`/`\else`/`\endif`
+          // leaves an INACTIVE branch, the SQL text the skipped branch
+          // accumulated is rolled back to the snapshot captured at the
+          // matching `\if`/`\elif`/`\else`. We also restore the scanner
+          // state captured at that checkpoint — without this a `(` inside
+          // the skipped branch would leave `parenDepth > 0` and the next
+          // `;` wouldn't trigger a dispatch boundary. Stmt line number
+          // stays as-is: the surrounding statement is still in flight.
+          if (r.handled && r.result?.truncateBufTo !== undefined) {
+            const target = r.result.truncateBufTo;
+            if (target < queryBuf.length) {
+              queryBuf = queryBuf.slice(0, target);
+            }
+            const savedScan = condScanStateStack[condScanStateStack.length - 1];
+            if (savedScan !== undefined) {
+              scanState = { ...savedScan };
+            }
+          }
+          // Sync the parallel scan-state stack with whatever cond.push /
+          // cond.pop / cond.setSavedQueryBufLen the command performed.
+          // `\if`           → push the scan state captured at dispatch.
+          // `\elif`/`\else` → replace the top entry with the scan state
+          //                   that prevails AFTER any truncate-on-leaving-
+          //                   inactive restoration (so the new branch
+          //                   starts from a clean checkpoint).
+          // `\endif`        → pop the top entry.
+          if (cmdName === 'if') {
+            condScanStateStack.push(scanStateBefore);
+          } else if (cmdName === 'elif' || cmdName === 'else') {
+            // Errors leave the top untouched (cond.setState not called on
+            // the no-matching/double-else paths). Only re-anchor when the
+            // command succeeded — `status: 'ok'` covers both the active
+            // and truncated paths.
+            if (condScanStateStack.length > 0 && r.result?.status === 'ok') {
+              condScanStateStack[condScanStateStack.length - 1] = {
+                ...scanState,
+              };
+            }
+          } else if (cmdName === 'endif') {
+            // Pop only on success — `\endif` with no matching `\if`
+            // returns an error and doesn't actually pop the cond frame.
+            if (r.result?.status === 'ok') {
+              condScanStateStack.pop();
+            }
           }
           // Note: we intentionally do NOT update `lastWasError` for cond
           // errors. Upstream psql exits 0 from a script whose only failure

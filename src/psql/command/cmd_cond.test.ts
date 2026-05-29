@@ -861,3 +861,150 @@ describe('upstream parity: \\if family', () => {
     expect(stderr).toBe('\\elif: no matching \\if\n');
   });
 });
+
+// ---------------------------------------------------------------------------
+// save_query_text_state / discard_query_text — buffer rollback on
+// transition out of an INACTIVE branch.
+//
+// Upstream `exec_command_if` captures `query_buf->len` (and the scanner
+// state) on push; `exec_command_elif`/`_else`/`_endif` invoke
+// `discard_query_text` when the just-completed branch was INACTIVE, so SQL
+// text the skipped branch accumulated doesn't bleed into the surrounding
+// statement. Our port plumbs this via `savedQueryBufLen` on the frame +
+// the `truncateBufTo` field on the BackslashResult (applied by mainloop).
+// ---------------------------------------------------------------------------
+
+describe('cond buffer save/discard (savedQueryBufLen / truncateBufTo)', () => {
+  test('\\if captures ctx.queryBuf.length on push', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    const ctx = makeCtx(settings, 'if', ['true']);
+    ctx.queryBuf = 'select\n  ';
+    attachCondStack(ctx, cond);
+    const r = await run(cmdIf, ctx);
+    expect(r.status).toBe('ok');
+    expect(cond.top()?.savedQueryBufLen).toBe('select\n  '.length);
+  });
+
+  test('\\if while inactive (push IGNORED) still captures savedLen', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('false'); // outer inactive
+    const ctx = makeCtx(settings, 'if', ['true']);
+    ctx.queryBuf = 'select foo, ';
+    attachCondStack(ctx, cond);
+    const r = await run(cmdIf, ctx);
+    expect(r.status).toBe('ok');
+    expect(cond.top()?.state).toBe('ignored');
+    expect(cond.top()?.savedQueryBufLen).toBe('select foo, '.length);
+  });
+
+  test('\\endif leaving INACTIVE branch sets truncateBufTo to savedLen', async () => {
+    // Simulates: select \if true 42 \else (bogus \endif
+    //   - \if push saves len=7 (length of "select ")
+    //   - \else flips to else-false (inactive); savedLen re-anchored
+    //   - \endif pops; the just-completed (else-false) was INACTIVE so
+    //     the result should ask the mainloop to truncate.
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('else-false', 18); // emulate state after \else flipped from true
+    const ctx = makeCtx(settings, 'endif', []);
+    ctx.queryBuf = 'select\n      42\n      (bogus\n';
+    attachCondStack(ctx, cond);
+    const r = await run(cmdEndif, ctx);
+    expect(r.status).toBe('ok');
+    expect(r.truncateBufTo).toBe(18);
+    expect(cond.depth()).toBe(0);
+  });
+
+  test('\\endif leaving ACTIVE branch does NOT request truncate', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('true', 7); // just-completed branch was active
+    const ctx = makeCtx(settings, 'endif', []);
+    ctx.queryBuf = 'select  42';
+    attachCondStack(ctx, cond);
+    const r = await run(cmdEndif, ctx);
+    expect(r.status).toBe('ok');
+    expect(r.truncateBufTo).toBeUndefined();
+    expect(cond.depth()).toBe(0);
+  });
+
+  test('\\else from FALSE truncates and re-anchors at saved len', async () => {
+    // \if false / (bogus / \else / ...
+    //   - \if push, savedLen=0 (queryBuf empty), state=false
+    //   - "(bogus " accumulates: queryBuf = "(bogus "
+    //   - \else: just-completed was INACTIVE → request truncate to 0,
+    //     re-anchor savedQueryBufLen to 0 so the new (active) branch's
+    //     text is kept (no further discard until matching \endif).
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('false', 0);
+    const ctx = makeCtx(settings, 'else', []);
+    ctx.queryBuf = '(bogus ';
+    attachCondStack(ctx, cond);
+    const r = await run(cmdElse, ctx);
+    expect(r.status).toBe('ok');
+    expect(r.truncateBufTo).toBe(0);
+    expect(cond.top()?.state).toBe('else-true');
+    expect(cond.top()?.savedQueryBufLen).toBe(0);
+  });
+
+  test('\\else from TRUE keeps buffer and re-anchors at current len', async () => {
+    // \if true / 42 / \else / ...
+    //   - \if push, savedLen=0, state=true
+    //   - "42 " accumulates
+    //   - \else: just-completed was ACTIVE → no truncate, re-anchor
+    //     savedQueryBufLen to current length (3) so a later \endif
+    //     after the inactive else-false branch can discard back to
+    //     just the active branch's contribution.
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('true', 0);
+    const ctx = makeCtx(settings, 'else', []);
+    ctx.queryBuf = '42 ';
+    attachCondStack(ctx, cond);
+    const r = await run(cmdElse, ctx);
+    expect(r.status).toBe('ok');
+    expect(r.truncateBufTo).toBeUndefined();
+    expect(cond.top()?.state).toBe('else-false');
+    expect(cond.top()?.savedQueryBufLen).toBe('42 '.length);
+  });
+
+  test('\\elif from FALSE truncates and re-anchors', async () => {
+    // \if false / (bad / \elif true / ...
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('false', 4); // queryBuf had 4 chars before \if
+    const ctx = makeCtx(settings, 'elif', ['true']);
+    ctx.queryBuf = 'abcd(bad';
+    attachCondStack(ctx, cond);
+    const r = await run(cmdElif, ctx);
+    expect(r.status).toBe('ok');
+    expect(r.truncateBufTo).toBe(4);
+    expect(cond.top()?.state).toBe('true');
+    expect(cond.top()?.savedQueryBufLen).toBe(4);
+  });
+
+  test('\\elif from TRUE flips to IGNORED, no truncate, re-anchors at current', async () => {
+    const settings = makeSettings();
+    const cond = createCondStack();
+    cond.push('true', 0);
+    const ctx = makeCtx(settings, 'elif', ['true']);
+    ctx.queryBuf = 'keep me';
+    attachCondStack(ctx, cond);
+    const r = await run(cmdElif, ctx);
+    expect(r.status).toBe('ok');
+    expect(r.truncateBufTo).toBeUndefined();
+    expect(cond.top()?.state).toBe('ignored');
+    expect(cond.top()?.savedQueryBufLen).toBe('keep me'.length);
+  });
+
+  test('setSavedQueryBufLen on empty stack is a no-op', () => {
+    const c = createCondStack();
+    expect(() => {
+      c.setSavedQueryBufLen(42);
+    }).not.toThrow();
+    expect(c.depth()).toBe(0);
+  });
+});
