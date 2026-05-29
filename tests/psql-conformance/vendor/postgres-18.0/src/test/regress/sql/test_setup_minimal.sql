@@ -82,4 +82,15 @@ CREATE TABLE tenk1 (
 INSERT INTO tenk1 (unique1, unique2)
 SELECT i, i FROM generate_series(0, 9999) AS gs(i);
 
+-- Index on unique2 mirrors upstream's tenk_unique2 (`src/test/regress/sql/
+-- create_index.sql`). Without it, the planner falls back to a seq-scan +
+-- sort for `ORDER BY unique2 LIMIT N` queries; the sort projects every
+-- row of `1/(15-unique2)` and hits divide-by-zero BEFORE any row is
+-- returned. With the index, the planner uses an IndexScan and streams
+-- rows lazily, so the FETCH_COUNT chunked-error test in psql.sql (line
+-- ~4961 of expected/psql.out) sees its first 10 rows before the error
+-- fires. Verified against vanilla psql 18 — without this index even
+-- vanilla returns only the ERROR.
+CREATE INDEX tenk1_unique2 ON tenk1 USING btree (unique2);
+
 VACUUM ANALYZE tenk1;
