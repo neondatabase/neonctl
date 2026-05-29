@@ -253,13 +253,23 @@ export const spawnPsql = async (
   const cwd = opts.cwd ?? mkdtempSync(join(tmpdir(), 'psql-pty-cwd-'));
 
   const externalBinary = opts.binary ?? process.env.PSQL_BINARY ?? '';
-  const file = externalBinary !== '' ? externalBinary : process.execPath;
-  // When using the embedded TS psql, we invoke `node <launcher> <uri>`;
-  // when using a vanilla psql binary, we invoke `<binary> <uri>`.
-  const argv: string[] =
-    externalBinary !== ''
-      ? [uri, ...args]
-      : [makeLauncher().launcher, uri, ...args];
+  // Three shapes for `file`/`argv` depending on what PSQL_BINARY points
+  // at — same logic as `regress.spec.ts`'s `resolvePsqlBinary`:
+  //   - unset:              `<node> <launcher.js> <uri>`
+  //   - `*.js` (our dist):  `<node> <path-to-js> <uri>`
+  //   - anything else (vanilla psql binary or wrapper):  `<binary> <uri>`
+  let file: string;
+  let argv: string[];
+  if (externalBinary === '') {
+    file = process.execPath;
+    argv = [makeLauncher().launcher, uri, ...args];
+  } else if (externalBinary.endsWith('.js')) {
+    file = process.execPath;
+    argv = [externalBinary, uri, ...args];
+  } else {
+    file = externalBinary;
+    argv = [uri, ...args];
+  }
 
   const term = pty.spawn(file, argv, {
     name: 'xterm-256color',

@@ -115,23 +115,36 @@ const SHOULD_RUN = SHOULD_RUN_INTEGRATION;
  * spec against a persistent fixture (`PGCONFORMANCE_PG_HOST` pointed at
  * an external Postgres).
  */
-const SETUP_SQL = [
+const FIXTURE_DROP_SQL = [
+  // Listed by name (not pattern) so we don't drop anything we don't
+  // own. Includes a defensive drop of `tab_psql_single` from
+  // `001_basic.spec.ts` — when it lingers, prefix matches like
+  // `from t<tab>` (should resolve uniquely to `tab1`) degrade to
+  // multi-candidate completions whose common prefix is just `tab`.
   'DROP TABLE IF EXISTS tab1 CASCADE;',
   'DROP TABLE IF EXISTS mytab123 CASCADE;',
   'DROP TABLE IF EXISTS mytab246 CASCADE;',
   'DROP TABLE IF EXISTS "mixedName" CASCADE;',
-  // Defensive cleanup of fixture tables created by sibling specs that share
-  // the testcontainers Postgres instance (e.g. `tab_psql_single` from
-  // `001_basic.spec.ts`). When these tables linger in the catalog they
-  // pollute prefix matches like `from t<tab>` (which should resolve
-  // uniquely to `tab1`) into multi-candidate completions whose common
-  // prefix is just `tab`, breaking the upstream-parity assertions. The
-  // spec passes in isolation but fails in the full conformance suite
-  // without this cleanup. Listed by name (not pattern) so we don't drop
-  // anything we don't own.
   'DROP TABLE IF EXISTS tab_psql_single CASCADE;',
   'DROP TYPE IF EXISTS enum1 CASCADE;',
   'DROP PUBLICATION IF EXISTS some_publication;',
+].join('\n');
+
+// `tenk1` (and `onek`) are seeded into every matrix container by
+// `pg-fixture.ts` so the `regress/psql*` specs find them. They share the
+// `t*` prefix with our `tab1`, which makes the upstream tab-completion
+// assertion "`select * from t<tab>` → tab1" ambiguous (two `t*` matches).
+// We drop them in this spec's setup so completion sees only our
+// fixtures, then restore them in teardown so sibling specs that run
+// later still find them.
+const SEED_DROP_SQL = [
+  'DROP TABLE IF EXISTS tenk1 CASCADE;',
+  'DROP TABLE IF EXISTS onek CASCADE;',
+].join('\n');
+
+const SETUP_SQL = [
+  FIXTURE_DROP_SQL,
+  SEED_DROP_SQL,
   'CREATE TABLE tab1 (c1 int primary key constraint foo not null, c2 text);',
   'CREATE TABLE mytab123 (f1 int, f2 text);',
   'CREATE TABLE mytab246 (f1 int, f2 text);',
@@ -139,6 +152,40 @@ const SETUP_SQL = [
   "CREATE TYPE enum1 AS ENUM ('foo', 'bar', 'baz', 'BLACK');",
   'CREATE PUBLICATION some_publication;',
 ].join('\n');
+
+// Symmetric teardown — drop the fixtures we created and re-seed the
+// regress-suite tables so sibling specs (regress/psql*, catalog-shape)
+// running after us see a clean schema. The full seed script lives at
+// `vendor/postgres-18.0/src/test/regress/sql/test_setup_minimal.sql`;
+// we inline its CREATE TABLE / INSERT / VACUUM block here to avoid a
+// file-path dependency at teardown time.
+const SEED_RESTORE_SQL = [
+  'CREATE TABLE onek (',
+  '    unique1     int4,',
+  '    unique2     int4,',
+  '    two         int4, four        int4, ten         int4,',
+  '    twenty      int4, hundred     int4, thousand    int4,',
+  '    twothousand int4, fivethous   int4, tenthous    int4,',
+  '    odd         int4, even        int4,',
+  '    stringu1    name, stringu2    name, string4     name',
+  ');',
+  'INSERT INTO onek (unique1, unique2) SELECT i, i FROM generate_series(0, 999) AS gs(i);',
+  'VACUUM ANALYZE onek;',
+  'CREATE TABLE tenk1 (',
+  '    unique1     int4,',
+  '    unique2     int4,',
+  '    two         int4, four        int4, ten         int4,',
+  '    twenty      int4, hundred     int4, thousand    int4,',
+  '    twothousand int4, fivethous   int4, tenthous    int4,',
+  '    odd         int4, even        int4,',
+  '    stringu1    name, stringu2    name, string4     name',
+  ');',
+  'INSERT INTO tenk1 (unique1, unique2) SELECT i, i FROM generate_series(0, 9999) AS gs(i);',
+  'CREATE INDEX tenk1_unique2 ON tenk1 USING btree (unique2);',
+  'VACUUM ANALYZE tenk1;',
+].join('\n');
+
+const TEARDOWN_SQL = [FIXTURE_DROP_SQL, SEED_RESTORE_SQL].join('\n');
 
 /**
  * Mirror upstream lines 59-73: a scratch `tab_comp_dir/` with three
@@ -162,7 +209,10 @@ const makeTabCompWorkdir = (): string => {
  * resolved from the helper module's `REPO_ROOT` (not from vitest's
  * cwd, which is the conformance subdir).
  */
-const runSetupSql = async (): Promise<void> => {
+const runSqlScript = async (
+  sql: string,
+  launcherName: string,
+): Promise<{ status: number | null; stderr: string }> => {
   const { spawnSync } = await import('node:child_process');
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -172,15 +222,41 @@ const runSetupSql = async (): Promise<void> => {
   };
   const external = process.env.PSQL_BINARY ?? '';
   const uri = buildUri();
-  const file = external !== '' ? external : process.execPath;
-  const argv =
-    external !== ''
-      ? [uri, '-X', '-c', SETUP_SQL]
-      : [makeLauncher('tabcomp-setup').launcher, uri, '-X', '-c', SETUP_SQL];
+  // Same `.js`-vs-binary resolver as `pty-helpers.ts` and
+  // `regress.spec.ts`: a `.js` PSQL_BINARY (our dist shim) must be
+  // invoked via `node`, since the file may not have the executable bit
+  // set after `tsc` emit.
+  let file: string;
+  let argv: string[];
+  if (external === '') {
+    file = process.execPath;
+    argv = [makeLauncher(launcherName).launcher, uri, '-X', '-c', sql];
+  } else if (external.endsWith('.js')) {
+    file = process.execPath;
+    argv = [external, uri, '-X', '-c', sql];
+  } else {
+    file = external;
+    argv = [uri, '-X', '-c', sql];
+  }
   const r = spawnSync(file, argv, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  return { status: r.status, stderr: r.stderr.toString() };
+};
+
+const runSetupSql = async (): Promise<void> => {
+  const r = await runSqlScript(SETUP_SQL, 'tabcomp-setup');
   if (r.status !== 0) {
-    throw new Error(
-      `setup SQL failed: exit=${r.status} stderr=${r.stderr.toString()}`,
+    throw new Error(`setup SQL failed: exit=${r.status} stderr=${r.stderr}`);
+  }
+};
+
+const runTeardownSql = async (): Promise<void> => {
+  // Best-effort: a teardown failure shouldn't fail the test run; the
+  // tests have already passed by this point. Log and move on so the
+  // next spec sees the cleanup attempt.
+  const r = await runSqlScript(TEARDOWN_SQL, 'tabcomp-teardown');
+  if (r.status !== 0) {
+    process.stderr.write(
+      `[010_tab_completion] teardown SQL failed (continuing): exit=${r.status} stderr=${r.stderr.slice(0, 200)}\n`,
     );
   }
 };
@@ -218,35 +294,41 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
 
   afterAll(async () => {
     if (h) await kill(h, 2_000);
+    // Clean up the seeded fixtures so sibling specs that share the
+    // matrix DB (regress/*, catalog-shape) see a clean schema. Without
+    // this, `tab1`/`mytab123`/etc. linger in `pg_class` and pollute
+    // `\d` / `\dT` / planner output. Mirror the SETUP_SQL DROPs.
+    await runTeardownSql();
   });
 
   // ----- check_completion helper -----------------------------------------
   // Mirrors upstream's `check_completion($send, $pattern, $annotation)`
   // from `010_tab_completion.pl`. Sends the keystrokes (including any
-  // embedded tabs), waits for the line to settle, and asserts the visible
-  // command line matches `pattern`. On failure the helper dumps the last
-  // 500 chars of cleaned output to make the diagnostic actionable.
+  // embedded tabs), polls the visible buffer for the expected pattern,
+  // and asserts the match. On failure dumps the last 500 chars of
+  // cleaned output so the diagnostic is actionable.
   //
-  // The settle delay is empirical — completion work is async (catalog
-  // queries run on each Tab), and we have no signal to know "completion
-  // finished" without parsing the prompt back. 700ms is enough for the
-  // local Postgres + the small fixture; raise it if CI flakes.
-  const SETTLE_MS = 700;
+  // `waitForOutput` returns as soon as the pattern shows up, so a
+  // happy-path completion typically takes <100 ms. The 5 s ceiling
+  // accommodates slow catalog queries on cold-started containers (the
+  // first test in the file pays the warmup cost for every `_psql_*`
+  // tab-completion query the engine fans out on the very first Tab).
+  const COMPLETION_TIMEOUT_MS = 5_000;
   const checkCompletion = async (
     send: string,
     pattern: RegExp,
   ): Promise<void> => {
     h.clear();
     sendKeys(h, send);
-    await new Promise<void>((r) => setTimeout(r, SETTLE_MS));
-    const buf = h.clean();
-    if (!pattern.test(buf)) {
+    try {
+      await waitForOutput(h, pattern, COMPLETION_TIMEOUT_MS);
+    } catch {
+      const buf = h.clean();
       throw new Error(
         `checkCompletion: expected pattern ${pattern} to match.\n` +
           `--- last 500 chars of clean output ---\n${buf.slice(-500)}`,
       );
     }
-    expect(buf).toMatch(pattern);
   };
 
   // Reset the prompt to a clean state between checks. Mirrors upstream's
