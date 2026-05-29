@@ -40,19 +40,41 @@ export const unalignedPrinter: Printer = {
     let outBuf = '';
 
     if (expanded) {
-      // Vertical mode: each record is N `header|value` lines, with a
-      // blank record-sep between records and an initial separator after
-      // the title if present.
+      // Vertical mode mirrors print.c `print_unaligned_vertical`: each
+      // record gap is a DOUBLE recordSep, the title (if any) emits
+      // without a trailing separator (the loop handles that), inter-
+      // column lines get one recordSep, and the closing footer block is
+      // preceded by a recordSep with one more recordSep separating each
+      // footer entry.
+      let needRecordSep = false;
       if (!tuplesOnly && opts.title) {
-        outBuf += opts.title + recordSep;
+        outBuf += opts.title;
+        needRecordSep = true;
       }
-
-      cells.forEach((row, rowIdx) => {
-        if (rowIdx > 0) outBuf += recordSep;
+      cells.forEach((row) => {
+        if (needRecordSep) {
+          outBuf += recordSep + recordSep;
+          needRecordSep = false;
+        }
         row.forEach((value, colIdx) => {
-          outBuf += headers[colIdx] + fieldSep + value + recordSep;
+          outBuf += headers[colIdx] + fieldSep + value;
+          if (colIdx < row.length - 1) {
+            outBuf += recordSep;
+          } else {
+            needRecordSep = true;
+          }
         });
       });
+
+      if (!tuplesOnly && opts.footers && opts.footers.length > 0) {
+        outBuf += recordSep;
+        for (const footer of opts.footers) {
+          outBuf += recordSep + footer;
+        }
+        needRecordSep = true;
+      }
+
+      if (needRecordSep) outBuf += recordSep;
     } else {
       // Horizontal mode.
       if (!tuplesOnly && opts.title) {
@@ -71,11 +93,11 @@ export const unalignedPrinter: Printer = {
         const n = rs.rows.length;
         outBuf += `(${String(n)} ${n === 1 ? 'row' : 'rows'})` + recordSep;
       }
-    }
 
-    if (!tuplesOnly && opts.footers) {
-      for (const footer of opts.footers) {
-        outBuf += footer + recordSep;
+      if (!tuplesOnly && opts.footers) {
+        for (const footer of opts.footers) {
+          outBuf += footer + recordSep;
+        }
       }
     }
 

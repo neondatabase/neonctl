@@ -179,6 +179,62 @@ describe('unalignedPrinter', () => {
     expect(out).toBe('id|1\nname|alice\n\nid|2\nname|bob\n');
   });
 
+  test('expanded mode emits a double recordSep between title and first record', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'Type' }, { name: 'Start' }],
+      rows: [[1, 2]],
+    });
+    const out = await capture((s) =>
+      unalignedPrinter.printQuery(
+        rs,
+        defaultOpts({ title: 'Sequence' }, { expanded: 'on' }),
+        s,
+      ),
+    );
+    // Upstream `print_unaligned_vertical` emits the title without a
+    // separator, then a double recordSep (which produces the blank
+    // line between title and the first record).
+    expect(out).toBe('Sequence\n\nType|1\nStart|2\n');
+  });
+
+  test('expanded mode separates last record from footer with a blank line', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'Type' }, { name: 'Start' }, { name: 'Cache' }],
+      rows: [[1, 2, 3]],
+    });
+    const out = await capture((s) =>
+      unalignedPrinter.printQuery(
+        rs,
+        defaultOpts(
+          { title: 'Sequence', footers: ['Owned by: x'] },
+          { expanded: 'on' },
+        ),
+        s,
+      ),
+    );
+    expect(out).toBe('Sequence\n\nType|1\nStart|2\nCache|3\n\nOwned by: x\n');
+  });
+
+  test('expanded mode tuplesOnly multi-record has no trailing blank after last record', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'Schema' }, { name: 'Name' }],
+      rows: [
+        ['pg_catalog', 'a'],
+        ['pg_catalog', 'b'],
+      ],
+    });
+    const out = await capture((s) =>
+      unalignedPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', tuplesOnly: true }),
+        s,
+      ),
+    );
+    expect(out).toBe(
+      'Schema|pg_catalog\nName|a\n\nSchema|pg_catalog\nName|b\n',
+    );
+  });
+
   test('emits singular "(1 row)" footer when row count is one', async () => {
     const rs = makeResultSet({
       columns: [{ name: 'a' }],
