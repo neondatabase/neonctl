@@ -196,6 +196,17 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
         // child's environment — see vendor/.../regress/sql/psql.sql.
         PG_ABS_BUILDDIR: REGRESS_TMP,
         PG_ABS_SRCDIR: REGRESS_ABS_SRCDIR,
+        // Mirror upstream pg_regress's process-environment seed. The
+        // regression test cluster is initdb'd with these as the GUC
+        // defaults; psql inherits them via libpq so date/time literals
+        // render exactly the way the vendored expected output captured.
+        // Without `PGDATESTYLE=Postgres, MDY`, `SELECT '2000-01-01'::date`
+        // renders as `2000-01-01` (ISO) rather than the vendored
+        // `01-01-2000`. `PGTIMEZONE=PST8PDT` is harmless for psql.sql
+        // (no `now()`-style queries) but it's the upstream contract and
+        // pairs with the date style.
+        PGDATESTYLE: 'Postgres, MDY',
+        PGTIMEZONE: 'PST8PDT',
       },
       encoding: 'utf8',
       maxBuffer: 1024 * 1024 * 64,
