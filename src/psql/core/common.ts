@@ -118,6 +118,70 @@ const readTxStatus = (conn: Connection): TxStatusByte => {
 const SAVEPOINT_NAME = 'pg_psql_temporary_savepoint';
 const CURSOR_NAME = '_psql_cursor';
 
+/**
+ * Strip leading whitespace and `--` line / slash-star block comments from
+ * `sql`. Mirrors what upstream psql's scanner advances past before handing a
+ * statement to `PQexec` — the server-reported error `position` is a 1-based
+ * offset into THAT trimmed buffer, so the `LINE N:` re-print computed from
+ * `count('\n')` in `sql.slice(0, position - 1)` aligns with vanilla output
+ * only when the same leading prelude is stripped here too.
+ *
+ * Block comments support nested depths (PG extension). Embedded comments
+ * mid-statement are intentionally NOT stripped — they participate in the
+ * line count of the executing statement, same as upstream.
+ *
+ * Exported for cmd_io / cmd_pipeline so backslash commands that capture or
+ * inspect `queryBuf` see the same shape that the wire and `lastQuery`
+ * receive.
+ */
+export const stripLeadingCommentsAndWS = (sql: string): string => {
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql.charCodeAt(i);
+    // Whitespace per psql_scan: space, tab, CR, LF, form-feed, vertical-tab.
+    if (
+      c === 0x20 ||
+      c === 0x09 ||
+      c === 0x0a ||
+      c === 0x0d ||
+      c === 0x0c ||
+      c === 0x0b
+    ) {
+      i++;
+      continue;
+    }
+    // `--` line comment: consume up to (but not including) the next \n.
+    if (c === 0x2d && sql.charCodeAt(i + 1) === 0x2d) {
+      i += 2;
+      while (i < n && sql.charCodeAt(i) !== 0x0a) i++;
+      continue;
+    }
+    // `/* … */` block comment with nested depth tracking.
+    if (c === 0x2f && sql.charCodeAt(i + 1) === 0x2a) {
+      i += 2;
+      let depth = 1;
+      while (i < n && depth > 0) {
+        if (sql.charCodeAt(i) === 0x2f && sql.charCodeAt(i + 1) === 0x2a) {
+          depth++;
+          i += 2;
+        } else if (
+          sql.charCodeAt(i) === 0x2a &&
+          sql.charCodeAt(i + 1) === 0x2f
+        ) {
+          depth--;
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+      continue;
+    }
+    break;
+  }
+  return i === 0 ? sql : sql.slice(i);
+};
+
 /** Strip leading whitespace and SQL comments, then upper-case for matching. */
 const peekKeywords = (sql: string, count = 3): string[] => {
   // Skip leading whitespace / SQL line + block comments so we look at the
@@ -917,9 +981,14 @@ const runCursorLoop = async (
 
 export const executeAndPrint = async (
   ctx: REPLContext,
-  sql: string,
+  sqlRaw: string,
   opts: SendQueryOpts = {},
 ): Promise<QueryStats> => {
+  // Strip leading whitespace + `--` line / slash-star block comments before
+  // the wire send so server-reported `position` (1-based offset) and
+  // `LINE N:` re-prints align with upstream — vanilla psql's scanner
+  // advances past the same prelude before handing the buffer to `PQexec`.
+  const sql = stripLeadingCommentsAndWS(sqlRaw);
   const started = ctx.settings.timing ? performance.now() : 0;
   const stats: QueryStats = {
     rowsAffected: 0,
@@ -984,9 +1053,17 @@ export const executeAndPrint = async (
 
 export const sendQuery = async (
   ctx: REPLContext,
-  sql: string,
+  sqlRaw: string,
   opts: SendQueryOpts = {},
 ): Promise<QueryStats> => {
+  // Strip leading whitespace + `--` line / slash-star block comments before
+  // the wire send AND before storing into `pset.last_query`. Vanilla psql's
+  // scanner advances past the same prelude before handing the buffer to
+  // `PQexec`, so server-reported `position` (1-based) and `LINE N:`
+  // re-prints align with vanilla only after we trim here. `\p` (which falls
+  // back to `lastQuery`) also prints the stripped form so the regress
+  // baseline's `\p` after `-- comment\nSELECT 1;` emits just `SELECT 1;`.
+  const sql = stripLeadingCommentsAndWS(sqlRaw);
   const stats: QueryStats = {
     rowsAffected: 0,
     rowsPrinted: 0,
