@@ -150,6 +150,7 @@ const bootContainer = async (
   user: string;
   password: string;
   db: string;
+  absBuilddir: string;
   stop: () => Promise<void>;
 }> => {
   const moduleName = '@testcontainers/postgresql';
@@ -166,30 +167,96 @@ const bootContainer = async (
     );
     process.exit(2);
   }
+  type BindMount = { source: string; target: string; mode?: 'ro' | 'rw' };
   type ContainerHandle = {
     withDatabase(db: string): ContainerHandle;
     withUsername(u: string): ContainerHandle;
     withPassword(p: string): ContainerHandle;
+    withBindMounts(mounts: BindMount[]): ContainerHandle;
     start(): Promise<{
       getHost(): string;
       getMappedPort(p: number): number;
       stop(): Promise<unknown>;
     }>;
   };
+  // Allocate abs_builddir up-front and bind-mount it into the container
+  // so `\g :'g_out_file'` (host writes) and `COPY ... FROM :'g_out_file'`
+  // (server reads) see the same path. Mirrors pg-fixture.ts setup —
+  // without it, the server can't see files the client writes.
+  const fs = await import('node:fs');
+  const absBuilddir = fs.mkdtempSync(
+    join(tmpdir(), 'psql-conformance-regress-'),
+  );
+  fs.chmodSync(absBuilddir, 0o755);
+  fs.mkdirSync(join(absBuilddir, 'results'), { recursive: true, mode: 0o777 });
   const built = new mod.PostgreSqlContainer(image) as ContainerHandle;
   const started = await built
     .withDatabase('regression')
     .withUsername('postgres')
     .withPassword('postgres')
+    .withBindMounts([{ source: absBuilddir, target: absBuilddir, mode: 'rw' }])
     .start();
+  // Seed `onek` / `tenk1` (with the unique2 index) so the vendored
+  // psql.sql references — and chunked-cursor FETCH_COUNT test — resolve.
+  // pg-fixture.ts seeds via its own setup path; the matrix runner takes
+  // the env-var bypass which skips that, so we mirror the seed here.
+  const seedPath = join(
+    process.cwd(),
+    'tests',
+    'psql-conformance',
+    'vendor',
+    'postgres-18.0',
+    'src',
+    'test',
+    'regress',
+    'sql',
+    'test_setup_minimal.sql',
+  );
+  if (existsSync(seedPath)) {
+    const host = started.getHost();
+    const port = started.getMappedPort(5432);
+    const seedResult = spawnSync(
+      'psql',
+      [
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-h',
+        host,
+        '-p',
+        String(port),
+        '-U',
+        'postgres',
+        '-d',
+        'regression',
+        '-f',
+        seedPath,
+      ],
+      {
+        env: { ...process.env, PGPASSWORD: 'postgres' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    if (seedResult.status !== 0) {
+      const err = (seedResult.stderr ?? Buffer.alloc(0)).toString();
+      process.stderr.write(
+        `[matrix] warning: seed script failed (status ${String(seedResult.status)}):\n${err.slice(0, 400)}\n`,
+      );
+    }
+  }
   return {
     host: started.getHost(),
     port: started.getMappedPort(5432),
     user: 'postgres',
     password: 'postgres',
     db: 'regression',
+    absBuilddir,
     stop: async () => {
       await started.stop();
+      try {
+        fs.rmSync(absBuilddir, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
     },
   };
 };
@@ -216,6 +283,10 @@ const runConformance = (
     PGCONFORMANCE_PG_USER: pgConn.user,
     PGCONFORMANCE_PG_PASSWORD: pgConn.password,
     PGCONFORMANCE_PG_DB: pgConn.db,
+    // abs_builddir is bind-mounted into the container at the same
+    // path; surface it so regress.spec.ts reuses it instead of allocating
+    // its own (would land on a different inode the container can't see).
+    PGCONFORMANCE_ABS_BUILDDIR: pgConn.absBuilddir,
     // Surface the slot's PG major so the harness can apply
     // version-conditional normalize rules without round-tripping
     // through the server-side probe (the GHA path uses the same env
