@@ -117,13 +117,17 @@ describe('findCompletions: SQL keyword completion at start of statement', () => 
     expect(r.candidates).toContain('SELECT');
   });
 
-  it('completes empty prefix to the full keyword list (lowercased by default)', async () => {
+  it('completes empty prefix to the full keyword list (UPPERCASE under preserve-upper)', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions([], '', ctx);
-    expect(r.candidates).toContain('select');
-    expect(r.candidates).toContain('update');
-    expect(r.candidates).toContain('insert into');
-    expect(r.candidates).toContain('delete from');
+    // Empty input under preserve-upper (default) follows upstream
+    // `pg_strdup_keyword_case`: first char is `\0`, neither lowercase
+    // nor alpha, so the keyword is emitted UPPERCASE. See applyCase in
+    // rules.ts for the parity rationale.
+    expect(r.candidates).toContain('SELECT');
+    expect(r.candidates).toContain('UPDATE');
+    expect(r.candidates).toContain('INSERT INTO');
+    expect(r.candidates).toContain('DELETE FROM');
   });
 
   it('keyword candidates are lowercased by default', async () => {
@@ -405,30 +409,30 @@ describe('findCompletions: ALTER TABLE deep sub-actions', () => {
   it('ALTER TABLE foo → list of sub-actions', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'TABLE', 'foo'], '', ctx);
-    expect(r.candidates).toContain('add');
-    expect(r.candidates).toContain('drop');
-    expect(r.candidates).toContain('rename');
-    expect(r.candidates).toContain('set');
-    expect(r.candidates).toContain('owner to');
-    expect(r.candidates).toContain('replica identity');
-    expect(r.candidates).toContain('validate constraint');
+    expect(r.candidates).toContain('ADD');
+    expect(r.candidates).toContain('DROP');
+    expect(r.candidates).toContain('RENAME');
+    expect(r.candidates).toContain('SET');
+    expect(r.candidates).toContain('OWNER TO');
+    expect(r.candidates).toContain('REPLICA IDENTITY');
+    expect(r.candidates).toContain('VALIDATE CONSTRAINT');
   });
 
   it('ALTER TABLE foo ADD → COLUMN, CONSTRAINT, CHECK', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'TABLE', 'foo', 'ADD'], '', ctx);
-    expect(r.candidates).toContain('column');
-    expect(r.candidates).toContain('constraint');
-    expect(r.candidates).toContain('check');
-    expect(r.candidates).toContain('foreign key');
+    expect(r.candidates).toContain('COLUMN');
+    expect(r.candidates).toContain('CONSTRAINT');
+    expect(r.candidates).toContain('CHECK');
+    expect(r.candidates).toContain('FOREIGN KEY');
   });
 
   it('ALTER TABLE foo DROP → COLUMN/CONSTRAINT/IF EXISTS', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'TABLE', 'foo', 'DROP'], '', ctx);
-    expect(r.candidates).toContain('column');
-    expect(r.candidates).toContain('constraint');
-    expect(r.candidates).toContain('if exists');
+    expect(r.candidates).toContain('COLUMN');
+    expect(r.candidates).toContain('CONSTRAINT');
+    expect(r.candidates).toContain('IF EXISTS');
   });
 
   it('ALTER TABLE foo ALTER → alter-column sub-actions', async () => {
@@ -438,9 +442,9 @@ describe('findCompletions: ALTER TABLE deep sub-actions', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('set default');
-    expect(r.candidates).toContain('drop not null');
-    expect(r.candidates).toContain('set data type');
+    expect(r.candidates).toContain('SET DEFAULT');
+    expect(r.candidates).toContain('DROP NOT NULL');
+    expect(r.candidates).toContain('SET DATA TYPE');
   });
 
   it('ALTER TABLE foo RENAME → TO/COLUMN/CONSTRAINT', async () => {
@@ -450,8 +454,8 @@ describe('findCompletions: ALTER TABLE deep sub-actions', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('column');
-    expect(r.candidates).toContain('to');
+    expect(r.candidates).toContain('COLUMN');
+    expect(r.candidates).toContain('TO');
   });
 
   it('ALTER TABLE foo ENABLE → ROW LEVEL SECURITY, TRIGGER, RULE', async () => {
@@ -461,9 +465,9 @@ describe('findCompletions: ALTER TABLE deep sub-actions', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('row level security');
-    expect(r.candidates).toContain('trigger');
-    expect(r.candidates).toContain('rule');
+    expect(r.candidates).toContain('ROW LEVEL SECURITY');
+    expect(r.candidates).toContain('TRIGGER');
+    expect(r.candidates).toContain('RULE');
   });
 
   it('ALTER TABLE foo REPLICA IDENTITY → DEFAULT/FULL/NOTHING/USING INDEX', async () => {
@@ -473,10 +477,10 @@ describe('findCompletions: ALTER TABLE deep sub-actions', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('default');
-    expect(r.candidates).toContain('full');
-    expect(r.candidates).toContain('nothing');
-    expect(r.candidates).toContain('using index');
+    expect(r.candidates).toContain('DEFAULT');
+    expect(r.candidates).toContain('FULL');
+    expect(r.candidates).toContain('NOTHING');
+    expect(r.candidates).toContain('USING INDEX');
   });
 });
 
@@ -484,10 +488,10 @@ describe('findCompletions: ALTER other objects deep sub-actions', () => {
   it('ALTER VIEW foo → ALTER/RENAME/SET/OWNER TO', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'VIEW', 'foo'], '', ctx);
-    expect(r.candidates).toContain('alter');
-    expect(r.candidates).toContain('rename');
-    expect(r.candidates).toContain('set');
-    expect(r.candidates).toContain('owner to');
+    expect(r.candidates).toContain('ALTER');
+    expect(r.candidates).toContain('RENAME');
+    expect(r.candidates).toContain('SET');
+    expect(r.candidates).toContain('OWNER TO');
   });
 
   it('ALTER MATERIALIZED VIEW foo → CLUSTER ON/RENAME etc.', async () => {
@@ -497,95 +501,95 @@ describe('findCompletions: ALTER other objects deep sub-actions', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('cluster on');
-    expect(r.candidates).toContain('rename');
-    expect(r.candidates).toContain('owner to');
+    expect(r.candidates).toContain('CLUSTER ON');
+    expect(r.candidates).toContain('RENAME');
+    expect(r.candidates).toContain('OWNER TO');
   });
 
   it('ALTER INDEX foo → RENAME/SET/ATTACH PARTITION', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'INDEX', 'foo'], '', ctx);
-    expect(r.candidates).toContain('rename');
-    expect(r.candidates).toContain('set');
-    expect(r.candidates).toContain('attach partition');
+    expect(r.candidates).toContain('RENAME');
+    expect(r.candidates).toContain('SET');
+    expect(r.candidates).toContain('ATTACH PARTITION');
   });
 
   it('ALTER SEQUENCE foo → INCREMENT BY/RESTART/OWNED BY', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'SEQUENCE', 'foo'], '', ctx);
-    expect(r.candidates).toContain('increment by');
-    expect(r.candidates).toContain('restart');
-    expect(r.candidates).toContain('owned by');
+    expect(r.candidates).toContain('INCREMENT BY');
+    expect(r.candidates).toContain('RESTART');
+    expect(r.candidates).toContain('OWNED BY');
   });
 
   it('ALTER FUNCTION foo → COST/IMMUTABLE/VOLATILE/STABLE', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'FUNCTION', 'foo'], '', ctx);
-    expect(r.candidates).toContain('cost');
-    expect(r.candidates).toContain('immutable');
-    expect(r.candidates).toContain('volatile');
-    expect(r.candidates).toContain('stable');
+    expect(r.candidates).toContain('COST');
+    expect(r.candidates).toContain('IMMUTABLE');
+    expect(r.candidates).toContain('VOLATILE');
+    expect(r.candidates).toContain('STABLE');
   });
 
   it('ALTER TYPE foo → ADD VALUE/RENAME ATTRIBUTE', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'TYPE', 'foo'], '', ctx);
-    expect(r.candidates).toContain('add value');
-    expect(r.candidates).toContain('rename attribute');
-    expect(r.candidates).toContain('set schema');
+    expect(r.candidates).toContain('ADD VALUE');
+    expect(r.candidates).toContain('RENAME ATTRIBUTE');
+    expect(r.candidates).toContain('SET SCHEMA');
   });
 
   it('ALTER ROLE alice → PASSWORD/SUPERUSER/RENAME TO', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'ROLE', 'alice'], '', ctx);
-    expect(r.candidates).toContain('password');
-    expect(r.candidates).toContain('superuser');
-    expect(r.candidates).toContain('rename to');
+    expect(r.candidates).toContain('PASSWORD');
+    expect(r.candidates).toContain('SUPERUSER');
+    expect(r.candidates).toContain('RENAME TO');
   });
 
   it('ALTER USER alice → equivalent to ROLE', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'USER', 'alice'], '', ctx);
-    expect(r.candidates).toContain('password');
-    expect(r.candidates).toContain('login');
+    expect(r.candidates).toContain('PASSWORD');
+    expect(r.candidates).toContain('LOGIN');
   });
 
   it('ALTER DATABASE mydb → OWNER TO/RENAME TO/CONNECTION LIMIT', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'DATABASE', 'mydb'], '', ctx);
-    expect(r.candidates).toContain('owner to');
-    expect(r.candidates).toContain('rename to');
-    expect(r.candidates).toContain('connection limit');
+    expect(r.candidates).toContain('OWNER TO');
+    expect(r.candidates).toContain('RENAME TO');
+    expect(r.candidates).toContain('CONNECTION LIMIT');
   });
 
   it('ALTER SCHEMA public → OWNER TO/RENAME TO', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'SCHEMA', 'public'], '', ctx);
-    expect(r.candidates).toEqual(['owner to', 'rename to']);
+    expect(r.candidates).toEqual(['OWNER TO', 'RENAME TO']);
   });
 
   it('ALTER EXTENSION pg_trgm → ADD/DROP/UPDATE/SET SCHEMA', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'EXTENSION', 'pg_trgm'], '', ctx);
-    expect(r.candidates).toContain('add');
-    expect(r.candidates).toContain('drop');
-    expect(r.candidates).toContain('set schema');
-    expect(r.candidates).toContain('update');
+    expect(r.candidates).toContain('ADD');
+    expect(r.candidates).toContain('DROP');
+    expect(r.candidates).toContain('SET SCHEMA');
+    expect(r.candidates).toContain('UPDATE');
   });
 
   it('ALTER POLICY mypol → ON/RENAME TO', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'POLICY', 'mypol'], '', ctx);
-    expect(r.candidates).toEqual(['on', 'rename to']);
+    expect(r.candidates).toEqual(['ON', 'RENAME TO']);
   });
 
   it('ALTER PUBLICATION mypub → ADD/DROP/SET/RENAME', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['ALTER', 'PUBLICATION', 'mypub'], '', ctx);
-    expect(r.candidates).toContain('add');
-    expect(r.candidates).toContain('drop');
-    expect(r.candidates).toContain('set');
-    expect(r.candidates).toContain('rename to');
+    expect(r.candidates).toContain('ADD');
+    expect(r.candidates).toContain('DROP');
+    expect(r.candidates).toContain('SET');
+    expect(r.candidates).toContain('RENAME TO');
   });
 
   it('ALTER SUBSCRIPTION mysub → ENABLE/DISABLE/CONNECTION', async () => {
@@ -595,9 +599,9 @@ describe('findCompletions: ALTER other objects deep sub-actions', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('enable');
-    expect(r.candidates).toContain('disable');
-    expect(r.candidates).toContain('connection');
+    expect(r.candidates).toContain('ENABLE');
+    expect(r.candidates).toContain('DISABLE');
+    expect(r.candidates).toContain('CONNECTION');
   });
 });
 
@@ -655,7 +659,7 @@ describe('findCompletions: GUC names via pg_settings', () => {
   it('SET work_mem → TO (upstream tab-complete.in.c emits just TO)', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['SET', 'work_mem'], '', ctx);
-    expect(r.candidates).toContain('to');
+    expect(r.candidates).toContain('TO');
     // `=` is valid SET syntax but upstream completes to `TO` only —
     // a single unique candidate so `set foo<tab><tab>` resolves to
     // `set foo TO ` rather than listing two near-synonymous separators.
@@ -665,10 +669,10 @@ describe('findCompletions: GUC names via pg_settings', () => {
   it('SET DateStyle TO → ISO/GERMAN/SQL/POSTGRES', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['SET', 'DateStyle', 'TO'], '', ctx);
-    expect(r.candidates).toContain('iso');
-    expect(r.candidates).toContain('german');
-    expect(r.candidates).toContain('sql');
-    expect(r.candidates).toContain('postgres');
+    expect(r.candidates).toContain('ISO');
+    expect(r.candidates).toContain('GERMAN');
+    expect(r.candidates).toContain('SQL');
+    expect(r.candidates).toContain('POSTGRES');
   });
 });
 
@@ -680,15 +684,15 @@ describe('findCompletions: CREATE INDEX', () => {
   it('CREATE INDEX → CONCURRENTLY/IF NOT EXISTS/ON', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['CREATE', 'INDEX'], '', ctx);
-    expect(r.candidates).toContain('concurrently');
-    expect(r.candidates).toContain('if not exists');
-    expect(r.candidates).toContain('on');
+    expect(r.candidates).toContain('CONCURRENTLY');
+    expect(r.candidates).toContain('IF NOT EXISTS');
+    expect(r.candidates).toContain('ON');
   });
 
   it('CREATE INDEX myidx → ON', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['CREATE', 'INDEX', 'myidx'], '', ctx);
-    expect(r.candidates).toEqual(['on']);
+    expect(r.candidates).toEqual(['ON']);
   });
 
   it('CREATE INDEX myidx ON → tables', async () => {
@@ -728,18 +732,18 @@ describe('findCompletions: CREATE INDEX', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('btree');
-    expect(r.candidates).toContain('hash');
-    expect(r.candidates).toContain('gist');
-    expect(r.candidates).toContain('gin');
-    expect(r.candidates).toContain('brin');
+    expect(r.candidates).toContain('BTREE');
+    expect(r.candidates).toContain('HASH');
+    expect(r.candidates).toContain('GIST');
+    expect(r.candidates).toContain('GIN');
+    expect(r.candidates).toContain('BRIN');
   });
 
   it('CREATE UNIQUE INDEX → CONCURRENTLY/IF NOT EXISTS/ON', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['CREATE', 'UNIQUE', 'INDEX'], '', ctx);
-    expect(r.candidates).toContain('concurrently');
-    expect(r.candidates).toContain('on');
+    expect(r.candidates).toContain('CONCURRENTLY');
+    expect(r.candidates).toContain('ON');
   });
 });
 
@@ -751,11 +755,11 @@ describe('findCompletions: post-FROM tail keywords', () => {
   it('SELECT * FROM t → JOIN, WHERE, GROUP BY, ORDER BY, LIMIT', async () => {
     const ctx = { settings: makeSettings() };
     const r = await findCompletions(['SELECT', '*', 'FROM', 'users'], '', ctx);
-    expect(r.candidates).toContain('join');
-    expect(r.candidates).toContain('where');
-    expect(r.candidates).toContain('group by');
-    expect(r.candidates).toContain('order by');
-    expect(r.candidates).toContain('limit');
+    expect(r.candidates).toContain('JOIN');
+    expect(r.candidates).toContain('WHERE');
+    expect(r.candidates).toContain('GROUP BY');
+    expect(r.candidates).toContain('ORDER BY');
+    expect(r.candidates).toContain('LIMIT');
   });
 
   it('SELECT … FROM t W → completes WHERE', async () => {
@@ -772,7 +776,7 @@ describe('findCompletions: post-FROM tail keywords', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toEqual(['on', 'using']);
+    expect(r.candidates).toEqual(['ON', 'USING']);
   });
 
   it('SELECT … FROM t WHERE id → AND/OR/IS/IN/LIKE/NOT/BETWEEN', async () => {
@@ -782,12 +786,12 @@ describe('findCompletions: post-FROM tail keywords', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('and');
-    expect(r.candidates).toContain('or');
-    expect(r.candidates).toContain('is');
-    expect(r.candidates).toContain('in');
-    expect(r.candidates).toContain('like');
-    expect(r.candidates).toContain('between');
+    expect(r.candidates).toContain('AND');
+    expect(r.candidates).toContain('OR');
+    expect(r.candidates).toContain('IS');
+    expect(r.candidates).toContain('IN');
+    expect(r.candidates).toContain('LIKE');
+    expect(r.candidates).toContain('BETWEEN');
   });
 });
 
@@ -803,11 +807,11 @@ describe('findCompletions: window functions', () => {
       '',
       ctx,
     );
-    expect(r.candidates).toContain('partition by');
-    expect(r.candidates).toContain('order by');
-    expect(r.candidates).toContain('rows');
-    expect(r.candidates).toContain('range');
-    expect(r.candidates).toContain('groups');
+    expect(r.candidates).toContain('PARTITION BY');
+    expect(r.candidates).toContain('ORDER BY');
+    expect(r.candidates).toContain('ROWS');
+    expect(r.candidates).toContain('RANGE');
+    expect(r.candidates).toContain('GROUPS');
   });
 });
 

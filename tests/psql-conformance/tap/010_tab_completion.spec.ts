@@ -670,19 +670,13 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   );
 
   // GUC completion (lines 366-387). We support unqualified GUC names
-  // via `Query_for_list_of_set_vars`; the failing cases are around
-  // qualified GUCs (`plpgsql.variable_conflict`) and value completion
-  // (`iso<tab>` → `iso_8601`), neither of which has a rule today.
-  // `set interval<tab>` → `intervalstyle ` is correct (unique GUC),
-  // and the second tab DOES insert `to` — but in lowercase. Upstream
-  // expects `TO` uppercase. The discrepancy is in our preserve-upper
-  // case-folding for the empty-input case: we fall back to lowercase
-  // (see filterAndCase in src/psql/complete/rules.ts line 898),
-  // upstream falls back to uppercase. Engine-level fix; left as
-  // `it.todo` until that case-folding behavior is reconciled.
-  it.todo(
-    'complete a GUC name — set interval<tab><tab> → intervalstyle TO (line 366; engine: empty-input preserve-upper case-folding diverges from upstream)',
-  );
+  // via `Query_for_list_of_set_vars`; the first tab on `interval`
+  // resolves uniquely to `intervalstyle`, and the second tab now lands
+  // `TO` uppercase thanks to the upstream-parity case-folding in
+  // `applyCase` (empty input under preserve-upper → uppercase).
+  it('complete a GUC name — set interval<tab><tab> → intervalstyle TO (line 366)', async () => {
+    await checkCompletion('set interval\t\t', /intervalstyle TO/);
+  });
   it.todo(
     'complete a GUC enum value — iso<tab> → iso_8601 (line 370; needs GUC-value completion)',
   );

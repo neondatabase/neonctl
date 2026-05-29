@@ -895,28 +895,26 @@ const applyCase = (
   if (containsNonKeywordChar(candidate)) return candidate;
 
   const mode = settings.compCase;
-  const hasUpper = /[A-Z]/.test(typed);
-  const hasLower = /[a-z]/.test(typed);
-  // With empty input we have no signal either way. Psql's interactive
-  // behaviour is to fall back to lowercase so the empty-prompt completion
-  // listing looks like the SQL the user typically writes (lowercase
-  // keywords). Unit tests pin this so a regression would be loud.
-  const empty = !hasUpper && !hasLower;
-  switch (mode) {
-    case 'lower':
-      return candidate.toLowerCase();
-    case 'upper':
-      return candidate.toUpperCase();
-    case 'preserve-lower':
-      // Default lowercase; uppercase only when user typed uppercase.
-      return hasUpper ? candidate.toUpperCase() : candidate.toLowerCase();
-    case 'preserve-upper':
-    default:
-      // Default uppercase; lowercase when user typed lowercase OR provided
-      // no case signal at all (empty prefix on the prompt).
-      if (empty) return candidate.toLowerCase();
-      return hasLower ? candidate.toLowerCase() : candidate.toUpperCase();
-  }
+  // Mirror upstream `pg_strdup_keyword_case` (tab-complete.c): the case
+  // decision keys off the FIRST character of the user's input, not the
+  // presence of any case anywhere. Empty input (`first` = 0) is treated as
+  // neither lowercase nor alpha, so:
+  //   - preserve-upper → UPPERCASE (default mode; matches vanilla psql 18
+  //     for the `set <name> <TAB><TAB>` → `TO` case, upstream test
+  //     010_tab_completion.pl line 366).
+  //   - preserve-lower → lowercase.
+  // The same rule applies when the first char is a non-letter (digit, `_`,
+  // punctuation) — those preserve the mode's default direction.
+  const first = typed[0] ?? '';
+  const firstIsLower = /[a-z]/.test(first);
+  const firstIsAlpha = /[A-Za-z]/.test(first);
+  const lowerCaseIt =
+    mode === 'lower' ||
+    ((mode === 'preserve-lower' || mode === 'preserve-upper') &&
+      firstIsLower) ||
+    (mode === 'preserve-lower' && !firstIsAlpha);
+  if (mode === 'upper') return candidate.toUpperCase();
+  return lowerCaseIt ? candidate.toLowerCase() : candidate.toUpperCase();
 };
 
 const containsNonKeywordChar = (s: string): boolean => /[^A-Za-z0-9 ]/.test(s);
