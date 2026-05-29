@@ -967,13 +967,48 @@ export const findCompletions = async (
   // Re-read the connection on every call so `\c` is picked up immediately.
   const conn = ctx.settings.db ?? ctx.conn ?? null;
 
-  // ----- Variable expansion (`:NAME`) takes priority over anything else.
+  // ----- Variable expansion (`:NAME`, `:'NAME'`, `:"NAME"`, `:{?NAME}`)
+  // takes priority over anything else. The interpolation forms are valid
+  // both inside SQL and inside backslash-command args (`\echo :VERB`),
+  // so this branch fires regardless of `prevWords`.
   if (currentWord.startsWith(':') && !currentWord.startsWith('::')) {
-    const prefix = currentWord.slice(1);
     const names = listVarNames(ctx.settings);
-    const filt = names
-      .filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase()))
-      .map((n) => ':' + n);
+    const lc = (s: string): string => s.toLowerCase();
+
+    // `:{?NAME}` — test-form (psqlscan_test_variable upstream). The
+    // candidate must close the `}` so the user's literal `:{?VERB`
+    // expands to `:{?VERBOSITY}` in one Tab.
+    if (currentWord.startsWith(':{?')) {
+      const prefix = currentWord.slice(3);
+      const lp = lc(prefix);
+      const cands = names
+        .filter((n) => lc(n).startsWith(lp))
+        .map((n) => ':{?' + n + '}');
+      return { candidates: cands };
+    }
+    // `:'NAME'` / `:"NAME"` — quoted-substitution forms (psqlscan emits
+    // a quoted literal / identifier). Close the matching quote so the
+    // unique-match path appends a trailing space cleanly.
+    if (currentWord.startsWith(":'")) {
+      const prefix = currentWord.slice(2);
+      const lp = lc(prefix);
+      const cands = names
+        .filter((n) => lc(n).startsWith(lp))
+        .map((n) => ":'" + n + "'");
+      return { candidates: cands };
+    }
+    if (currentWord.startsWith(':"')) {
+      const prefix = currentWord.slice(2);
+      const lp = lc(prefix);
+      const cands = names
+        .filter((n) => lc(n).startsWith(lp))
+        .map((n) => ':"' + n + '"');
+      return { candidates: cands };
+    }
+    // Plain `:NAME` — bare substitution.
+    const prefix = currentWord.slice(1);
+    const lp = lc(prefix);
+    const filt = names.filter((n) => lc(n).startsWith(lp)).map((n) => ':' + n);
     return { candidates: filt };
   }
 

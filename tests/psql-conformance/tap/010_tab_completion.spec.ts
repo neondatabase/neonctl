@@ -714,12 +714,20 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   it('complete a psql variable value — \\set VERBOSITY def<tab> → default (line 394)', async () => {
     await checkCompletion('\\set VERBOSITY def\t', /default /);
   });
-  it.todo(
-    'complete interpolated psql variable name — \\echo :VERB<tab> → :VERBOSITY (line 398; needs `:`-interpolation context)',
-  );
-  it.todo(
-    'complete a psql variable test — \\echo :{?VERB<tab> → :{?VERBOSITY} (line 406; needs `:{?…}` syntax support)',
-  );
+  // `\echo :VERB<tab>` resolves to `:VERBOSITY ` via the var-interpolation
+  // path in `findCompletions`. The detector already fires on any
+  // `currentWord` starting with `:`, so the backslash prefix doesn't
+  // matter — it just provides the context. Upstream regex matches
+  // `qr/:VERBOSITY /`.
+  it('complete interpolated psql variable name — \\echo :VERB<tab> → :VERBOSITY (line 398)', async () => {
+    await checkCompletion('\\echo :VERB\t', /:VERBOSITY /);
+  });
+  // `:{?NAME}` test-form: the rule emits `:{?VERBOSITY}` as a unique
+  // candidate so the line editor appends a trailing space after the
+  // closing brace.
+  it('complete a psql variable test — \\echo :{?VERB<tab> → :{?VERBOSITY} (line 406)', async () => {
+    await checkCompletion('\\echo :{?VERB\t', /:\{\?VERBOSITY} /);
+  });
 
   // COPY FROM WITH (DEFAULT) (line 419). Needs a COPY-options rule that
   // recognises the `WITH (…)` option list; our COPY rule stops at the

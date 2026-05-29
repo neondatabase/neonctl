@@ -395,6 +395,38 @@ describe('findCompletions: variable expansion', () => {
     // Should NOT trigger var completion (returns top-level keywords instead).
     expect(r.candidates).not.toContain(':');
   });
+
+  it(':NAME interpolation fires inside backslash-arg context (\\echo)', async () => {
+    const settings = makeSettings();
+    settings.vars.set('MY_VAR', 'value');
+    const ctx = { settings };
+    const r = await findCompletions(['\\echo'], ':MY', ctx);
+    expect(r.candidates).toEqual([':MY_VAR']);
+  });
+
+  it(':{?NAME} test-form completion closes the brace', async () => {
+    const settings = makeSettings();
+    settings.vars.set('MY_VAR', 'value');
+    const ctx = { settings };
+    const r = await findCompletions(['\\echo'], ':{?MY', ctx);
+    expect(r.candidates).toEqual([':{?MY_VAR}']);
+  });
+
+  it(":'NAME' literal-quote interpolation closes the single-quote", async () => {
+    const settings = makeSettings();
+    settings.vars.set('MY_VAR', 'value');
+    const ctx = { settings };
+    const r = await findCompletions(['\\echo'], ":'MY", ctx);
+    expect(r.candidates).toEqual([":'MY_VAR'"]);
+  });
+
+  it(':"NAME" ident-quote interpolation closes the double-quote', async () => {
+    const settings = makeSettings();
+    settings.vars.set('MY_VAR', 'value');
+    const ctx = { settings };
+    const r = await findCompletions(['\\echo'], ':"MY', ctx);
+    expect(r.candidates).toEqual([':"MY_VAR"']);
+  });
 });
 
 // ---------------------------------------------------------------------------
