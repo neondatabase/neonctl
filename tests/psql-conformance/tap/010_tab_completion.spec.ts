@@ -632,9 +632,13 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   it('offer keyword from SchemaQuery — DROP TYPE big<tab> → DROP TYPE bigint (line 328)', async () => {
     await checkCompletion('DROP TYPE big\t', /DROP TYPE bigint /);
   });
-  it.todo(
-    'check create_command_generator — CREATE TY<tab> → CREATE TYPE (line 336; needs CREATE multi-word completion)',
-  );
+  it('check create_command_generator — CREATE TY<tab> → CREATE TYPE (line 336)', async () => {
+    // The existing `TailMatches(['CREATE'])` arm filters CREATE_OBJECTS
+    // by the in-progress current word — `TY` resolves uniquely to
+    // `TYPE`, mirroring upstream's `create_command_generator` walking
+    // the `words_after_create[]` table.
+    await checkCompletion('CREATE TY\t', /CREATE TYPE /);
+  });
 
   // words_after_create (line 344). CREATE TABLE name suggestion uses the
   // table list as a hint set; our rule returns no candidates for

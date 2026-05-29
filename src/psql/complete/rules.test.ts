@@ -942,3 +942,33 @@ describe('findCompletions: DROP TYPE with built-in datatype keywords', () => {
     expect(r.candidates).toContain('boolean');
   });
 });
+
+// ---------------------------------------------------------------------------
+// CREATE multi-word completion: `CREATE TY<TAB>` → `CREATE TYPE` falls out
+// of the existing `TailMatches(['CREATE'])` arm filtering CREATE_OBJECTS by
+// the in-progress current word — confirm with a pinned assertion (mirrors
+// 010_tab_completion.pl line 336).
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: CREATE <prefix> picks sub-object keyword', () => {
+  it('CREATE TY → TYPE (unique match)', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['CREATE'], 'TY', ctx);
+    expect(r.candidates).toContain('TYPE');
+    expect(r.candidates).not.toContain('TABLE');
+  });
+
+  it('CREATE T → TABLE, TYPE, TRIGGER, ... (multiple matches)', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['CREATE'], 'T', ctx);
+    expect(r.candidates).toContain('TABLE');
+    expect(r.candidates).toContain('TYPE');
+    expect(r.candidates).toContain('TRIGGER');
+  });
+
+  it('CREATE TYP → TYPE only', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['CREATE'], 'TYP', ctx);
+    expect(r.candidates).toEqual(['TYPE']);
+  });
+});
