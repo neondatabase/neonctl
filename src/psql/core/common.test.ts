@@ -957,6 +957,75 @@ describe('executeAndPrint', () => {
   });
 });
 
+describe('sendQuery — \\;-chain pre-error replay', () => {
+  test('partialResults on thrown error are rendered before the ERROR line', async () => {
+    // Mimic the wire layer's contract: when an ErrorResponse arrives mid-
+    // batch, the thrown Error carries the accumulated `finished[]` results
+    // (set by `ReadyForQuery`'s `partialResults` attach). `sendQuery`
+    // renders them via `renderResultSets` before recording the error.
+    const ok = buildResultSet('SELECT', [{ name: 'n' }], [[42]]);
+    const err = Object.assign(new Error('division by zero'), {
+      severity: 'ERROR',
+      code: '22012',
+      partialResults: [ok],
+    });
+    const canned = new Map<string, Canned>([
+      ['SELECT 42 \\; SELECT 1/0;', err],
+    ]);
+    const { ctx, stdout, stderr } = buildCtxWithBuffers({ canned });
+    const stats = await sendQuery(ctx, 'SELECT 42 \\; SELECT 1/0;');
+    expect(stats.hadError).toBe(true);
+    // The pre-error result table is on stdout.
+    expect(stdout.text()).toMatch(/\b42\b/);
+    expect(stdout.text()).toMatch(/\(1 row\)/);
+    // The ERROR diagnostic is on stderr.
+    expect(stderr.text()).toContain('division by zero');
+  });
+});
+
+describe('renderResultSets — COPY-OUT byte ordering', () => {
+  test('rs.copyOutBytes is emitted at the result position in a \\;-chain', async () => {
+    // Three results: a SELECT, then a COPY-out with bytes, then another
+    // SELECT. The COPY-out bytes must land BETWEEN the two SELECT tables
+    // — not before either of them (which is what a streaming sink would
+    // produce by writing at receive time).
+    const tableA = buildResultSet('SELECT', [{ name: 'begin' }], [['ok']]);
+    const copy: ResultSet = {
+      command: 'COPY',
+      rowCount: 2,
+      oid: null,
+      fields: [],
+      rows: [],
+      notices: [],
+      copyOutBytes: [Buffer.from('Calvin\n'), Buffer.from('Hobbes\n')],
+    };
+    const tableB = buildResultSet('SELECT', [{ name: 'done' }], [['ok']]);
+    const canned = new Map<string, Canned>([
+      [
+        "SELECT 'ok' AS begin \\; COPY t TO STDOUT \\; SELECT 'ok' AS done;",
+        [tableA, copy, tableB],
+      ],
+    ]);
+    const { ctx, stdout } = buildCtxWithBuffers({ canned });
+    await sendQuery(
+      ctx,
+      "SELECT 'ok' AS begin \\; COPY t TO STDOUT \\; SELECT 'ok' AS done;",
+    );
+    const out = stdout.text();
+    const beginIdx = out.indexOf('begin');
+    const calvinIdx = out.indexOf('Calvin');
+    const hobbesIdx = out.indexOf('Hobbes');
+    const doneIdx = out.indexOf('done');
+    expect(beginIdx).toBeGreaterThanOrEqual(0);
+    expect(calvinIdx).toBeGreaterThan(beginIdx);
+    expect(hobbesIdx).toBeGreaterThan(calvinIdx);
+    expect(doneIdx).toBeGreaterThan(hobbesIdx);
+    // `COPY N` tag is NOT emitted on the queryFout (matches upstream's
+    // handleCopyOut: bytes flow to queryFout, tag goes to status).
+    expect(out).not.toMatch(/^COPY 2$/m);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // psqlExec
 // ---------------------------------------------------------------------------
