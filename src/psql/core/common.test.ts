@@ -439,6 +439,56 @@ describe('sendQuery — FETCH_COUNT', () => {
     expect(out.match(/\(\d+ rows?\)/g)).toEqual(['(3 rows)']);
   });
 
+  test('FETCH_COUNT mid-error: accumulated chunks are flushed (header + rows) before the ERROR line', async () => {
+    // First chunk succeeds with 3 rows; second FETCH throws. Upstream
+    // print_cursor.c renders the first chunk's rows before the error
+    // line — we mirror by flushing the merged ResultSet (without the
+    // `(N rows)` footer) on the way out of the catch block.
+    let call = 0;
+    const fetchResults = new Map<string, Canned>([
+      [
+        'FETCH FORWARD 3 FROM _psql_cursor',
+        () => {
+          call += 1;
+          if (call === 1) {
+            return [
+              buildResultSet(
+                'FETCH',
+                [{ name: '?column?' }],
+                [[10], [20], [30]],
+              ),
+            ];
+          }
+          const err = Object.assign(new Error('division by zero'), {
+            severity: 'ERROR',
+            code: '22012',
+          });
+          throw err;
+        },
+      ],
+    ]);
+    const { ctx, stdout, stderr } = buildCtxWithBuffers({
+      canned: fetchResults,
+      settingsOverride: (s) => {
+        s.vars.set('FETCH_COUNT', '3');
+      },
+    });
+    const stats = await sendQuery(ctx, 'SELECT n FROM t;');
+    expect(stats.hadError).toBe(true);
+
+    const out = stdout.text();
+    // Header + the 3 rows from the first chunk must be present.
+    expect(out).toContain('?column?');
+    expect(out).toMatch(/\b10\b/);
+    expect(out).toMatch(/\b20\b/);
+    expect(out).toMatch(/\b30\b/);
+    // No `(N rows)` footer — partial flush suppresses it because the table
+    // is conceptually incomplete (matches upstream's chunked rendering).
+    expect(out).not.toMatch(/\(\d+ rows?\)/);
+    // Error landed on stderr.
+    expect(stderr.text()).toContain('division by zero');
+  });
+
   test('DECLARE failure: lastErrorResult.sqlText is the user query, position rebased into user-sql coords', async () => {
     // The user typed `SELECT error;`. Our wrapper sends
     // `DECLARE _psql_cursor NO SCROLL CURSOR FOR SELECT error`, which the

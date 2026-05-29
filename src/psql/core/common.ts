@@ -947,6 +947,28 @@ const runCursorLoop = async (
     }
     return { rowsAffected, rowsPrinted, lastRowCount: rowsPrinted };
   } catch (err) {
+    // Flush whatever chunks we successfully fetched before the error so the
+    // partial output lands ahead of the ERROR line. Mirrors upstream
+    // print_cursor.c: each chunk renders incrementally — when a later FETCH
+    // raises (e.g. division by zero on row 16 of a 10-row chunked stream),
+    // the first chunk's rows have already been printed. We accumulate into
+    // a single merged ResultSet here, so the partial flush is "print the
+    // merged buffer once, without the `(N rows)` footer the happy-path
+    // emits when the cursor completes cleanly". The footer is suppressed
+    // because the table is conceptually incomplete (upstream renders no
+    // `(N rows)` for the truncated chunk either).
+    if (merged !== null) {
+      merged.rowCount = merged.rows.length;
+      const partialOpts = {
+        ...ctx.settings.popt,
+        topt: { ...ctx.settings.popt.topt, defaultFooter: false },
+      };
+      try {
+        await printer.printQuery(merged, partialOpts, out);
+      } catch {
+        // ignore — surface the original error
+      }
+    }
     // Rebase the server-reported `position` from the synthetic wrapper's
     // coordinates into the user's SQL coordinates in place. Server error
     // positions come back relative to whatever statement we sent (DECLARE
