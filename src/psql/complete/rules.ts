@@ -1912,6 +1912,33 @@ const sqlRules = async (
       ),
     };
   }
+  if (TailMatches(prevWords, ['DROP', 'PUBLICATION'])) {
+    // Mirrors upstream's `words_after_create` PUBLICATION entry
+    // (VersionedQuery on `Query_for_list_of_publications`). Two-step
+    // completion: `DROP PUBLIC<TAB>` first resolves to `PUBLICATION`
+    // via the static DROP_OBJECTS list (handled below by the bare
+    // `DROP` arm), then `DROP PUBLICATION <TAB>` lists publications.
+    if (!conn) return { candidates: [] };
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_publications,
+        currentWord,
+      ),
+    };
+  }
+  if (TailMatches(prevWords, ['DROP', 'SUBSCRIPTION'])) {
+    // Same shape as DROP PUBLICATION — paired here for parity with the
+    // ALTER block above.
+    if (!conn) return { candidates: [] };
+    return {
+      candidates: await runCatalogQuery(
+        conn,
+        Query_for_list_of_subscriptions,
+        currentWord,
+      ),
+    };
+  }
   // Bare DROP — sub-object keywords.
   if (TailMatches(prevWords, ['DROP'])) {
     return {

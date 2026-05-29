@@ -655,12 +655,18 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
     expect(buf).toMatch(/mytab123\s+mytab246/);
   });
 
-  // VersionedQuery (line 352). Two-step completion DROP PUBLIC<tab> →
-  // DROP PUBLICATION, then publication name. We have the publication
-  // name rule but not the first-step "DROP PUBLIC" keyword detection.
-  it.todo(
-    'check VersionedQuery — DROP PUBLIC<tab>...<tab><tab> → DROP PUBLICATION some_publication (line 352; needs DROP keyword first-tab + VersionedQuery rule)',
-  );
+  // VersionedQuery (line 352). Two-step completion:
+  //   1. `DROP PUBLIC<TAB>` → `DROP PUBLICATION ` (via DROP_OBJECTS
+  //      static-list filter; `PUBLICATION` is the only DROP_OBJECTS
+  //      entry starting with `PUBLIC`).
+  //   2. `<TAB><TAB>` → `some_publication ` (via the DROP PUBLICATION
+  //      rule that runs `Query_for_list_of_publications`).
+  it('check VersionedQuery — DROP PUBLIC<tab>...<tab><tab> → DROP PUBLICATION some_publication (line 352)', async () => {
+    await checkCompletion(
+      'DROP PUBLIC\t \t\t',
+      /DROP PUBLICATION\s+some_publication /,
+    );
+  });
 
   // Multi-line completion / ANALYZE ( (line 360). Tab completion mid-
   // statement after an `(` on its own line — our tokenizer treats

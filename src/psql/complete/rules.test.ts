@@ -1044,3 +1044,50 @@ describe('findCompletions: CREATE TABLE name hints via existing tables', () => {
     expect(r.candidates).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// DROP <prefix> sub-object keyword + DROP PUBLICATION name completion.
+// Mirrors 010_tab_completion.pl line 352 `DROP PUBLIC<TAB>...<TAB><TAB>` →
+// `DROP PUBLICATION some_publication`. First tab resolves `PUBLIC` to
+// `PUBLICATION` via the static DROP_OBJECTS list; the follow-up tab uses
+// the catalog rule we add here.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: DROP multi-word completion + publication/subscription names', () => {
+  it('DROP PUBLIC → PUBLICATION (sub-object keyword match)', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['DROP'], 'PUBLIC', ctx);
+    expect(r.candidates).toEqual(['PUBLICATION']);
+  });
+
+  it('DROP SUBS → SUBSCRIPTION (sub-object keyword match)', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['DROP'], 'SUBS', ctx);
+    expect(r.candidates).toEqual(['SUBSCRIPTION']);
+  });
+
+  it('DROP PUBLICATION <prefix> → publication names from pg_publication', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_publication': ['some_publication', 'other_pub'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['DROP', 'PUBLICATION'], 'some', ctx);
+    expect(r.candidates).toContain('some_publication');
+  });
+
+  it('DROP PUBLICATION returns empty when no connection', async () => {
+    const ctx = { settings: makeSettings(null) };
+    const r = await findCompletions(['DROP', 'PUBLICATION'], '', ctx);
+    expect(r.candidates).toEqual([]);
+  });
+
+  it('DROP SUBSCRIPTION <prefix> → subscription names', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_subscription': ['sub_a', 'sub_b'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['DROP', 'SUBSCRIPTION'], 'sub', ctx);
+    expect(r.candidates).toContain('sub_a');
+    expect(r.candidates).toContain('sub_b');
+  });
+});
