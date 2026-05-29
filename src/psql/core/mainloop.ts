@@ -1188,8 +1188,23 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           }
           continue;
         }
+        // Upstream `HandleSlashCmds` looks up the command name BEFORE
+        // consulting the conditional stack: an unknown name emits
+        // `invalid command \X` to stderr regardless of branch state.
+        // Without this, e.g. `\if false \n \lo \n \endif` silently passes
+        // `\lo` through, but vanilla surfaces the diagnostic. Looking the
+        // command up here also lets us short-circuit the inactive branch
+        // without losing the unknown-command error.
         if (!ctx.cond.isActive()) {
-          // Skip non-cond commands inside an inactive branch.
+          if (ctx.registry.lookup(cmdName) === undefined) {
+            writeError(ctx, `invalid command \\${cmdName}`);
+            // Errors emitted in an inactive branch must NOT taint
+            // `lastWasError` (vanilla exits 0 from `\if false; \lo; \endif`)
+            // and must NOT trigger ON_ERROR_STOP. The diagnostic stands
+            // alone; the loop continues to the next chunk.
+          }
+          // Skip non-cond commands inside an inactive branch (run or not,
+          // registered or not).
           continue;
         }
         const bres = await dispatchRegisteredCommand(

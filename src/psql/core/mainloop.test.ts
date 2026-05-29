@@ -640,6 +640,39 @@ describe('runMainLoop — conditional dispatch', () => {
     expect(stderr.text()).toMatch(/reached EOF without finding closing/);
   });
 
+  // Upstream `HandleSlashCmds` does the registry lookup BEFORE consulting
+  // the conditional stack, so an unknown backslash command in an INACTIVE
+  // branch still emits `invalid command \X` to stderr. The diagnostic must
+  // fire, but it must NOT taint `lastWasError` (vanilla exits 0 from this
+  // shape) and must NOT trigger ON_ERROR_STOP.
+  test('unknown backslash inside \\if false branch still reports invalid command', async () => {
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['\\if false', '\\lo', '\\endif'],
+    });
+    const code = await runMainLoop(ctx);
+    expect(stderr.text()).toMatch(/invalid command \\lo/);
+    // Inactive branch — no SQL or known commands ran.
+    expect(db?.calls).toEqual([]);
+    expect(ctx.cond.depth()).toBe(0);
+    // Vanilla exits 0 from a script whose only failure was an unknown
+    // backslash in an inactive branch.
+    expect(code).toBe(EXIT_SUCCESS);
+  });
+
+  test('known backslash inside \\if false branch is skipped silently', async () => {
+    // Sanity check that the new lookup-before-active-check path doesn't
+    // accidentally run registered commands in an inactive branch. \echo
+    // is registered, so the lookup finds it — but cond.isActive() is false
+    // so it must NOT execute (no __ECHO_LAST update, no stderr write).
+    const { ctx, stderr } = buildCtx({
+      lines: ['\\if false', '\\echo skipped', '\\endif'],
+    });
+    const code = await runMainLoop(ctx);
+    expect(stderr.text()).toBe('');
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBeUndefined();
+    expect(code).toBe(EXIT_SUCCESS);
+  });
+
   // -------------------------------------------------------------------------
   // save_query_text_state / discard_query_text — \if-inside-statement.
   //
