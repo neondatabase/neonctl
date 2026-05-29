@@ -1197,7 +1197,15 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         // without losing the unknown-command error.
         if (!ctx.cond.isActive()) {
           if (ctx.registry.lookup(cmdName) === undefined) {
-            writeError(ctx, `invalid command \\${cmdName}`);
+            // Bare wording (no `psql: ERROR:` prefix) — vanilla's
+            // `psql_log_pre_callback` short-circuits when input has no
+            // line-number context (stdin pipe path), so the diagnostic
+            // is emitted via `pg_log_error_internal` as a raw string.
+            // Matches the expected output's `invalid command \lo` shape
+            // at psql.out:4698. Other writeError() call sites keep the
+            // prefix because they're errors WE emit from a known
+            // dispatch path, not from the unknown-command lookup miss.
+            ctx.stderr.write(`invalid command \\${cmdName}\n`);
             // Errors emitted in an inactive branch must NOT taint
             // `lastWasError` (vanilla exits 0 from `\if false; \lo; \endif`)
             // and must NOT trigger ON_ERROR_STOP. The diagnostic stands

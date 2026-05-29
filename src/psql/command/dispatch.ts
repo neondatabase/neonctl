@@ -346,6 +346,35 @@ export const defaultRegistry = (): BackslashRegistry => {
   r.register(cmdTiming);
   r.register(cmdCopyright);
   r.register(cmdHelpSQL);
+  // Stubs for command names that exist in vanilla psql but aren't wired up
+  // here yet — registering them as no-ops keeps `\if false ... \?  ... \endif`
+  // from emitting spurious "invalid command" diagnostics that vanilla
+  // suppresses (it just skips known names in inactive branches). The
+  // commands are otherwise unreachable today; full impls are tracked
+  // separately.
+  r.register({
+    name: '?',
+    argMode: 'whole-line',
+    helpKey: '?',
+    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
+  });
+  r.register({
+    name: 'e',
+    aliases: ['edit'],
+    argMode: 'whole-line',
+    helpKey: 'e',
+    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
+  });
+  r.register({
+    name: 'html',
+    helpKey: 'html',
+    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
+  });
+  r.register({
+    name: 's',
+    helpKey: 's',
+    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
+  });
   // Format.
   r.register(cmdA);
   r.register(cmdC);
