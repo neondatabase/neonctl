@@ -214,4 +214,165 @@ describe('troffMsPrinter', () => {
     expect(out.startsWith('.LP\n.DS C\nMy Title\n.DE\n.LP\n.TS\n')).toBe(true);
     expect(out).toContain('.TE\n.DS L\nnote one\nnote two\n.DE\n');
   });
+
+  describe('expanded mode (\\x on)', () => {
+    test('renders Record blocks with c s + c | l body at border=1', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'id', oid: 23 }, { name: 'name' }],
+        rows: [
+          [1, 'alice'],
+          [2, 'bob'],
+        ],
+      });
+      const out = await capture((s) =>
+        troffMsPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(out).toBe(
+        '.LP\n.TS\n' +
+          'center;\n' +
+          'c s.\n' +
+          '\\fIRecord 1\\fP\n' +
+          '_\n' +
+          '.T&\n' +
+          'c | l.\n' +
+          'id\t1\n' +
+          'name\talice\n' +
+          '.T&\n' +
+          'c s.\n' +
+          '\\fIRecord 2\\fP\n' +
+          '_\n' +
+          '.T&\n' +
+          'c | l.\n' +
+          'id\t2\n' +
+          'name\tbob\n' +
+          '.TE\n.DS L\n.DE\n',
+      );
+    });
+
+    test('expanded border=0 emits "c l." body spec and no _ separator', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x']],
+      });
+      const out = await capture((s) =>
+        troffMsPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on', border: 0 }),
+          s,
+        ),
+      );
+      expect(out).toContain('c s.\n\\fIRecord 1\\fP\n.T&\nc l.\n');
+      expect(out).not.toContain('_\n');
+    });
+
+    test('expanded border=2 emits "center box" plus inter-record _ separator', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x'], ['y']],
+      });
+      const out = await capture((s) =>
+        troffMsPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on', border: 2 }),
+          s,
+        ),
+      );
+      expect(out).toContain('center box;\n');
+      // Between record 1 and record 2 at border=2: _\n.T&\nc s.\n
+      expect(out).toContain(
+        'x\n_\n.T&\nc s.\n\\fIRecord 2\\fP\n_\n.T&\nc l.\n',
+      );
+    });
+
+    test('expanded tuplesOnly uses one-shot "c l;" spec, no Record headers', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }, { name: 'b' }],
+        rows: [
+          ['x', 'y'],
+          ['p', 'q'],
+        ],
+      });
+      const out = await capture((s) =>
+        troffMsPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on', tuplesOnly: true }),
+          s,
+        ),
+      );
+      expect(out).toBe(
+        '.LP\n.TS\n' +
+          'center;\n' +
+          'c l;\n' +
+          '_\n' +
+          'a\tx\n' +
+          'b\ty\n' +
+          '_\n' +
+          'a\tp\n' +
+          'b\tq\n' +
+          '.TE\n.DS L\n.DE\n',
+      );
+    });
+
+    test('expanded omits default (N rows) footer; preserves user footers', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x']],
+      });
+      const out = await capture((s) =>
+        troffMsPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(out).not.toContain('(1 row)');
+      expect(out.endsWith('.TE\n.DS L\n.DE\n')).toBe(true);
+
+      const withFooter = await capture((s) =>
+        troffMsPrinter.printQuery(
+          rs,
+          defaultOpts({ footers: ['my note'] }, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(withFooter).toContain('.TE\n.DS L\nmy note\n.DE\n');
+    });
+
+    test('expanded honors topt.prior for Record numbering', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x'], ['y']],
+      });
+      const out = await capture((s) =>
+        troffMsPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on', prior: 9 }),
+          s,
+        ),
+      );
+      expect(out).toContain('\\fIRecord 10\\fP\n');
+      expect(out).toContain('\\fIRecord 11\\fP\n');
+    });
+
+    test('expanded with title emits .DS C block', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x']],
+      });
+      const out = await capture((s) =>
+        troffMsPrinter.printQuery(
+          rs,
+          defaultOpts({ title: 'My Title' }, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(out.startsWith('.LP\n.DS C\nMy Title\n.DE\n.LP\n.TS\n')).toBe(
+        true,
+      );
+    });
+  });
 });
