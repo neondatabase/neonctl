@@ -26,11 +26,12 @@
 //   - Multi-candidate listing on the second Tab (engine already did
 //     this — verified by the listing subtests).
 //
+// Filename completion (`\lo_import`, `\lo_export`, `\copy ... FROM/TO`,
+// and SQL `COPY ... FROM/TO`) is now backed by the filesystem-driven
+// completer in `src/psql/complete/filenames.ts`.
+//
 // What's still missing (and therefore still `it.todo`):
 //
-//   - Filename completion for `\lo_import` / `COPY FROM <path>` —
-//     would need a filesystem-driven completer rule that's not in
-//     our 88-rule set.
 //   - Enum-value completion inside `'X<tab>` — needs a string-literal
 //     context detector + `ALTER TYPE ... RENAME VALUE` rule.
 //   - Timezone name completion — would need `pg_timezone_names` rule.
@@ -552,24 +553,56 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
     'complete qualified name from object reference — `comment on constraint ... on public.<tab>` (line 234; needs COMMENT ON CONSTRAINT rule + multi-line context)',
   );
 
-  // Filename completion (lines 242-277). Our completer has no
-  // filesystem-aware rule for `\lo_import` / `COPY FROM <path>` — we'd
-  // need to plumb a filename completer into the line editor.
-  it.todo(
-    'filename completion with one possibility — \\lo_import tab_comp_dir/some<tab> (line 242; needs filename completer)',
-  );
-  it.todo(
-    'filename completion with multiple possibilities — \\lo_import tab_comp_dir/af<tab> (line 250; needs filename completer)',
-  );
-  it.todo(
-    'quoted filename completion with one possibility — COPY FROM tab_comp_dir/some<tab> (line 259; needs filename completer)',
-  );
-  it.todo(
-    'quoted filename completion with multiple possibilities — COPY FROM tab_comp_dir/af<tab> (line 266; needs filename completer)',
-  );
-  it.todo(
-    'offer multiple file choices on <tab><tab> (line 274; needs filename completer)',
-  );
+  // Filename completion (lines 242-277). Backed by the filesystem-driven
+  // completer in `src/psql/complete/filenames.ts`. The PTY session's cwd
+  // is the tmp workdir created by `makeTabCompWorkdir`, which seeds
+  // `tab_comp_dir/{somefile,afile123,afile456}`.
+  it('filename completion with one possibility — \\lo_import tab_comp_dir/some<tab> (line 242)', async () => {
+    await checkCompletion(
+      '\\lo_import tab_comp_dir/some\t',
+      /tab_comp_dir\/somefile /,
+    );
+  });
+
+  it('filename completion with multiple possibilities — \\lo_import tab_comp_dir/af<tab> (line 250)', async () => {
+    // Single tab inserts the common prefix `tab_comp_dir/afile`. Bell may
+    // precede it (\a) — upstream's pattern allows that.
+    await checkCompletion(
+      '\\lo_import tab_comp_dir/af\t',
+      /tab_comp_dir\/af\a?ile/,
+    );
+  });
+
+  it('quoted filename completion with one possibility — COPY FROM tab_comp_dir/some<tab> (line 259)', async () => {
+    // SQL `COPY` requires a string literal — our completer wraps the
+    // unique candidate in single quotes and the editor appends a trailing
+    // space since the quotes are balanced.
+    await checkCompletion(
+      'COPY foo FROM tab_comp_dir/some\t',
+      /'tab_comp_dir\/somefile' /,
+    );
+  });
+
+  it('quoted filename completion with multiple possibilities — COPY FROM tab_comp_dir/af<tab> (line 266)', async () => {
+    // Multi-candidate common prefix: opening quote only, no closing quote
+    // yet (user is still typing inside the string literal).
+    await checkCompletion(
+      'COPY foo FROM tab_comp_dir/af\t',
+      /'tab_comp_dir\/afile/,
+    );
+  });
+
+  it('offer multiple file choices on <tab><tab> (line 274)', async () => {
+    // Empty basename prefix at `tab_comp_dir/` — second Tab renders the
+    // listing under the prompt. The formatted columns lay out the three
+    // candidates with full paths; we match the three basenames in order
+    // across the formatted row(s).
+    h.clear();
+    sendKeys(h, '\\lo_import tab_comp_dir/\t\t');
+    await new Promise<void>((r) => setTimeout(r, 500));
+    const buf = h.clean();
+    expect(buf).toMatch(/afile123[\s\S]*afile456[\s\S]*somefile/);
+  });
 
   // Enum label completion (lines 284-295). Needs the `ALTER TYPE ...
   // RENAME VALUE 'X<tab>` rule + a string-literal context detector

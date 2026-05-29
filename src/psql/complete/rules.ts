@@ -100,6 +100,7 @@
 import type { Connection } from '../types/connection.js';
 import type { PsqlSettings } from '../types/settings.js';
 
+import { completeFilenames, isCopyFromOrTo } from './filenames.js';
 import { HeadMatches, MatchAny, TailMatches } from './matcher.js';
 import {
   Query_for_list_of_casts,
@@ -1273,6 +1274,46 @@ const backslashArgRules = async (
     return { candidates: [] };
   }
 
+  // \lo_import / \lo_export → filesystem-driven filename completion.
+  // psql parses the path as a backslash-argument literal — no SQL string
+  // quoting required, so we use the unquoted candidate form.
+  if (cmd === '\\lo_import' || cmd === '\\lo_export') {
+    if (prevWords.length === 1) {
+      return { candidates: completeFilenames(currentWord, 'none') };
+    }
+    return { candidates: [] };
+  }
+
+  // \copy <table> [FROM|TO] <path> — once the FROM/TO keyword has been
+  // typed, the next token is a filename (backslash-context, so bare paths
+  // are fine).
+  if (cmd === '\\copy') {
+    // First arg: a table name.
+    if (prevWords.length === 1 && conn) {
+      return {
+        candidates: await completeSchemaOrRelations(
+          conn,
+          currentWord,
+          Query_for_list_of_tables,
+        ),
+      };
+    }
+    // Second arg: the FROM/TO keyword.
+    if (prevWords.length === 2) {
+      return {
+        candidates: filterAndCase(['FROM', 'TO'], currentWord, ctx.settings),
+      };
+    }
+    // Third arg (after FROM/TO): the filename.
+    if (prevWords.length >= 3) {
+      const last = prevWords[prevWords.length - 1].toUpperCase();
+      if (last === 'FROM' || last === 'TO') {
+        return { candidates: completeFilenames(currentWord, 'none') };
+      }
+    }
+    return { candidates: [] };
+  }
+
   // \drds, \drg → roles (for the first arg).
   if (cmd === '\\drds' || cmd === '\\drg') {
     if (prevWords.length === 1 && conn) {
@@ -1310,6 +1351,13 @@ const sqlRules = async (
       candidates: await completeSchemaOrRelations(conn, currentWord, query),
     };
   };
+
+  // COPY <table> [FROM|TO] <'path'> — filename completion in the
+  // string-literal context. MUST come before the generic `FROM <prefix>`
+  // rule below, which would otherwise treat the path as a table name.
+  if (isCopyFromOrTo(prevWords)) {
+    return { candidates: completeFilenames(currentWord, 'sql') };
+  }
 
   // FROM <prefix>: tables/views/matviews.
   if (TailMatches(prevWords, ['FROM'])) {
@@ -1930,7 +1978,9 @@ const sqlRules = async (
   if (TailMatches(prevWords, ['TRUNCATE', 'TABLE'])) return completeTables();
   if (TailMatches(prevWords, ['TRUNCATE', 'ONLY'])) return completeTables();
 
-  // COPY x → tables.
+  // COPY x → tables. (The `COPY x FROM/TO <path>` filename completion is
+  // handled by the early `isCopyFromOrTo` check at the top of this
+  // function so it wins over the generic `FROM <prefix>` table rule.)
   if (TailMatches(prevWords, ['COPY'])) return completeTables();
   if (TailMatches(prevWords, ['COPY', MatchAny])) {
     return {
