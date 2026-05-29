@@ -134,11 +134,46 @@ const makeStreamLineReader = (
     crlfDelay: Infinity,
     terminal: false,
   });
-  const iter = rl[Symbol.asyncIterator]();
+  // We deliberately do NOT use rl[Symbol.asyncIterator]() here. Node's
+  // events.on()-based readline iterator races its own close: when the input
+  // stream EOFs after pushing many buffered lines, the iterator drains most
+  // of them correctly but on the boundary call (when the internal queue
+  // empties on the same tick the close completes) it calls
+  // Interface.resume() AFTER close has been applied, which throws
+  // `ERR_USE_AFTER_CLOSE: readline was closed` instead of returning
+  // `{ done: true }`. The previous, *successfully* buffered last `'line'`
+  // event ends up dropped. Reproduces in a standalone Node v24 program with
+  // ~2000 pushed lines followed by `push(null)`. The 'line' / 'close'
+  // event model below is queue-based so we never lose a line on close.
+  const lineQueue: string[] = [];
+  let waiter: ((line: string | null) => void) | null = null;
+  let ended = false;
+  rl.on('line', (line) => {
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      w(line);
+    } else {
+      lineQueue.push(line);
+    }
+  });
+  rl.on('close', () => {
+    ended = true;
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      w(null);
+    }
+  });
   return {
-    readLine: async (): Promise<string | null> => {
-      const r = await iter.next();
-      return r.done ? null : r.value;
+    readLine: (): Promise<string | null> => {
+      if (lineQueue.length > 0) {
+        return Promise.resolve(lineQueue.shift() as string);
+      }
+      if (ended) return Promise.resolve(null);
+      return new Promise<string | null>((resolve) => {
+        waiter = resolve;
+      });
     },
     pushHistory: (): void => undefined,
     // No prompt to garble; just write straight to stdout.
