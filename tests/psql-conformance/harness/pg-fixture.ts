@@ -278,6 +278,37 @@ async function bootTestcontainer(): Promise<PgConn> {
   const started = await builder.start();
   containerRef = started;
 
+  // Create a `regression` database to mirror upstream pg_regress. The
+  // vendored psql.sql references `regression.<schema>.<rel>` in dozens
+  // of places to exercise the cross-database short-circuit in psql's
+  // `\d*` dispatcher (e.g. `\dt regression."no.such.schema"."no.such.relation"`).
+  // Upstream's pg_regress always runs against a database named
+  // `regression`; if the connection's current DB doesn't match, our
+  // dispatcher emits "cross-database references are not implemented"
+  // instead of the empty-list output the test expects. Creating the
+  // DB here (and connecting to it below) closes ~50 lines of diff in
+  // the psql.out conformance baseline. Other vendored scripts
+  // (psql_crosstab, psql_pipeline) make no `regression.*` references,
+  // so they're unaffected by the rename.
+  const regressionDbName = 'regression';
+  const createDbResult = await started.exec([
+    'psql',
+    '-v',
+    'ON_ERROR_STOP=1',
+    '-U',
+    started.getUsername(),
+    '-d',
+    started.getDatabase(),
+    '-c',
+    `CREATE DATABASE ${regressionDbName}`,
+  ]);
+  if (createDbResult.exitCode !== 0) {
+    throw new Error(
+      `pg-fixture: failed to create ${regressionDbName} database ` +
+        `(exit ${createDbResult.exitCode}):\n${createDbResult.output}`,
+    );
+  }
+
   // Seed the regression-test infrastructure once the container is up.
   // The vendored psql.sql references upstream tables (`onek`, `tenk1`)
   // that upstream pg_regress creates via test_setup.sql before running
@@ -303,7 +334,7 @@ async function bootTestcontainer(): Promise<PgConn> {
     '-U',
     started.getUsername(),
     '-d',
-    started.getDatabase(),
+    regressionDbName,
     '-f',
     SEED_SCRIPT_CONTAINER_PATH,
   ]);
@@ -345,7 +376,12 @@ async function bootTestcontainer(): Promise<PgConn> {
   const conn: PgConn = {
     host: started.getHost(),
     port: started.getPort(),
-    db: started.getDatabase(),
+    // Connect to the regression DB created above (not the container's
+    // default DB). Upstream pg_regress also drives all its scripts
+    // against a DB named `regression`, and several vendored psql.sql
+    // checks (cross-database refs, `\dX "^regression$".*`) depend on
+    // that name.
+    db: regressionDbName,
     user: started.getUsername(),
     password: started.getPassword(),
     absBuilddir,
