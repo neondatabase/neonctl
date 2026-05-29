@@ -961,21 +961,23 @@ describe('findCompletions: DROP TYPE with built-in datatype keywords', () => {
   it('merges built-in keywords with catalog rows', async () => {
     // The mock returns `bigint` from pg_type — exercising both code paths
     // (keyword + catalog). Result is allowed to contain duplicates; the
-    // psqlCompleter wrapper de-dupes.
+    // psqlCompleter wrapper de-dupes. Keywords come back UPPERCASE on
+    // empty input because preserve-upper now mirrors upstream's
+    // empty-input fallback (commit 8a53e46); catalog rows stay lowercase.
     const conn = makeMockConn({
       'pg_catalog.pg_type': ['myudt'],
     });
     const ctx = { settings: makeSettings(conn) };
     const r = await findCompletions(['DROP', 'TYPE'], '', ctx);
-    expect(r.candidates).toContain('bigint');
+    expect(r.candidates).toContain('BIGINT');
     expect(r.candidates).toContain('myudt');
   });
 
   it('falls back to keyword list when no connection is available', async () => {
     const ctx = { settings: makeSettings(null) };
     const r = await findCompletions(['DROP', 'TYPE'], '', ctx);
-    expect(r.candidates).toContain('bigint');
-    expect(r.candidates).toContain('boolean');
+    expect(r.candidates).toContain('BIGINT');
+    expect(r.candidates).toContain('BOOLEAN');
   });
 });
 
