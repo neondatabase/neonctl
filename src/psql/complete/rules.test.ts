@@ -901,3 +901,44 @@ describe('psqlCompleter wrapper', () => {
     expect(tabCount).toBeLessThanOrEqual(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// DROP TYPE → built-in scalar type keywords + user types
+// (upstream tab-complete.in.c: Keywords_for_list_of_datatypes mixed in via
+// Query_for_list_of_datatypes). Mirrors the 010_tab_completion.pl line 328
+// `DROP TYPE big<TAB>` → `DROP TYPE bigint` subtest.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: DROP TYPE with built-in datatype keywords', () => {
+  it('completes DROP TYPE big → bigint (built-in keyword, no catalog row needed)', async () => {
+    const ctx = { settings: makeSettings(null) };
+    const r = await findCompletions(['DROP', 'TYPE'], 'big', ctx);
+    expect(r.candidates).toContain('bigint');
+  });
+
+  it('completes DROP TYPE int → integer (built-in keyword)', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(['DROP', 'TYPE'], 'int', ctx);
+    expect(r.candidates).toContain('integer');
+  });
+
+  it('merges built-in keywords with catalog rows', async () => {
+    // The mock returns `bigint` from pg_type — exercising both code paths
+    // (keyword + catalog). Result is allowed to contain duplicates; the
+    // psqlCompleter wrapper de-dupes.
+    const conn = makeMockConn({
+      'pg_catalog.pg_type': ['myudt'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['DROP', 'TYPE'], '', ctx);
+    expect(r.candidates).toContain('bigint');
+    expect(r.candidates).toContain('myudt');
+  });
+
+  it('falls back to keyword list when no connection is available', async () => {
+    const ctx = { settings: makeSettings(null) };
+    const r = await findCompletions(['DROP', 'TYPE'], '', ctx);
+    expect(r.candidates).toContain('bigint');
+    expect(r.candidates).toContain('boolean');
+  });
+});

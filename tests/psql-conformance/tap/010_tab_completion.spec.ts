@@ -626,11 +626,12 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
 
   // SchemaQuery keyword + create_command_generator (lines 328-339).
   // The DROP TYPE → bigint case wants type-name completion to include
-  // built-in scalar keywords; CREATE TY → TYPE needs a CREATE multi-word
-  // generator. Both rules are missing.
-  it.todo(
-    'offer keyword from SchemaQuery — DROP TYPE big<tab> → DROP TYPE bigint (line 328; needs DROP TYPE → builtin-types rule)',
-  );
+  // built-in scalar keywords (mirrors upstream's
+  // `Keywords_for_list_of_datatypes`). CREATE TY → TYPE still needs the
+  // CREATE multi-word generator (handled in a separate commit).
+  it('offer keyword from SchemaQuery — DROP TYPE big<tab> → DROP TYPE bigint (line 328)', async () => {
+    await checkCompletion('DROP TYPE big\t', /DROP TYPE bigint /);
+  });
   it.todo(
     'check create_command_generator — CREATE TY<tab> → CREATE TYPE (line 336; needs CREATE multi-word completion)',
   );

@@ -819,6 +819,24 @@ export const TRANSACTION_KEYWORDS: readonly string[] = [
   'TRANSACTION',
 ];
 
+/**
+ * Built-in scalar type keywords that psql tab-completion mixes in
+ * wherever a type name is expected. Mirrors upstream's
+ * `Keywords_for_list_of_datatypes` (tab-complete.in.c). The multi-word
+ * names disabled under `#ifdef NOT_USED` upstream are intentionally
+ * omitted here too — tab completion can't disambiguate across word
+ * boundaries.
+ */
+export const BUILTIN_DATATYPE_KEYWORDS: readonly string[] = [
+  'bigint',
+  'boolean',
+  'character',
+  'double precision',
+  'integer',
+  'real',
+  'smallint',
+];
+
 // ---------------------------------------------------------------------------
 // Result shape.
 // ---------------------------------------------------------------------------
@@ -1774,14 +1792,22 @@ const sqlRules = async (
     return completeTables(Query_for_list_of_sequences);
   }
   if (TailMatches(prevWords, ['DROP', 'TYPE'])) {
-    if (!conn) return { candidates: [] };
-    return {
-      candidates: await runCatalogQuery(
-        conn,
-        Query_for_list_of_types,
-        currentWord,
-      ),
-    };
+    // Built-in scalar type keywords mirror upstream's
+    // `Keywords_for_list_of_datatypes` attached to the SchemaQuery; psql
+    // mixes them with user-defined types so `DROP TYPE big<TAB>` resolves
+    // to `bigint` even without a matching catalog row.
+    const keywords = filterAndCase(
+      BUILTIN_DATATYPE_KEYWORDS,
+      currentWord,
+      ctx.settings,
+    );
+    if (!conn) return { candidates: keywords };
+    const types = await runCatalogQuery(
+      conn,
+      Query_for_list_of_types,
+      currentWord,
+    );
+    return { candidates: [...keywords, ...types] };
   }
   if (TailMatches(prevWords, ['DROP', 'SCHEMA'])) {
     if (!conn) return { candidates: [] };
