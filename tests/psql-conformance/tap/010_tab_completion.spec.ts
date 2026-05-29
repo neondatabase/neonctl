@@ -35,11 +35,12 @@
 //   - Enum-value completion inside `'X<tab>` — needs a string-literal
 //     context detector + `ALTER TYPE ... RENAME VALUE` rule.
 //   - Timezone name completion — would need `pg_timezone_names` rule.
-//   - Some SchemaQuery-derived keyword completions (DROP TYPE big →
-//     bigint), VersionedQuery, words_after_create, plpgsql GUCs.
-//   - Multi-line completion mid-statement (ANALYZE (\n\t\t).
+//   - plpgsql qualified-GUC completion (`set plpg<tab>` → `plpgsql.`),
+//     GUC enum value completion (`iso<tab>` → `iso_8601`).
+//   - Multi-line completion mid-statement (ANALYZE (\n\t\t) — needs
+//     the LineEditor to pass the in-flight query buffer to the
+//     completer.
 //   - Index name completion via ALTER TABLE ... DROP CONSTRAINT.
-//   - COPY ... WITH (DEFAULT) keyword in option-list context.
 //
 // Whatever still fails after this round stays as `it.todo` with a
 // reason in the comment.
@@ -669,10 +670,15 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   });
 
   // Multi-line completion / ANALYZE ( (line 360). Tab completion mid-
-  // statement after an `(` on its own line — our tokenizer treats
-  // unclosed `(` differently than upstream's multi-statement parser.
+  // statement after an `(` on its own line. Our LineEditor passes only
+  // the current line to the completer (mainloop.ts:259) — the `analyze (`
+  // from the previous line is gone by the time the second-line tab
+  // fires, so we can't see the parenthesised-option-list context.
+  // Adding it would require either plumbing the in-flight query buffer
+  // into the completer, or having the engine read the multi-line state
+  // from a shared session reference.
   it.todo(
-    'check ANALYZE (VERBOSE ... — multi-line completion of `analyze (` (line 360; needs ANALYZE-option rule + multi-line context)',
+    'check ANALYZE (VERBOSE ... — multi-line completion of `analyze (` (line 360; LineEditor passes only the current line to the completer, so the `(` opened on the previous line is invisible — needs multi-line buffer plumbing)',
   );
 
   // GUC completion (lines 366-387). We support unqualified GUC names
@@ -735,12 +741,13 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
     await checkCompletion('\\echo :{?VERB\t', /:\{\?VERBOSITY} /);
   });
 
-  // COPY FROM WITH (DEFAULT) (line 419). Needs a COPY-options rule that
-  // recognises the `WITH (…)` option list; our COPY rule stops at the
-  // `FROM/TO` direction selector.
-  it.todo(
-    'COPY FROM with DEFAULT completion — `COPY foo FROM stdin WITH ( DEF<tab>)` → DEFAULT (line 419; needs COPY ... WITH option rule)',
-  );
+  // COPY FROM WITH (DEFAULT) (line 419). The COPY ... WITH ( <opt> arm
+  // dispatches the COPY_FROM_OPTIONS / COPY_TO_OPTIONS keyword set
+  // depending on the direction word (FROM vs TO). Mirrors upstream's
+  // `Copy_from_options` / `Copy_to_options` macros.
+  it('COPY FROM with DEFAULT completion — `COPY foo FROM stdin WITH ( DEF<tab>)` → DEFAULT (line 419)', async () => {
+    await checkCompletion('COPY foo FROM stdin WITH ( DEF\t)', /DEFAULT /);
+  });
 });
 
 // ---------------------------------------------------------------------------

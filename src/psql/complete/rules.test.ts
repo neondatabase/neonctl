@@ -1091,3 +1091,59 @@ describe('findCompletions: DROP multi-word completion + publication/subscription
     expect(r.candidates).toContain('sub_b');
   });
 });
+
+// ---------------------------------------------------------------------------
+// COPY ... WITH ( <option> — option keywords inside the COPY WITH paren
+// list. Mirrors 010_tab_completion.pl line 419
+// `COPY foo FROM stdin WITH ( DEF<TAB>)` → `DEFAULT`.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: COPY WITH option keywords', () => {
+  it('COPY foo FROM stdin WITH ( DEF → DEFAULT (FROM-only option)', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['COPY', 'foo', 'FROM', 'stdin', 'WITH', '('],
+      'DEF',
+      ctx,
+    );
+    expect(r.candidates).toContain('DEFAULT');
+  });
+
+  it('COPY foo FROM stdin WITH ( FOR → FORCE_NOT_NULL, FORCE_NULL, FORMAT', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['COPY', 'foo', 'FROM', 'stdin', 'WITH', '('],
+      'FOR',
+      ctx,
+    );
+    expect(r.candidates).toContain('FORCE_NOT_NULL');
+    expect(r.candidates).toContain('FORCE_NULL');
+    expect(r.candidates).toContain('FORMAT');
+  });
+
+  it('COPY foo TO stdout WITH ( FOR → FORCE_QUOTE, FORMAT (TO-only excludes DEFAULT/FORCE_NULL)', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['COPY', 'foo', 'TO', 'stdout', 'WITH', '('],
+      'FOR',
+      ctx,
+    );
+    expect(r.candidates).toContain('FORCE_QUOTE');
+    expect(r.candidates).toContain('FORMAT');
+    expect(r.candidates).not.toContain('FORCE_NULL');
+    expect(r.candidates).not.toContain('DEFAULT');
+  });
+
+  it('COPY foo FROM stdin WITH ( opt1, → option list (comma continuation)', async () => {
+    const ctx = { settings: makeSettings() };
+    const r = await findCompletions(
+      ['COPY', 'foo', 'FROM', 'stdin', 'WITH', '(', 'FREEZE', ','],
+      '',
+      ctx,
+    );
+    // Empty input → preserve-upper default folds to upstream's
+    // pg_strdup_keyword_case fallback (uppercase for empty input).
+    expect(r.candidates).toContain('DEFAULT');
+    expect(r.candidates).toContain('FORMAT');
+  });
+});

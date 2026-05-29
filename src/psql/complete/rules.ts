@@ -837,6 +837,44 @@ export const BUILTIN_DATATYPE_KEYWORDS: readonly string[] = [
   'smallint',
 ];
 
+/**
+ * COPY ... FROM ... WITH ( ... ) option keywords. Mirrors upstream's
+ * `Copy_from_options` macro = `Copy_common_options` + the FROM-specific
+ * extras (DEFAULT, FORCE_NOT_NULL, FORCE_NULL, FREEZE, LOG_VERBOSITY,
+ * ON_ERROR, REJECT_LIMIT).
+ */
+export const COPY_FROM_OPTIONS: readonly string[] = [
+  'DELIMITER',
+  'ENCODING',
+  'ESCAPE',
+  'FORMAT',
+  'HEADER',
+  'NULL',
+  'QUOTE',
+  'DEFAULT',
+  'FORCE_NOT_NULL',
+  'FORCE_NULL',
+  'FREEZE',
+  'LOG_VERBOSITY',
+  'ON_ERROR',
+  'REJECT_LIMIT',
+];
+
+/**
+ * COPY ... TO ... WITH ( ... ) option keywords. Mirrors upstream's
+ * `Copy_to_options` macro = `Copy_common_options` + `FORCE_QUOTE`.
+ */
+export const COPY_TO_OPTIONS: readonly string[] = [
+  'DELIMITER',
+  'ENCODING',
+  'ESCAPE',
+  'FORMAT',
+  'HEADER',
+  'NULL',
+  'QUOTE',
+  'FORCE_QUOTE',
+];
+
 // ---------------------------------------------------------------------------
 // Result shape.
 // ---------------------------------------------------------------------------
@@ -2070,6 +2108,35 @@ const sqlRules = async (
   }
   if (TailMatches(prevWords, ['TRUNCATE', 'TABLE'])) return completeTables();
   if (TailMatches(prevWords, ['TRUNCATE', 'ONLY'])) return completeTables();
+
+  // COPY ... FROM <sth> WITH ( — option keywords inside the WITH
+  // parenthesised list. The tokenizer splits `(` and `,` into their
+  // own tokens so the tail looks like `[... WITH (]` for the first
+  // option and `[..., WITH, (, opt, ,]` for subsequent ones. Two
+  // arms: one for FROM (which adds DEFAULT, FORCE_NOT_NULL, etc.)
+  // and one for TO (which adds FORCE_QUOTE only). Mirrors upstream
+  // tab-complete.in.c ~3309-3315 (`Copy_from_options` /
+  // `Copy_to_options`). The `HeadMatches` guard restricts the rule
+  // to a real COPY statement so the generic `(`/`,` pattern doesn't
+  // fire inside CREATE TABLE / SELECT lists.
+  if (
+    HeadMatches(prevWords, ['COPY|\\copy']) &&
+    HeadMatches(prevWords, [MatchAny, MatchAny, 'FROM']) &&
+    (TailMatches(prevWords, ['(']) || TailMatches(prevWords, [',']))
+  ) {
+    return {
+      candidates: filterAndCase(COPY_FROM_OPTIONS, currentWord, ctx.settings),
+    };
+  }
+  if (
+    HeadMatches(prevWords, ['COPY|\\copy']) &&
+    HeadMatches(prevWords, [MatchAny, MatchAny, 'TO']) &&
+    (TailMatches(prevWords, ['(']) || TailMatches(prevWords, [',']))
+  ) {
+    return {
+      candidates: filterAndCase(COPY_TO_OPTIONS, currentWord, ctx.settings),
+    };
+  }
 
   // COPY x → tables. (The `COPY x FROM/TO <path>` filename completion is
   // handled by the early `isCopyFromOrTo` check at the top of this
