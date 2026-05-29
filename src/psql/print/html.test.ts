@@ -252,4 +252,158 @@ describe('htmlPrinter', () => {
     expect(out).toContain('<caption>Report &lt;2024&gt;</caption>');
     expect(out).toContain('<p>note 1<br />\nnote &amp; 2<br />\n</p>');
   });
+
+  describe('expanded mode (\\x on)', () => {
+    test('emits one Record block per row with <th>/<td> pairs', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'id', oid: 23 }, { name: 'name' }],
+        rows: [
+          [1, 'alice'],
+          [2, 'bob'],
+        ],
+      });
+      const out = await capture((s) =>
+        htmlPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(out).toBe(
+        '<table border="1">\n' +
+          '\n  <tr><td colspan="2" align="center">Record 1</td></tr>\n' +
+          '  <tr valign="top">\n' +
+          '    <th>id</th>\n' +
+          '    <td align="right">1</td>\n' +
+          '  </tr>\n' +
+          '  <tr valign="top">\n' +
+          '    <th>name</th>\n' +
+          '    <td align="left">alice</td>\n' +
+          '  </tr>\n' +
+          '\n  <tr><td colspan="2" align="center">Record 2</td></tr>\n' +
+          '  <tr valign="top">\n' +
+          '    <th>id</th>\n' +
+          '    <td align="right">2</td>\n' +
+          '  </tr>\n' +
+          '  <tr valign="top">\n' +
+          '    <th>name</th>\n' +
+          '    <td align="left">bob</td>\n' +
+          '  </tr>\n' +
+          '</table>\n\n',
+      );
+    });
+
+    test('expanded omits (N rows) default footer; trailing newline always emitted', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'col' }],
+        rows: [['x']],
+      });
+      const out = await capture((s) =>
+        htmlPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(out).not.toContain('(1 row)');
+      // Upstream print_html_vertical always emits a final '\n' after
+      // </table>, regardless of footers (cf. print.c).
+      expect(out.endsWith('</table>\n\n')).toBe(true);
+    });
+
+    test('expanded with tuplesOnly uses &nbsp; placeholder instead of Record', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }, { name: 'b' }],
+        rows: [['x', 'y']],
+      });
+      const out = await capture((s) =>
+        htmlPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on', tuplesOnly: true }),
+          s,
+        ),
+      );
+      expect(out).toContain('  <tr><td colspan="2">&nbsp;</td></tr>\n');
+      expect(out).not.toContain('Record');
+    });
+
+    test('expanded honors title via <caption>', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x']],
+      });
+      const out = await capture((s) =>
+        htmlPrinter.printQuery(
+          rs,
+          defaultOpts({ title: 'My Title' }, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(out).toContain('<caption>My Title</caption>');
+    });
+
+    test('expanded preserves user-supplied footers', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x']],
+      });
+      const out = await capture((s) =>
+        htmlPrinter.printQuery(
+          rs,
+          defaultOpts({ footers: ['my note'] }, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(out).toContain('<p>my note<br />\n</p>\n');
+    });
+
+    test('expanded honors topt.prior for Record numbering', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x'], ['y']],
+      });
+      const out = await capture((s) =>
+        htmlPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on', prior: 10 }),
+          s,
+        ),
+      );
+      expect(out).toContain('Record 11</td></tr>');
+      expect(out).toContain('Record 12</td></tr>');
+    });
+
+    test('expanded honors tableAttr', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }],
+        rows: [['x']],
+      });
+      const out = await capture((s) =>
+        htmlPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, {
+            expanded: 'on',
+            tableAttr: 'class="t"',
+          }),
+          s,
+        ),
+      );
+      expect(out.startsWith('<table border="1" class="t">\n')).toBe(true);
+    });
+
+    test('expanded escapes whitespace-only cells as &nbsp;', async () => {
+      const rs = makeResultSet({
+        columns: [{ name: 'a' }, { name: 'b' }],
+        rows: [['', 'x']],
+      });
+      const out = await capture((s) =>
+        htmlPrinter.printQuery(
+          rs,
+          defaultOpts(undefined, { expanded: 'on' }),
+          s,
+        ),
+      );
+      expect(out).toContain('    <td align="left">&nbsp; </td>\n');
+    });
+  });
 });

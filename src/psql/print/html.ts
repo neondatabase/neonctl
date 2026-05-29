@@ -6,9 +6,9 @@ import { formatNumericLocale } from './units.js';
 /**
  * HTML printer.
  *
- * Mirrors print.c `print_html_text`.
+ * Mirrors print.c `print_html_text` and `print_html_vertical`.
  *
- * Output shape (with title + footers):
+ * Output shape (flat):
  *   <table border="1">
  *     <caption>title</caption>
  *     <tr>
@@ -25,6 +25,20 @@ import { formatNumericLocale } from './units.js';
  *   footer<br />
  *   </p>
  *
+ * Output shape (expanded, `\pset expanded on`):
+ *   <table border="1">
+ *     <caption>title</caption>
+ *
+ *     <tr><td colspan="2" align="center">Record 1</td></tr>
+ *     <tr valign="top">
+ *       <th>col</th>
+ *       <td align="left">val</td>
+ *     </tr>
+ *     ...
+ *   </table>
+ *   <p>user footer<br />
+ *   </p>
+ *
  * - `topt.tableAttr` is appended to the opening `<table>` tag.
  * - `topt.border` becomes the `border="..."` value.
  * - `topt.startTable` / `stopTable` gate the prologue/epilogue, allowing
@@ -35,6 +49,9 @@ import { formatNumericLocale } from './units.js';
  *   `aligns` array upstream.
  * - Cells that are whitespace-only render `&nbsp; ` so the cell still
  *   takes layout space (verbatim upstream behavior).
+ * - Expanded mode renders a `<tr><td colspan="2" align="center">Record
+ *   N</td></tr>` separator before each row (or `&nbsp;` placeholder
+ *   when `tuplesOnly`); it never emits the default `(N rows)` footer.
  */
 
 // INT2, INT4, INT8, FLOAT4, FLOAT8, NUMERIC, INTERVAL.
@@ -48,74 +65,160 @@ export const htmlPrinter: Printer = {
     out: NodeJS.WritableStream,
   ): Promise<void> {
     const topt = opts.topt;
-    const tuplesOnly = topt.tuplesOnly;
-    const startTable = topt.startTable;
-    const stopTable = topt.stopTable;
-    const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
-    const title = opts.title ?? topt.title;
-    const footers = opts.footers ?? topt.footers;
+    if (topt.expanded === 'on') {
+      return printExpanded(rs, opts, out);
+    }
+    return printFlat(rs, opts, out);
+  },
+};
 
-    const headers = rs.fields.map((f) => f.name);
-    const aligns = rs.fields.map((f) =>
-      NUMERIC_OIDS.has(f.dataTypeID) ? 'right' : 'left',
-    );
-    const cells: string[][] = rs.rows.map((row) =>
-      row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
-    );
+const printFlat = (
+  rs: ResultSet,
+  opts: PrintQueryOpts,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const topt = opts.topt;
+  const tuplesOnly = topt.tuplesOnly;
+  const startTable = topt.startTable;
+  const stopTable = topt.stopTable;
+  const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
+  const title = opts.title ?? topt.title;
+  const footers = opts.footers ?? topt.footers;
 
-    let buf = '';
+  const headers = rs.fields.map((f) => f.name);
+  const aligns = rs.fields.map((f) =>
+    NUMERIC_OIDS.has(f.dataTypeID) ? 'right' : 'left',
+  );
+  const cells: string[][] = rs.rows.map((row) =>
+    row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
+  );
 
-    if (startTable) {
-      buf += `<table border="${String(topt.border)}"`;
-      if (topt.tableAttr) buf += ` ${topt.tableAttr}`;
-      buf += '>\n';
+  let buf = '';
 
-      if (!tuplesOnly && title) {
-        buf += '  <caption>' + escapeHtml(title) + '</caption>\n';
-      }
+  if (startTable) {
+    buf += `<table border="${String(topt.border)}"`;
+    if (topt.tableAttr) buf += ` ${topt.tableAttr}`;
+    buf += '>\n';
 
-      if (!tuplesOnly) {
-        buf += '  <tr>\n';
-        for (const h of headers) {
-          buf += '    <th align="center">' + escapeHtml(h) + '</th>\n';
-        }
-        buf += '  </tr>\n';
-      }
+    if (!tuplesOnly && title) {
+      buf += '  <caption>' + escapeHtml(title) + '</caption>\n';
     }
 
-    for (const row of cells) {
-      buf += '  <tr valign="top">\n';
-      row.forEach((value, idx) => {
-        buf += `    <td align="${aligns[idx]}">`;
-        if (isWhitespaceOnly(value)) {
-          buf += '&nbsp; ';
-        } else {
-          buf += escapeHtml(value);
-        }
-        buf += '</td>\n';
-      });
+    if (!tuplesOnly) {
+      buf += '  <tr>\n';
+      for (const h of headers) {
+        buf += '    <th align="center">' + escapeHtml(h) + '</th>\n';
+      }
       buf += '  </tr>\n';
     }
+  }
 
-    if (stopTable) {
-      buf += '</table>\n';
+  for (const row of cells) {
+    buf += '  <tr valign="top">\n';
+    row.forEach((value, idx) => {
+      buf += `    <td align="${aligns[idx]}">`;
+      if (isWhitespaceOnly(value)) {
+        buf += '&nbsp; ';
+      } else {
+        buf += escapeHtml(value);
+      }
+      buf += '</td>\n';
+    });
+    buf += '  </tr>\n';
+  }
 
-      if (!tuplesOnly) {
-        const effective = effectiveFooters(rs, topt, footers);
-        if (effective.length > 0) {
-          buf += '<p>';
-          for (const f of effective) {
-            buf += escapeHtml(f) + '<br />\n';
-          }
-          buf += '</p>';
-          buf += '\n';
+  if (stopTable) {
+    buf += '</table>\n';
+
+    if (!tuplesOnly) {
+      const effective = effectiveFooters(rs, topt, footers);
+      if (effective.length > 0) {
+        buf += '<p>';
+        for (const f of effective) {
+          buf += escapeHtml(f) + '<br />\n';
         }
+        buf += '</p>';
+        buf += '\n';
       }
     }
+  }
 
-    out.write(buf);
-    return Promise.resolve();
-  },
+  out.write(buf);
+  return Promise.resolve();
+};
+
+const printExpanded = (
+  rs: ResultSet,
+  opts: PrintQueryOpts,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const topt = opts.topt;
+  const tuplesOnly = topt.tuplesOnly;
+  const startTable = topt.startTable;
+  const stopTable = topt.stopTable;
+  const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
+  const title = opts.title ?? topt.title;
+  const footers = opts.footers ?? topt.footers;
+
+  const headers = rs.fields.map((f) => f.name);
+  const aligns = rs.fields.map((f) =>
+    NUMERIC_OIDS.has(f.dataTypeID) ? 'right' : 'left',
+  );
+  const cells: string[][] = rs.rows.map((row) =>
+    row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
+  );
+
+  let buf = '';
+
+  if (startTable) {
+    buf += `<table border="${String(topt.border)}"`;
+    if (topt.tableAttr) buf += ` ${topt.tableAttr}`;
+    buf += '>\n';
+
+    if (!tuplesOnly && title) {
+      buf += '  <caption>' + escapeHtml(title) + '</caption>\n';
+    }
+  }
+
+  let record = topt.prior + 1;
+  cells.forEach((row) => {
+    if (!tuplesOnly) {
+      buf += `\n  <tr><td colspan="2" align="center">Record ${String(record)}</td></tr>\n`;
+      record += 1;
+    } else {
+      buf += '\n  <tr><td colspan="2">&nbsp;</td></tr>\n';
+    }
+    row.forEach((value, idx) => {
+      buf += '  <tr valign="top">\n';
+      buf += '    <th>' + escapeHtml(headers[idx]) + '</th>\n';
+      buf += `    <td align="${aligns[idx]}">`;
+      if (isWhitespaceOnly(value)) {
+        buf += '&nbsp; ';
+      } else {
+        buf += escapeHtml(value);
+      }
+      buf += '</td>\n';
+      buf += '  </tr>\n';
+    });
+  });
+
+  if (stopTable) {
+    buf += '</table>\n';
+
+    // Expanded mode never emits the default "(N rows)" footer; only
+    // user-supplied footers appear (matches print_html_vertical).
+    if (!tuplesOnly && footers && footers.length > 0) {
+      buf += '<p>';
+      for (const f of footers) {
+        buf += escapeHtml(f) + '<br />\n';
+      }
+      buf += '</p>';
+    }
+    buf += '\n';
+  }
+
+  out.write(buf);
+  return Promise.resolve();
 };
 
 const effectiveFooters = (
