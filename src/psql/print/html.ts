@@ -138,9 +138,13 @@ const printFlat = (
           buf += escapeHtml(f) + '<br />\n';
         }
         buf += '</p>';
-        buf += '\n';
       }
     }
+
+    // Upstream `print_html_text` finishes with an unconditional
+    // `fputc('\n', fout)` AFTER the (optional) `<p>...</p>` block. The
+    // trailing newline appears regardless of footers / tuplesOnly.
+    buf += '\n';
   }
 
   out.write(buf);

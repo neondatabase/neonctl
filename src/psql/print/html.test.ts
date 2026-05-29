@@ -213,7 +213,7 @@ describe('htmlPrinter', () => {
     expect(out).toContain('<p>(1 row)<br />\n');
   });
 
-  test('tuplesOnly suppresses caption, header, and footer', async () => {
+  test('tuplesOnly suppresses caption, header, and footer; trailing newline still emitted', async () => {
     const rs = makeResultSet({
       columns: [{ name: 'col' }],
       rows: [['x']],
@@ -225,12 +225,14 @@ describe('htmlPrinter', () => {
         s,
       ),
     );
+    // Upstream print_html_text emits an unconditional final '\n' after
+    // </table>, even with tuplesOnly set and no footers.
     expect(out).toBe(
       '<table border="1">\n' +
         '  <tr valign="top">\n' +
         '    <td align="left">x</td>\n' +
         '  </tr>\n' +
-        '</table>\n',
+        '</table>\n\n',
     );
   });
 
