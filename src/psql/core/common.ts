@@ -1045,6 +1045,22 @@ export const executeAndPrint = async (
       lastRowCount = r.lastRowCount;
     }
   } catch (err) {
+    // `\;`-chained batches surface every result the server produced before
+    // the ErrorResponse on the thrown Error's `partialResults` field (set
+    // by the wire layer's ReadyForQuery handler). Render them in order
+    // before printing the error itself so the user sees the same shape
+    // upstream `PQgetResult` walks produce.
+    const partial = (err as Error & { partialResults?: ResultSet[] })
+      .partialResults;
+    if (partial && partial.length > 0) {
+      try {
+        const r = await renderResultSets(ctx, partial, out);
+        stats.rowsAffected = r.rowsAffected;
+        stats.rowsPrinted = r.rowsPrinted;
+      } catch {
+        // Surface the original error; don't shadow it with a render failure.
+      }
+    }
     const message = recordError(ctx, err, sql);
     writeQueryError(ctx, message);
     stats.hadError = true;
@@ -1193,6 +1209,22 @@ export const sendQuery = async (
       lastRowCount = r.lastRowCount;
     }
   } catch (err) {
+    // `\;`-chained batches surface every result the server produced before
+    // the ErrorResponse on the thrown Error's `partialResults` field (set
+    // by the wire layer's ReadyForQuery handler). Render them in order
+    // before printing the error itself so the user sees the same shape
+    // upstream `PQgetResult` walks produce.
+    const partial = (err as Error & { partialResults?: ResultSet[] })
+      .partialResults;
+    if (partial && partial.length > 0) {
+      try {
+        const r = await renderResultSets(ctx, partial, out);
+        stats.rowsAffected = r.rowsAffected;
+        stats.rowsPrinted = r.rowsPrinted;
+      } catch {
+        // Surface the original error; don't shadow it with a render failure.
+      }
+    }
     const message = recordError(ctx, err, sql);
     writeQueryError(ctx, message);
     stats.hadError = true;

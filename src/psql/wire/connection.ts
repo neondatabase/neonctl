@@ -1796,7 +1796,17 @@ export class PgConnection implements Connection {
         this.state = 'idle';
         this.pendingQuery = null;
         if (q.error) {
-          q.reject(asThrowable(q.error));
+          // Mirror libpq's behaviour: the result list contains every
+          // PGresult the server produced before the ErrorResponse — for
+          // a `\;`-chained simple-query batch, that's all the statements
+          // before the failing one. We surface them by attaching the
+          // accumulated `finished[]` to the thrown Error so callers
+          // (`executeAndPrint`) can render the pre-error rows in order
+          // before printing the error itself.
+          const err = asThrowable(q.error);
+          (err as Error & { partialResults?: ResultSet[] }).partialResults =
+            q.finished;
+          q.reject(err);
         } else {
           q.resolve(q.finished);
         }
