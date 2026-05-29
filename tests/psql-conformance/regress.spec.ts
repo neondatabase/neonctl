@@ -154,6 +154,19 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
       `abs_builddir=${REGRESS_TMP}`,
       '-v',
       `abs_srcdir=${REGRESS_ABS_SRCDIR}`,
+      // Mirror upstream pg_regress: hide the per-relation access method
+      // and toast-compression markers from `\d+` output. pg_regress
+      // injects `\set HIDE_TABLEAM on` / `\set HIDE_TOAST_COMPRESSION on`
+      // into its session psqlrc before running each script; the vendored
+      // expected output therefore assumes both are `on`. Without these,
+      // we emit `Access method: heap` / `Access method: heap_psql`
+      // footers that diverge before the `\set HIDE_TABLEAM off` line in
+      // the psql.sql script. Passing via `-v` is equivalent and is
+      // robust against `--no-psqlrc`.
+      '-v',
+      'HIDE_TABLEAM=on',
+      '-v',
+      'HIDE_TOAST_COMPRESSION=on',
       '-h',
       conn.host,
       '-p',
