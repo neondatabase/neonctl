@@ -117,9 +117,32 @@ const resolvePsqlBinary = (): { command: string; commandArgs: string[] } => {
 const { command: PSQL_COMMAND, commandArgs: PSQL_PREARGS } =
   resolvePsqlBinary();
 
+// `regress/psql` is the only case in REGRESS_CASES whose vendored
+// expected output and vendored SQL depend on PG-18-only catalog shape
+// and SQL syntax: `\dAo+ Leakproof?`, `\df+ Leakproof?`, `\dRp+ Generated
+// columns`, `\dx Default version`, `\dAp uuid_skipsupport`,
+// `debug_parallel_query` GUC, and `GRANT ... WITH ADMIN TRUE` syntax.
+// Folding every diverging output block onto PG 18 shape is feasible but
+// fragile (each PG minor that drops a row would cascade through the
+// rest of the script via downstream state). We keep the test
+// authoritative on PG 18 (byte-perfect) and skip it on older servers;
+// `regress/psql_crosstab` and `regress/psql_pipeline` still run on
+// every PG and remain green across the 14-18 matrix.
+const skipReasonForCase = (
+  name: RegressCase,
+  pgMajor?: number,
+): string | null =>
+  name === 'psql' && pgMajor !== undefined && pgMajor < 18
+    ? `regress/psql expected output is PG ${pgMajor < 18 ? '18-pinned' : '18'}; older server output diverges on PG-18-only features (Leakproof?, Generated columns, uuid_skipsupport, GRANT WITH ADMIN TRUE, …)`
+    : null;
+
 describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
-  it('matches vendored expected output', () => {
+  it('matches vendored expected output', (ctx) => {
     const conn = getPgConn();
+    const skipReason = skipReasonForCase(name, conn.serverMajor ?? undefined);
+    if (skipReason) {
+      ctx.skip(skipReason);
+    }
     const sqlPath = join(SQL_DIR, `${name}.sql`);
     const expectedPath = join(EXPECTED_DIR, `${name}.out`);
     if (!existsSync(sqlPath)) {

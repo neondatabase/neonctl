@@ -46,6 +46,7 @@ type PerVersionResult = {
   pg: MajorVersion;
   passed: number;
   failed: number;
+  skipped: number;
   total: number;
   failedAny: boolean;
   errored: boolean;
@@ -322,6 +323,7 @@ const runConformance = (
       pg,
       passed: 0,
       failed: 0,
+      skipped: 0,
       total: 0,
       failedAny: true,
       errored: true,
@@ -350,6 +352,7 @@ const runConformance = (
       pg,
       passed: 0,
       failed: 0,
+      skipped: 0,
       total: 0,
       failedAny: true,
       errored: true,
@@ -361,6 +364,16 @@ const runConformance = (
   const failed = report.numFailedTests ?? 0;
   const total = report.numTotalTests ?? passed + failed;
   const failedAny = failed > 0;
+  // Count skipped assertions (vitest treats `ctx.skip(...)` calls as
+  // status: 'skipped'; they don't fail, so they count toward `passed`
+  // in the summary). Surfacing the count keeps the matrix output
+  // honest when version-conditional specs opt out on older PGs.
+  let skipped = 0;
+  for (const tr of report.testResults ?? []) {
+    for (const a of tr.assertionResults ?? []) {
+      if (a.status === 'skipped' || a.status === 'pending') skipped += 1;
+    }
+  }
 
   // Write the full report alongside the cwd for triage.
   const persistedDir = join(process.cwd(), 'tmp', 'psql-conformance');
@@ -378,6 +391,7 @@ const runConformance = (
     pg,
     passed,
     failed,
+    skipped,
     total,
     failedAny,
     errored: false,
@@ -390,12 +404,12 @@ const renderSummary = (results: readonly PerVersionResult[]): string => {
   lines.push('Conformance matrix summary');
   lines.push('==========================');
   lines.push('');
-  lines.push('  PG    Total   Passed   Failed   Status');
-  lines.push('  ----  ------  -------  -------  ------');
+  lines.push('  PG    Total   Passed   Failed   Skipped   Status');
+  lines.push('  ----  ------  -------  -------  --------  ------');
   for (const r of results) {
     const status = r.errored ? 'ERRORED' : r.failedAny ? 'FAIL' : 'OK';
     lines.push(
-      `  ${r.pg.padEnd(4)}  ${String(r.total).padStart(6)}  ${String(r.passed).padStart(7)}  ${String(r.failed).padStart(7)}  ${status}`,
+      `  ${r.pg.padEnd(4)}  ${String(r.total).padStart(6)}  ${String(r.passed).padStart(7)}  ${String(r.failed).padStart(7)}  ${String(r.skipped).padStart(8)}  ${status}`,
     );
     if (r.message) lines.push(`        └─ ${r.message}`);
   }
@@ -426,7 +440,7 @@ const main = async (): Promise<void> => {
       const r = runConformance(slot.pg, pgConn);
       results.push(r);
       log(
-        `done: total=${r.total} passed=${r.passed} failed=${r.failed} status=${
+        `done: total=${r.total} passed=${r.passed} failed=${r.failed} skipped=${r.skipped} status=${
           r.errored ? 'ERRORED' : r.failedAny ? 'FAIL' : 'OK'
         }`,
       );
@@ -435,6 +449,7 @@ const main = async (): Promise<void> => {
         pg: slot.pg,
         passed: 0,
         failed: 0,
+        skipped: 0,
         total: 0,
         failedAny: true,
         errored: true,
