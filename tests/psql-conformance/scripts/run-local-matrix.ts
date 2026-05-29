@@ -279,6 +279,11 @@ const runConformance = (
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PSQL_BINARY: psqlBinary,
+    // Opt in to TAP-style integration specs (`tap/001_basic.spec.ts`,
+    // `tap/030_pager.spec.ts`, etc.). They self-skip when this env var
+    // is missing so they don't slow down the default `bun run test`
+    // suite — but the matrix is exactly where we want them to run.
+    RUN_INTEGRATION: '1',
     PGCONFORMANCE_PG_HOST: pgConn.host,
     PGCONFORMANCE_PG_PORT: String(pgConn.port),
     PGCONFORMANCE_PG_USER: pgConn.user,

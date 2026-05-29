@@ -843,6 +843,17 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       // container; soldier on either way.
       void r;
     });
+    // Drop the table so other specs sharing this database — notably
+    // `regress/psql_pipeline.sql`, which does `CREATE TABLE
+    // psql_pipeline(a INTEGER PRIMARY KEY, s TEXT)` at line 5 — see a
+    // clean schema. Upstream pg_regress runs each script against a fresh
+    // database; our matrix shares one DB per container.
+    afterAll(async () => {
+      await runChild({
+        launcher: paths.launcher,
+        argv: [uri, '-X', '-c', 'DROP TABLE IF EXISTS psql_pipeline'],
+      });
+    });
 
     // A short cap keeps COPY-in-pipeline tests responsive when the TS
     // psql hangs waiting for stdin. The real expectation is a fast
