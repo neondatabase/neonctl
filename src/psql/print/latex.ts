@@ -6,14 +6,23 @@ import { formatNumericLocale } from './units.js';
 /**
  * LaTeX printers — `latex` (tabular) and `latex-longtable` (longtable).
  *
- * Mirrors print.c `print_latex_text` and `print_latex_longtable_text`.
+ * Mirrors print.c `print_latex_text`, `print_latex_vertical`, and
+ * `print_latex_longtable_text`. Expanded mode for both `latex` and
+ * `latex-longtable` falls through to the vertical renderer
+ * (`print_latex_vertical`) — that's how upstream dispatches.
  *
- * Border behavior (from print.c):
+ * Border behavior (flat tabular, from print.c):
  *   - `topt.border` is clamped to 0..3.
  *   - tabular column spec gets ` | ` between columns when border > 0,
  *     and a leading/trailing `|` at border >= 2.
  *   - border == 2 emits `\hline` around header and at end of table.
  *   - border == 3 emits `\hline` after every row.
+ *
+ * Border behavior (expanded, from print.c):
+ *   - `topt.border` is clamped to 0..2 (note: not 0..3).
+ *   - tabular column spec is `cl`, `c|l`, or `|c|l|` for border 0/1/2.
+ *   - border >= 1 emits `\hline` between records.
+ *   - border == 2 wraps each "Record N" header in `\hline` lines.
  *
  * Numeric columns (per the OID heuristic) get the `r` alignment letter;
  * everything else gets `l`. That letter is passed straight through to
@@ -36,81 +45,167 @@ export const latexPrinter: Printer = {
     out: NodeJS.WritableStream,
   ): Promise<void> {
     const topt = opts.topt;
-    const tuplesOnly = topt.tuplesOnly;
-    const startTable = topt.startTable;
-    const stopTable = topt.stopTable;
-    const border = clampBorder(topt.border);
-    const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
-    const title = opts.title ?? topt.title;
-    const footers = opts.footers ?? topt.footers;
-
-    const headers = rs.fields.map((f) => f.name);
-    const ncols = rs.fields.length;
-    const aligns: ('l' | 'r')[] = rs.fields.map((f) =>
-      NUMERIC_OIDS.has(f.dataTypeID) ? 'r' : 'l',
-    );
-    const cells: string[][] = rs.rows.map((row) =>
-      row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
-    );
-
-    let buf = '';
-
-    if (startTable) {
-      if (!tuplesOnly && title) {
-        buf += '\\begin{center}\n';
-        buf += escapeLatex(title);
-        buf += '\n\\end{center}\n\n';
-      }
-
-      buf += '\\begin{tabular}{';
-      if (border >= 2) buf += '| ';
-      aligns.forEach((a, idx) => {
-        buf += a;
-        if (border !== 0 && idx < ncols - 1) buf += ' | ';
-      });
-      if (border >= 2) buf += ' |';
-      buf += '}\n';
-
-      if (!tuplesOnly && border >= 2) buf += '\\hline\n';
-
-      if (!tuplesOnly) {
-        headers.forEach((h, idx) => {
-          if (idx !== 0) buf += ' & ';
-          buf += '\\textit{' + escapeLatex(h) + '}';
-        });
-        buf += ' \\\\\n';
-        buf += '\\hline\n';
-      }
+    if (topt.expanded === 'on') {
+      return printLatexVertical(rs, opts, out);
     }
-
-    cells.forEach((row) => {
-      row.forEach((value, idx) => {
-        buf += escapeLatex(value);
-        if (idx === ncols - 1) {
-          buf += ' \\\\\n';
-          if (border === 3) buf += '\\hline\n';
-        } else {
-          buf += ' & ';
-        }
-      });
-    });
-
-    if (stopTable) {
-      if (border === 2) buf += '\\hline\n';
-      buf += '\\end{tabular}\n\n\\noindent ';
-
-      if (!tuplesOnly) {
-        const effective = effectiveFooters(rs, topt, footers);
-        for (const f of effective) {
-          buf += escapeLatex(f) + ' \\\\\n';
-        }
-      }
-      buf += '\n';
-    }
-
-    out.write(buf);
-    return Promise.resolve();
+    return printLatexFlat(rs, opts, out);
   },
+};
+
+const printLatexFlat = (
+  rs: ResultSet,
+  opts: PrintQueryOpts,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const topt = opts.topt;
+  const tuplesOnly = topt.tuplesOnly;
+  const startTable = topt.startTable;
+  const stopTable = topt.stopTable;
+  const border = clampBorder(topt.border, 3);
+  const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
+  const title = opts.title ?? topt.title;
+  const footers = opts.footers ?? topt.footers;
+
+  const headers = rs.fields.map((f) => f.name);
+  const ncols = rs.fields.length;
+  const aligns: ('l' | 'r')[] = rs.fields.map((f) =>
+    NUMERIC_OIDS.has(f.dataTypeID) ? 'r' : 'l',
+  );
+  const cells: string[][] = rs.rows.map((row) =>
+    row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
+  );
+
+  let buf = '';
+
+  if (startTable) {
+    if (!tuplesOnly && title) {
+      buf += '\\begin{center}\n';
+      buf += escapeLatex(title);
+      buf += '\n\\end{center}\n\n';
+    }
+
+    buf += '\\begin{tabular}{';
+    if (border >= 2) buf += '| ';
+    aligns.forEach((a, idx) => {
+      buf += a;
+      if (border !== 0 && idx < ncols - 1) buf += ' | ';
+    });
+    if (border >= 2) buf += ' |';
+    buf += '}\n';
+
+    if (!tuplesOnly && border >= 2) buf += '\\hline\n';
+
+    if (!tuplesOnly) {
+      headers.forEach((h, idx) => {
+        if (idx !== 0) buf += ' & ';
+        buf += '\\textit{' + escapeLatex(h) + '}';
+      });
+      buf += ' \\\\\n';
+      buf += '\\hline\n';
+    }
+  }
+
+  cells.forEach((row) => {
+    row.forEach((value, idx) => {
+      buf += escapeLatex(value);
+      if (idx === ncols - 1) {
+        buf += ' \\\\\n';
+        if (border === 3) buf += '\\hline\n';
+      } else {
+        buf += ' & ';
+      }
+    });
+  });
+
+  if (stopTable) {
+    if (border === 2) buf += '\\hline\n';
+    buf += '\\end{tabular}\n\n\\noindent ';
+
+    if (!tuplesOnly) {
+      const effective = effectiveFooters(rs, topt, footers);
+      for (const f of effective) {
+        buf += escapeLatex(f) + ' \\\\\n';
+      }
+    }
+    buf += '\n';
+  }
+
+  out.write(buf);
+  return Promise.resolve();
+};
+
+const printLatexVertical = (
+  rs: ResultSet,
+  opts: PrintQueryOpts,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const topt = opts.topt;
+  const tuplesOnly = topt.tuplesOnly;
+  const startTable = topt.startTable;
+  const stopTable = topt.stopTable;
+  const border = clampBorder(topt.border, 2);
+  const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
+  const title = opts.title ?? topt.title;
+  const footers = opts.footers ?? topt.footers;
+
+  const headers = rs.fields.map((f) => f.name);
+  const cells: string[][] = rs.rows.map((row) =>
+    row.map((cell) => renderCell(cell, nullPrint, topt.numericLocale)),
+  );
+
+  let buf = '';
+
+  if (startTable) {
+    if (!tuplesOnly && title) {
+      buf += '\\begin{center}\n';
+      buf += escapeLatex(title);
+      buf += '\n\\end{center}\n\n';
+    }
+
+    buf += '\\begin{tabular}{';
+    if (border === 0) buf += 'cl';
+    else if (border === 1) buf += 'c|l';
+    else buf += '|c|l|';
+    buf += '}\n';
+  }
+
+  let record = topt.prior + 1;
+  cells.forEach((row) => {
+    if (!tuplesOnly) {
+      if (border === 2) {
+        buf += '\\hline\n';
+        buf += `\\multicolumn{2}{|c|}{\\textit{Record ${String(record)}}} \\\\\n`;
+      } else {
+        buf += `\\multicolumn{2}{c}{\\textit{Record ${String(record)}}} \\\\\n`;
+      }
+      record += 1;
+    }
+    if (border >= 1) buf += '\\hline\n';
+
+    row.forEach((value, idx) => {
+      buf += escapeLatex(headers[idx]);
+      buf += ' & ';
+      buf += escapeLatex(value);
+      buf += ' \\\\\n';
+    });
+  });
+
+  if (stopTable) {
+    if (border === 2) buf += '\\hline\n';
+    buf += '\\end{tabular}\n\n\\noindent ';
+
+    // Expanded mode does NOT include the default "(N rows)" footer;
+    // only user-supplied footers (matches print_latex_vertical).
+    if (!tuplesOnly && footers && footers.length > 0) {
+      for (const f of footers) {
+        buf += escapeLatex(f) + ' \\\\\n';
+      }
+    }
+    buf += '\n';
+  }
+
+  out.write(buf);
+  return Promise.resolve();
 };
 
 export const latexLongtablePrinter: Printer = {
@@ -120,11 +215,16 @@ export const latexLongtablePrinter: Printer = {
     opts: PrintQueryOpts,
     out: NodeJS.WritableStream,
   ): Promise<void> {
+    // Upstream dispatch sends both `latex` and `latex-longtable` to
+    // `print_latex_vertical` when expanded is on (cf. print.c).
+    if (opts.topt.expanded === 'on') {
+      return printLatexVertical(rs, opts, out);
+    }
     const topt = opts.topt;
     const tuplesOnly = topt.tuplesOnly;
     const startTable = topt.startTable;
     const stopTable = topt.stopTable;
-    const border = clampBorder(topt.border);
+    const border = clampBorder(topt.border, 3);
     const nullPrint = opts.nullPrint !== '' ? opts.nullPrint : topt.nullPrint;
     const title = opts.title ?? topt.title;
 
@@ -241,8 +341,8 @@ export const latexLongtablePrinter: Printer = {
   },
 };
 
-const clampBorder = (b: number): number => {
-  if (b > 3) return 3;
+const clampBorder = (b: number, max: 2 | 3): number => {
+  if (b > max) return max;
   if (b < 0) return 0;
   return b;
 };

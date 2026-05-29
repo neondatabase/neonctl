@@ -342,4 +342,184 @@ describe('latexLongtablePrinter', () => {
         '\\end{longtable}\n',
     );
   });
+
+  test('expanded mode falls through to latex vertical layout', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['x', 'y']],
+    });
+    const out = await capture((s) =>
+      latexLongtablePrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on' }),
+        s,
+      ),
+    );
+    // Expanded latex-longtable uses the vertical/tabular path, not
+    // longtable (matches upstream print.c dispatch).
+    expect(out).toContain('\\begin{tabular}{c|l}\n');
+    expect(out).toContain('\\multicolumn{2}{c}{\\textit{Record 1}}');
+    expect(out).not.toContain('longtable');
+  });
+});
+
+describe('latexPrinter (expanded mode)', () => {
+  test('renders Record blocks with c|l column spec at border=1', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'id', oid: 23 }, { name: 'name' }],
+      rows: [
+        [1, 'alice'],
+        [2, 'bob'],
+      ],
+    });
+    const out = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on' }),
+        s,
+      ),
+    );
+    expect(out).toBe(
+      '\\begin{tabular}{c|l}\n' +
+        '\\multicolumn{2}{c}{\\textit{Record 1}} \\\\\n' +
+        '\\hline\n' +
+        'id & 1 \\\\\n' +
+        'name & alice \\\\\n' +
+        '\\multicolumn{2}{c}{\\textit{Record 2}} \\\\\n' +
+        '\\hline\n' +
+        'id & 2 \\\\\n' +
+        'name & bob \\\\\n' +
+        '\\end{tabular}\n\n' +
+        '\\noindent \n',
+    );
+  });
+
+  test('expanded border=0 emits cl column spec, no \\hline', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }],
+      rows: [['x']],
+    });
+    const out = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 0 }),
+        s,
+      ),
+    );
+    expect(out).toContain('\\begin{tabular}{cl}\n');
+    expect(out).toContain('\\multicolumn{2}{c}{\\textit{Record 1}} \\\\\n');
+    expect(out).not.toContain('\\hline');
+  });
+
+  test('expanded border=2 wraps with |c|l| and adds \\hline before/after each record', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }],
+      rows: [['x'], ['y']],
+    });
+    const out = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 2 }),
+        s,
+      ),
+    );
+    expect(out).toContain('\\begin{tabular}{|c|l|}\n');
+    expect(out).toContain(
+      '\\hline\n\\multicolumn{2}{|c|}{\\textit{Record 1}} \\\\\n\\hline\n',
+    );
+    expect(out).toContain(
+      '\\hline\n\\multicolumn{2}{|c|}{\\textit{Record 2}} \\\\\n\\hline\n',
+    );
+    // Border==2 also emits the closing \hline before \end{tabular}.
+    expect(out).toContain('\\hline\n\\end{tabular}');
+  });
+
+  test('expanded border>=3 clamps to 2 (upstream uses 0..2)', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }],
+      rows: [['x']],
+    });
+    const out = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', border: 3 }),
+        s,
+      ),
+    );
+    expect(out).toContain('\\begin{tabular}{|c|l|}\n');
+  });
+
+  test('expanded omits default (N rows) footer; preserves user footers', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }],
+      rows: [['x']],
+    });
+    const out = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on' }),
+        s,
+      ),
+    );
+    expect(out).not.toContain('(1 row)');
+
+    const withFooter = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts({ footers: ['my note'] }, { expanded: 'on' }),
+        s,
+      ),
+    );
+    expect(withFooter).toContain('\\noindent my note \\\\\n');
+  });
+
+  test('expanded tuplesOnly suppresses Record N rows', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }, { name: 'b' }],
+      rows: [['x', 'y']],
+    });
+    const out = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', tuplesOnly: true }),
+        s,
+      ),
+    );
+    expect(out).not.toContain('Record');
+    expect(out).toContain('a & x \\\\\n');
+    expect(out).toContain('b & y \\\\\n');
+  });
+
+  test('expanded honors topt.prior for Record numbering', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }],
+      rows: [['x'], ['y']],
+    });
+    const out = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts(undefined, { expanded: 'on', prior: 4 }),
+        s,
+      ),
+    );
+    expect(out).toContain('\\textit{Record 5}');
+    expect(out).toContain('\\textit{Record 6}');
+  });
+
+  test('expanded renders title via \\begin{center}', async () => {
+    const rs = makeResultSet({
+      columns: [{ name: 'a' }],
+      rows: [['x']],
+    });
+    const out = await capture((s) =>
+      latexPrinter.printQuery(
+        rs,
+        defaultOpts({ title: 'My$Title' }, { expanded: 'on' }),
+        s,
+      ),
+    );
+    expect(
+      out.startsWith('\\begin{center}\nMy\\$Title\n\\end{center}\n\n'),
+    ).toBe(true);
+  });
 });
