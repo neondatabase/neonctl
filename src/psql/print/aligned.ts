@@ -965,11 +965,13 @@ const renderHorizontal = (
   }
 
   // Trailing blank line between query results. Upstream `print.c`
-  // line 1196 emits `fputc('\n', fout)` UNCONDITIONALLY (not guarded by
-  // `opt_tuples_only`) when `stop_table` is set — so `\pset tuples_only
-  // on` queries still get a single blank separator before the next
-  // command. Verified against vanilla psql 18.
-  out += newline;
+  // line 1196 emits `fputc('\n', fout)` ONLY when `stop_table` is set —
+  // chunked-cursor mid-error printing leaves it unset so the ERROR line
+  // lands flush against the last data row. Default is `true`, so happy-path
+  // queries still get the blank separator before the next command.
+  if (topt.stopTable) {
+    out += newline;
+  }
 
   return out;
 };

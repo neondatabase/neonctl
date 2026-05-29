@@ -984,7 +984,15 @@ const runCursorLoop = async (
       merged.rowCount = merged.rows.length;
       const partialOpts = {
         ...ctx.settings.popt,
-        topt: { ...ctx.settings.popt.topt, defaultFooter: false },
+        // `stopTable: false` mirrors upstream `print_cursor.c`'s
+        // mid-error flush: no `(N rows)` auto-footer, no trailing
+        // blank — the ERROR line should land flush against the last
+        // data row, not separated by an extra empty line.
+        topt: {
+          ...ctx.settings.popt.topt,
+          defaultFooter: false,
+          stopTable: false,
+        },
       };
       try {
         await printer.printQuery(merged, partialOpts, out);
