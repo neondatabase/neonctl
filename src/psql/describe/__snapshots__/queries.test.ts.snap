@@ -1119,3 +1119,183 @@ exports[`describe/queries — pg17 snapshots > showView / fixed name 1`] = `
   "sql": "SELECT pg_catalog.pg_get_viewdef('public.my_view'::pg_catalog.regclass, true) AS def;",
 }
 `;
+
+exports[`describe/queries — pg18 snapshots (PG-18-only branches) > describeFunctions / pg18 / verbose=true (Leakproof?) 1`] = `
+{
+  "description": "List of functions",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  p.proname as "Name",
+  pg_catalog.pg_get_function_result(p.oid) as "Result data type",
+  pg_catalog.pg_get_function_arguments(p.oid) as "Argument data types",
+ CASE p.prokind
+  WHEN 'a' THEN 'agg'
+  WHEN 'w' THEN 'window'
+  WHEN 'p' THEN 'proc'
+  ELSE 'func'
+ END as "Type",
+ CASE
+  WHEN p.provolatile = 'i' THEN 'immutable'
+  WHEN p.provolatile = 's' THEN 'stable'
+  WHEN p.provolatile = 'v' THEN 'volatile'
+ END as "Volatility",
+ CASE
+  WHEN p.proparallel = 'r' THEN 'restricted'
+  WHEN p.proparallel = 's' THEN 'safe'
+  WHEN p.proparallel = 'u' THEN 'unsafe'
+ END as "Parallel",
+ pg_catalog.pg_get_userbyid(p.proowner) as "Owner",
+ CASE WHEN prosecdef THEN 'definer' ELSE 'invoker' END AS "Security",
+ CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END as "Leakproof?",
+ CASE WHEN pg_catalog.array_length(p.proacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(p.proacl, E'\\n') END AS "Access privileges",
+ l.lanname as "Language",
+ CASE WHEN l.lanname IN ('internal', 'c') THEN p.prosrc END as "Internal name",
+ pg_catalog.obj_description(p.oid, 'pg_proc') as "Description"
+FROM pg_catalog.pg_proc p
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+     LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+WHERE true /* TODO(WP-20): pattern matching */
+      AND n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+ORDER BY 1, 2, 4;",
+}
+`;
+
+exports[`describe/queries — pg18 snapshots (PG-18-only branches) > describeOperators / pg18 1`] = `
+{
+  "description": "List of operators",
+  "params": [],
+  "sql": "SELECT n.nspname as "Schema",
+  o.oprname AS "Name",
+  CASE WHEN o.oprkind='l' THEN NULL ELSE pg_catalog.format_type(o.oprleft, NULL) END AS "Left arg type",
+  CASE WHEN o.oprkind='r' THEN NULL ELSE pg_catalog.format_type(o.oprright, NULL) END AS "Right arg type",
+  pg_catalog.format_type(o.oprresult, NULL) AS "Result type",
+  coalesce(pg_catalog.obj_description(o.oid, 'pg_operator'),
+           pg_catalog.obj_description(o.oprcode, 'pg_proc')) AS "Description"
+FROM pg_catalog.pg_operator o
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace
+WHERE n.nspname <> 'pg_catalog'
+      AND n.nspname <> 'information_schema'
+  AND true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2, 3, 4;",
+}
+`;
+
+exports[`describe/queries — pg18 snapshots (PG-18-only branches) > describePublications / pg18 (Generated columns) 1`] = `
+{
+  "description": "Details of publications",
+  "params": [],
+  "sql": "SELECT oid, pubname,
+  pg_catalog.pg_get_userbyid(pubowner) AS owner,
+  puballtables, false AS puballsequences, pubinsert, pubupdate, pubdelete, pubtruncate, (CASE pubgencols WHEN 'n' THEN 'none' WHEN 's' THEN 'stored' END) AS pubgencols, pubviaroot, pg_catalog.obj_description(oid, 'pg_publication')
+FROM pg_catalog.pg_publication
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 2;",
+}
+`;
+
+exports[`describe/queries — pg18 snapshots (PG-18-only branches) > listCasts / pg18 1`] = `
+{
+  "description": "List of casts",
+  "params": [],
+  "sql": "SELECT pg_catalog.format_type(castsource, NULL) AS "Source type",
+       pg_catalog.format_type(casttarget, NULL) AS "Target type",
+       CASE WHEN c.castmethod = 'b' THEN '(binary coercible)'
+            WHEN c.castmethod = 'i' THEN '(with inout)'
+            ELSE p.proname
+       END AS "Function",
+       CASE WHEN c.castcontext = 'e' THEN 'no'
+            WHEN c.castcontext = 'a' THEN 'in assignment'
+            ELSE 'yes'
+       END AS "Implicit?"
+FROM pg_catalog.pg_cast c LEFT JOIN pg_catalog.pg_proc p
+     ON c.castfunc = p.oid
+     LEFT JOIN pg_catalog.pg_type ts ON c.castsource = ts.oid
+     LEFT JOIN pg_catalog.pg_namespace ns ON ns.oid = ts.typnamespace
+     LEFT JOIN pg_catalog.pg_type tt ON c.casttarget = tt.oid
+     LEFT JOIN pg_catalog.pg_namespace nt ON nt.oid = tt.typnamespace
+WHERE ( (true  AND true /* TODO(WP-20): pattern matching */
+) OR (true  AND true /* TODO(WP-20): pattern matching */
+) )
+ORDER BY 1, 2;",
+}
+`;
+
+exports[`describe/queries — pg18 snapshots (PG-18-only branches) > listDefaultACLs / pg18 1`] = `
+{
+  "description": "Default access privileges",
+  "params": [],
+  "sql": "SELECT pg_catalog.pg_get_userbyid(d.defaclrole) AS "Owner",
+  n.nspname AS "Schema",
+  CASE d.defaclobjtype WHEN 'r' THEN 'table' WHEN 'S' THEN 'sequence' WHEN 'f' THEN 'function' WHEN 'T' THEN 'type' WHEN 'n' THEN 'schema' WHEN 'L' THEN 'large object' END AS "Type",
+  CASE WHEN pg_catalog.array_length(d.defaclacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(d.defaclacl, E'\\n') END AS "Access privileges"
+FROM pg_catalog.pg_default_acl d
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = d.defaclnamespace
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1, 2, 3;",
+}
+`;
+
+exports[`describe/queries — pg18 snapshots (PG-18-only branches) > listExtensions / pg18 (Default version) 1`] = `
+{
+  "description": "List of installed extensions",
+  "params": [],
+  "sql": "SELECT e.extname AS "Name", e.extversion AS "Version", ae.default_version AS "Default version",n.nspname AS "Schema", d.description AS "Description"
+FROM pg_catalog.pg_extension e LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace LEFT JOIN pg_catalog.pg_description d ON d.objoid = e.oid AND d.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass LEFT JOIN pg_catalog.pg_available_extensions() ae(name, default_version, comment) ON ae.name = e.extname
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;
+
+exports[`describe/queries — pg18 snapshots (PG-18-only branches) > listOpFamilyOperators / pg18 / verbose=true (Leakproof?) 1`] = `
+{
+  "description": "List of operators of operator families",
+  "params": [],
+  "sql": "SELECT
+  am.amname AS "AM",
+  CASE
+    WHEN pg_catalog.pg_opfamily_is_visible(of.oid)
+    THEN pg_catalog.format('%I', of.opfname)
+    ELSE pg_catalog.format('%I.%I', nsf.nspname, of.opfname)
+  END AS "Operator family",
+  o.amopopr::pg_catalog.regoperator AS "Operator"
+,  o.amopstrategy AS "Strategy",
+  CASE o.amoppurpose
+    WHEN 'o' THEN 'ordering'
+    WHEN 's' THEN 'search'
+  END AS "Purpose"
+, ofs.opfname AS "Sort opfamily",
+  CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END AS "Leakproof?"
+FROM pg_catalog.pg_amop o
+  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = o.amopfamily
+  LEFT JOIN pg_catalog.pg_am am ON am.oid = of.opfmethod AND am.oid = o.amopmethod
+  LEFT JOIN pg_catalog.pg_namespace nsf ON of.opfnamespace = nsf.oid
+  LEFT JOIN pg_catalog.pg_opfamily ofs ON ofs.oid = o.amopsortfamily
+  LEFT JOIN pg_catalog.pg_operator op ON op.oid = o.amopopr
+  LEFT JOIN pg_catalog.pg_proc p ON p.oid = op.oprcode
+ORDER BY 1, 2,
+  o.amoplefttype = o.amoprighttype DESC,
+  pg_catalog.format_type(o.amoplefttype, NULL),
+  pg_catalog.format_type(o.amoprighttype, NULL),
+  o.amopstrategy;",
+}
+`;
+
+exports[`describe/queries — pg18 snapshots (PG-18-only branches) > listPublications / pg18 (Generated columns) 1`] = `
+{
+  "description": "List of publications",
+  "params": [],
+  "sql": "SELECT pubname AS "Name",
+  pg_catalog.pg_get_userbyid(pubowner) AS "Owner",
+  puballtables AS "All tables",
+  pubinsert AS "Inserts",
+  pubupdate AS "Updates",
+  pubdelete AS "Deletes",
+  pubtruncate AS "Truncates",
+ (CASE pubgencols WHEN 'n' THEN 'none' WHEN 's' THEN 'stored' END) AS "Generated columns",
+  pubviaroot AS "Via root"
+FROM pg_catalog.pg_publication
+WHERE true /* TODO(WP-20): pattern matching */
+ORDER BY 1;",
+}
+`;

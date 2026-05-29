@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import * as q from './queries.js';
-import { PG_12, PG_17 } from './versionGate.js';
+import { PG_12, PG_17, PG_18 } from './versionGate.js';
 
 describe('describe/queries — pg17 snapshots', () => {
   /* ----- Representative subset: both verbose=false and verbose=true ----- */
@@ -279,5 +279,49 @@ describe('describe/queries — pg17 snapshots', () => {
     expect(
       q.showView({ name: 'public.my_view', serverVersion: PG_17 }),
     ).toMatchSnapshot();
+  });
+});
+
+// PG 18 added new columns / rows / WHERE branches to several catalog
+// queries. The pg17 block above already pins the older shape; this
+// block pins the PG-18 SQL so future edits cannot silently drop a
+// version branch (e.g. removing the `Leakproof?` column from
+// `listOpFamilyOperators` would change this snapshot without changing
+// the pg17 one).
+describe('describe/queries — pg18 snapshots (PG-18-only branches)', () => {
+  it('describeFunctions / pg18 / verbose=true (Leakproof?)', () => {
+    expect(
+      q.describeFunctions({ serverVersion: PG_18, verbose: true }),
+    ).toMatchSnapshot();
+  });
+
+  it('describeOperators / pg18', () => {
+    expect(q.describeOperators({ serverVersion: PG_18 })).toMatchSnapshot();
+  });
+
+  it('describePublications / pg18 (Generated columns)', () => {
+    expect(q.describePublications({ serverVersion: PG_18 })).toMatchSnapshot();
+  });
+
+  it('listCasts / pg18', () => {
+    expect(q.listCasts({ serverVersion: PG_18 })).toMatchSnapshot();
+  });
+
+  it('listDefaultACLs / pg18', () => {
+    expect(q.listDefaultACLs({ serverVersion: PG_18 })).toMatchSnapshot();
+  });
+
+  it('listExtensions / pg18 (Default version)', () => {
+    expect(q.listExtensions({ serverVersion: PG_18 })).toMatchSnapshot();
+  });
+
+  it('listOpFamilyOperators / pg18 / verbose=true (Leakproof?)', () => {
+    expect(
+      q.listOpFamilyOperators({ serverVersion: PG_18, verbose: true }),
+    ).toMatchSnapshot();
+  });
+
+  it('listPublications / pg18 (Generated columns)', () => {
+    expect(q.listPublications({ serverVersion: PG_18 })).toMatchSnapshot();
   });
 });
