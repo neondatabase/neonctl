@@ -25,6 +25,13 @@
 -- vendored psql.sql still expects that.
 GRANT ALL ON SCHEMA public TO public;
 
+-- Upstream's create_am.sql regression test runs before psql.sql in the
+-- standard parallel_schedule and installs a second table access method
+-- named `heap2` (using the same handler as `heap`). psql.sql then
+-- inspects it via `\dA`, `\dA *`, `\dA h*`, `\dA+`, etc. We don't run
+-- the full schedule, so install heap2 here to keep those checks green.
+CREATE ACCESS METHOD heap2 TYPE TABLE HANDLER heap_tableam_handler;
+
 -- onek: 1000 rows. psql.sql uses .unique1 only.
 CREATE TABLE onek (
     unique1     int4,
