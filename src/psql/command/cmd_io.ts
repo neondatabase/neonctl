@@ -86,6 +86,7 @@ import {
   openSync,
 } from 'node:fs';
 import * as path from 'node:path';
+import { platform } from 'node:os';
 
 import type {
   BackslashCmdSpec,
@@ -543,6 +544,18 @@ const openWriter = (target: string): QueryFoutEntry => {
             closeSync(fd);
           } catch (closeErr) {
             reject(closeErr as Error);
+            return;
+          }
+          // Docker Desktop on macOS uses virtiofs/gRPC-FUSE for bind
+          // mounts; cache propagation from host writes to the container's
+          // view is eventual, not synchronous. A subsequent server-side
+          // `COPY FROM '/bind/mount/file'` can read a partial view even
+          // though the file is fully synced on the host. Linux + Windows
+          // bind mounts are coherent, so this branch is macOS-only.
+          if (platform() === 'darwin') {
+            setTimeout(() => {
+              resolve({});
+            }, 25);
             return;
           }
           resolve({});
