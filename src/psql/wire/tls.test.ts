@@ -18,6 +18,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { Buffer } from 'node:buffer';
 import type * as tls from 'node:tls';
@@ -542,6 +543,139 @@ describe('loadTlsFileOptions', () => {
       expect((merged.cert as Buffer).toString()).toContain('cert-bytes');
     } finally {
       f.cleanup();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // DER auto-detection: libpq accepts sslcert/sslkey/sslrootcert in PEM or DER
+  // (binary) form. Node's tls.connect wants PEM, so a non-PEM file is treated
+  // as DER and wrapped in the correct armor in-memory.
+  // -------------------------------------------------------------------------
+
+  /** Decode the base64 body of a single PEM block back to its DER bytes. */
+  const pemBodyToDer = (pem: string): Buffer => {
+    const body = pem
+      .replace(/-----BEGIN [^-]+-----/g, '')
+      .replace(/-----END [^-]+-----/g, '')
+      .replace(/\s+/g, '');
+    return Buffer.from(body, 'base64');
+  };
+
+  test('wraps a DER (non-PEM) sslcert in CERTIFICATE armor', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-der-'));
+    try {
+      // Arbitrary binary bytes that do NOT start with the PEM marker — stands
+      // in for a DER-encoded cert. Includes high bytes so it is unambiguously
+      // binary, not accidentally text.
+      const der = Buffer.from([0x30, 0x82, 0x01, 0x0a, 0x00, 0xff, 0xfe, 0x7f]);
+      const certPath = path.join(dir, 'client.der');
+      fs.writeFileSync(certPath, der);
+      const merged = await loadTlsFileOptions({}, { sslcert: certPath });
+      const pem = (merged.cert as Buffer).toString('ascii');
+      expect(pem).toContain('-----BEGIN CERTIFICATE-----');
+      expect(pem).toContain('-----END CERTIFICATE-----');
+      // The armored body must base64-decode back to the original DER bytes.
+      expect(pemBodyToDer(pem).equals(der)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('wraps a DER (non-PEM) sslkey in PRIVATE KEY armor', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-der-'));
+    try {
+      const der = Buffer.from([0x30, 0x82, 0x02, 0x5d, 0x02, 0x01, 0x00, 0x80]);
+      const keyPath = path.join(dir, 'client.key.der');
+      fs.writeFileSync(keyPath, der);
+      fs.chmodSync(keyPath, 0o600);
+      const merged = await loadTlsFileOptions({}, { sslkey: keyPath });
+      const pem = (merged.key as Buffer).toString('ascii');
+      expect(pem).toContain('-----BEGIN PRIVATE KEY-----');
+      expect(pem).toContain('-----END PRIVATE KEY-----');
+      expect(pemBodyToDer(pem).equals(der)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('wraps a DER (non-PEM) sslrootcert in CERTIFICATE armor', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-der-'));
+    try {
+      const der = Buffer.from([0x30, 0x82, 0x03, 0x11, 0xca, 0xfe, 0xba, 0xbe]);
+      const caPath = path.join(dir, 'root.der');
+      fs.writeFileSync(caPath, der);
+      const merged = await loadTlsFileOptions(
+        {},
+        { sslrootcert: caPath },
+        'verify-full',
+      );
+      const pem = (merged.ca as Buffer).toString('ascii');
+      expect(pem).toContain('-----BEGIN CERTIFICATE-----');
+      expect(pemBodyToDer(pem).equals(der)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('leaves an already-PEM sslcert untouched (no double-armor)', async () => {
+    const f = fixtures();
+    try {
+      const merged = await loadTlsFileOptions({}, { sslcert: f.certPath });
+      const pem = (merged.cert as Buffer).toString();
+      // PEM input flows through verbatim — exactly one BEGIN marker, and the
+      // original body text survives.
+      expect(pem).toBe('-----BEGIN CERTIFICATE-----\ncert-bytes\n');
+      expect(pem.match(/-----BEGIN/g)?.length).toBe(1);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test('converts an openssl-minted DER cert (when openssl is on PATH)', async () => {
+    let openssl = true;
+    try {
+      execFileSync('openssl', ['version'], { stdio: 'ignore' });
+    } catch {
+      openssl = false;
+    }
+    if (!openssl) return; // hermetic skip: no openssl in this environment
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-der-'));
+    try {
+      const keyPem = path.join(dir, 'k.pem');
+      const certPem = path.join(dir, 'c.pem');
+      const certDer = path.join(dir, 'c.der');
+      execFileSync('openssl', [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-keyout',
+        keyPem,
+        '-out',
+        certPem,
+        '-days',
+        '1',
+        '-subj',
+        '/CN=der-test',
+      ]);
+      execFileSync('openssl', [
+        'x509',
+        '-in',
+        certPem,
+        '-outform',
+        'der',
+        '-out',
+        certDer,
+      ]);
+      const merged = await loadTlsFileOptions({}, { sslcert: certDer });
+      const pem = (merged.cert as Buffer).toString('ascii');
+      expect(pem).toContain('-----BEGIN CERTIFICATE-----');
+      // The wrapped PEM must equal the PEM openssl emits from the same cert.
+      const expectedDer = fs.readFileSync(certDer);
+      expect(pemBodyToDer(pem).equals(expectedDer)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 

@@ -233,10 +233,14 @@ export async function loadTlsFileOptions(
       // (set by the connection layer for verify-* modes) is left intact.
       const sslCertFile = process.env.SSL_CERT_FILE;
       if (sslCertFile !== undefined && sslCertFile !== '') {
-        merged.ca = await readPem('sslrootcert', sslCertFile);
+        merged.ca = await readPem('sslrootcert', sslCertFile, 'CERTIFICATE');
       }
     } else {
-      merged.ca = await readPem('sslrootcert', fileOpts.sslrootcert);
+      merged.ca = await readPem(
+        'sslrootcert',
+        fileOpts.sslrootcert,
+        'CERTIFICATE',
+      );
     }
   }
   // libpq `sslcertmode` gates whether the client cert/key are sent.
@@ -256,11 +260,11 @@ export async function loadTlsFileOptions(
   }
   if (certMode !== 'disable') {
     if (clientCert !== undefined) {
-      merged.cert = await readPem('sslcert', clientCert);
+      merged.cert = await readPem('sslcert', clientCert, 'CERTIFICATE');
     }
     if (fileOpts.sslkey !== undefined && fileOpts.sslkey !== '') {
       await assertKeyPermissions(fileOpts.sslkey);
-      merged.key = await readPem('sslkey', fileOpts.sslkey);
+      merged.key = await readPem('sslkey', fileOpts.sslkey, 'PRIVATE KEY');
     }
   }
   // CRLs come from a single file (`sslcrl`) and/or every file in a directory
@@ -313,13 +317,66 @@ async function assertKeyLogFileWritable(filePath: string): Promise<void> {
   }
 }
 
-async function readPem(label: string, filePath: string): Promise<Buffer> {
+/**
+ * PEM armor label for a DER blob that {@link readPem} auto-detected. libpq
+ * accepts `sslcert`/`sslkey`/`sslrootcert` in either PEM or DER (binary) form
+ * and sniffs the format; Node's `tls.connect` only understands PEM, so we
+ * wrap a raw DER blob ourselves:
+ *   - `'CERTIFICATE'` for certs and CA roots (`sslcert` / `sslrootcert`).
+ *   - `'PRIVATE KEY'` for client keys (`sslkey`). A DER key is assumed to be
+ *     PKCS#8 (`-----BEGIN PRIVATE KEY-----`), which is what `openssl pkcs8`
+ *     and every modern key-export tool emits. Legacy bare PKCS#1 / SEC1 DER
+ *     keys (rare) would need a different armor; libpq leans on OpenSSL's
+ *     auto-detection there, which Node does not expose, so we document the
+ *     PKCS#8 assumption rather than silently mislabel.
+ */
+type DerArmor = 'CERTIFICATE' | 'PRIVATE KEY';
+
+/** True when the bytes already carry a `-----BEGIN ...-----` PEM header. */
+function isPemArmored(bytes: Buffer): boolean {
+  // A PEM file is ASCII text; scan a bounded prefix (skipping leading
+  // whitespace libpq tolerates) for the armor marker. DER is binary and will
+  // not contain this token at the front.
+  const head = bytes.subarray(0, 64).toString('latin1');
+  return head.includes('-----BEGIN');
+}
+
+/**
+ * Wrap raw DER bytes in the requested PEM armor: base64 the DER, split into
+ * 64-char lines (the PEM convention), and bracket with the BEGIN/END markers.
+ */
+function derToPem(der: Buffer, armor: DerArmor): Buffer {
+  const b64 = der.toString('base64');
+  const lines = b64.match(/.{1,64}/g) ?? [];
+  const body = lines.join('\n');
+  const pem = `-----BEGIN ${armor}-----\n${body}\n-----END ${armor}-----\n`;
+  return Buffer.from(pem, 'ascii');
+}
+
+/**
+ * Read a libpq SSL file, returning PEM bytes ready for `tls.connect`. If the
+ * file is already PEM-armored it's returned verbatim; otherwise it's treated
+ * as DER and converted in-memory using {@link derToPem} with `derArmor`
+ * (matching libpq's PEM-or-DER auto-detection). When `derArmor` is omitted the
+ * file is returned as-is even if not PEM (used for CRLs, where DER conversion
+ * is out of scope).
+ */
+async function readPem(
+  label: string,
+  filePath: string,
+  derArmor?: DerArmor,
+): Promise<Buffer> {
+  let bytes: Buffer;
   try {
-    return await fs.readFile(filePath);
+    bytes = await fs.readFile(filePath);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`could not read ${label} "${filePath}": ${reason}`);
   }
+  if (derArmor !== undefined && !isPemArmored(bytes)) {
+    return derToPem(bytes, derArmor);
+  }
+  return bytes;
 }
 
 /**
