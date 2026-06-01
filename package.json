@@ -9,7 +9,7 @@
   "description": "CLI tool for NeonDB Cloud management",
   "main": "index.js",
   "author": "NeonDB",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": false,
   "engines": {
     "node": ">=18"
