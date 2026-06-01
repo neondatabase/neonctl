@@ -29,10 +29,15 @@ on:
       - 'src/commands/projects.ts'
       - 'tests/psql-conformance/**'
       - '.github/workflows/psql-conformance.yml'
+  # `push` runs ONLY for `main` — post-merge validation. Updates to
+  # feature branches like `feat/ts-psql` are already covered by the
+  # `pull_request` trigger above (the PR against main fires on every
+  # `synchronize` event), so listing the branch under `push` would
+  # double every CI run. The other workflows in this repo (pr.yml,
+  # commitlint.yml) follow the same single-trigger pattern.
   push:
     branches:
       - main
-      - feat/ts-psql
 
 permissions: {}
 
