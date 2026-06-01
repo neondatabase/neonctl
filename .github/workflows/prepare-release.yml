@@ -45,6 +45,8 @@ on:
         type: string
         default: 'main'
 
+permissions: {}
+
 concurrency:
   group: prepare-release
   cancel-in-progress: false
@@ -200,10 +202,11 @@ jobs:
             echo "- Bump kind: \`${BUMP}\`"
             echo ""
             echo "### Next steps"
-            echo "1. An approver reviews + approves this PR."
-            echo "2. Required checks run."
-            echo "3. On green, the approver **manually clicks \"Squash and merge\"** in the UI. **Do NOT use auto-merge.**"
-            echo "4. \`post-release.yml\` fires on the push to \`main\`, tags the squash commit \`${TAG}\`, and comments here with Stage 2 (npm publish) dispatch instructions."
+            echo "1. Click **Ready for review** to take this PR out of draft (required before merge; also attaches the required checks under your identity)."
+            echo "2. An approver reviews + approves this PR."
+            echo "3. Required checks run."
+            echo "4. On green, the approver **manually clicks \"Squash and merge\"** in the UI. **Do NOT use auto-merge.**"
+            echo "5. \`post-release.yml\` fires on the push to \`main\`, tags the squash commit \`${TAG}\`, and comments here with Stage 2 (npm publish) dispatch instructions."
             echo ""
             echo "> :warning: **Why manual merge?** GitHub Actions suppresses downstream \`on: push\` workflows for pushes caused by \`GITHUB_TOKEN\` (including auto-merge enabled from a workflow). A human clicking merge attributes the push to that user, so \`post-release.yml\` fires."
             echo ""
