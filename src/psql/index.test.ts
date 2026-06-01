@@ -23,7 +23,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   envConnectionDefaults,
+  libpqConnectionDefaults,
   looksLikeConnectionString,
+  mergeConnectOptions,
   parseConninfo,
   parseConnectionUri,
 } from './index.js';
@@ -762,6 +764,47 @@ describe('envConnectionDefaults — PGSSLCERTMODE', () => {
     expect(() => envConnectionDefaults({ PGSSLCERTMODE: 'bogus' })).toThrow(
       'invalid sslcertmode value: "bogus"',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sslrootcert=system: the special trust-store value raises the effective
+// sslmode to verify-full (libpq).
+// ---------------------------------------------------------------------------
+describe('sslrootcert=system raises sslmode to verify-full', () => {
+  it('forces verify-full when sslmode was unset (defaults to prefer)', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslrootcert=system');
+    expect(got.sslrootcert).toBe('system');
+    expect(got.ssl).toBe('verify-full');
+  });
+
+  it('forces verify-full when a weaker sslmode=require was requested', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslrootcert=system&sslmode=require',
+    );
+    expect(got.ssl).toBe('verify-full');
+  });
+
+  it('leaves an explicit sslmode=verify-full untouched', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslrootcert=system&sslmode=verify-full',
+    );
+    expect(got.ssl).toBe('verify-full');
+  });
+
+  it('does not touch sslmode for a real sslrootcert path', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslrootcert=/etc/pg/ca.pem&sslmode=require',
+    );
+    expect(got.ssl).toBe('require');
+  });
+
+  it('applies cross-layer in mergeConnectOptions (e.g. PGSSLROOTCERT=system)', () => {
+    const merged = mergeConnectOptions(
+      [{ sslrootcert: 'system' }, { ssl: 'require' }],
+      libpqConnectionDefaults({}),
+    );
+    expect(merged.ssl).toBe('verify-full');
   });
 });
 

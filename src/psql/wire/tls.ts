@@ -90,7 +90,15 @@ export type TlsFileOptions = {
    * is treated as "no passphrase" to mirror libpq's behaviour.
    */
   sslpassword?: string;
-  /** Path to CA cert(s) (PEM, may contain a bundle). Mapped to `ca`. */
+  /**
+   * Path to CA cert(s) (PEM, may contain a bundle), mapped to `ca`.
+   *
+   * The special value `system` (libpq `sslrootcert=system`) is NOT a file
+   * path: it selects the OS / OpenSSL trust store. We emulate libpq's
+   * OpenSSL build — if `SSL_CERT_FILE` is set we read THAT file as the CA
+   * bundle; otherwise we leave `ca` unset so Node falls back to its built-in
+   * Mozilla root store. `rejectUnauthorized` stays true either way.
+   */
   sslrootcert?: string;
   /** Path to CRL (PEM). Mapped to `crl`. */
   sslcrl?: string;
@@ -204,7 +212,19 @@ export async function loadTlsFileOptions(
     fileOpts.sslrootcert !== undefined &&
     fileOpts.sslrootcert !== ''
   ) {
-    merged.ca = await readPem('sslrootcert', fileOpts.sslrootcert);
+    if (fileOpts.sslrootcert === 'system') {
+      // `sslrootcert=system`: use the OS / OpenSSL trust store instead of a
+      // file. libpq's OpenSSL build honours $SSL_CERT_FILE as the bundle
+      // path, so we do the same; with neither set, leaving `ca` unset makes
+      // Node fall back to its built-in root store. `rejectUnauthorized`
+      // (set by the connection layer for verify-* modes) is left intact.
+      const sslCertFile = process.env.SSL_CERT_FILE;
+      if (sslCertFile !== undefined && sslCertFile !== '') {
+        merged.ca = await readPem('sslrootcert', sslCertFile);
+      }
+    } else {
+      merged.ca = await readPem('sslrootcert', fileOpts.sslrootcert);
+    }
   }
   // libpq `sslcertmode` gates whether the client cert/key are sent.
   //   - `disable`: skip loading them entirely, even when configured.

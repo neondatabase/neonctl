@@ -543,6 +543,62 @@ describe('loadTlsFileOptions', () => {
       f.cleanup();
     }
   });
+
+  // -------------------------------------------------------------------------
+  // sslrootcert=system: trust store, not a file path. Honour $SSL_CERT_FILE
+  // (libpq's OpenSSL behaviour); otherwise leave `ca` unset (built-in store).
+  // -------------------------------------------------------------------------
+  test('sslrootcert=system without SSL_CERT_FILE leaves ca unset', async () => {
+    const saved = process.env.SSL_CERT_FILE;
+    delete process.env.SSL_CERT_FILE;
+    try {
+      const merged = await loadTlsFileOptions(
+        { rejectUnauthorized: true },
+        { sslrootcert: 'system' },
+        'verify-full',
+      );
+      expect(merged.ca).toBeUndefined();
+      // rejectUnauthorized must survive untouched.
+      expect(merged.rejectUnauthorized).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.SSL_CERT_FILE;
+      else process.env.SSL_CERT_FILE = saved;
+    }
+  });
+
+  test('sslrootcert=system with SSL_CERT_FILE reads that file as the CA', async () => {
+    const f = fixtures();
+    const saved = process.env.SSL_CERT_FILE;
+    process.env.SSL_CERT_FILE = f.caPath;
+    try {
+      const merged = await loadTlsFileOptions(
+        { rejectUnauthorized: true },
+        { sslrootcert: 'system' },
+        'verify-full',
+      );
+      expect(Buffer.isBuffer(merged.ca)).toBe(true);
+      expect((merged.ca as Buffer).toString()).toContain('ca-bytes');
+    } finally {
+      if (saved === undefined) delete process.env.SSL_CERT_FILE;
+      else process.env.SSL_CERT_FILE = saved;
+      f.cleanup();
+    }
+  });
+
+  test('sslrootcert=system never tries to read a file named "system"', async () => {
+    const saved = process.env.SSL_CERT_FILE;
+    delete process.env.SSL_CERT_FILE;
+    try {
+      // Would throw `could not read sslrootcert "system"` if we treated the
+      // value as a path; the trust-store branch must short-circuit instead.
+      await expect(
+        loadTlsFileOptions({}, { sslrootcert: 'system' }, 'verify-full'),
+      ).resolves.toBeDefined();
+    } finally {
+      if (saved === undefined) delete process.env.SSL_CERT_FILE;
+      else process.env.SSL_CERT_FILE = saved;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

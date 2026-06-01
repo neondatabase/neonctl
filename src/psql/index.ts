@@ -693,7 +693,7 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   const password = queryPassword ?? raw.password;
   const database = queryDbname ?? raw.database ?? user;
 
-  const ssl = normalizeSslMode(raw.query.get('sslmode') ?? null);
+  let ssl = normalizeSslMode(raw.query.get('sslmode') ?? null);
   const channelBinding = normalizeChannelBinding(
     raw.query.get('channel_binding') ?? null,
   );
@@ -723,6 +723,12 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
   const sslcrl = nonEmpty(raw.query.get('sslcrl'));
   const sslcrldir = nonEmpty(raw.query.get('sslcrldir'));
+
+  // libpq: `sslrootcert=system` raises the effective sslmode to verify-full.
+  // verify-full is the strongest mode, so this only ever raises it.
+  if (sslrootcert === 'system' && ssl !== 'verify-full') {
+    ssl = 'verify-full';
+  }
 
   // libpq `hostaddr`: a fixed IP that bypasses DNS while `host` still drives
   // TLS SNI / cert verification. Empty string is "not set".
@@ -1856,6 +1862,13 @@ export const mergeConnectOptions = (
   // sentinel for "nothing supplied".
   if (out.database === '') {
     out.database = out.user;
+  }
+  // libpq: `sslrootcert=system` raises the effective sslmode to verify-full
+  // (it makes no sense to trust the public CA store without verifying the
+  // chain AND the hostname). verify-full is the strongest mode, so this can
+  // only ever raise — never downgrade — an explicitly requested mode.
+  if (out.sslrootcert === 'system' && out.ssl !== 'verify-full') {
+    out.ssl = 'verify-full';
   }
   return out;
 };
