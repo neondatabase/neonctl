@@ -128,6 +128,19 @@ const loadWire = async (): Promise<WireModule> => {
   return wireMod;
 };
 
+/**
+ * Load `parseConnectionUri` from the BUILT index module. `sslnegotiation`'s
+ * weak-sslmode rejection is a URI PARSE-layer check (the wire handshake
+ * never sees it), so the conformance assertion drives the built parser.
+ * (Authoritative cases live in `src/psql/index.test.ts`.)
+ */
+const loadParseUri = async (): Promise<(uri: string) => unknown> => {
+  const mod = (await import(pathToFileURL(DIST_PSQL).href)) as {
+    parseConnectionUri: (uri: string) => unknown;
+  };
+  return mod.parseConnectionUri;
+};
+
 // ---------------------------------------------------------------------------
 // Gating: surface why we're skipped when we are. The visible "(gate)"
 // describe is always emitted so the report tells the reader what's
@@ -524,12 +537,18 @@ describe.skipIf(!SHOULD_RUN)('tap/005_negotiate_encryption', () => {
       }
     });
 
-    // direct + weak sslmode (disable/allow/prefer) is rejected at the
-    // URI/conninfo PARSE layer (index.ts mergeConnectOptions:
-    // `weak sslmode "<mode>" may not be used with sslnegotiation=direct`),
-    // not the wire layer — covered by src/psql/index.test.ts unit tests.
-    it.skip('sslnegotiation=direct + weak sslmode -> rejected (parse-layer; see index.test.ts)', () => {
-      /* covered by src/psql/index.test.ts parser unit tests */
+    // direct + weak sslmode (disable/allow/prefer) is rejected at the URI
+    // PARSE layer (the wire handshake never sees it), so drive the built
+    // parser directly.
+    it('sslnegotiation=direct + weak sslmode is rejected at parse time', async () => {
+      const parseConnectionUri = await loadParseUri();
+      expect(() =>
+        parseConnectionUri(
+          'postgresql://h/db?sslnegotiation=direct&sslmode=prefer',
+        ),
+      ).toThrow(
+        /weak sslmode "prefer" may not be used with sslnegotiation=direct/,
+      );
     });
   });
 

@@ -563,20 +563,14 @@ describe.skipIf(!SHOULD_RUN)('tap/003_load_balance_host_list', () => {
   }, 60_000);
 
   // -------------------------------------------------------------------------
-  // SKIPPED SUBTESTS — explicit `it.skip` so the report inventories them.
+  // COVERAGE NOTE — upstream's "stop node1+node2, expect node3" follow-ups
+  // (for both load_balance_hosts=disable and =random) are NOT re-implemented
+  // here: the fall-through-on-refuse behavior is covered deterministically by
+  // `src/psql/wire/connection.test.ts` ('falls through to the second host
+  // when the first refuses the connection'), and the random-shuffle order by
+  // this spec's deterministic-RNG subtest above. Reproducing them as
+  // conformance tests would require stopping containers mid-run (flaky, ~10s
+  // of choreography) for no additional coverage — so they are intentionally
+  // omitted rather than left as misleading skipped placeholders.
   // -------------------------------------------------------------------------
-
-  describe('SKIPPED: load_balance_hosts=disable fall-through (covered by unit tests)', () => {
-    it.skip('stops node1 + node2, expects connection to node3', () => {
-      /* covered by `src/psql/wire/connection.test.ts::'falls through
-       * to the second host when the first refuses the connection'` */
-    });
-  });
-
-  describe('SKIPPED: load_balance_hosts=random fall-through (covered by unit tests)', () => {
-    it.skip('5x connect with two nodes down, expects only node3 to be hit', () => {
-      /* covered by the wire-level fall-through unit test plus this
-       * spec's deterministic-RNG subtest */
-    });
-  });
 });

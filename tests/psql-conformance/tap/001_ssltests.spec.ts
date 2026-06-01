@@ -100,6 +100,21 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
 const DIST_WIRE = join(REPO_ROOT, 'dist', 'psql', 'wire', 'connection.js');
+const DIST_INDEX = join(REPO_ROOT, 'dist', 'psql', 'index.js');
+
+/**
+ * Load `parseConnectionUri` from the BUILT index module. A few libpq SSL
+ * params are validated at the URI/conninfo PARSE layer (not the wire
+ * handshake), so the conformance assertion drives the built parser
+ * directly. (The authoritative cases live in `src/psql/index.test.ts`;
+ * exercising the dist build here guards export/build regressions.)
+ */
+const loadParseUri = async (): Promise<(uri: string) => { ssl: string }> => {
+  const mod = (await import(pathToFileURL(DIST_INDEX).href)) as {
+    parseConnectionUri: (uri: string) => { ssl: string };
+  };
+  return mod.parseConnectionUri;
+};
 
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION === '1';
 const OPENSSL_OK = isOpensslAvailable();
@@ -1120,8 +1135,13 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     // PARSE layer (index.ts `normalizeTlsProtocolVersion` /
     // `assertTlsProtocolRange`), not the wire layer — so this is covered
     // by the parser unit tests in `src/psql/index.test.ts`, not here.
-    it.skip('connect fails with malformed ssl_min/max_protocol_version values — parse-layer; see index.test.ts', () => {
-      /* covered by src/psql/index.test.ts parser unit tests */
+    // Malformed protocol-version is rejected at the URI parse layer (the
+    // wire handshake never sees it), so drive the built parser directly.
+    it('rejects a malformed ssl_min_protocol_version at parse time', async () => {
+      const parseConnectionUri = await loadParseUri();
+      expect(() =>
+        parseConnectionUri('postgresql://h/db?ssl_min_protocol_version=TLSv9'),
+      ).toThrow(/ssl_min_protocol_version/);
     });
     it.skip('server fails to restart with min > max protocol versions', () => {
       /* unreachable — server-side restart not in our scope */
@@ -1326,8 +1346,13 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
 
     // The system→verify-full minimum bump happens at the URI/conninfo parse
     // layer (index.ts), covered by src/psql/index.test.ts unit tests.
-    it.skip('sslrootcert=system defaults to sslmode=verify-full — parse-layer; see index.test.ts', () => {
-      /* covered by src/psql/index.test.ts parser unit tests */
+    // sslrootcert=system raises the minimum sslmode to verify-full at the
+    // parse layer — assert via the built parser.
+    it('sslrootcert=system raises the sslmode minimum to verify-full', async () => {
+      const parseConnectionUri = await loadParseUri();
+      expect(
+        parseConnectionUri('postgresql://h/db?sslrootcert=system').ssl,
+      ).toBe('verify-full');
     });
 
     it('sslkeylogfile is written on connect with correct permissions', async () => {
@@ -1362,9 +1387,9 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
       ).rejects.toThrow(/could not open sslkeylogfile/);
     });
 
-    it.skip('sslcrldir=... reads CRLs from a directory — covered by the CRL revocation group above', () => {
-      /* implemented: see "fails with matching CRL via sslcrldir=" */
-    });
+    // NOTE: sslcrldir is exercised by the active "fails with matching CRL
+    // via sslcrldir=" test in the CRL revocation group above — no separate
+    // (skipped) placeholder needed here.
   });
 
   describe('libpq-style diagnostic strings', () => {
