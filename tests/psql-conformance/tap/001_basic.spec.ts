@@ -52,7 +52,7 @@
 // Re-port checklist (when bumping the vendored PG version): walk
 // 001_basic.pl top-to-bottom and verify each section here matches.
 
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -693,28 +693,54 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
   // -------------------------------------------------------------------------
 
   describe('\\watch', () => {
-    // Named-flag parsing (c=N, i=F, m=N) does not dispatch when the
-    // backslash command is on the same SQL line as a query: the SQL
-    // scanner gates backslash dispatch on `isBufferEmpty(sql)`, so
-    // `SELECT 1 \watch c=3 i=0.01` reaches the server as a literal `\`.
-    // cmd_io.ts implements the named-flag forms (commit 289802f); the
-    // gap is in the scanner. Tracked separately from this conformance
-    // migration — leave as todo with a precise reason.
-    it.todo(
-      'runs N=3 iterations at 10ms interval (lines 371-373) — \\watch named flags (c=N i=F) do not dispatch when on the same line as the SQL; scanner gates backslash dispatch on isBufferEmpty(sql)',
-    );
+    // Named-flag parsing (c=N, i=F, m=N) on the same SQL line as a query
+    // now dispatches correctly — the scanner flushes the buffered SQL on
+    // a mid-buffer backslash and cmd_io.ts honours the named flags. The
+    // `c=3` iteration count produces the row three times.
+    it('runs N=3 iterations at 10ms interval (lines 371-373)', async () => {
+      const r = await expectPsqlLike(
+        paths,
+        uri,
+        'SELECT 1 \\watch c=3 i=0.01',
+        /1[\s\S]*1[\s\S]*1/,
+      );
+      expect(
+        (r.stdout.match(/^\s*1\s*$/gm) ?? []).length,
+      ).toBeGreaterThanOrEqual(3);
+    });
 
-    it.todo(
-      'runs N=3 iterations at 0.0001s interval (sub-ms, lines 376-378) — same scanner gap (c=N i=F on same line as SELECT)',
-    );
+    it('runs N=3 iterations at 0.0001s interval (sub-ms, lines 376-378)', async () => {
+      const r = await expectPsqlLike(
+        paths,
+        uri,
+        'SELECT 1 \\watch c=3 i=0.0001',
+        /1[\s\S]*1[\s\S]*1/,
+      );
+      expect(
+        (r.stdout.match(/^\s*1\s*$/gm) ?? []).length,
+      ).toBeGreaterThanOrEqual(3);
+    });
 
-    it.todo(
-      'runs N=3 iterations with WATCH_INTERVAL=0 (lines 381-384) — same scanner gap (c=N on same line as SELECT)',
-    );
+    it('runs N=3 iterations with WATCH_INTERVAL=0 (lines 381-384)', async () => {
+      const r = await expectPsqlLike(
+        paths,
+        uri,
+        '\\set WATCH_INTERVAL 0\nSELECT 1 \\watch c=3',
+        /1[\s\S]*1[\s\S]*1/,
+      );
+      expect(
+        (r.stdout.match(/^\s*1\s*$/gm) ?? []).length,
+      ).toBeGreaterThanOrEqual(3);
+    });
 
-    it.todo(
-      'rejects m=x (invalid minimum row count, lines 387-391) — \\watch does not reject m=<non-numeric>; the option silently no-ops',
-    );
+    it('rejects m=x (invalid minimum row count, lines 387-391)', async () => {
+      await expectPsqlFailsLike(
+        paths,
+        uri,
+        'SELECT 3 \\watch m=x',
+        /incorrect minimum row count/,
+      );
+    });
 
     it('rejects m=1 min_rows=2 ("specified more than once", lines 393-397)', async () => {
       await expectPsqlFailsLike(
@@ -743,17 +769,32 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       );
     });
 
-    it.todo(
-      'rejects negative interval value (lines 411-414) — \\watch accepts negative positional interval (-10); upstream rejects with "incorrect interval value"',
-    );
+    it('rejects negative interval value (lines 411-414)', async () => {
+      await expectPsqlFailsLike(
+        paths,
+        uri,
+        'SELECT 1 \\watch -10',
+        /incorrect interval value "-10"/,
+      );
+    });
 
-    it.todo(
-      'rejects garbage interval value (lines 416-419) — \\watch accepts garbage positional interval (10ab); upstream rejects with "incorrect interval value"',
-    );
+    it('rejects garbage interval value (lines 416-419)', async () => {
+      await expectPsqlFailsLike(
+        paths,
+        uri,
+        'SELECT 1 \\watch 10ab',
+        /incorrect interval value "10ab"/,
+      );
+    });
 
-    it.todo(
-      'rejects out-of-range interval value (lines 421-424) — \\watch accepts out-of-range positional interval (10e400); upstream rejects',
-    );
+    it('rejects out-of-range interval value (lines 421-424)', async () => {
+      await expectPsqlFailsLike(
+        paths,
+        uri,
+        'SELECT 1 \\watch 10e400',
+        /incorrect interval value "10e400"/,
+      );
+    });
 
     it('rejects duplicate positional interval (lines 426-429)', async () => {
       await expectPsqlFailsLike(
@@ -773,9 +814,20 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       );
     });
 
-    it.todo(
-      'WATCH_INTERVAL is set, updated on \\set, restored on \\unset (lines 438-448) — `\\unset WATCH_INTERVAL` should restore the default value of 2 via a substitute hook (upstream `assign_watch_interval_hook` + substitute callback); plain :NAME substitution and the initial seed (=2) work, only the post-unset default restore remains',
-    );
+    it('WATCH_INTERVAL is set, updated on \\set, restored on \\unset (lines 438-448)', async () => {
+      // `\unset WATCH_INTERVAL` restores the default (2) via the
+      // substitute hook — so the three echoes read 2, 10, 2.
+      await expectPsqlLike(
+        paths,
+        uri,
+        '\\echo :WATCH_INTERVAL\n' +
+          '\\set WATCH_INTERVAL 10\n' +
+          '\\echo :WATCH_INTERVAL\n' +
+          '\\unset WATCH_INTERVAL\n' +
+          '\\echo :WATCH_INTERVAL',
+        /^2$[\s\S]*^10$[\s\S]*^2$/m,
+      );
+    });
 
     it('WATCH_INTERVAL=1e500 is out of range (lines 449-453)', async () => {
       await expectPsqlFailsLike(
@@ -796,19 +848,32 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
     // is on the host PATH — `/bin/cat` should be ubiquitous on macOS/
     // Linux, which are the only platforms our CI uses.
 
-    // The `\g | <program>` pipe is implemented in cmd_io.ts (commit
-    // 289802f), but the same scanner gap as \watch keeps the backslash
-    // command from dispatching when it lives on the same SQL line as
-    // the query: the buffer is non-empty, so the scanner emits the
-    // literal `\` to the server. cmd_io.ts is sound; the scanner needs
-    // to flush on `\g` mid-buffer. Tracked separately.
-    it.todo(
-      'single SELECT \\g | cat > file (lines 462-464) — `\\g | <program>` does not dispatch when on the same line as the SQL; scanner gates backslash dispatch on isBufferEmpty(sql)',
-    );
+    // The `\g | <program>` pipe dispatches on the same SQL line as the
+    // query: the scanner flushes the buffered SQL on the mid-buffer
+    // backslash and cmd_io.ts pipes the rendered output into the program.
+    // We use `cat > <file>` (ubiquitous on the macOS/Linux CI hosts) and
+    // slurp the file back, mirroring upstream's `perl -pe '' >$g_file`.
+    it('single SELECT \\g | cat > file (lines 462-464)', async () => {
+      const gFile = join(workdir, 'g_file_1.out');
+      const r = await runPsqlScript({
+        launcher: paths.launcher,
+        uri,
+        script: `SELECT 'one' \\g | cat > ${gFile}`,
+      });
+      expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+      expect(readFileSync(gFile, 'utf8')).toMatch(/one/);
+    });
 
-    it.todo(
-      'multi-statement SELECT ... \\g | cat > file emits both rows (lines 466-469) — same scanner gap as above',
-    );
+    it('multi-statement SELECT ... \\g | cat > file emits both rows (lines 466-469)', async () => {
+      const gFile = join(workdir, 'g_file_2.out');
+      const r = await runPsqlScript({
+        launcher: paths.launcher,
+        uri,
+        script: `SELECT 'two' \\; SELECT 'three' \\g | cat > ${gFile}`,
+      });
+      expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+      expect(readFileSync(gFile, 'utf8')).toMatch(/two[\s\S]*three/);
+    });
 
     it('SHOW_ALL_RESULTS=0 emits only last row (lines 472-479)', async () => {
       // Upstream uses `\g | pipe-program`; we exercise the same `sendQuery`
@@ -824,9 +889,16 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
       expect(r.stdout).not.toMatch(/four/);
     });
 
-    it.todo(
-      'COPY (values ...) TO STDOUT \\g | cat > file (lines 481-484) — same scanner gap as above (COPY variant)',
-    );
+    it('COPY (values ...) TO STDOUT \\g | cat > file (lines 481-484)', async () => {
+      const gFile = join(workdir, 'g_file_4.out');
+      const r = await runPsqlScript({
+        launcher: paths.launcher,
+        uri,
+        script: `copy (values ('foo'),('bar')) to stdout \\g | cat > ${gFile}`,
+      });
+      expect(r.exitCode, `stderr=${r.stderr}`).toBe(0);
+      expect(readFileSync(gFile, 'utf8')).toMatch(/foo[\s\S]*bar/);
+    });
   });
 
   // -------------------------------------------------------------------------
