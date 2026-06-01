@@ -82,6 +82,14 @@ jobs:
             echo "::error::Could not read .version from package.json on ${GITHUB_SHA}."
             exit 1
           fi
+          # Re-validate the shape (same pattern Stage 1 enforces on write). Guards
+          # against a malformed/multiline .version corrupting later steps or the
+          # $GITHUB_OUTPUT lines below.
+          semver_pat='^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?$'
+          if ! [[ "$VERSION" =~ $semver_pat ]]; then
+            echo "::error::package.json .version '$VERSION' is not valid semver."
+            exit 1
+          fi
 
           # Parse SUBJECT LINE ONLY — squash bodies may concatenate other
           # commit subjects that contain version-like tokens.
