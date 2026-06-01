@@ -49,6 +49,7 @@ import type {
   Notice,
   Pipeline,
   PreparedStatement,
+  RequireAuthMethod,
   ResultSet,
 } from '../types/connection.js';
 
@@ -445,6 +446,14 @@ export class PgConnection implements Connection {
   // -- Auth state (only used during state=auth)
   private scram: ScramClient | null = null;
   private readonly channelBindingData: Buffer | null;
+  /**
+   * True once the server has sent ANY authentication challenge (Cleartext,
+   * MD5, SASL, ...). Used by the AuthenticationOk handler to distinguish
+   * "server picked trust/cert auth" (no challenge, method=`none`) from
+   * "server just completed a SASL exchange" (challenge seen, method
+   * already validated when the challenge arrived).
+   */
+  private authChallengeSeen = false;
 
   // -- Error-after-close guard
   private socketError: Error | null = null;
@@ -1274,12 +1283,64 @@ export class PgConnection implements Connection {
   private startupResolve: (() => void) | null = null;
   private startupReject: ((err: unknown) => void) | null = null;
 
+  /**
+   * Enforce `require_auth` against an observed server-requested method.
+   * Returns true when the connection should proceed; false (with
+   * {@link failStartup} already called) when the policy was violated.
+   */
+  private checkRequireAuth(observed: RequireAuthMethod): boolean {
+    const policy = this.opts.requireAuth;
+    if (policy === undefined) return true;
+    const hit = policy.methods.has(observed);
+    const allowed = policy.negated ? !hit : hit;
+    if (!allowed) {
+      this.failStartup(
+        new Error(`auth method "${observed}" requirement failed`),
+      );
+      return false;
+    }
+    return true;
+  }
+
   private handleAuthMessage(msg: BackendMessage): void {
     switch (msg.type) {
-      case 'AuthenticationOk':
+      case 'AuthenticationOk': {
+        // libpq parity: channel_binding=require demands that some prior
+        // auth step actually negotiated channel binding. A bare
+        // AuthenticationOk after no challenge ("trust") or after a cert
+        // exchange ("cert" HBA, clientcert=verify-full) means no SCRAM
+        // happened and we must refuse.
+        if (
+          this.opts.channelBinding === 'require' &&
+          (this.scram === null || this.scram.mechanism !== 'SCRAM-SHA-256-PLUS')
+        ) {
+          this.failStartup(
+            new Error(
+              'channel binding required, but server authenticated client without channel binding',
+            ),
+          );
+          return;
+        }
+        // require_auth=none allows trust auth; anything else is rejected
+        // here. If a prior challenge was sent and validated, skip — that
+        // method was already accepted by the check at its own branch.
+        if (!this.authChallengeSeen && !this.checkRequireAuth('none')) {
+          return;
+        }
         this.state = 'await-ready';
         return;
+      }
       case 'AuthenticationCleartextPassword': {
+        this.authChallengeSeen = true;
+        if (this.opts.channelBinding === 'require') {
+          this.failStartup(
+            new Error(
+              "channel binding required but not supported by server's authentication request",
+            ),
+          );
+          return;
+        }
+        if (!this.checkRequireAuth('password')) return;
         if (this.opts.password === undefined) {
           this.failStartup(
             new Error(
@@ -1292,6 +1353,16 @@ export class PgConnection implements Connection {
         return;
       }
       case 'AuthenticationMD5Password': {
+        this.authChallengeSeen = true;
+        if (this.opts.channelBinding === 'require') {
+          this.failStartup(
+            new Error(
+              "channel binding required but not supported by server's authentication request",
+            ),
+          );
+          return;
+        }
+        if (!this.checkRequireAuth('md5')) return;
         if (this.opts.password === undefined) {
           this.failStartup(
             new Error(
@@ -1309,10 +1380,27 @@ export class PgConnection implements Connection {
         return;
       }
       case 'AuthenticationSASL': {
+        this.authChallengeSeen = true;
         if (this.opts.password === undefined) {
           this.failStartup(
             new Error(
               'Server requested SASL auth but no password was provided',
+            ),
+          );
+          return;
+        }
+        if (!this.checkRequireAuth('scram-sha-256')) return;
+        // channel_binding=require AND server didn't offer the PLUS
+        // variant — refuse before the SASL handshake starts. The check
+        // is split between here (no PLUS in the mechanism list) and
+        // chooseMechanism's fallback (PLUS present but no binding data).
+        if (
+          this.opts.channelBinding === 'require' &&
+          !msg.mechanisms.includes('SCRAM-SHA-256-PLUS')
+        ) {
+          this.failStartup(
+            new Error(
+              "channel binding required but not supported by server's authentication request",
             ),
           );
           return;
@@ -1323,7 +1411,7 @@ export class PgConnection implements Connection {
         ) {
           this.failStartup(
             new Error(
-              'channel_binding=require but no TLS channel-binding data is available',
+              "channel binding required but not supported by server's authentication request",
             ),
           );
           return;
