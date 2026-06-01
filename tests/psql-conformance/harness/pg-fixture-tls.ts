@@ -117,7 +117,15 @@ export type ServerCertName =
   | 'cn-and-san'
   | 'san-only'
   | 'ip-in-san'
-  | 'multi-name';
+  | 'multi-name'
+  /**
+   * RSA-PSS keyed leaf, signed by the (RSA-PKCS1) server CA. Exists so
+   * the 002_scram spec can verify that SCRAM-SHA-256-PLUS channel
+   * binding works against a server presenting an `rsassaPss`-signed
+   * certificate (upstream bug #17760 + the `HAVE_X509_GET_SIGNATURE_INFO`
+   * branch in libpq). SAN matches `cn-and-san` so verify-full works.
+   */
+  | 'pss';
 
 /** Identifier for a client cert the spec can pass via sslcert/sslkey. */
 export type ClientCertName = 'ssltestuser' | 'anotheruser';
@@ -222,6 +230,7 @@ export class CertVault {
       'DNS:dns2.localhost',
       'DNS:*.wildcard.localhost',
     ]);
+    this.mintRsaPssServerCert();
 
     // 6. Client leaf certs — signed by the client CA.
     this.mintClientCert('ssltestuser', '/CN=ssltestuser');
@@ -408,6 +417,94 @@ export class CertVault {
       ext,
     ]);
     this.serverCerts.set(name, { cert, key });
+  }
+
+  /**
+   * Mint an RSA-PSS keyed server leaf cert (`rsassaPss` signature algorithm
+   * on the public key — the issuing CA still uses RSA-PKCS1, which is a
+   * valid X.509 mix). Used by 002_scram to verify that SCRAM-SHA-256-PLUS
+   * channel binding works against an RSA-PSS server certificate.
+   *
+   * Key generation uses `openssl genpkey` because `openssl req -newkey
+   * rsa-pss` exists but is finicky about pkeyopt parsing across versions
+   * (and silently falls back to RSA-PKCS1 on older OpenSSL builds). A
+   * separate keygen step is explicit and portable.
+   *
+   * SAN matches `cn-and-san` so the cert satisfies `sslmode=verify-full`.
+   */
+  private mintRsaPssServerCert(): void {
+    const slug = 'server-pss';
+    const key = this.path(`${slug}.key`);
+    const csr = this.path(`${slug}.csr`);
+    const cert = this.path(`${slug}.crt`);
+
+    // 1. Generate an RSA-PSS keypair. `rsa_pss_keygen_md:sha256` pins the
+    // permitted digest so the cert's signature algorithm is rsassaPss
+    // with SHA-256 — the exact shape libpq's HAVE_X509_GET_SIGNATURE_INFO
+    // path expects to detect for channel-binding hash selection.
+    runOpenssl([
+      'genpkey',
+      '-algorithm',
+      'rsa-pss',
+      '-pkeyopt',
+      'rsa_keygen_bits:2048',
+      '-pkeyopt',
+      'rsa_pss_keygen_md:sha256',
+      '-pkeyopt',
+      'rsa_pss_keygen_saltlen:32',
+      '-out',
+      key,
+    ]);
+
+    // 2. Build a CSR against the RSA-PSS key. The signature on the CSR
+    // itself will be rsassaPss (since the key is rsa-pss); openssl picks
+    // the digest from `rsa_pss_keygen_md`.
+    runOpenssl([
+      'req',
+      '-new',
+      '-key',
+      key,
+      '-out',
+      csr,
+      '-subj',
+      '/CN=localhost',
+    ]);
+
+    // 3. Sign the CSR with the existing server CA (still RSA-PKCS1).
+    // The resulting cert has an rsassaPss SubjectPublicKeyInfo but its
+    // issuer-signature uses the CA's signature algorithm — that's a
+    // valid X.509 mix and matches the upstream test fixture's setup.
+    const ext = this.path(`${slug}.ext`);
+    writeFileSync(
+      ext,
+      [
+        'basicConstraints=CA:FALSE',
+        'keyUsage=critical,digitalSignature,keyEncipherment',
+        'extendedKeyUsage=serverAuth',
+        'subjectKeyIdentifier=hash',
+        'authorityKeyIdentifier=keyid,issuer',
+        'subjectAltName=DNS:localhost,DNS:127.0.0.1,DNS:*.localhost',
+      ].join('\n') + '\n',
+    );
+    if (!this.serverCaCertPath) throw new Error('CertVault: server CA missing');
+    runOpenssl([
+      'x509',
+      '-req',
+      '-in',
+      csr,
+      '-CA',
+      this.serverCaCertPath,
+      '-CAkey',
+      this.path('server_ca.key'),
+      '-CAcreateserial',
+      '-out',
+      cert,
+      '-days',
+      '30',
+      '-extfile',
+      ext,
+    ]);
+    this.serverCerts.set('pss', { cert, key });
   }
 
   /** Mint a client leaf cert signed by the client CA. */
@@ -814,6 +911,7 @@ function allServerCertFiles(
     'san-only',
     'ip-in-san',
     'multi-name',
+    'pss',
   ];
   const out: { host: string; container: string }[] = [];
   for (const n of names) {
