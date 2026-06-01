@@ -128,7 +128,7 @@ export type ServerCertName =
   | 'pss';
 
 /** Identifier for a client cert the spec can pass via sslcert/sslkey. */
-export type ClientCertName = 'ssltestuser' | 'anotheruser';
+export type ClientCertName = 'ssltestuser' | 'anotheruser' | 'revokeduser';
 
 /**
  * Container-side paths the server reads its TLS material from. The init
@@ -168,6 +168,7 @@ export class CertVault {
   private bundleRootServerPath: string | null = null;
   private bundleRootClientPath: string | null = null;
   private serverCrlPath: string | null = null;
+  private clientCrlPath: string | null = null;
 
   public constructor(workDir: string) {
     this.workDir = workDir;
@@ -236,6 +237,9 @@ export class CertVault {
     // 6. Client leaf certs — signed by the client CA.
     this.mintClientCert('ssltestuser', '/CN=ssltestuser');
     this.mintClientCert('anotheruser', '/CN=anotheruser');
+    // `revokeduser` exists solely to be revoked by the client-CA CRL the
+    // server loads via `ssl_crl_file` (server-side revocation test).
+    this.mintClientCert('revokeduser', '/CN=revokeduser');
 
     // 7. Encrypted variant of ssltestuser's key. PKCS#8 AES-256, passphrase
     // "testpw". We don't keep the unencrypted key path under a different
@@ -258,28 +262,71 @@ export class CertVault {
     ]);
     userCert.encryptedKey = encryptedKey;
 
-    // 8. A CRL signed by the server CA that revokes the active server leaf
-    // cert (cn-and-san). The client passes this via `sslcrl` to prove that
-    // a revoked server certificate is rejected at verify time.
-    this.mintServerCrl();
+    // 8. CRL bundles. PG and Node both enable OpenSSL's CRL_CHECK_ALL, which
+    // requires a CRL for EVERY CA in the chain being verified — including an
+    // (empty) CRL for the issuing intermediate so its own revocation status
+    // is checkable. Without it, verifying a non-revoked cert fails with
+    // "unknown ca". So each `sslcrl` / `ssl_crl_file` is a PEM bundle of the
+    // revoking CA's CRL + the root CA's empty CRL.
+    const rootCaCrl = this.mintCrl('root', rootCert, rootKey, null, 'root.crl');
+
+    // 8a. Client-side `sslcrl`: server_ca CRL revoking the active server leaf
+    // (cn-and-san) + root CRL. The client passes this to reject a revoked
+    // server certificate at verify time.
+    const serverLeaf = this.serverCerts.get('cn-and-san');
+    if (!serverLeaf) throw new Error('CertVault: cn-and-san cert not minted');
+    const serverCaCrl = this.mintCrl(
+      'server',
+      this.serverCaCertPath,
+      this.path('server_ca.key'),
+      serverLeaf.cert,
+      'server_ca_only.crl',
+    );
+    this.serverCrlPath = this.path('server_ca.crl');
+    writeFileSync(
+      this.serverCrlPath,
+      readUtf8(serverCaCrl) + '\n' + readUtf8(rootCaCrl),
+    );
+
+    // 8b. Server-side `ssl_crl_file`: client_ca CRL revoking `revokeduser`
+    // + root CRL. The server loads this to reject the revoked client cert.
+    const revoked = this.clientCerts.get('revokeduser');
+    if (!revoked) throw new Error('CertVault: revokeduser cert not minted');
+    if (!this.clientCaCertPath) throw new Error('CertVault: client CA missing');
+    const clientCaCrl = this.mintCrl(
+      'client',
+      this.clientCaCertPath,
+      this.path('client_ca.key'),
+      revoked.cert,
+      'client_ca_only.crl',
+    );
+    this.clientCrlPath = this.path('client_ca.crl');
+    writeFileSync(
+      this.clientCrlPath,
+      readUtf8(clientCaCrl) + '\n' + readUtf8(rootCaCrl),
+    );
   }
 
   /**
-   * Generate a CRL signed by the server CA that lists the active server
-   * leaf cert (`cn-and-san`) as revoked. Uses the `openssl ca -gencrl`
-   * workflow, which needs a tiny CA database (index + crlnumber) and a
-   * config naming the issuing cert/key. Stored at `server_ca.crl`.
+   * Generate a CRL signed by `caCertPath`/`caKeyPath` that lists
+   * `revokeCertPath` as revoked, written to `<workDir>/<outName>`. Uses the
+   * `openssl ca -gencrl` workflow, which needs a tiny per-CA database
+   * (index + crlnumber + serial) and a config naming the issuing cert/key.
+   * `slug` namespaces those scratch files so multiple CRLs don't collide.
+   * Returns the absolute CRL path.
    */
-  private mintServerCrl(): void {
-    if (!this.serverCaCertPath) throw new Error('CertVault: server CA missing');
-    const serverLeaf = this.serverCerts.get('cn-and-san');
-    if (!serverLeaf) throw new Error('CertVault: cn-and-san cert not minted');
-
-    const indexPath = this.path('crl-index.txt');
-    const crlNumberPath = this.path('crl-number.txt');
-    const serialPath = this.path('crl-serial.txt');
-    const configPath = this.path('crl-ca.cnf');
-    const crlPath = this.path('server_ca.crl');
+  private mintCrl(
+    slug: string,
+    caCertPath: string,
+    caKeyPath: string,
+    revokeCertPath: string | null,
+    outName: string,
+  ): string {
+    const indexPath = this.path(`crl-${slug}-index.txt`);
+    const crlNumberPath = this.path(`crl-${slug}-number.txt`);
+    const serialPath = this.path(`crl-${slug}-serial.txt`);
+    const configPath = this.path(`crl-${slug}-ca.cnf`);
+    const crlPath = this.path(outName);
 
     writeFileSync(indexPath, '');
     writeFileSync(crlNumberPath, '1000\n');
@@ -297,8 +344,8 @@ export class CertVault {
         `crlnumber = ${crlNumberPath}`,
         `serial = ${serialPath}`,
         `new_certs_dir = ${this.workDir}`,
-        `certificate = ${this.serverCaCertPath}`,
-        `private_key = ${this.path('server_ca.key')}`,
+        `certificate = ${caCertPath}`,
+        `private_key = ${caKeyPath}`,
         'default_md = sha256',
         'default_crl_days = 30',
         'default_days = 30',
@@ -313,10 +360,14 @@ export class CertVault {
       ].join('\n') + '\n',
     );
 
-    // Mark the server leaf revoked in the CA database, then emit the CRL.
-    runOpenssl(['ca', '-config', configPath, '-revoke', serverLeaf.cert]);
+    // Mark the cert revoked in the CA database (if any), then emit the CRL.
+    // A null `revokeCertPath` yields an EMPTY CRL — needed for intermediate
+    // CAs so OpenSSL's CRL_CHECK_ALL can confirm they aren't revoked.
+    if (revokeCertPath !== null) {
+      runOpenssl(['ca', '-config', configPath, '-revoke', revokeCertPath]);
+    }
     runOpenssl(['ca', '-config', configPath, '-gencrl', '-out', crlPath]);
-    this.serverCrlPath = crlPath;
+    return crlPath;
   }
 
   // -------------------------------------------------------------------------
@@ -344,6 +395,12 @@ export class CertVault {
   public getServerCrl(): string {
     if (!this.serverCrlPath) throw new Error('CertVault: CRL not minted');
     return this.serverCrlPath;
+  }
+  /** CRL (signed by client CA) revoking the `revokeduser` client cert. */
+  public getClientCrl(): string {
+    if (!this.clientCrlPath)
+      throw new Error('CertVault: client CRL not minted');
+    return this.clientCrlPath;
   }
   /** PEM bundle of root_ca + client_ca — the server's `ssl_ca_file`. */
   public getRootClientBundle(): string {
@@ -685,6 +742,9 @@ CREATE USER anotheruser;
 -- Target of the pg_ident.conf "certmap" mapping: a client presenting the
 -- ssltestuser cert (CN=ssltestuser) may authenticate AS mappeduser.
 CREATE USER mappeduser;
+-- Reachable only via cert auth; its cert is listed in the client-CA CRL,
+-- so it is rejected once the server loads ssl_crl_file.
+CREATE USER revokeduser;
 
 -- Password-auth users for the 002_scram suite. The cluster default
 -- \`password_encryption\` is scram-sha-256 (PG 14+), so the SCRAM user
@@ -752,6 +812,9 @@ hostssl        all       anotheruser  ::/0            trust clientcert=verify-ca
 # reachable by presenting the ssltestuser cert (CN=ssltestuser).
 hostssl        all       mappeduser   0.0.0.0/0       cert clientcert=verify-full map=certmap
 hostssl        all       mappeduser   ::/0            cert clientcert=verify-full map=certmap
+# revokeduser: cert auth; rejected once ssl_crl_file lists its cert.
+hostssl        all       revokeduser  0.0.0.0/0       cert clientcert=verify-full
+hostssl        all       revokeduser  ::/0            cert clientcert=verify-full
 # Password-auth users for the 002_scram suite. Both are TLS-only so
 # the auth flow exercises SCRAM channel binding when channel_binding
 # is requested. The methods are per-user (not catch-all) so plaintext
@@ -821,9 +884,14 @@ done
 for f in ${SERVER_CERT_TARGET_DIR}/*.key; do
   cp "$f" "$PGDATA/$(basename "$f")"
 done
-chown postgres:postgres "$PGDATA"/*.crt "$PGDATA"/*.key 2>/dev/null || true
+# CRL files (e.g. client_ca.crl) so ssl_crl_file can reference them by name.
+for f in ${SERVER_CERT_TARGET_DIR}/*.crl; do
+  [ -e "$f" ] && cp "$f" "$PGDATA/$(basename "$f")"
+done
+chown postgres:postgres "$PGDATA"/*.crt "$PGDATA"/*.key "$PGDATA"/*.crl 2>/dev/null || true
 chmod 600 "$PGDATA"/*.key
 chmod 644 "$PGDATA"/*.crt
+chmod 644 "$PGDATA"/*.crl 2>/dev/null || true
 
 # Enable SSL via postgresql.conf so it is the default but can be
 # overridden at runtime via ALTER SYSTEM (which writes to
@@ -939,6 +1007,13 @@ export async function setupTlsPg(): Promise<TlsPgConn> {
     {
       source: vault.getRootClientBundle(),
       target: CLIENT_CA_CONTAINER_PATH,
+      mode: 0o644,
+    },
+    // Client-CA CRL (revokes `revokeduser`); the server-side CRL test wires
+    // it in via `ALTER SYSTEM SET ssl_crl_file = 'client_ca.crl'`.
+    {
+      source: vault.getClientCrl(),
+      target: `${SERVER_CERT_TARGET_DIR}/client_ca.crl`,
       mode: 0o644,
     },
     // Init scripts run in alphabetical order — `01-users.sql` creates

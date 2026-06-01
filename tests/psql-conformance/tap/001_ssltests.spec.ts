@@ -1083,11 +1083,82 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     it.skip('sslcrl pointing at unrelated CA is rejected at verify time', () => {
       /* out of scope — Node ignores a CRL whose issuer is not in the chain */
     });
-    it.skip('server-side CRL directory revokes client certs', () => {
-      /* server-side ssl_crl_file config, not a wire-layer concern */
+  });
+
+  // Server-side CRL: the server loads a client-CA CRL via `ssl_crl_file` and
+  // rejects a revoked client certificate at connect time. This exercises our
+  // client presenting a cert and handling the server's verify rejection.
+  // `ssl_crl_file` is set/reset around this group (reloadable via SIGHUP) so
+  // the other cert-auth tests are unaffected; the CRL revokes only
+  // `revokeduser`, so non-revoked certs still authenticate.
+  describe('server-side CRL revocation (ssl_crl_file)', () => {
+    const setServerCrl = async (file: string | null): Promise<void> => {
+      const t = ensureFixture();
+      const { PgConnection } = await loadWire();
+      const admin = await PgConnection.connect({
+        host: t.tls.host,
+        port: t.tls.port,
+        user: t.tls.user,
+        password: t.tls.password,
+        database: t.tls.db,
+        ssl: 'prefer',
+      });
+      try {
+        await admin.execSimple(
+          file === null
+            ? 'ALTER SYSTEM RESET ssl_crl_file'
+            : `ALTER SYSTEM SET ssl_crl_file = '${file}'`,
+        );
+        await admin.execSimple('SELECT pg_reload_conf()');
+      } finally {
+        await admin.close();
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    };
+
+    beforeAll(async () => {
+      await switchServerCert('cn-and-san');
+      await setServerCrl('client_ca.crl');
     });
+    afterAll(async () => {
+      await setServerCrl(null);
+    });
+
+    it('rejects a client cert revoked by the server CRL', async () => {
+      const t = ensureFixture();
+      const revoked = t.tls.vault.getClientCert('revokeduser');
+      const conn = await tryConnect({
+        user: 'revokeduser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: revoked.cert,
+        sslkey: revoked.key,
+      });
+      expect(conn).toBeNull();
+    });
+
+    it('still accepts a non-revoked client cert (CRL is selective)', async () => {
+      const t = ensureFixture();
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const conn = await mustConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: client.cert,
+        sslkey: client.key,
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    // Non-ASCII cert subjects would need a dedicated non-ASCII-CN cert in
+    // CertVault; the revocation mechanism itself is covered above.
     it.skip('server-side CRL handles non-ASCII subjects', () => {
-      /* server-side config, not a wire-layer concern */
+      /* low value — needs a non-ASCII-CN cert minted in CertVault */
     });
   });
 
