@@ -728,6 +728,15 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   const sslcrldir = nonEmpty(raw.query.get('sslcrldir'));
   const sslkeylogfile = nonEmpty(raw.query.get('sslkeylogfile'));
 
+  // libpq sslsni / keepalives toggles (0/1) + keepalives_idle (seconds) +
+  // requirepeer (OS user, validated but not enforceable in Node).
+  const sslsni = parseLibpqBool(nonEmpty(raw.query.get('sslsni')));
+  const keepalives = parseLibpqBool(nonEmpty(raw.query.get('keepalives')));
+  const keepalivesIdle = parseKeepalivesIdle(
+    nonEmpty(raw.query.get('keepalives_idle')),
+  );
+  const requirepeer = nonEmpty(raw.query.get('requirepeer'));
+
   // libpq: `sslrootcert=system` raises the effective sslmode to verify-full.
   // verify-full is the strongest mode, so this only ever raises it.
   if (sslrootcert === 'system' && ssl !== 'verify-full') {
@@ -771,9 +780,48 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     ...(sslcrl !== undefined ? { sslcrl } : {}),
     ...(sslcrldir !== undefined ? { sslcrldir } : {}),
     ...(sslkeylogfile !== undefined ? { sslkeylogfile } : {}),
+    ...(sslsni !== undefined ? { sslsni } : {}),
+    ...(keepalives !== undefined ? { keepalives } : {}),
+    ...(keepalivesIdle !== undefined ? { keepalivesIdle } : {}),
+    ...(requirepeer !== undefined ? { requirepeer } : {}),
     ...(sslMinProtocolVersion !== undefined ? { sslMinProtocolVersion } : {}),
     ...(sslMaxProtocolVersion !== undefined ? { sslMaxProtocolVersion } : {}),
   };
+};
+
+/**
+ * Parse a libpq 0/1 boolean connection parameter (`sslsni`, `keepalives`).
+ * libpq's `parse_bool_with_len` accepts `1`/`0`, `true`/`false`, `yes`/`no`,
+ * `on`/`off` (case-insensitive). Returns `undefined` for unset / empty /
+ * unrecognised so the caller falls back to libpq's default (enabled).
+ */
+const parseLibpqBool = (raw: string | undefined): boolean | undefined => {
+  if (raw === undefined || raw === '') return undefined;
+  switch (raw.toLowerCase()) {
+    case '1':
+    case 'true':
+    case 'yes':
+    case 'on':
+      return true;
+    case '0':
+    case 'false':
+    case 'no':
+    case 'off':
+      return false;
+    default:
+      return undefined;
+  }
+};
+
+/**
+ * Parse `keepalives_idle` (seconds, non-negative integer). Returns the value
+ * in seconds, or `undefined` if unset / malformed (the wire layer converts to
+ * milliseconds for `socket.setKeepAlive`'s `initialDelay`).
+ */
+const parseKeepalivesIdle = (raw: string | undefined): number | undefined => {
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
 };
 
 const nonEmpty = (v: string | undefined): string | undefined =>
@@ -1126,17 +1174,33 @@ const applyConninfoPair = (
       if (v !== undefined) out.sslMaxProtocolVersion = v;
       return;
     }
+    case 'sslsni': {
+      const b = parseLibpqBool(value);
+      if (b !== undefined) out.sslsni = b;
+      return;
+    }
+    case 'keepalives': {
+      const b = parseLibpqBool(value);
+      if (b !== undefined) out.keepalives = b;
+      return;
+    }
+    case 'keepalives_idle': {
+      const n = parseKeepalivesIdle(value);
+      if (n !== undefined) out.keepalivesIdle = n;
+      return;
+    }
+    case 'requirepeer':
+      if (value !== '') out.requirepeer = value;
+      return;
     // Recognised libpq keys that we don't model — accept silently so we
-    // don't reject legitimate connection strings.
+    // don't reject legitimate connection strings. keepalives_interval /
+    // keepalives_count have no Node net API equivalent (setKeepAlive only
+    // exposes enable + initial delay) — recognised but cannot be applied.
     case 'passfile':
     case 'sslcompression':
-    case 'sslsni':
-    case 'requirepeer':
     case 'krbsrvname':
     case 'gsslib':
     case 'fallback_application_name':
-    case 'keepalives':
-    case 'keepalives_idle':
     case 'keepalives_interval':
     case 'keepalives_count':
       return;
@@ -1547,6 +1611,16 @@ export const parseConnectionUriPartial = (
   if (sslcrldir !== undefined) out.sslcrldir = sslcrldir;
   const sslkeylogfile = nonEmpty(raw.query.get('sslkeylogfile'));
   if (sslkeylogfile !== undefined) out.sslkeylogfile = sslkeylogfile;
+  const sslsni = parseLibpqBool(nonEmpty(raw.query.get('sslsni')));
+  if (sslsni !== undefined) out.sslsni = sslsni;
+  const keepalives = parseLibpqBool(nonEmpty(raw.query.get('keepalives')));
+  if (keepalives !== undefined) out.keepalives = keepalives;
+  const keepalivesIdle = parseKeepalivesIdle(
+    nonEmpty(raw.query.get('keepalives_idle')),
+  );
+  if (keepalivesIdle !== undefined) out.keepalivesIdle = keepalivesIdle;
+  const requirepeer = nonEmpty(raw.query.get('requirepeer'));
+  if (requirepeer !== undefined) out.requirepeer = requirepeer;
   const hostaddr = nonEmpty(raw.query.get('hostaddr'));
   if (hostaddr !== undefined) out.hostaddr = hostaddr;
   const sslMin = normalizeTlsProtocolVersion(
@@ -1853,6 +1927,24 @@ export const serviceEntryToConnectOptions = (
         break;
       case 'sslkeylogfile':
         if (v !== '') out.sslkeylogfile = v;
+        break;
+      case 'sslsni': {
+        const b = parseLibpqBool(v);
+        if (b !== undefined) out.sslsni = b;
+        break;
+      }
+      case 'keepalives': {
+        const b = parseLibpqBool(v);
+        if (b !== undefined) out.keepalives = b;
+        break;
+      }
+      case 'keepalives_idle': {
+        const n = parseKeepalivesIdle(v);
+        if (n !== undefined) out.keepalivesIdle = n;
+        break;
+      }
+      case 'requirepeer':
+        if (v !== '') out.requirepeer = v;
         break;
       case 'hostaddr':
         if (v !== '') out.hostaddr = v;

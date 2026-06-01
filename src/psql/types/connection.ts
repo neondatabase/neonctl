@@ -262,6 +262,37 @@ export type ConnectOptions = {
    */
   sslcrldir?: string;
   /**
+   * libpq `sslsni` (0/1, default 1): whether to send the TLS Server Name
+   * Indication (SNI) extension. When `false`, the wire layer omits the
+   * `servername` tls.connect option so no SNI hostname is sent. When unset or
+   * `true`, SNI is sent (the default). Parsed from `sslsni=0` / `sslsni=1`.
+   */
+  sslsni?: boolean;
+  /**
+   * libpq `keepalives` (0/1, default 1): whether TCP keepalive probes are
+   * enabled on the connection socket. `false` disables them; unset/`true`
+   * leaves them enabled (the OS / Node default). Ignored for Unix-domain
+   * socket connections, matching libpq. Applied via `socket.setKeepAlive`.
+   */
+  keepalives?: boolean;
+  /**
+   * libpq `keepalives_idle` (seconds): idle time before the first TCP
+   * keepalive probe. Mapped to the `initialDelay` (milliseconds) argument of
+   * `socket.setKeepAlive`. libpq's `keepalives_interval` and
+   * `keepalives_count` have NO equivalent in Node's net API (`setKeepAlive`
+   * only exposes enable + initial delay), so those two are parsed/recognised
+   * but cannot be applied — documented as a no-op.
+   */
+  keepalivesIdle?: number;
+  /**
+   * libpq `requirepeer`: the OS username the server process must run as, for
+   * Unix-domain socket connections (libpq verifies it via peer credentials,
+   * `getpeereid`). Node exposes NO portable peer-credential API for Unix
+   * sockets, so this is parsed and validated (non-empty) but its enforcement
+   * is a documented NO-OP — we cannot assert the server's effective user.
+   */
+  requirepeer?: string;
+  /**
    * libpq `sslkeylogfile`: path to a file the TLS session keys are appended
    * to (NSS key-log format) so the handshake can be decrypted in Wireshark
    * for debugging. The wire layer attaches a `'keylog'` listener on the

@@ -16,7 +16,7 @@
  * verification lives in `tls.test.ts`.
  */
 
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as net from 'node:net';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -26,7 +26,9 @@ import { Buffer } from 'node:buffer';
 
 import {
   isUnixSocketHost,
+  keepAliveArgs,
   PgConnection,
+  tlsServername,
   unixSocketPath,
 } from './connection.js';
 import { CancelRequest } from './protocol.js';
@@ -493,6 +495,36 @@ describe('PgConnection', () => {
       replication: 'database',
     });
     await conn.close();
+  });
+
+  test('applies keepalives=0 + keepalives_idle to the TCP socket', async () => {
+    // The keepalive call happens inside openSocket before startup; spy on the
+    // prototype so we capture the (enable, initialDelay) arguments without
+    // exporting the socket.
+    const spy = vi.spyOn(net.Socket.prototype, 'setKeepAlive');
+    try {
+      server = await startFakeServer((msg, client) => {
+        if (msg.type === 'Startup') {
+          client.send(authenticationOk());
+          client.send(parameterStatus('server_version', '16.2'));
+          client.send(backendKeyData(1, 2));
+          client.send(readyForQuery('I'));
+        }
+      });
+      const conn = await PgConnection.connect({
+        host: '127.0.0.1',
+        port: server.port,
+        user: 'alice',
+        database: 'postgres',
+        ssl: 'disable',
+        keepalives: false,
+        keepalivesIdle: 15,
+      });
+      expect(spy).toHaveBeenCalledWith(false, 15_000);
+      await conn.close();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test('omits replication parameter when not requested', async () => {
@@ -2431,5 +2463,75 @@ describe('PgConnection over Unix-domain socket', () => {
         ssl: 'verify-full',
       }),
     ).rejects.toThrow(/sslmode=verify-full.*Unix-domain/);
+  });
+
+  test('rejects requirepeer on a unix-socket connection (cannot enforce)', async () => {
+    // The requirepeer check fires before openSocket, so no server is needed.
+    // Node has no peer-credential API for unix sockets — we refuse rather
+    // than pretend the check passed.
+    await expect(
+      PgConnection.connect({
+        host: '/no/such/dir',
+        port: 5432,
+        user: 'u',
+        database: 'db',
+        ssl: 'disable',
+        requirepeer: 'postgres',
+      }),
+    ).rejects.toThrow(/requirepeer="postgres" cannot be enforced/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sslsni: TLS SNI servername gating (libpq sslsni=0/1).
+// ---------------------------------------------------------------------------
+describe('tlsServername (sslsni)', () => {
+  test('sends servername = host by default (sslsni unset)', () => {
+    expect(tlsServername({ host: 'db.example.com' })).toBe('db.example.com');
+  });
+
+  test('sends servername = host when sslsni=true', () => {
+    expect(tlsServername({ host: 'db.example.com', sslsni: true })).toBe(
+      'db.example.com',
+    );
+  });
+
+  test('suppresses servername when sslsni=false (sslsni=0)', () => {
+    expect(
+      tlsServername({ host: 'db.example.com', sslsni: false }),
+    ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// keepalives: socket.setKeepAlive(enable, initialDelay) argument mapping.
+// ---------------------------------------------------------------------------
+describe('keepAliveArgs (keepalives / keepalives_idle)', () => {
+  test('enabled with OS-default delay when nothing is set', () => {
+    expect(keepAliveArgs({})).toEqual({
+      enable: true,
+      initialDelayMs: undefined,
+    });
+  });
+
+  test('keepalives=false disables keepalives', () => {
+    expect(keepAliveArgs({ keepalives: false })).toEqual({
+      enable: false,
+      initialDelayMs: undefined,
+    });
+  });
+
+  test('keepalives_idle seconds map to initialDelay milliseconds', () => {
+    expect(keepAliveArgs({ keepalivesIdle: 30 })).toEqual({
+      enable: true,
+      initialDelayMs: 30_000,
+    });
+  });
+
+  test('disabled but with an idle delay still reports the delay', () => {
+    expect(keepAliveArgs({ keepalives: false, keepalivesIdle: 10 })).toEqual({
+      enable: false,
+      initialDelayMs: 10_000,
+    });
   });
 });

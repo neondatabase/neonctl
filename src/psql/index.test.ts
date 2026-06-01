@@ -32,6 +32,8 @@ import {
   mergeConnectOptions,
   parseConninfo,
   parseConnectionUri,
+  parseConnectionUriPartial,
+  serviceEntryToConnectOptions,
 } from './index.js';
 import type { ConnectOptions } from './types/connection.js';
 
@@ -945,6 +947,94 @@ describe('defaultClientCertDefaults', () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sslsni / keepalives / keepalives_idle / requirepeer parsing across all four
+// connection-string surfaces (URI query, conninfo keyword/value, DSN query,
+// pg_service.conf entry).
+// ---------------------------------------------------------------------------
+describe('sslsni / keepalives / requirepeer parsing', () => {
+  it('parses sslsni=0 / keepalives=0 / keepalives_idle / requirepeer from a URI', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslsni=0&keepalives=0&keepalives_idle=42&requirepeer=postgres',
+    );
+    expect(got.sslsni).toBe(false);
+    expect(got.keepalives).toBe(false);
+    expect(got.keepalivesIdle).toBe(42);
+    expect(got.requirepeer).toBe('postgres');
+  });
+
+  it('parses sslsni=1 / keepalives=1 as true', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslsni=1&keepalives=1');
+    expect(got.sslsni).toBe(true);
+    expect(got.keepalives).toBe(true);
+  });
+
+  it('accepts on/off and yes/no spellings (libpq bool grammar)', () => {
+    expect(parseConnectionUri('postgresql://u@h/db?sslsni=off').sslsni).toBe(
+      false,
+    );
+    expect(
+      parseConnectionUri('postgresql://u@h/db?keepalives=yes').keepalives,
+    ).toBe(true);
+  });
+
+  it('omits the fields when the query parameters are empty / absent', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslsni=&keepalives=');
+    expect(got).not.toHaveProperty('sslsni');
+    expect(got).not.toHaveProperty('keepalives');
+    expect(got).not.toHaveProperty('keepalivesIdle');
+    expect(got).not.toHaveProperty('requirepeer');
+  });
+
+  it('parses them from a conninfo keyword/value string', () => {
+    expect(
+      parseConninfo('sslsni=0 keepalives=0 keepalives_idle=7 requirepeer=pg'),
+    ).toMatchObject({
+      sslsni: false,
+      keepalives: false,
+      keepalivesIdle: 7,
+      requirepeer: 'pg',
+    });
+  });
+
+  it('parses them from a DSN-style partial URI (parseConnectionUriPartial)', () => {
+    expect(
+      parseConnectionUriPartial(
+        'postgresql://u@h/db?sslsni=0&keepalives=0&keepalives_idle=9&requirepeer=pg',
+      ),
+    ).toMatchObject({
+      sslsni: false,
+      keepalives: false,
+      keepalivesIdle: 9,
+      requirepeer: 'pg',
+    });
+  });
+
+  it('parses them from a pg_service.conf entry', () => {
+    expect(
+      serviceEntryToConnectOptions({
+        sslsni: '0',
+        keepalives: '0',
+        keepalives_idle: '12',
+        requirepeer: 'svc',
+      }),
+    ).toMatchObject({
+      sslsni: false,
+      keepalives: false,
+      keepalivesIdle: 12,
+      requirepeer: 'svc',
+    });
+  });
+
+  it('drops a malformed keepalives_idle but keeps the others', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?keepalives_idle=abc&sslsni=0',
+    );
+    expect(got).not.toHaveProperty('keepalivesIdle');
+    expect(got.sslsni).toBe(false);
   });
 });
 

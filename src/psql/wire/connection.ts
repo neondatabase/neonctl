@@ -666,6 +666,26 @@ export class PgConnection implements Connection {
       );
     }
 
+    // libpq `requirepeer`: for Unix-domain sockets, libpq verifies the server
+    // process runs as the named OS user via peer credentials (getpeereid /
+    // SO_PEERCRED). Node exposes NO portable peer-credential API for Unix
+    // sockets, so we CANNOT enforce this. We honestly do NOT verify it — to
+    // avoid pretending a security check passed, we reject the connection with
+    // a clear diagnostic when `requirepeer` is set on a socket connection,
+    // rather than silently connecting as if the check had succeeded. (TCP
+    // connections ignore `requirepeer`, matching libpq.)
+    if (
+      isUnixSocketHost(opts.host) &&
+      opts.requirepeer !== undefined &&
+      opts.requirepeer !== ''
+    ) {
+      throw new Error(
+        `requirepeer="${opts.requirepeer}" cannot be enforced: Node provides no ` +
+          `Unix-domain socket peer-credential API; refusing to connect rather ` +
+          `than skip the check`,
+      );
+    }
+
     const rawSocket = await openSocket(opts, addressOverride);
     let socket: AnySocket = rawSocket;
     let channelBindingData: Buffer | null = null;
@@ -675,8 +695,12 @@ export class PgConnection implements Connection {
       // NOTE: do NOT set `checkServerIdentity: undefined` — newer Node
       // versions reject that with "must be of type function". Omit the
       // property when verify-full so the default validator runs.
+      // libpq `sslsni=0` suppresses the TLS SNI extension: omit `servername`
+      // entirely so no hostname is sent in the ClientHello. Default (unset /
+      // true) sends SNI = the connection host, as libpq does.
+      const servername = tlsServername(opts);
       const tlsConnectionOptions: tls.ConnectionOptions = {
-        servername: opts.host,
+        ...(servername !== undefined ? { servername } : {}),
         rejectUnauthorized:
           opts.ssl === 'verify-ca' || opts.ssl === 'verify-full',
         // PG 17+ advertises ALPN for the 'postgresql' protocol; libpq sets
@@ -691,6 +715,16 @@ export class PgConnection implements Connection {
       };
       if (opts.ssl !== 'verify-full') {
         tlsConnectionOptions.checkServerIdentity = (): undefined => undefined;
+      } else if (opts.sslsni === false) {
+        // verify-full still verifies the peer name against `host`, but with
+        // SNI suppressed Node has no `servername` to drive its default
+        // identity check — so verify explicitly against the connection host.
+        // (libpq decouples SNI (sslsni) from peer-name verification (sslmode);
+        // we mirror that here.)
+        tlsConnectionOptions.checkServerIdentity = (
+          _host,
+          cert,
+        ): Error | undefined => tls.checkServerIdentity(opts.host, cert);
       }
       applyTlsProtocolVersionRange(tlsConnectionOptions, opts);
       const tlsResult = await negotiateTls(
@@ -1176,14 +1210,23 @@ export class PgConnection implements Connection {
     );
     let writeSocket: AnySocket = cancelSocket;
     try {
+      // sslsni=0 suppresses SNI on the cancel connection too (mirrors the
+      // primary connect path).
+      const cancelServername = tlsServername(this.opts);
       const cancelTlsOpts: tls.ConnectionOptions = {
-        servername: this.opts.host,
+        ...(cancelServername !== undefined
+          ? { servername: cancelServername }
+          : {}),
         rejectUnauthorized:
           this.opts.ssl === 'verify-ca' || this.opts.ssl === 'verify-full',
         ALPNProtocols: ['postgresql'],
       };
       if (this.opts.ssl !== 'verify-full') {
         cancelTlsOpts.checkServerIdentity = (): undefined => undefined;
+      } else if (this.opts.sslsni === false) {
+        const host = this.opts.host;
+        cancelTlsOpts.checkServerIdentity = (_h, cert): Error | undefined =>
+          tls.checkServerIdentity(host, cert);
       }
       applyTlsProtocolVersionRange(cancelTlsOpts, this.opts);
       const t = await negotiateTls(
@@ -2861,6 +2904,46 @@ function applyTlsProtocolVersionRange(
   if (max !== undefined) tlsOpts.maxVersion = max;
 }
 
+/**
+ * libpq `sslsni`: the TLS SNI servername to send, or `undefined` to suppress
+ * the SNI extension entirely. `sslsni=0` (`opts.sslsni === false`) suppresses
+ * it; unset / `sslsni=1` sends `opts.host` (libpq's default). Returned value
+ * is spread into the `tls.connect` options as `servername`.
+ *
+ * Exported for unit tests.
+ */
+export function tlsServername(
+  opts: Pick<ConnectOptions, 'host' | 'sslsni'>,
+): string | undefined {
+  return opts.sslsni === false ? undefined : opts.host;
+}
+
+/**
+ * Translate libpq's `keepalives` / `keepalives_idle` into the arguments for
+ * Node's `socket.setKeepAlive(enable, initialDelay)`:
+ *   - `enable`: `false` only when `keepalives === false` (libpq `keepalives=0`);
+ *     unset / `true` keeps keepalives on (libpq default).
+ *   - `initialDelayMs`: `keepalives_idle` seconds → milliseconds, or
+ *     `undefined` to leave the OS default.
+ *
+ * libpq's `keepalives_interval` and `keepalives_count` have NO Node net API
+ * equivalent (`setKeepAlive` exposes only enable + initial delay), so they are
+ * intentionally not represented here.
+ *
+ * Exported for unit tests.
+ */
+export function keepAliveArgs(
+  opts: Pick<ConnectOptions, 'keepalives' | 'keepalivesIdle'>,
+): { enable: boolean; initialDelayMs: number | undefined } {
+  return {
+    enable: opts.keepalives !== false,
+    initialDelayMs:
+      opts.keepalivesIdle !== undefined
+        ? opts.keepalivesIdle * 1000
+        : undefined,
+  };
+}
+
 function openSocket(
   opts: ConnectOptions,
   /**
@@ -2873,12 +2956,23 @@ function openSocket(
   addressOverride?: string,
 ): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const socket = isUnixSocketHost(opts.host)
+    const isUnix = isUnixSocketHost(opts.host);
+    const socket = isUnix
       ? net.connect({ path: unixSocketPath(opts.host, opts.port) })
       : net.connect({
           host: addressOverride ?? opts.host,
           port: opts.port,
         });
+    // libpq TCP keepalives (no-op for Unix-domain sockets, matching libpq,
+    // which only applies SO_KEEPALIVE on TCP).
+    if (!isUnix) {
+      const { enable, initialDelayMs } = keepAliveArgs(opts);
+      if (initialDelayMs !== undefined) {
+        socket.setKeepAlive(enable, initialDelayMs);
+      } else {
+        socket.setKeepAlive(enable);
+      }
+    }
     const timeout = opts.connectTimeoutMs;
     let timer: ReturnType<typeof setTimeout> | null = null;
     if (timeout !== undefined && timeout > 0) {
