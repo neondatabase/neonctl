@@ -1266,3 +1266,60 @@ describe('findCompletions: multi-line ANALYZE ( option list', () => {
     expect(r.candidates).not.toContain('SKIP_LOCKED');
   });
 });
+
+describe('findCompletions: multi-line COMMENT ON CONSTRAINT … ON', () => {
+  it('emits schema-qualified table candidates for the named constraint', async () => {
+    // The reverse-direction query: given `tab1_pkey`, find tables that have
+    // a constraint of that name in `public`.
+    const conn = makeMockConn({
+      'pg_catalog.pg_constraint con': ['tab1'],
+    });
+    const ctx = {
+      settings: makeSettings(conn),
+      queryBuf: 'comment on constraint tab1_pkey \n',
+    };
+    const r = await findCompletions(['on'], 'public.', ctx);
+    expect(r.candidates).toContain('public.tab1');
+  });
+
+  it('emits unqualified tables + schemas when no schema typed yet', async () => {
+    // `prevWords = ['on']` and `currentWord = ''` — the rule emits tables
+    // owning the constraint plus a list of schemas (suffixed with `.`).
+    const conn = makeMockConn({
+      'pg_catalog.pg_constraint con': ['tab1'],
+      'pg_catalog.pg_namespace': ['public', 'pg_catalog'],
+    });
+    const ctx = {
+      settings: makeSettings(conn),
+      queryBuf: 'comment on constraint tab1_pkey \n',
+    };
+    const r = await findCompletions(['on'], '', ctx);
+    expect(r.candidates).toContain('tab1');
+    expect(r.candidates).toContain('public.');
+  });
+
+  it('strips double-quoted constraint names before binding to the query', async () => {
+    // `COMMENT ON CONSTRAINT "MixedCase" ON public.<TAB>` — the constraint
+    // name from the buffer is `"MixedCase"` (still quoted). We strip the
+    // quoting before sending it to `con.conname = $1` so the catalog match
+    // resolves to the underlying mixed-case identifier.
+    const conn = makeMockConn({
+      'pg_catalog.pg_constraint con': ['tab1'],
+    });
+    const ctx = {
+      settings: makeSettings(conn),
+      queryBuf: 'comment on constraint "MixedCase" \n',
+    };
+    const r = await findCompletions(['on'], 'public.', ctx);
+    expect(r.candidates).toContain('public.tab1');
+  });
+
+  it('returns empty when there is no connection', async () => {
+    const ctx = {
+      settings: makeSettings(null),
+      queryBuf: 'comment on constraint tab1_pkey \n',
+    };
+    const r = await findCompletions(['on'], 'public.', ctx);
+    expect(r.candidates).toEqual([]);
+  });
+});

@@ -375,6 +375,53 @@ export const Query_for_constraint_of_table_in_schema = `
 `;
 
 /**
+ * Tables (regular + partitioned) that have a constraint with the given
+ * name. The reverse direction of `Query_for_constraint_of_table` — used by
+ * the `COMMENT ON CONSTRAINT <name> ON <prefix>` completion to resolve the
+ * relation that owns the named constraint.
+ *
+ * Caller passes `[constraintName]`, then the ILIKE prefix on the relname.
+ * Mirrors upstream's `Query_for_list_of_tables_for_constraint` SchemaQuery
+ * (tab-complete.in.c ~line 694), which uses
+ * `selcondition = "c.oid=con.conrelid and c.relkind IN ('r','p')"` and
+ * `refname = "con.conname"`. The `quote_ident()` wrapper ensures
+ * names that need quoting (mixed case, reserved words) come back in a
+ * paste-safe form.
+ */
+export const Query_for_list_of_tables_for_constraint = `
+  SELECT DISTINCT pg_catalog.quote_ident(c.relname)
+  FROM pg_catalog.pg_class c, pg_catalog.pg_constraint con
+  WHERE c.oid = con.conrelid
+    AND c.relkind IN ('r', 'p')
+    AND pg_catalog.pg_table_is_visible(c.oid)
+    AND con.conname = $1
+    AND c.relname ILIKE $2
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/**
+ * Same as `Query_for_list_of_tables_for_constraint` but scoped to a
+ * specific schema (so `COMMENT ON CONSTRAINT foo ON public.<TAB>` only
+ * shows relations in `public`).
+ *
+ * Caller passes `[constraintName, schema]`, then the ILIKE prefix. Schema
+ * is matched case-insensitively to handle `PUBLIC.<TAB>` → `public.*`.
+ */
+export const Query_for_list_of_tables_for_constraint_in_schema = `
+  SELECT DISTINCT pg_catalog.quote_ident(c.relname)
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_constraint con ON c.oid = con.conrelid
+  JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+  WHERE c.relkind IN ('r', 'p')
+    AND pg_catalog.lower(n.nspname) = pg_catalog.lower($2)
+    AND con.conname = $1
+    AND c.relname ILIKE $3
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/**
  * Enum label values for the named enum type. Mirrors upstream's
  * `Query_for_list_of_enum_values_quoted` / `…_unquoted` (tab-complete.in.c
  * ~line 602-618), with a parameter-bound type name in place of upstream's

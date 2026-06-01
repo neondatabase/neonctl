@@ -124,6 +124,8 @@ import {
   Query_for_list_of_set_vars,
   Query_for_list_of_subscriptions,
   Query_for_list_of_tables,
+  Query_for_list_of_tables_for_constraint,
+  Query_for_list_of_tables_for_constraint_in_schema,
   Query_for_list_of_tables_views,
   Query_for_list_of_tablespaces,
   Query_for_list_of_timezone_names_quoted_in,
@@ -1212,17 +1214,13 @@ const combinedPrevWords = (
  * the current-line view). Today this covers:
  *
  *   - `ANALYZE (` opened on a previous line — emit the option list.
+ *   - `COMMENT ON CONSTRAINT <name> ON <schema>.` continuation —
+ *     resolve to the table holding that constraint in `<schema>`.
  *
  * Returns the rule's `RuleResult` when an arm matches, or `null` when the
  * combined-token view doesn't add anything (so the caller continues with
  * the line-local rule grammar).
  */
-// Async signature today is forward-compatible with rules that need to hit
-// the catalog (e.g. a future COMMENT ON CONSTRAINT … ON arm that looks up
-// the table holding the named constraint). The lone ANALYZE arm doesn't
-// touch the catalog, so eslint flags the no-await async; we keep the
-// signature uniform and silence the rule here.
-/* eslint-disable @typescript-eslint/require-await */
 const multiLineSqlRules = async (
   combined: string[],
   prevWords: string[],
@@ -1284,10 +1282,57 @@ const multiLineSqlRules = async (
     }
   }
 
+  // ----- COMMENT ON CONSTRAINT <name> ON <schema>.<prefix> — resolve to the
+  // table that has `<name>` as a constraint within `<schema>`. Upstream
+  // calls `set_completion_reference(prev2_wd)` (the constraint name) and
+  // runs `Query_for_list_of_tables_for_constraint` with the schema match
+  // baked into the SchemaQuery shape (tab-complete.in.c ~line 3204).
+  //
+  // We allow the rule to fire even when the line-local `prevWords` only
+  // sees the trailing `ON` — the COMBINED tokens carry the
+  // `COMMENT ON CONSTRAINT <name>` prefix from the previous line.
+  if (TailMatches(combined, ['COMMENT', 'ON', 'CONSTRAINT', MatchAny, 'ON'])) {
+    if (!conn) return { candidates: [] };
+    // `combined` ends in `ON`. The constraint name is the token just
+    // before that trailing `ON`. Indexing from the right avoids hard-coding
+    // the queryBuf token count.
+    const constraintNameRaw = combined[combined.length - 2];
+    const constraintName = stripIdentifierQuote(constraintNameRaw);
+    const split = splitSchemaPrefix(currentWord);
+    if (split) {
+      // Schema-qualified: emit tables in `<schema>` that have the named
+      // constraint, with the canonical schema prefix re-attached so the
+      // line ends up looking like `public.tab1`.
+      const rows = await runCatalogQuery(
+        conn,
+        Query_for_list_of_tables_for_constraint_in_schema,
+        split.prefix,
+        [constraintName, split.schema],
+      );
+      const canonicalSchema = split.schemaWasQuoted
+        ? split.schema
+        : split.schema.toLowerCase();
+      return {
+        candidates: rows.map((r) => canonicalSchema + '.' + r),
+      };
+    }
+    // Unqualified: list tables that have the constraint, plus the schemas
+    // they live in (with trailing `.` so the user can drill into a schema).
+    const [tables, schemas] = await Promise.all([
+      runCatalogQuery(
+        conn,
+        Query_for_list_of_tables_for_constraint,
+        currentWord,
+        [constraintName],
+      ),
+      runCatalogQuery(conn, Query_for_list_of_schemas, currentWord),
+    ]);
+    return { candidates: [...tables, ...schemas.map((s) => s + '.')] };
+  }
+
   void conn;
   return null;
 };
-/* eslint-enable @typescript-eslint/require-await */
 
 /**
  * Return true when the tokens (after dropping a leading `ANALYZE` keyword)
@@ -1308,6 +1353,15 @@ const isInsideOpenParen = (tokens: readonly string[]): boolean => {
     }
   }
   return sawOpen && depth > 0;
+};
+
+/** Strip surrounding `"..."` quoting from a constraint/identifier token. */
+const stripIdentifierQuote = (raw: string | undefined): string => {
+  if (raw === undefined) return '';
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    return raw.slice(1, -1).replace(/""/g, '"');
+  }
+  return raw;
 };
 
 // ---------------------------------------------------------------------------

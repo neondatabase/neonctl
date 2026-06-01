@@ -557,10 +557,16 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
 
   // Qualified name from object reference (line 234) — multi-line tab
   // completion that uses the COMMENT ON CONSTRAINT context to resolve
-  // the schema/object the user references. Not in our 88 rules.
-  it.todo(
-    'complete qualified name from object reference — `comment on constraint ... on public.<tab>` (line 234; needs COMMENT ON CONSTRAINT rule + multi-line context)',
-  );
+  // the schema/object the user references. Now wired: the queryBuf
+  // plumbing exposes the prior-line `COMMENT ON CONSTRAINT tab1_pkey` so
+  // the multi-line rule in `complete/rules.ts` resolves
+  // `public.<TAB>` → `public.tab1`.
+  it('complete qualified name from object reference — `comment on constraint ... on public.<tab>` (line 234)', async () => {
+    await checkCompletion(
+      'comment on constraint tab1_pkey \n on public.\t',
+      /public\.tab1/,
+    );
+  });
 
   // Filename completion (lines 242-277). Backed by the filesystem-driven
   // completer in `src/psql/complete/filenames.ts`. The PTY session's cwd
