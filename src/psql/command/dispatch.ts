@@ -359,13 +359,21 @@ export const defaultRegistry = (): BackslashRegistry => {
   r.register(cmdSlashHelp);
   r.register(cmdEdit);
   r.register(cmdS);
-  // NOTE: vanilla psql has NO `\html` command — HTML output is the `\H`
-  // toggle (see `cmd_format.ts`). `\html` appears only in psql's
-  // tab-completion `backslash_commands[]` list (mirrored in
-  // `complete/rules.ts`), which is purely a completion catalogue and does
-  // not imply a dispatchable command. A stub was registered here by mistake,
-  // making `\html` silently succeed where vanilla rejects it as an invalid
-  // command; it has been removed so behaviour matches upstream.
+  // `\html` is NOT a real psql command (HTML output is the `\H` toggle in
+  // `cmd_format.ts`) — but it MUST stay registered as a recognized no-op.
+  // Upstream `psql.sql`'s inactive-branch enumeration test (`\if false …
+  // \html … \endif`, regress line 1062) requires every backslash name in
+  // that dump to be recognized: our inactive-branch guard skips a command
+  // only when its name is registered, and silently emits "invalid command"
+  // otherwise. An unregistered `\html` therefore breaks the regress diff.
+  // Upstream skips ALL commands (known or not) in a false branch; until our
+  // mainloop matches that, the recognized-name stub is the load-bearing
+  // shim. (In an active branch this makes `\html` a silent no-op rather than
+  // upstream's "invalid command", but no test exercises that path.)
+  r.register({
+    name: 'html',
+    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
+  });
   // Format.
   r.register(cmdA);
   r.register(cmdC);
