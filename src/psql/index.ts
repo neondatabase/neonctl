@@ -18,7 +18,9 @@ import { applyStartupArgs, parseStartupArgs } from './core/startup.js';
 import { executeInputString, loadPsqlrc } from './io/psqlrc.js';
 import { loadPgPass } from './io/pgpass.js';
 import { loadPgServices } from './io/pgservice.js';
-import { promises as fs } from 'node:fs';
+import { promises as fs, existsSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 /**
  * Embedded TypeScript psql entrypoint.
@@ -1727,6 +1729,13 @@ const applyEnvValue = (
  *   - ssl: 'prefer'
  *   - applicationName: 'psql' — matches upstream so `pg_stat_activity` shows
  *     the value users expect.
+ *   - sslcert / sslkey: libpq auto-loads the default client cert/key at
+ *     `~/.postgresql/postgresql.crt` / `.key` when neither is configured AND
+ *     the file exists. We seed these as the lowest-priority defaults via
+ *     {@link defaultClientCertDefaults}; any explicit URI / env / conninfo
+ *     value overrides them. A non-existent default file is simply not set
+ *     (no error), matching libpq — only an explicit path that's missing
+ *     surfaces an error (at TLS-load time, in the wire layer).
  */
 export const libpqConnectionDefaults = (
   env: NodeJS.ProcessEnv,
@@ -1737,7 +1746,35 @@ export const libpqConnectionDefaults = (
   database: '',
   ssl: 'prefer',
   applicationName: 'psql',
+  ...defaultClientCertDefaults(env),
 });
+
+/**
+ * libpq default client-certificate discovery. When the user has NOT set
+ * `sslcert` / `sslkey` (explicit paths and `PGSSLCERT` / `PGSSLKEY` are
+ * higher-priority layers), libpq falls back to `~/.postgresql/postgresql.crt`
+ * and `~/.postgresql/postgresql.key` — but only if those files actually
+ * exist. We mirror that here so a present default cert satisfies e.g.
+ * `sslcertmode=require`.
+ *
+ * The home directory is taken from `env.HOME` (falling back to
+ * `os.homedir()`), the same convention as the pgpass / pgservice loaders;
+ * passing a synthetic `HOME` keeps this hermetic in tests.
+ *
+ * Exported for unit testing.
+ */
+export const defaultClientCertDefaults = (
+  env: NodeJS.ProcessEnv,
+): Partial<Pick<ConnectOptions, 'sslcert' | 'sslkey'>> => {
+  const home = env.HOME ?? os.homedir();
+  if (home === undefined || home === '') return {};
+  const out: Partial<Pick<ConnectOptions, 'sslcert' | 'sslkey'>> = {};
+  const certPath = path.join(home, '.postgresql', 'postgresql.crt');
+  if (existsSync(certPath)) out.sslcert = certPath;
+  const keyPath = path.join(home, '.postgresql', 'postgresql.key');
+  if (existsSync(keyPath)) out.sslkey = keyPath;
+  return out;
+};
 
 /**
  * Translate a `pg_service.conf` entry into a `Partial<ConnectOptions>`.

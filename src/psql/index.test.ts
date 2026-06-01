@@ -20,8 +20,12 @@
  * `it.skip` entries with a comment so the upstream coverage is documented.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import {
+  defaultClientCertDefaults,
   envConnectionDefaults,
   libpqConnectionDefaults,
   looksLikeConnectionString,
@@ -834,6 +838,113 @@ describe('sslkeylogfile parsing', () => {
     expect(
       envConnectionDefaults({ PGSSLKEYLOGFILE: '/tmp/env-keys.log' }),
     ).toMatchObject({ sslkeylogfile: '/tmp/env-keys.log' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Default client-cert discovery: libpq auto-loads ~/.postgresql/postgresql.crt
+// and .key when sslcert/sslkey are unset AND the files exist. Hermetic — we
+// point HOME at a temp dir, never the real ~/.postgresql.
+// ---------------------------------------------------------------------------
+describe('defaultClientCertDefaults', () => {
+  const makeHome = (opts: {
+    cert?: boolean;
+    key?: boolean;
+  }): { home: string; cleanup: () => void } => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-home-'));
+    const pgDir = path.join(home, '.postgresql');
+    fs.mkdirSync(pgDir);
+    if (opts.cert) {
+      fs.writeFileSync(
+        path.join(pgDir, 'postgresql.crt'),
+        '-----BEGIN CERTIFICATE-----\nx\n',
+      );
+    }
+    if (opts.key) {
+      fs.writeFileSync(
+        path.join(pgDir, 'postgresql.key'),
+        '-----BEGIN PRIVATE KEY-----\nx\n',
+      );
+    }
+    return {
+      home,
+      cleanup: (): void => {
+        fs.rmSync(home, { recursive: true, force: true });
+      },
+    };
+  };
+
+  it('sets sslcert / sslkey when both default files exist', () => {
+    const { home, cleanup } = makeHome({ cert: true, key: true });
+    try {
+      const got = defaultClientCertDefaults({ HOME: home });
+      expect(got.sslcert).toBe(
+        path.join(home, '.postgresql', 'postgresql.crt'),
+      );
+      expect(got.sslkey).toBe(path.join(home, '.postgresql', 'postgresql.key'));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('sets only the file that exists (cert present, key absent)', () => {
+    const { home, cleanup } = makeHome({ cert: true });
+    try {
+      const got = defaultClientCertDefaults({ HOME: home });
+      expect(got.sslcert).toBe(
+        path.join(home, '.postgresql', 'postgresql.crt'),
+      );
+      expect(got).not.toHaveProperty('sslkey');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('returns nothing when neither default file exists', () => {
+    const { home, cleanup } = makeHome({});
+    try {
+      expect(defaultClientCertDefaults({ HOME: home })).toEqual({});
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('returns nothing when HOME has no .postgresql dir', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-home-'));
+    try {
+      expect(defaultClientCertDefaults({ HOME: home })).toEqual({});
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds the default cert as a low-priority layer in libpqConnectionDefaults', () => {
+    const { home, cleanup } = makeHome({ cert: true, key: true });
+    try {
+      const defaults = libpqConnectionDefaults({ HOME: home });
+      expect(defaults.sslcert).toBe(
+        path.join(home, '.postgresql', 'postgresql.crt'),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('an explicit sslcert overrides the default in mergeConnectOptions', () => {
+    const { home, cleanup } = makeHome({ cert: true, key: true });
+    try {
+      const merged = mergeConnectOptions(
+        [{ sslcert: '/explicit/client.crt' }],
+        libpqConnectionDefaults({ HOME: home }),
+      );
+      expect(merged.sslcert).toBe('/explicit/client.crt');
+      // The default key is still seeded since no layer overrode it.
+      expect(merged.sslkey).toBe(
+        path.join(home, '.postgresql', 'postgresql.key'),
+      );
+    } finally {
+      cleanup();
+    }
   });
 });
 
