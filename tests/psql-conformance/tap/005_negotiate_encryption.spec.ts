@@ -109,6 +109,7 @@ type WireOpts = {
   password?: string;
   database: string;
   ssl: 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
+  sslnegotiation?: 'postgres' | 'direct';
 };
 
 type WireModule = {
@@ -477,15 +478,58 @@ describe.skipIf(!SHOULD_RUN)('tap/005_negotiate_encryption', () => {
     });
   });
 
-  describe('SKIPPED: sslnegotiation=direct (PG17+, not implemented in TS impl)', () => {
-    it.skip('sslnegotiation=direct + sslmode in {disable, allow, prefer} -> fail', () => {
-      /* unreachable */
+  describe('sslnegotiation=direct (PG17+ direct SSL)', () => {
+    // Direct SSL: skip the SSLRequest packet, start TLS immediately with
+    // ALPN `postgresql`. PG18 auto-detects the direct ClientHello.
+    const connectDirect = async (
+      ssl: WireOpts['ssl'],
+    ): Promise<'ssl' | 'plain' | 'fail'> => {
+      const t = ensureFixture();
+      const { PgConnection } = await loadWire();
+      let conn: WireConn;
+      try {
+        conn = await PgConnection.connect({
+          host: t.host,
+          port: t.port,
+          user: 'testuser',
+          database: t.db,
+          ssl,
+          sslnegotiation: 'direct',
+        });
+      } catch {
+        return 'fail';
+      }
+      try {
+        const rs = await conn.execSimple(
+          'SELECT (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid())::text',
+        );
+        const raw = rs[0]?.rows[0]?.[0];
+        return raw === true || raw === 't' || raw === 'true' ? 'ssl' : 'plain';
+      } finally {
+        await conn.close();
+      }
+    };
+
+    it('sslmode=require + server SSL=on connects over direct TLS', async () => {
+      await setServerSsl(true);
+      expect(await connectDirect('require')).toBe('ssl');
     });
-    it.skip('sslnegotiation=direct + sslmode=require + server SSL=on -> ssl', () => {
-      /* unreachable */
+
+    it('sslmode=require + server SSL=off fails (no plaintext fallback)', async () => {
+      await setServerSsl(false);
+      try {
+        expect(await connectDirect('require')).toBe('fail');
+      } finally {
+        await setServerSsl(true);
+      }
     });
-    it.skip('sslnegotiation=direct + sslmode=require + server SSL=off -> fail', () => {
-      /* unreachable */
+
+    // direct + weak sslmode (disable/allow/prefer) is rejected at the
+    // URI/conninfo PARSE layer (index.ts mergeConnectOptions:
+    // `weak sslmode "<mode>" may not be used with sslnegotiation=direct`),
+    // not the wire layer — covered by src/psql/index.test.ts unit tests.
+    it.skip('sslnegotiation=direct + weak sslmode -> rejected (parse-layer; see index.test.ts)', () => {
+      /* covered by src/psql/index.test.ts parser unit tests */
     });
   });
 

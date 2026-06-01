@@ -1367,18 +1367,83 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     });
   });
 
-  describe('SKIPPED: error-message-text assertions (libpq diagnostic strings differ from ours)', () => {
-    it.skip('asserts libpq-style "no pg_hba.conf entry" text', () => {
-      /* unreachable — we surface a different ConnectError shape */
+  describe('libpq-style diagnostic strings', () => {
+    it('"no pg_hba.conf entry" when no rule matches the transport', async () => {
+      const t = ensureFixture();
+      const { PgConnection } = await loadWire();
+      // ssluser is hostssl-only; a plaintext attempt has no matching rule.
+      await expect(
+        PgConnection.connect({
+          host: t.tls.host,
+          port: t.tls.port,
+          user: 'ssluser',
+          database: t.tls.db,
+          ssl: 'disable',
+        }),
+      ).rejects.toThrow(/no pg_hba\.conf entry/);
     });
-    it.skip('asserts libpq-style "certificate verify failed" text', () => {
-      /* unreachable */
+
+    it('"certificate verify failed" with an unrelated root cert', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const { PgConnection } = await loadWire();
+      await expect(
+        PgConnection.connect({
+          host: 'localhost',
+          port: t.tls.port,
+          user: 'testuser',
+          database: t.tls.db,
+          ssl: 'verify-full',
+          sslrootcert: t.wrongCaCertPath,
+        }),
+      ).rejects.toThrow(/certificate verify failed/);
     });
-    it.skip('asserts libpq-style "does not match host name" text', () => {
-      /* unreachable */
+
+    it('"does not match host name" when SAN excludes the connect host', async () => {
+      const t = ensureFixture();
+      // multi-name SAN = {dns1,dns2}.localhost + *.wildcard.localhost — none
+      // of which is plain `localhost`, so verify-full to host=localhost
+      // fails the hostname check. (`localhost` still resolves to loopback,
+      // so the TCP connect itself reaches the server.)
+      await switchServerCert('multi-name');
+      const { PgConnection } = await loadWire();
+      try {
+        await expect(
+          PgConnection.connect({
+            host: 'localhost',
+            port: t.tls.port,
+            user: 'testuser',
+            database: t.tls.db,
+            ssl: 'verify-full',
+            sslrootcert: t.tls.vault.getRootServerBundle(),
+          }),
+        ).rejects.toThrow(/does not match host name/);
+      } finally {
+        await switchServerCert('cn-and-san');
+      }
     });
-    it.skip('asserts libpq-style "bad decrypt" text on wrong key password', () => {
-      /* unreachable */
+
+    it('"bad decrypt" on a wrong encrypted-key password', async () => {
+      const t = ensureFixture();
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const encryptedKey = client.encryptedKey;
+      if (encryptedKey === undefined) {
+        throw new Error('fixture did not produce encrypted ssltestuser key');
+      }
+      const { PgConnection } = await loadWire();
+      await expect(
+        PgConnection.connect({
+          host: t.tls.host,
+          port: t.tls.port,
+          user: 'ssltestuser',
+          database: t.tls.db,
+          ssl: 'require',
+          sslrootcert: t.tls.vault.getRootServerBundle(),
+          sslcert: client.cert,
+          sslkey: encryptedKey,
+          sslpassword: 'definitely-not-the-password',
+        }),
+      ).rejects.toThrow(/bad decrypt/);
     });
   });
 });
