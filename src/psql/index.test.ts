@@ -2,8 +2,8 @@
  * Conformance tests for `parseConnectionUri` ported from upstream
  * `src/interfaces/libpq/t/001_uri.pl` (PostgreSQL REL_18_0).
  *
- * The vendored Perl reference lives at:
- *   tests/psql-conformance/vendor/postgres-18.0/src/interfaces/libpq/t/001_uri.pl
+ * Upstream Perl reference:
+ *   https://github.com/postgres/postgres/blob/REL_18_0/src/interfaces/libpq/t/001_uri.pl
  *
  * Each upstream row is a `[uri, expected_stdout, expected_stderr, ...env]`
  * tuple. We translate the libpq verbose-conninfo key/value pairs into our

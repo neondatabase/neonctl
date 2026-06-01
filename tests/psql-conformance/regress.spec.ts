@@ -1,39 +1,48 @@
-// SQL regression driver. For each vendored .sql script we:
+// SQL regression driver. For each upstream regress case we:
 //   1. boot postgres (via globalSetup -> pg-fixture)
-//   2. shell out to $PSQL_BINARY (default `psql` on $PATH) with the
-//      vendored .sql piped on stdin
-//   3. normalize stdout and diff against the vendored .out file
-//   4. assert the diff is empty
+//   2. fetch the SQL + expected output from upstream PostgreSQL at the
+//      commit pinned in `tests/psql-conformance/POSTGRES_REF` (no on-disk
+//      vendor copy — the harness owns the fetch via
+//      `harness/upstream-fixtures.ts`)
+//   3. shell out to $PSQL_BINARY with the fetched SQL on stdin
+//   4. normalize stdout and diff against the fetched expected file
+//   5. assert the diff is empty
 //
 // Day-1 invariant: with PSQL_BINARY pointing at the system psql, all
 // three test bodies must pass. Subtests that don't yet pass against the
 // TS implementation should be marked `it.todo("reason")` (engine gap)
 // or `it.skip("reason")` (out of scope) in their spec file.
+//
+// Upstream sources fetched at runtime (see harness/upstream-fixtures.ts):
+//   https://github.com/postgres/postgres/blob/REL_18_0/src/test/regress/sql/psql.sql
+//   https://github.com/postgres/postgres/blob/REL_18_0/src/test/regress/sql/psql_crosstab.sql
+//   https://github.com/postgres/postgres/blob/REL_18_0/src/test/regress/sql/psql_pipeline.sql
+//   …and the matching expected/ outputs.
 
 import { spawnSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import { normalize } from './harness/normalize.js';
 import { getPgConn } from './harness/pg-fixture.js';
+import {
+  fetchRegressFixtures,
+  type RegressCaseName,
+  type UpstreamRegressFixture,
+} from './harness/upstream-fixtures.js';
 import { log } from './harness/util-log.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
-const VENDOR_ROOT = join(HERE, 'vendor', 'postgres-18.0');
-const SQL_DIR = join(VENDOR_ROOT, 'src', 'test', 'regress', 'sql');
-const EXPECTED_DIR = join(VENDOR_ROOT, 'src', 'test', 'regress', 'expected');
 
-const REGRESS_CASES = ['psql', 'psql_crosstab', 'psql_pipeline'] as const;
-type RegressCase = (typeof REGRESS_CASES)[number];
+const REGRESS_CASES: readonly RegressCaseName[] = [
+  'psql',
+  'psql_crosstab',
+  'psql_pipeline',
+];
+type RegressCase = RegressCaseName;
 
 // Seed the `abs_builddir` / `abs_srcdir` psql variables the way upstream
 // pg_regress does. Vendored scripts (e.g. regress/psql.sql) rely on them
@@ -55,9 +64,11 @@ type RegressCase = (typeof REGRESS_CASES)[number];
 // mkdtemp so the suite still works against an externally-managed PG
 // that shares a filesystem with us.
 //
-// abs_srcdir is read-only and points at the vendored sql dir for
-// completeness (no current vendored script actually reads abs_srcdir,
-// but upstream pg_regress sets both so we mirror the contract).
+// abs_srcdir is read-only and historically pointed at the vendored sql
+// dir for completeness; no current vendored script actually reads it,
+// but upstream pg_regress sets both so we mirror the contract. Now that
+// we no longer vendor the upstream files, abs_srcdir points at the same
+// tmp dir as abs_builddir — harmless because nothing reads it.
 //
 // Cleanup is best-effort via `afterAll` — mkdtempSync collisions are
 // impossible, and leaving the dir behind on crash is harmless.
@@ -72,7 +83,7 @@ const REGRESS_TMP = (() => {
   return tmp;
 })();
 const REGRESS_TMP_OWNED_BY_SPEC = !process.env.PGCONFORMANCE_ABS_BUILDDIR;
-const REGRESS_ABS_SRCDIR = join(VENDOR_ROOT, 'src', 'test', 'regress');
+const REGRESS_ABS_SRCDIR = REGRESS_TMP;
 
 afterAll(() => {
   // Only this file is allowed to remove the dir it created. When the
@@ -136,30 +147,38 @@ const skipReasonForCase = (
     ? `regress/psql expected output is PG ${pgMajor < 18 ? '18-pinned' : '18'}; older server output diverges on PG-18-only features (Leakproof?, Generated columns, uuid_skipsupport, GRANT WITH ADMIN TRUE, …)`
     : null;
 
+// Fetch upstream SQL + expected outputs once per spec invocation. No
+// on-disk cache — we accept the ~1-2s of HTTPS round-trips in exchange
+// for the invariant "the harness always exercises the exact pinned
+// upstream content". Generous timeout because the network can be slow
+// in CI.
+let upstreamFixtures: Map<RegressCaseName, UpstreamRegressFixture> | null =
+  null;
+beforeAll(async () => {
+  upstreamFixtures = await fetchRegressFixtures();
+}, 60_000);
+
 describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
-  it('matches vendored expected output', (ctx) => {
+  it('matches upstream expected output', (ctx) => {
     const conn = getPgConn();
     const skipReason = skipReasonForCase(name, conn.serverMajor ?? undefined);
     if (skipReason) {
       ctx.skip(skipReason);
     }
-    const sqlPath = join(SQL_DIR, `${name}.sql`);
-    const expectedPath = join(EXPECTED_DIR, `${name}.out`);
-    if (!existsSync(sqlPath)) {
-      throw new Error(`vendor script missing: ${sqlPath}`);
+    if (!upstreamFixtures) {
+      throw new Error('upstream fixtures not loaded (beforeAll did not run)');
     }
-    if (!existsSync(expectedPath)) {
-      throw new Error(`vendor expected output missing: ${expectedPath}`);
+    const fixture = upstreamFixtures.get(name);
+    if (!fixture) {
+      throw new Error(`upstream fixture missing for ${name}`);
     }
-    const sql = readFileSync(sqlPath, 'utf8');
+    const sql = fixture.sql;
     // Apply the same normalize options to both sides of the diff so
     // version-conditional rules can collapse PG 14-17 wording onto
-    // the PG 18 vendored expected shape (rules only match older-PG
-    // output, so they are no-ops on expected).
+    // the PG 18 expected shape (rules only match older-PG output, so
+    // they are no-ops on expected).
     const pgMajor = conn.serverMajor ?? undefined;
-    const expected = normalize(readFileSync(expectedPath, 'utf8'), {
-      pgMajor,
-    });
+    const expected = normalize(fixture.expected, { pgMajor });
 
     const psqlArgs = [
       '--no-psqlrc',
@@ -266,7 +285,7 @@ describe.each(REGRESS_CASES)('regress/%s', (name: RegressCase) => {
 
     const diff = renderDiff(expected, actual);
     const failureMessage =
-      `regress/${name} output differs from vendored expected.\n` +
+      `regress/${name} output differs from upstream expected.\n` +
       `--- expected (normalized)\n+++ actual (normalized)\n${diff}\n` +
       (stderr ? `--- stderr ---\n${stderr}\n` : '');
     throw new Error(failureMessage);

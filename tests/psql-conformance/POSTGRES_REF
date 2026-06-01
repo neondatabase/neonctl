@@ -1,13 +1,14 @@
 # PostgreSQL source-of-truth pin for the psql-conformance harness.
 #
-# This file is the single source of pinned versions for the vendored
-# regression files and the test postgres server image. To bump, edit
-# this file and then run:
+# This file is the single source of pinned versions for:
+#   - The upstream regression SQL + expected outputs the harness fetches
+#     at test bootstrap (see `harness/upstream-fixtures.ts`). No on-disk
+#     copy of these files lives in this repo.
+#   - The test postgres server image (used by GHA + testcontainers).
 #
-#   bun tests/psql-conformance/scripts/refresh-vendored.ts
-#
-# (or `bun tests/psql-conformance/scripts/refresh-vendored.ts <new-tag>`
-#  to drive the bump from the command line.)
+# To bump the upstream PG pin: change PG_TAG / PG_COMMIT below and
+# update PG_IMAGE / PG_IMAGE_DIGEST to a matching docker tag. The next
+# `bun run test:conformance` re-fetches against the new tag.
 
 PG_VERSION=18.0
 PG_TAG=REL_18_0

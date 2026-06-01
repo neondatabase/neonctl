@@ -1481,7 +1481,7 @@ describe('WATCH_INTERVAL variable hook', () => {
     // null branch, which `VarStore.unset` honours by re-storing the
     // substituted value. The conformance test echoes `:WATCH_INTERVAL`
     // after `\unset` and expects `2` — see
-    // `tests/psql-conformance/vendor/postgres-18.0/.../001_basic.pl`
+    // https://github.com/postgres/postgres/blob/REL_18_0/src/bin/psql/t/001_basic.pl
     // around the `WATCH_INTERVAL variable is set and updated` block.
     const s = makeSettings();
     s.vars.set('WATCH_INTERVAL', '5');

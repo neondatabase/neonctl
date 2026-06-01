@@ -1,8 +1,8 @@
 // Port of upstream PostgreSQL's
 // `src/interfaces/libpq/t/005_negotiate_encryption.pl`.
 //
-// Vendored reference:
-//   tests/psql-conformance/vendor/postgres-18.0/src/interfaces/libpq/t/005_negotiate_encryption.pl
+// Upstream reference:
+//   https://github.com/postgres/postgres/blob/REL_18_0/src/interfaces/libpq/t/005_negotiate_encryption.pl
 //
 // SCOPE — what is ported, what is skipped, and why
 // ---------------------------------------------------------------------------
@@ -177,7 +177,7 @@ type NegCase = {
 /**
  * Portable subset of the upstream test table. Each row is hand-mirrored
  * from the upstream perl script (line numbers in comments reference
- * `vendor/postgres-18.0/src/interfaces/libpq/t/005_negotiate_encryption.pl`).
+ * https://github.com/postgres/postgres/blob/REL_18_0/src/interfaces/libpq/t/005_negotiate_encryption.pl).
  *
  * EVENTS are NOT asserted: libpq's perl test scrapes the server log for
  * a trace like `connect, sslreject, authok`. Our TS impl's negotiation

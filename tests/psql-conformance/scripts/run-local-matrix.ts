@@ -205,20 +205,16 @@ const bootContainer = async (
     .withPassword('postgres')
     .withBindMounts([{ source: absBuilddir, target: absBuilddir, mode: 'rw' }])
     .start();
-  // Seed `onek` / `tenk1` (with the unique2 index) so the vendored
-  // psql.sql references — and chunked-cursor FETCH_COUNT test — resolve.
-  // pg-fixture.ts seeds via its own setup path; the matrix runner takes
-  // the env-var bypass which skips that, so we mirror the seed here.
+  // Seed `onek` / `tenk1` (with the unique2 index) so the upstream
+  // regress/psql.sql references — and chunked-cursor FETCH_COUNT test —
+  // resolve. pg-fixture.ts seeds via its own setup path; the matrix
+  // runner takes the env-var bypass which skips that, so we mirror the
+  // seed here.
   const seedPath = join(
     process.cwd(),
     'tests',
     'psql-conformance',
-    'vendor',
-    'postgres-18.0',
-    'src',
-    'test',
-    'regress',
-    'sql',
+    'seed',
     'test_setup_minimal.sql',
   );
   if (existsSync(seedPath)) {

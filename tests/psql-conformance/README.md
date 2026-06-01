@@ -4,10 +4,13 @@ This directory contains the test infrastructure for the TypeScript
 reimplementation of PostgreSQL's `psql` that lives in `src/psql/`.
 
 The harness validates **a `psql` binary** — by default the system
-`psql`, eventually the TS implementation — against the vendored
-upstream PostgreSQL 17.4 regression scripts. It is designed so that
-**Day 1 is the system psql passing every test**, before any TS psql
-code exists. That is how we know the harness itself is faithful.
+`psql`, eventually the TS implementation — against the upstream
+PostgreSQL regression scripts. The upstream SQL + expected outputs are
+fetched from `raw.githubusercontent.com/postgres/postgres` at the
+commit pinned in `POSTGRES_REF`; nothing is vendored. The harness is
+designed so that **Day 1 is the system psql passing every test**,
+before any TS psql code exists. That is how we know the harness
+itself is faithful.
 
 Subtests that don't yet pass against the embedded TS psql are marked
 inline with `it.todo("<name> — <reason>")` (engine gap) or
@@ -21,16 +24,21 @@ tests/psql-conformance/
   POSTGRES_REF             # pinned PG version + commit sha + image digest
   vitest.config.ts         # separate vitest config (longer timeouts, custom reporter)
   tsconfig.json            # extends ../../tsconfig.json to include this tree
+  seed/
+    test_setup_minimal.sql # our own seed (NOT vendored; trimmed from
+                           # upstream test_setup.sql to avoid the
+                           # regresslib C extension)
   harness/
     pg-fixture.ts          # boots postgres (testcontainers OR GHA service)
     global-setup.ts        # vitest globalSetup wiring pg-fixture
     normalize.ts           # pg_regress-style output normalization
+    upstream-fixtures.ts   # fetches regress SQL + expected from upstream
+                           # at test bootstrap (no on-disk vendor copy)
     reporter.ts            # vitest reporter that prints coverage headline
     util-log.ts            # stderr logger (no-console eslint rule)
     *.test.ts              # unit tests for the harness itself
   regress.spec.ts          # drives psql.sql, psql_crosstab.sql, psql_pipeline.sql
-  scripts/refresh-vendored.ts  # re-pull upstream regression files at a tag
-  vendor/postgres-17.4/    # vendored upstream files (see VENDORED_FROM)
+  tap/                     # ports of upstream .pl scripts (URLs in headers)
 ```
 
 ## Setup (one-time)
@@ -174,26 +182,28 @@ behind the harness. Recommended order for the maintainer:
    `it.todo(...)` placeholders with real `it(...)` bodies that assert
    the expected behaviour.
 
-## Vendored files
+## Upstream files
 
-`vendor/postgres-17.4/` is a verbatim copy of upstream PostgreSQL
-test scripts. See `VENDORED_FROM` for the exact tag, commit sha, and
-license attribution.
+Nothing from upstream PostgreSQL is checked in. The three regress
+scripts (`psql.sql`, `psql_crosstab.sql`, `psql_pipeline.sql`) and
+their expected outputs are fetched from upstream at test bootstrap
+by `harness/upstream-fixtures.ts`, against the commit pinned in
+`POSTGRES_REF`. No on-disk cache — every `vitest run` re-fetches the
+~400 KB of content from `raw.githubusercontent.com`.
 
-`psql_pipeline.sql` is vendored from `REL_18_0` because it was added
-to upstream after `REL_17_4`. The script still exercises features
-available in the pinned `postgres:17.4` server. Failures specific to
-that mismatch should be marked with `it.todo("reason")` /
-`it.skip("reason")` on the relevant subtests.
+The TAP-style `.pl` scripts (`001_basic.pl`, `010_tab_completion.pl`,
+`020_cancel.pl`, libpq's `001_uri.pl`, `005_negotiate_encryption.pl`,
+ssl's `001_ssltests.pl`) have been ported to TypeScript spec files
+under `tap/`. Each port's header carries a `https://github.com/postgres/postgres/blob/<TAG>/…`
+URL pointing back at the upstream source it was translated from.
 
 `030_pager.pl` is listed in the WP-T plan but **does not exist** in
-upstream and so is not vendored. A custom port lives at
-`tap/030_pager.spec.ts` — see "Custom pager spec" below.
+upstream; a custom port lives at `tap/030_pager.spec.ts` — see
+"Custom pager spec" below.
 
-`001_basic.pl` IS vendored under
-`vendor/postgres-18.0/src/bin/psql/t/`; the Vitest port lives at
-`tap/001_basic.spec.ts`. See "TAP-port specs" below for how the spec
-is gated and how deferred subtests are marked.
+To bump the upstream PG pin: edit `PG_TAG` / `PG_COMMIT` in
+`POSTGRES_REF` and run the conformance suite — the next bootstrap
+re-fetches against the new tag.
 
 ### TAP-port specs
 
@@ -207,7 +217,7 @@ Current inventory:
 
 | spec                    | upstream source                            | scope                                                                                                                                                          |
 | ----------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `tap/001_basic.spec.ts` | `src/bin/psql/t/001_basic.pl` (vendored)   | program args, `\timing`, `:ENCODING`, LISTEN/NOTIFY, server crash, `\errverbose`, multi-`-c`/`-f` + `--single-transaction`, `\copy ... DEFAULT`, `\watch`, `\g | pipe`, COPY-in-pipeline, `\restrict` |
+| `tap/001_basic.spec.ts` | `src/bin/psql/t/001_basic.pl` (linked)     | program args, `\timing`, `:ENCODING`, LISTEN/NOTIFY, server crash, `\errverbose`, multi-`-c`/`-f` + `--single-transaction`, `\copy ... DEFAULT`, `\watch`, `\g | pipe`, COPY-in-pipeline, `\restrict` |
 | `tap/030_pager.spec.ts` | custom (upstream's `030_pager.pl` deleted) | `PAGER`, `PSQL_PAGER`, `\pset pager off` / `always`                                                                                                            |
 
 Common helpers for these specs live in `tap/_helpers.ts`:
@@ -268,19 +278,19 @@ adding the wiring should make the assertions tighter without rewriting
 the harness; today the assertions are content-based and verify the
 plumbing.
 
-### Refreshing
+### Bumping the PG pin
 
-When bumping the pinned PostgreSQL version:
+Edit `POSTGRES_REF` (PG_VERSION, PG_TAG, PG_COMMIT, PG_IMAGE,
+PG_IMAGE_DIGEST). The next `bun run test:conformance` re-fetches the
+regress SQL + expected outputs against the new tag — there's no
+vendored copy to refresh.
+
+To resolve a tag → commit SHA, query the GitHub API:
 
 ```sh
-# Update POSTGRES_REF (PG_VERSION, PG_TAG, PG_IMAGE_DIGEST) by hand,
-# OR override on the command line:
-bun tests/psql-conformance/scripts/refresh-vendored.ts REL_17_5
+curl -s https://api.github.com/repos/postgres/postgres/git/refs/tags/REL_18_2 \
+  | jq -r '.object.sha'
 ```
-
-The script re-resolves commit shas via the GitHub API (set
-`$GITHUB_TOKEN` to avoid rate limits), redownloads each vendored
-file, and rewrites `POSTGRES_REF` and `VENDORED_FROM`.
 
 ## CI integration
 

@@ -1,7 +1,7 @@
 // Port of upstream PostgreSQL's `src/bin/psql/t/001_basic.pl`.
 //
 // Vendored reference:
-//   tests/psql-conformance/vendor/postgres-18.0/src/bin/psql/t/001_basic.pl
+//   https://github.com/postgres/postgres/blob/REL_18_0/src/bin/psql/t/001_basic.pl
 //
 // This spec exercises the basics that upstream's TAP harness covers:
 //   * `--help`, `--help=commands`, `--help=variables`, `--version`,

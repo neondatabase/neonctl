@@ -62,15 +62,14 @@ export type PgConn = {
 const PG_IMAGE_DEFAULT = 'postgres:18.0';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// Our own seed script (NOT vendored from upstream — we trimmed it down
+// from upstream's `test_setup.sql` so the harness can run against a
+// stock postgres image without the regresslib C extension that the
+// full upstream script needs).
 const SEED_SCRIPT_HOST_PATH = join(
   HERE,
   '..',
-  'vendor',
-  'postgres-18.0',
-  'src',
-  'test',
-  'regress',
-  'sql',
+  'seed',
   'test_setup_minimal.sql',
 );
 const SEED_SCRIPT_CONTAINER_PATH =

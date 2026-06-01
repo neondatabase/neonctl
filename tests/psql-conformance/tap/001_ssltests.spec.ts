@@ -1,7 +1,7 @@
 // Port of upstream PostgreSQL's `src/test/ssl/t/001_ssltests.pl`.
 //
 // Vendored reference:
-//   tests/psql-conformance/vendor/postgres-18.0/src/test/ssl/t/001_ssltests.pl
+//   https://github.com/postgres/postgres/blob/REL_18_0/src/test/ssl/t/001_ssltests.pl
 //   (REL_18_0 commit 3d6a828938a5fa0444275d3d2f67b64ec3199eb7)
 //
 // SCOPE — what is ported, what is skipped, and why

@@ -1,7 +1,7 @@
 // Port of upstream PostgreSQL's `src/bin/psql/t/010_tab_completion.pl`.
 //
 // Vendored reference:
-//   tests/psql-conformance/vendor/postgres-18.0/src/bin/psql/t/010_tab_completion.pl
+//   https://github.com/postgres/postgres/blob/REL_18_0/src/bin/psql/t/010_tab_completion.pl
 //
 // This spec drives an interactive psql session over a PTY (via `node-pty`),
 // sends partial commands with embedded tabs, and asserts the resulting
@@ -158,7 +158,7 @@ const SETUP_SQL = [
 // Symmetric teardown — drop the fixtures we created and re-seed the
 // regress-suite tables so sibling specs (regress/psql*, catalog-shape)
 // running after us see a clean schema. The full seed script lives at
-// `vendor/postgres-18.0/src/test/regress/sql/test_setup_minimal.sql`;
+// `tests/psql-conformance/seed/test_setup_minimal.sql`;
 // we inline its CREATE TABLE / INSERT / VACUUM block here to avoid a
 // file-path dependency at teardown time.
 const SEED_RESTORE_SQL = [
