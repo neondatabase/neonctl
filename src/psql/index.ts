@@ -1106,14 +1106,18 @@ const normalizeSslMode = (raw: string | null): ConnectOptions['ssl'] => {
 const normalizeChannelBinding = (
   raw: string | null,
 ): ConnectOptions['channelBinding'] => {
-  const value = (raw ?? '').toLowerCase();
+  if (raw === null || raw === '') return undefined;
+  const value = raw.toLowerCase();
   switch (value) {
     case 'disable':
     case 'prefer':
     case 'require':
       return value;
     default:
-      return undefined;
+      // Mirror libpq's `invalid channel_binding value: "<raw>"`
+      // diagnostic (upstream test `002_scram.pl`). Empty / unset
+      // returns `undefined` above so the wire-layer default applies.
+      throw new Error(`invalid channel_binding value: "${raw}"`);
   }
 };
 
