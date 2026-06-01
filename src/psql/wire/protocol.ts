@@ -41,7 +41,17 @@
  */
 
 import { Buffer } from 'node:buffer';
-import { serialize } from 'pg-protocol';
+// `pg-protocol@1.14` is published as CommonJS. Node's ESM static
+// analyzer extracts only `module.exports.__esModule = true` style
+// named exports from CJS; the actual function exports on
+// `module.exports` (including `serialize`) aren't visible to a named
+// import. tsc with `module: NodeNext` preserves the import verbatim,
+// so a `import { serialize } from 'pg-protocol'` at runtime under
+// Node ESM dies with `SyntaxError: Named export 'serialize' not
+// found`. Use the default-import + destructure form which node-
+// postgres itself uses for the same reason.
+import pgProtocol from 'pg-protocol';
+const { serialize } = pgProtocol;
 // `Parser` is not part of pg-protocol's top-level exports (only `serialize`,
 // `parse`, and `DatabaseError` are). The package's `exports` map permits
 // `./dist/*` subpath imports, which is the canonical way to reach the parser
