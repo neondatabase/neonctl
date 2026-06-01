@@ -29,6 +29,7 @@ import {
   loadTlsFileOptions,
   mapTlsHandshakeError,
   negotiateTls,
+  readCaDir,
   sendSslRequest,
 } from './tls.js';
 
@@ -732,6 +733,118 @@ describe('loadTlsFileOptions', () => {
     } finally {
       if (saved === undefined) delete process.env.SSL_CERT_FILE;
       else process.env.SSL_CERT_FILE = saved;
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // SSL_CERT_DIR: OpenSSL hashed-dir of CA files honoured by
+  // sslrootcert=system, alongside (or instead of) SSL_CERT_FILE.
+  // -------------------------------------------------------------------------
+  const withSslCertEnv = async (
+    file: string | undefined,
+    dir: string | undefined,
+    fn: () => Promise<void>,
+  ): Promise<void> => {
+    const savedFile = process.env.SSL_CERT_FILE;
+    const savedDir = process.env.SSL_CERT_DIR;
+    if (file === undefined) delete process.env.SSL_CERT_FILE;
+    else process.env.SSL_CERT_FILE = file;
+    if (dir === undefined) delete process.env.SSL_CERT_DIR;
+    else process.env.SSL_CERT_DIR = dir;
+    try {
+      await fn();
+    } finally {
+      if (savedFile === undefined) delete process.env.SSL_CERT_FILE;
+      else process.env.SSL_CERT_FILE = savedFile;
+      if (savedDir === undefined) delete process.env.SSL_CERT_DIR;
+      else process.env.SSL_CERT_DIR = savedDir;
+    }
+  };
+
+  test('readCaDir reads every regular file in the directory', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-cadir-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'a.0'),
+        '-----BEGIN CERTIFICATE-----\nca-a\n-----END CERTIFICATE-----\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'b.0'),
+        '-----BEGIN CERTIFICATE-----\nca-b\n-----END CERTIFICATE-----\n',
+      );
+      // Subdirectories are skipped (only hashed CA files live at the top).
+      fs.mkdirSync(path.join(dir, 'nested'));
+      const cas = await readCaDir(dir);
+      expect(cas).toHaveLength(2);
+      const joined = cas.map((c) => c.toString()).sort();
+      expect(joined[0]).toContain('ca-a');
+      expect(joined[1]).toContain('ca-b');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('readCaDir surfaces a clear error for a missing directory', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-cadir-'));
+    try {
+      const missing = path.join(dir, 'no-such-dir');
+      await expect(readCaDir(missing)).rejects.toThrow(
+        /could not read SSL_CERT_DIR ".*no-such-dir"/,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('sslrootcert=system reads SSL_CERT_DIR files into the ca array', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-cadir-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'one.0'),
+        '-----BEGIN CERTIFICATE-----\ndir-ca-1\n-----END CERTIFICATE-----\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'two.0'),
+        '-----BEGIN CERTIFICATE-----\ndir-ca-2\n-----END CERTIFICATE-----\n',
+      );
+      await withSslCertEnv(undefined, dir, async () => {
+        const merged = await loadTlsFileOptions(
+          {},
+          { sslrootcert: 'system' },
+          'verify-full',
+        );
+        expect(Array.isArray(merged.ca)).toBe(true);
+        const cas = (merged.ca as Buffer[]).map((c) => c.toString()).sort();
+        expect(cas[0]).toContain('dir-ca-1');
+        expect(cas[1]).toContain('dir-ca-2');
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('sslrootcert=system combines SSL_CERT_FILE and SSL_CERT_DIR', async () => {
+    const f = fixtures();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-cadir-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'dir.0'),
+        '-----BEGIN CERTIFICATE-----\nfrom-dir\n-----END CERTIFICATE-----\n',
+      );
+      await withSslCertEnv(f.caPath, dir, async () => {
+        const merged = await loadTlsFileOptions(
+          {},
+          { sslrootcert: 'system' },
+          'verify-full',
+        );
+        expect(Array.isArray(merged.ca)).toBe(true);
+        const cas = (merged.ca as Buffer[]).map((c) => c.toString());
+        expect(cas.some((c) => c.includes('ca-bytes'))).toBe(true);
+        expect(cas.some((c) => c.includes('from-dir'))).toBe(true);
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      f.cleanup();
     }
   });
 

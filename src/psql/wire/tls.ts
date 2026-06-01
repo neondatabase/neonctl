@@ -95,9 +95,11 @@ export type TlsFileOptions = {
    *
    * The special value `system` (libpq `sslrootcert=system`) is NOT a file
    * path: it selects the OS / OpenSSL trust store. We emulate libpq's
-   * OpenSSL build — if `SSL_CERT_FILE` is set we read THAT file as the CA
-   * bundle; otherwise we leave `ca` unset so Node falls back to its built-in
-   * Mozilla root store. `rejectUnauthorized` stays true either way.
+   * OpenSSL build — if `SSL_CERT_FILE` is set we read THAT file as a CA
+   * bundle, and if `SSL_CERT_DIR` is set we read every file in that directory
+   * as additional CAs (both may be set together); otherwise we leave `ca`
+   * unset so Node falls back to its built-in Mozilla root store.
+   * `rejectUnauthorized` stays true either way.
    */
   sslrootcert?: string;
   /** Path to CRL (PEM). Mapped to `crl`. */
@@ -227,13 +229,26 @@ export async function loadTlsFileOptions(
   ) {
     if (fileOpts.sslrootcert === 'system') {
       // `sslrootcert=system`: use the OS / OpenSSL trust store instead of a
-      // file. libpq's OpenSSL build honours $SSL_CERT_FILE as the bundle
-      // path, so we do the same; with neither set, leaving `ca` unset makes
-      // Node fall back to its built-in root store. `rejectUnauthorized`
-      // (set by the connection layer for verify-* modes) is left intact.
+      // file. libpq's OpenSSL build honours OpenSSL's $SSL_CERT_FILE (a single
+      // bundle) and $SSL_CERT_DIR (a directory of hashed CA files); we read
+      // both. With neither set, leaving `ca` unset makes Node fall back to its
+      // built-in root store. `rejectUnauthorized` (set by the connection layer
+      // for verify-* modes) is left intact.
+      const systemCas: Buffer[] = [];
       const sslCertFile = process.env.SSL_CERT_FILE;
       if (sslCertFile !== undefined && sslCertFile !== '') {
-        merged.ca = await readPem('sslrootcert', sslCertFile, 'CERTIFICATE');
+        systemCas.push(
+          await readPem('sslrootcert', sslCertFile, 'CERTIFICATE'),
+        );
+      }
+      const sslCertDir = process.env.SSL_CERT_DIR;
+      if (sslCertDir !== undefined && sslCertDir !== '') {
+        systemCas.push(...(await readCaDir(sslCertDir)));
+      }
+      if (systemCas.length === 1) {
+        merged.ca = systemCas[0];
+      } else if (systemCas.length > 1) {
+        merged.ca = systemCas;
       }
     } else {
       merged.ca = await readPem(
@@ -433,6 +448,37 @@ async function readCrlDir(dirPath: string): Promise<Buffer[]> {
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     out.push(await readPem('sslcrldir', path.join(dirPath, entry.name)));
+  }
+  return out;
+}
+
+/**
+ * Read every regular file in an OpenSSL `$SSL_CERT_DIR` (the hashed-dir
+ * convention honoured by `sslrootcert=system`) and return their PEM bytes.
+ * Mirrors {@link readCrlDir}: subdirectories are skipped and a DER-format
+ * file is auto-converted to PEM. A failure to list the directory or read any
+ * file surfaces as `could not read SSL_CERT_DIR "<path>": <reason>`.
+ *
+ * Exported for tests.
+ */
+export async function readCaDir(dirPath: string): Promise<Buffer[]> {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`could not read SSL_CERT_DIR "${dirPath}": ${reason}`);
+  }
+  const out: Buffer[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    out.push(
+      await readPem(
+        'SSL_CERT_DIR',
+        path.join(dirPath, entry.name),
+        'CERTIFICATE',
+      ),
+    );
   }
   return out;
 }
