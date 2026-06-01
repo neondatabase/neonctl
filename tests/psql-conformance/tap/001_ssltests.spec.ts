@@ -1180,8 +1180,40 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
   });
 
   describe('SKIPPED: client cert format / perms / DN (libpq-specific behaviour)', () => {
-    it.skip('certificate authorization succeeds with DER client cert + key', () => {
-      /* unreachable — Node TLS accepts PEM only */
+    // libpq accepts client cert/key in DER (binary) form and auto-detects;
+    // our wire layer now sniffs PEM armor and converts DER→PEM in-memory.
+    // Convert ssltestuser's PEM material to DER and authenticate with it.
+    it('certificate authorization succeeds with DER client cert + key', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const certDer = join(t.workDir, 'ssltestuser.cert.der');
+      const keyDer = join(t.workDir, 'ssltestuser.key.der');
+      // x509 → DER; key → PKCS#8 DER (matches the wrapper's armor).
+      execFileSync(
+        'openssl',
+        ['x509', '-in', client.cert, '-outform', 'der', '-out', certDer],
+        { stdio: 'pipe' },
+      );
+      execFileSync(
+        'openssl',
+        ['pkey', '-in', client.key, '-outform', 'der', '-out', keyDer],
+        { stdio: 'pipe' },
+      );
+      const conn = await mustConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: certDer,
+        sslkey: keyDer,
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+        expect(stat.clientDn ?? '').toMatch(/CN=ssltestuser/);
+      } finally {
+        await conn.close();
+      }
     });
     // libpq refuses a client key file that is group/world-readable; our
     // wire layer now enforces the same POSIX stat-mode check. Windows has
