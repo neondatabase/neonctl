@@ -55,10 +55,18 @@ start_cluster () {
   local data_dir="$PG_LB_ROOT/$nodename"
   local log_file="$LOG_ROOT/$nodename.log"
 
+  # Per-node Unix socket dir. PG keys the postmaster lock on PORT, not
+  # listen address — three clusters all on port 5432 would collide on
+  # `/var/run/postgresql/.s.PGSQL.5432.lock`. Give each its own dir.
+  local socket_dir="$PG_LB_ROOT/$nodename/sockets"
+  mkdir -p "$socket_dir"
+  chown postgres:postgres "$socket_dir"
+
   # Set listen_addresses for this cluster.
   cat > "$data_dir/postgresql.auto.conf" <<EOF
 listen_addresses = '$ip'
 port = 5432
+unix_socket_directories = '$socket_dir'
 log_destination = 'stderr'
 logging_collector = off
 # Match upstream's connect_ok regex expectations: log every statement
