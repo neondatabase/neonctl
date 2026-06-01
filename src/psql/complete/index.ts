@@ -29,6 +29,18 @@ import { findCompletions, type CompleteContext } from './rules.js';
 
 export type PsqlCompleterContext = {
   settings: PsqlSettings;
+  /**
+   * Accessor for the in-flight multi-line query buffer. Called on every
+   * completion to fetch the raw, pre-scan text of the lines already submitted
+   * for the current statement. Lets rules that need cross-line context (e.g.
+   * `ANALYZE (` opened on the previous line) see beyond what the line editor
+   * currently has in its single-line buffer.
+   *
+   * Optional: omitted (or returning `''`) puts the completer in the
+   * single-line-only mode that existed before WP-25's multi-line plumbing,
+   * matching what unit tests typically want.
+   */
+  getQueryBuf?: () => string;
 };
 
 /**
@@ -45,7 +57,10 @@ export const psqlCompleter = (ctx: PsqlCompleterContext): Completer => {
       input,
       cursor,
     );
-    const ruleCtx: CompleteContext = { settings: ctx.settings };
+    const ruleCtx: CompleteContext = {
+      settings: ctx.settings,
+      queryBuf: ctx.getQueryBuf?.() ?? '',
+    };
     const { candidates } = await findCompletions(
       prevWords,
       currentWord,

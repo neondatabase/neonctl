@@ -144,6 +144,20 @@ export type CompleteContext = {
   /** Lazy: re-read from settings.db on every call so `\c` updates take effect. */
   conn?: Connection | null;
   settings: PsqlSettings;
+  /**
+   * In-flight multi-line query buffer (raw, pre-scan text) accumulated by the
+   * REPL on previous lines of the current statement. Empty when the user is
+   * starting a fresh statement. Rules that need cross-line context (e.g.
+   * `ANALYZE (` opened on a previous line, or `COMMENT ON CONSTRAINT … ON`
+   * spanning lines) inspect this buffer themselves — the rule engine doesn't
+   * re-tokenize it because the `prevWords` tail-match grammar is already
+   * pinned to the current line.
+   *
+   * Optional / defaults to empty string: rules that only care about the
+   * current line ignore it, and unit tests can construct a context without
+   * a buffer.
+   */
+  queryBuf?: string;
 };
 
 /** Backslash command names psql tab-completes (mirrors backslash_commands[]). */

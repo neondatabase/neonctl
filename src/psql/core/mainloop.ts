@@ -210,7 +210,23 @@ const viModeOption = (raw: string | undefined): 'emacs' | 'vi' => {
   return parseBoolVar(raw) === true ? 'vi' : 'emacs';
 };
 
-const makeEditorLineReader = async (ctx: REPLContext): Promise<LineReader> => {
+/**
+ * Optional plumbing that lets the completer see beyond the current line.
+ *
+ * `getQueryBuf` is captured by the completer factory by closure; on each
+ * Tab press the completer reads the live (post-scan) `queryBuf` and uses it
+ * for rules that need cross-line context (`ANALYZE (` opened on a previous
+ * line, `COMMENT ON CONSTRAINT <name> ON` resolving the table reference,
+ * etc.). When omitted the completer falls back to the single-line view.
+ */
+type LineReaderOptions = {
+  getQueryBuf?: () => string;
+};
+
+const makeEditorLineReader = async (
+  ctx: REPLContext,
+  opts: LineReaderOptions = {},
+): Promise<LineReader> => {
   const env = process.env;
   const histPath = defaultHistoryPath(env);
   const histSize = resolveHistSize(env);
@@ -232,7 +248,10 @@ const makeEditorLineReader = async (ctx: REPLContext): Promise<LineReader> => {
     stdin: ctx.stdin as NodeJS.ReadStream,
     stdout: ctx.stdout,
     history,
-    completer: psqlCompleter({ settings: ctx.settings }),
+    completer: psqlCompleter({
+      settings: ctx.settings,
+      getQueryBuf: opts.getQueryBuf,
+    }),
     mode: initialMode,
   });
   // Hook: validate the value, reject unrecognised input with psql's
@@ -319,7 +338,10 @@ const HELP_TEXT =
   '       \\g or terminate with semicolon to execute query\n' +
   '       \\q to quit\n';
 
-const makeLineReader = async (ctx: REPLContext): Promise<LineReader> => {
+const makeLineReader = async (
+  ctx: REPLContext,
+  opts: LineReaderOptions = {},
+): Promise<LineReader> => {
   const debug = process.env.NEONCTL_PSQL_DEBUG === '1';
   if (ctx.settings.notty) {
     if (debug) {
@@ -330,7 +352,7 @@ const makeLineReader = async (ctx: REPLContext): Promise<LineReader> => {
     return makeStreamLineReader(ctx.stdin, ctx.stdout);
   }
   try {
-    const r = await makeEditorLineReader(ctx);
+    const r = await makeEditorLineReader(ctx, opts);
     if (debug) {
       ctx.stderr.write(
         '[psql-debug] LineEditor engaged (raw mode, Tab completion active)\n',
@@ -843,9 +865,14 @@ const installSigint = (ctx: REPLContext, state: SigintState): (() => void) => {
 // ---------------------------------------------------------------------------
 
 export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
-  const reader = await makeLineReader(ctx);
-
+  // queryBuf is declared up front so the line reader's tab completer can
+  // close over it via `getQueryBuf` and see the in-flight multi-line buffer
+  // on every Tab. The mainloop reassigns this variable across statements
+  // (resetBuf, after dispatch); the closure stays valid because it captures
+  // the binding, not a snapshot.
   let queryBuf = '';
+  const reader = await makeLineReader(ctx, { getQueryBuf: () => queryBuf });
+
   let scanState: ScanState = initialScanState();
   let stmtLineNumber = 1;
   let successResult = EXIT_SUCCESS;
