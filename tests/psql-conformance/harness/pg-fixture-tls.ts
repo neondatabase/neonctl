@@ -682,6 +682,9 @@ CREATE USER ssluser;
 CREATE USER nossluser;
 CREATE USER ssltestuser;
 CREATE USER anotheruser;
+-- Target of the pg_ident.conf "certmap" mapping: a client presenting the
+-- ssltestuser cert (CN=ssltestuser) may authenticate AS mappeduser.
+CREATE USER mappeduser;
 
 -- Password-auth users for the 002_scram suite. The cluster default
 -- \`password_encryption\` is scram-sha-256 (PG 14+), so the SCRAM user
@@ -744,6 +747,11 @@ hostssl        all       ssltestuser  0.0.0.0/0       cert clientcert=verify-ful
 hostssl        all       ssltestuser  ::/0            cert clientcert=verify-full
 hostssl        all       anotheruser  0.0.0.0/0       trust clientcert=verify-ca
 hostssl        all       anotheruser  ::/0            trust clientcert=verify-ca
+# Cert auth with a pg_ident.conf username map: the cert's CN (the system
+# name) is mapped to the requested PG role via map=certmap. mappeduser is
+# reachable by presenting the ssltestuser cert (CN=ssltestuser).
+hostssl        all       mappeduser   0.0.0.0/0       cert clientcert=verify-full map=certmap
+hostssl        all       mappeduser   ::/0            cert clientcert=verify-full map=certmap
 # Password-auth users for the 002_scram suite. Both are TLS-only so
 # the auth flow exercises SCRAM channel binding when channel_binding
 # is requested. The methods are per-user (not catch-all) so plaintext
@@ -832,6 +840,13 @@ __CONF_EOF__
 cat > "$PGDATA/pg_hba.conf" <<'__HBA_EOF__'
 ${HBA_CONF.trim()}
 __HBA_EOF__
+
+# pg_ident.conf — maps the ssltestuser cert CN to the mappeduser role for
+# the map=certmap HBA rule above. PG reads \$PGDATA/pg_ident.conf by default.
+cat > "$PGDATA/pg_ident.conf" <<'__IDENT_EOF__'
+# MAPNAME   SYSTEM-USERNAME   PG-USERNAME
+certmap     ssltestuser       mappeduser
+__IDENT_EOF__
 `;
 
 /**

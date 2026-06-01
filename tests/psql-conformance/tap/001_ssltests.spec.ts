@@ -1210,8 +1210,28 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
         ).rejects.toThrow(/group or world access/);
       },
     );
-    it.skip('cert DN mapping via pg_ident.conf — exact / regex / CN', () => {
-      /* unreachable — server-side admin, not a wire-layer concern */
+    // The fixture's pg_ident.conf maps cert CN `ssltestuser` -> role
+    // `mappeduser` (HBA rule: `cert clientcert=verify-full map=certmap`).
+    // Presenting the ssltestuser cert while requesting the mappeduser role
+    // authenticates via the map — exercises our client sending the cert
+    // and completing auth where CN != requested username.
+    it('cert DN mapping via pg_ident.conf maps CN to a different role', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const conn = await mustConnect({
+        user: 'mappeduser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: client.cert,
+        sslkey: client.key,
+      });
+      try {
+        const stat = await queryPgStatSsl(conn);
+        expect(stat.ssl).toBe(true);
+      } finally {
+        await conn.close();
+      }
     });
     it.skip('long client cert subject is truncated in the server log', () => {
       /* unreachable — log inspection not supported via wire layer */
