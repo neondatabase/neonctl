@@ -915,10 +915,19 @@ const resolveLayeredConnect = (
   // caller via this same field, so callers should populate `serviceName`
   // from there before invoking us.
   const serviceName = resolution.serviceName ?? env.PGSERVICE;
-  const serviceEntry =
-    serviceName !== undefined && serviceName !== ''
-      ? resolution.services?.get(serviceName)
-      : undefined;
+  let serviceEntry;
+  if (serviceName !== undefined && serviceName !== '') {
+    serviceEntry = resolution.services?.get(serviceName);
+    if (serviceEntry === undefined) {
+      // Mirror libpq: if the user explicitly named a service (via
+      // `?service=`, conninfo `service=`, or `$PGSERVICE`) and it isn't
+      // found in any loaded service file, fail fast with the exact
+      // upstream wording. Without this the empty service layer would
+      // silently degrade to a different connection target — surprising
+      // and very hard to debug.
+      throw new Error(`definition of service "${serviceName}" not found`);
+    }
+  }
   const serviceLayer: Partial<ConnectOptions> =
     serviceEntry !== undefined
       ? serviceEntryToConnectOptions(serviceEntry)

@@ -41,22 +41,47 @@ export const runPsql = async (
 
   const connectionUri = argv[0] ?? '';
 
-  // Parse the URI as both:
-  //   - a fully-defaulted ConnectOptions (legacy surface; preserves byte-exact
-  //     behaviour for paths that don't yet route through env/pgpass/service)
-  //   - a Partial<ConnectOptions> with ONLY the fields the URI explicitly
-  //     supplied, plus an extracted `service` name. The partial is what the
-  //     new layered resolver consumes.
+  // Parse argv[0] in one of three shapes:
+  //   - URI scheme (`postgres://…` / `postgresql://…`): the URI-partial
+  //     parser handles authority, query, and `?service=…`.
+  //   - libpq conninfo string (`key=value …`, no scheme): `parseConninfo`
+  //     extracts each known key (including `service`).
+  //   - Bare database name (e.g. `mydb`): no parsing; the rest of the
+  //     resolver picks up host/port/user/etc. from env/pgpass/service/
+  //     defaults.
   //
-  // When `connectionUri` is empty (the standalone-psql shim case), we skip
-  // URI parsing entirely and rely on libpq flags + env to populate the
+  // `looksLikeConnectionString` (libpq parity: `recognized_connection_
+  // string()`) decides between the first two and the third.
+  //
+  // When `connectionUri` is empty (the standalone-psql shim case), we
+  // skip parsing entirely and rely on libpq flags + env to populate the
   // ConnectOptions layers.
   let uriPartial: Partial<ConnectOptions> = {};
   let uriService: string | undefined;
-  if (connectionUri !== '') {
+  if (connectionUri !== '' && looksLikeConnectionString(connectionUri)) {
     try {
-      uriPartial = parseConnectionUriPartial(connectionUri);
-      uriService = parseConnectionUriService(connectionUri);
+      if (
+        connectionUri.startsWith('postgres://') ||
+        connectionUri.startsWith('postgresql://')
+      ) {
+        uriPartial = parseConnectionUriPartial(connectionUri);
+        uriService = parseConnectionUriService(connectionUri);
+      } else {
+        // Bare `key=value …` conninfo string. `parseConninfo` parks the
+        // service name on a private `_service` staging slot (it's not
+        // part of ConnectOptions); pull it out so the layered resolver
+        // can look it up.
+        const parsed = parseConninfo(
+          connectionUri,
+        ) as Partial<ConnectOptions> & {
+          _service?: string;
+        };
+        if (typeof parsed._service === 'string' && parsed._service.length > 0) {
+          uriService = parsed._service;
+        }
+        delete parsed._service;
+        uriPartial = parsed;
+      }
     } catch (err) {
       stderr.write(`psql: error: ${(err as Error).message}\n`);
       return EXIT_BADCONN;
@@ -83,27 +108,38 @@ export const runPsql = async (
   settings.notty = !(stdin as NodeJS.ReadStream).isTTY;
 
   // Resolve external configuration sources (pgpass, pg_service.conf) before
-  // running the layered merge. Both loaders gracefully degrade to empty
-  // results when files are missing or unreadable — `applyStartupArgs` will
-  // just not find a match and fall through to the next layer.
+  // running the layered merge. `loadPgPass` always degrades silently to
+  // an empty result. `loadPgServices` only errors when the user named a
+  // missing file via `$PGSERVICEFILE` (libpq parity for `006_service.pl`);
+  // bubble that out as a connection error.
   const pgpassEntries = await loadPgPass(undefined, {
     env: process.env,
     stderr,
   });
-  const services = await loadPgServices();
+  let services;
+  try {
+    services = await loadPgServices();
+  } catch (err) {
+    stderr.write(`psql: error: ${(err as Error).message}\n`);
+    return EXIT_BADCONN;
+  }
 
-  const { connect: connectOpts, preActions } = applyStartupArgs(
-    parsed,
-    settings,
-    undefined,
-    {
+  let resolved;
+  try {
+    resolved = applyStartupArgs(parsed, settings, undefined, {
       env: process.env,
       uriPartial,
       serviceName: uriService,
       pgpassEntries,
       services,
-    },
-  );
+    });
+  } catch (err) {
+    // `resolveLayeredConnect` throws on unknown service name (libpq
+    // parity). Surface as a connection-setup error and bail.
+    stderr.write(`psql: error: ${(err as Error).message}\n`);
+    return EXIT_BADCONN;
+  }
+  const { connect: connectOpts, preActions } = resolved;
 
   let connection: PgConnection;
   try {
@@ -903,6 +939,10 @@ export const parseConninfo = (input: string): Partial<ConnectOptions> => {
     }
   }
   // Drop the private staging fields before returning to the caller.
+  // `_service` is left in place — the layered connect resolver in
+  // `core/startup.ts` doesn't see this struct; only `runPsql` extracts
+  // and forwards the service name. The caller deletes the slot after
+  // reading it.
   delete out._hostList;
   delete out._portList;
   return out;
@@ -1013,13 +1053,20 @@ const applyConninfoPair = (
     case 'ssl_max_protocol_version':
     case 'krbsrvname':
     case 'gsslib':
-    case 'service':
     case 'fallback_application_name':
     case 'keepalives':
     case 'keepalives_idle':
     case 'keepalives_interval':
     case 'keepalives_count':
       return;
+    case 'service': {
+      // Service name is NOT a ConnectOptions field — it's resolved by
+      // the layered connect resolver in `core/startup.ts`. Stash it on
+      // a private staging slot so the caller (`runPsql`) can extract it
+      // alongside the URI-side `?service=…` parser.
+      (out as Partial<ConnectOptions> & { _service?: string })._service = value;
+      return;
+    }
     default:
       throw new Error(`invalid conninfo key: "${key}"`);
   }
@@ -1207,6 +1254,18 @@ export const parseConnectionUriPartial = (
     queryPort,
   });
 
+  // Did the URI actually mention a port anywhere? `parsePort()` defaults
+  // empty input to 5432, so `hostsTuples[i].port` is ALWAYS a number even
+  // for a URI like `postgres:///?service=foo` (no port specified). We
+  // need to distinguish "URI explicitly said 5432" from "URI said nothing
+  // about a port" so the service-file's port wins when we layer this
+  // partial above the service layer. Mirrors libpq's behaviour for
+  // `006_service.pl`'s `postgres:///?service=…` cases.
+  const portInUri =
+    (raw.port !== undefined && raw.port !== '') ||
+    (queryPort !== undefined && queryPort !== '') ||
+    (raw.hosts?.some((t) => t.port !== undefined && t.port !== '') ?? false);
+
   const out: Partial<ConnectOptions> = {};
 
   if (hostsTuples.length > 0) {
@@ -1215,7 +1274,7 @@ export const parseConnectionUriPartial = (
     // tuple (e.g. `postgres://:12345/`) means "explicit port, no host" —
     // we record the port but leave host to the next layer.
     if (hostsTuples[0].host !== '') out.host = hostsTuples[0].host;
-    if (hostsTuples[0].port !== 0) out.port = hostsTuples[0].port;
+    if (portInUri && hostsTuples[0].port !== 0) out.port = hostsTuples[0].port;
     if (hostsTuples.length > 1) {
       out.hosts = hostsTuples.map((t) => ({ host: t.host, port: t.port }));
     }

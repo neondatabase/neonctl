@@ -131,6 +131,16 @@ const expectConnectOk = (
   expect(r.stdout, `${label} stdout`).toMatch(expected);
 };
 
+/** Assert the probe failed and stderr matches `expected`. */
+const expectConnectFails = (
+  r: RunResult,
+  expected: RegExp,
+  label: string,
+): void => {
+  expect(r.exitCode, `${label} exit (stderr=${r.stderr})`).not.toBe(0);
+  expect(r.stderr, `${label} stderr`).toMatch(expected);
+};
+
 describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/006_service', () => {
   let paths: LauncherPaths;
   let workdir: string;
@@ -203,21 +213,70 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/006_service', () => {
       expectConnectOk(r, /connect1_3/, 'PGSERVICE=my_srv');
     });
 
-    it.todo(
-      'connection with correct "service" URI + PGSERVICEFILE (connect1_2) — `postgres:///?service=my_srv` URI form is not honoured today: parseConnectionUriPartial synthesises a default port=5432 when the URI authority omits the port, and the URI-partial layer beats the service-file layer in resolveLayeredConnect, so the service host/port never wins. Fix lives in `parseConnectionUriPartial` (src/psql/index.ts) — gate the implicit-default port on whether the URI authority actually specified one.',
-    );
+    it('connection with correct "service" URI + PGSERVICEFILE (connect1_2)', async () => {
+      // Upstream lines 65-68: `psql 'postgresql:///?service=my_srv'`. URI
+      // authority is empty so the URI-partial layer must NOT inject a
+      // default port; otherwise it would override the service-file's
+      // host:port and the connect would land on `localhost:5432`.
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: [
+          'postgresql:///?service=my_srv',
+          '-X',
+          '-A',
+          '-t',
+          '-c',
+          "SELECT 'connect1_2'",
+        ],
+        env: baseEnv(),
+      });
+      expectConnectOk(r, /connect1_2/, 'URI ?service= + PGSERVICEFILE');
+    });
 
-    it.todo(
-      'connection with correct "service" conninfo string + PGSERVICEFILE (connect1_1) — bare conninfo strings (e.g. `service=my_srv`) are not accepted at argv[0]; runPsql only parses URIs (psql: error: unsupported scheme in URI). Adding the `service=…` conninfo-string entry point is the upstream-faithful fix.',
-    );
+    it('connection with correct "service" conninfo string + PGSERVICEFILE (connect1_1)', async () => {
+      // Upstream lines 60-64: `psql 'service=my_srv'`. Bare conninfo
+      // strings (no URI scheme) at argv[0] used to be rejected; runPsql
+      // now dispatches them through parseConninfo, which stages the
+      // service name on `_service`.
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: ['service=my_srv', '-X', '-A', '-t', '-c', "SELECT 'connect1_1'"],
+        env: baseEnv(),
+      });
+      expectConnectOk(r, /connect1_1/, 'conninfo service= + PGSERVICEFILE');
+    });
 
-    it.todo(
-      'connection with incorrect "service" string and PGSERVICEFILE — unknown service names silently fall through to env/defaults instead of emitting `definition of service "<name>" not found`. Implementation gap in `resolveLayeredConnect` (src/psql/core/startup.ts): when `serviceName` is set but `services.get(serviceName)` is undefined, the merge proceeds with no service layer rather than aborting with the libpq error. Closing this gap also closes the matching PGSERVICE-form failure.',
-    );
+    it('connection with incorrect "service" string and PGSERVICEFILE', async () => {
+      // Upstream emits `definition of service "<name>" not found` and
+      // exits non-zero. We now mirror that in resolveLayeredConnect when
+      // services.get(<name>) is undefined.
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: ['service=nonexistent_srv', '-X', '-A', '-t', '-c', 'SELECT 1'],
+        env: baseEnv(),
+      });
+      expectConnectFails(
+        r,
+        /definition of service "nonexistent_srv" not found/,
+        'unknown service via conninfo',
+      );
+    });
 
-    it.todo(
-      'connection with incorrect PGSERVICE and PGSERVICEFILE — same gap as the conninfo-string variant: unknown PGSERVICE is silently ignored. See the `resolveLayeredConnect` note above.',
-    );
+    it('connection with incorrect PGSERVICE and PGSERVICEFILE', async () => {
+      // Same gap as the conninfo variant — PGSERVICE picks up the
+      // unknown name; resolveLayeredConnect aborts with the libpq
+      // diagnostic.
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: ['', '-X', '-A', '-t', '-c', 'SELECT 1'],
+        env: { ...baseEnv(), PGSERVICE: 'nonexistent_srv' },
+      });
+      expectConnectFails(
+        r,
+        /definition of service "nonexistent_srv" not found/,
+        'unknown service via PGSERVICE',
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -225,9 +284,28 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/006_service', () => {
   // -------------------------------------------------------------------------
 
   describe('PGSERVICEFILE pointing at a missing file', () => {
-    it.todo(
-      'connection with "service" string + missing PGSERVICEFILE — our `loadPgServices` returns an empty Map on ENOENT (intentional: silently fall through the discovery chain). libpq instead emits `service file "…pg_service_missing.conf" not found` when an explicit PGSERVICEFILE does not exist. Closing this requires distinguishing "user-specified PGSERVICEFILE missing" from "any candidate missing" in `loadPgServices` and surfacing that as a connect-time error.',
-    );
+    it('connection with "service" string + missing PGSERVICEFILE', async () => {
+      // Upstream lines 95-104: explicit PGSERVICEFILE that doesn't exist
+      // is a hard failure with `service file "<path>" not found`. Now
+      // mirrored in loadPgServices, which throws when `process.env.
+      // PGSERVICEFILE` is set and the file is missing (silent ENOENT is
+      // still fine for any candidate the discovery chain landed on
+      // without the user naming it).
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: ['service=my_srv', '-X', '-A', '-t', '-c', 'SELECT 1'],
+        env: cleanPgEnv({
+          PGSERVICEFILE: srvfileMissing,
+          HOME: emptyHome,
+          PGSYSCONFDIR: emptySysconfdir,
+        }),
+      });
+      expectConnectFails(
+        r,
+        /service file ".*pg_service_missing\.conf" not found/,
+        'missing PGSERVICEFILE',
+      );
+    });
 
     // Verify the missing file path really is missing — a sanity probe.
     it('sanity: srvfileMissing path is not on disk', () => {
@@ -264,21 +342,56 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/006_service', () => {
       expectConnectOk(r, /connect2_3/, 'default pg_service.conf + PGSERVICE');
     });
 
-    it.todo(
-      'connection with "service" URI + default pg_service.conf (connect2_2) — same URI-partial port-default bug as the connect1_2 case above.',
-    );
+    it('connection with "service" URI + default pg_service.conf (connect2_2)', async () => {
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: [
+          'postgresql:///?service=my_srv',
+          '-X',
+          '-A',
+          '-t',
+          '-c',
+          "SELECT 'connect2_2'",
+        ],
+        env: baseEnv(),
+      });
+      expectConnectOk(r, /connect2_2/, 'URI ?service= + default file');
+    });
 
-    it.todo(
-      'connection with "service" conninfo string + default pg_service.conf (connect2_1) — same conninfo-string entry-point gap as connect1_1.',
-    );
+    it('connection with "service" conninfo string + default pg_service.conf (connect2_1)', async () => {
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: ['service=my_srv', '-X', '-A', '-t', '-c', "SELECT 'connect2_1'"],
+        env: baseEnv(),
+      });
+      expectConnectOk(r, /connect2_1/, 'conninfo service= + default file');
+    });
 
-    it.todo(
-      'connection with incorrect "service" string + default pg_service.conf — same unknown-service silent-fallthrough as Group 1.',
-    );
+    it('connection with incorrect "service" string + default pg_service.conf', async () => {
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: ['service=nonexistent_srv', '-X', '-A', '-t', '-c', 'SELECT 1'],
+        env: baseEnv(),
+      });
+      expectConnectFails(
+        r,
+        /definition of service "nonexistent_srv" not found/,
+        'unknown service via conninfo + default file',
+      );
+    });
 
-    it.todo(
-      'connection with incorrect PGSERVICE + default pg_service.conf — same gap as the conninfo-string variant.',
-    );
+    it('connection with incorrect PGSERVICE + default pg_service.conf', async () => {
+      const r = await runChild({
+        launcher: paths.launcher,
+        argv: ['', '-X', '-A', '-t', '-c', 'SELECT 1'],
+        env: { ...baseEnv(), PGSERVICE: 'nonexistent_srv' },
+      });
+      expectConnectFails(
+        r,
+        /definition of service "nonexistent_srv" not found/,
+        'unknown PGSERVICE + default file',
+      );
+    });
   });
 
   // -------------------------------------------------------------------------

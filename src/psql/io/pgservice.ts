@@ -170,15 +170,37 @@ const readIfExists = async (filePath: string): Promise<string | null> => {
  * Discover and parse `pg_service.conf`. Walks the candidate list returned by
  * `defaultPgServiceFilePath`, reading the first existing file.
  *
- * Resolves to an empty Map when no file is found.
+ * Resolves to an empty Map when no file is found. When the user has
+ * explicitly named a file via `$PGSERVICEFILE` and that file is missing,
+ * throws an error with the upstream wording — mirrors libpq's
+ * "service file %s not found" diagnostic (different from a silent
+ * discovery-chain miss, where each candidate may legitimately be absent).
+ *
+ * The `env` argument is exposed so tests can drive the user-specified
+ * branch without touching `process.env`. Production callers leave it
+ * defaulting to `process.env`.
  */
 export const loadPgServices = async (
   paths?: string[],
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<Map<string, ServiceEntry>> => {
-  const candidates = paths ?? defaultPgServiceFilePath();
+  const candidates = paths ?? defaultPgServiceFilePath(env);
+  const userSpecified = env.PGSERVICEFILE;
+  const userSpecifiedAbs =
+    userSpecified !== undefined && userSpecified.length > 0
+      ? userSpecified
+      : null;
   for (const p of candidates) {
     const content = await readIfExists(p);
-    if (content === null) continue;
+    if (content === null) {
+      // Hard-fail when the user explicitly named this file (via
+      // PGSERVICEFILE) and it's missing. Silent ENOENT is fine for the
+      // discovery-chain candidates the user didn't ask for.
+      if (userSpecifiedAbs !== null && p === userSpecifiedAbs) {
+        throw new Error(`service file "${p}" not found`);
+      }
+      continue;
+    }
     return parsePgServiceContent(content);
   }
   return new Map();
