@@ -706,21 +706,46 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   it('complete a GUC name — set interval<tab><tab> → intervalstyle TO (line 366)', async () => {
     await checkCompletion('set interval\t\t', /intervalstyle TO/);
   });
-  it.todo(
-    'complete a GUC enum value — iso<tab> → iso_8601 (line 370; needs GUC-value completion)',
-  );
-  it.todo(
-    'load plpgsql extension — `DO $$begin end$$ LANGUAGE plpgsql;` (line 376; setup-only, not a completion check)',
-  );
-  it.todo(
-    'complete prefix of a GUC name — set plpg<tab> → plpgsql. (line 380; needs qualified-GUC rule)',
-  );
-  it.todo(
-    'complete a qualified GUC name — var<tab><tab> → variable_conflict TO (line 382; needs qualified-GUC rule)',
-  );
-  it.todo(
-    'complete a qualified GUC enum value — USE_C<tab> → use_column (line 386; needs qualified-GUC value rule)',
-  );
+  // `set intervalstyle TO iso<tab>` resolves uniquely to `iso_8601` via the
+  // GUC enum-value rule that unnests `pg_settings.enumvals` for `intervalstyle`.
+  // Upstream chains: after the previous `set interval\t\t` left
+  // `set intervalstyle TO ` on the buffer, ` iso\t` adds the prefix and
+  // completes the value. Our spec resets the prompt every test, so we send
+  // the equivalent full keystroke sequence in one go.
+  it('complete a GUC enum value — set intervalstyle TO iso<tab> → iso_8601 (line 370)', async () => {
+    await checkCompletion('set interval\t\t iso\t', /iso_8601 /);
+  });
+  // Setup-only: `LOAD 'plpgsql'` is implicit when a `plpgsql` function runs,
+  // so `DO $$begin end$$ LANGUAGE plpgsql;` registers the `plpgsql.*` GUCs
+  // for the remainder of this session. Subsequent qualified-GUC tests
+  // depend on these settings being visible in `pg_settings`.
+  it('load plpgsql extension — DO $$begin end$$ LANGUAGE plpgsql; (line 376; setup-only)', async () => {
+    await sendCommand('DO $$begin end$$ LANGUAGE plpgsql;');
+  });
+  // `set plpg<tab>` returns multiple candidates (plpgsql.check_asserts,
+  // plpgsql.extra_errors, plpgsql.variable_conflict, …); the common prefix
+  // `plpgsql.` is inserted by the line editor, and `shouldAppendSpace`
+  // suppresses the trailing space because the candidate ends in `.`.
+  // Upstream pattern allows a `\a` bell between `plpg` and `sql`.
+  it('complete prefix of a GUC name — set plpg<tab> → plpgsql. (line 380)', async () => {
+    await checkCompletion('set plpg\t', /plpg\a?sql\./);
+  });
+  // `set plpgsql.var<tab><tab>` — first Tab resolves the unique GUC name
+  // (variable_conflict is the only plpgsql.* setting matching `var`); second
+  // Tab fires the `SET <name>` arm and appends ` TO`.
+  it('complete a qualified GUC name — set plpgsql.var<tab><tab> → variable_conflict TO (line 382)', async () => {
+    await checkCompletion('set plpgsql.var\t\t', /variable_conflict TO/);
+  });
+  // `set plpgsql.variable_conflict TO USE_C<tab>` resolves uniquely to
+  // `use_column` via the GUC enum-value rule. The catalog stores enumvals
+  // in lowercase so the pattern matches `use_column` regardless of how
+  // the user typed the prefix.
+  it('complete a qualified GUC enum value — set plpgsql.variable_conflict TO USE_C<tab> → use_column (line 386)', async () => {
+    await checkCompletion(
+      'set plpgsql.variable_conflict TO USE_C\t',
+      /use_column/,
+    );
+  });
 
   // psql variable completion (lines 392-410). `\set VERB<tab>` works
   // via our SPECIAL_VARIABLES list (VERBOSITY is in there), and
