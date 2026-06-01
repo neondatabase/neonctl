@@ -262,6 +262,15 @@ export type ConnectOptions = {
    */
   sslcrldir?: string;
   /**
+   * libpq `sslkeylogfile`: path to a file the TLS session keys are appended
+   * to (NSS key-log format) so the handshake can be decrypted in Wireshark
+   * for debugging. The wire layer attaches a `'keylog'` listener on the
+   * TLSSocket and appends each emitted line. If the path cannot be opened
+   * for append, the connection fails with
+   * `could not open sslkeylogfile "<path>": <reason>`.
+   */
+  sslkeylogfile?: string;
+  /**
    * libpq `ssl_min_protocol_version` / `ssl_max_protocol_version`: bound the
    * TLS protocol versions offered in the handshake. Accepted values mirror
    * libpq (`TLSv1`, `TLSv1.1`, `TLSv1.2`, `TLSv1.3`) and map to Node TLS

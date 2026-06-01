@@ -809,6 +809,35 @@ describe('sslrootcert=system raises sslmode to verify-full', () => {
 });
 
 // ---------------------------------------------------------------------------
+// sslkeylogfile: TLS session key-log path for debugging.
+// ---------------------------------------------------------------------------
+describe('sslkeylogfile parsing', () => {
+  it('threads sslkeylogfile from a URI', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslkeylogfile=/tmp/keys.log',
+    );
+    expect(got.sslkeylogfile).toBe('/tmp/keys.log');
+  });
+
+  it('omits sslkeylogfile when the query parameter is empty', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslkeylogfile=');
+    expect(got).not.toHaveProperty('sslkeylogfile');
+  });
+
+  it('parses sslkeylogfile from a conninfo keyword/value string', () => {
+    expect(parseConninfo('sslkeylogfile=/tmp/k.log')).toMatchObject({
+      sslkeylogfile: '/tmp/k.log',
+    });
+  });
+
+  it('maps PGSSLKEYLOGFILE onto sslkeylogfile', () => {
+    expect(
+      envConnectionDefaults({ PGSSLKEYLOGFILE: '/tmp/env-keys.log' }),
+    ).toMatchObject({ sslkeylogfile: '/tmp/env-keys.log' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // TLS protocol-version range (ssl_min/max_protocol_version).
 // ---------------------------------------------------------------------------
 describe('parseConnectionUri — ssl protocol version range', () => {

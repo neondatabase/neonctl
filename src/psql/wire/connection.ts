@@ -709,6 +709,7 @@ export class PgConnection implements Connection {
           sslrootcert: opts.sslrootcert,
           sslcrl: opts.sslcrl,
           sslcrldir: opts.sslcrldir,
+          sslkeylogfile: opts.sslkeylogfile,
         },
       );
       if (tlsResult.kind === 'tls') {
@@ -1198,6 +1199,7 @@ export class PgConnection implements Connection {
           sslrootcert: this.opts.sslrootcert,
           sslcrl: this.opts.sslcrl,
           sslcrldir: this.opts.sslcrldir,
+          sslkeylogfile: this.opts.sslkeylogfile,
         },
       );
       writeSocket = t.kind === 'tls' ? t.socket : t.socket;

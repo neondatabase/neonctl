@@ -31,7 +31,7 @@
 import type * as net from 'node:net';
 import * as tls from 'node:tls';
 import { createHash } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { promises as fs, appendFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { SSLRequest } from './protocol.js';
 
@@ -109,6 +109,15 @@ export type TlsFileOptions = {
    * file surfaces as `could not read sslcrldir "<path>": <reason>`.
    */
   sslcrldir?: string;
+  /**
+   * libpq `sslkeylogfile`: path the negotiated TLS session keys are appended
+   * to (NSS key-log format) for offline decryption while debugging. The
+   * handshake attaches a `'keylog'` listener and appends each emitted line.
+   * The path is pre-checked (opened for append) before the handshake so a
+   * bad path fails fast with `could not open sslkeylogfile "<path>":
+   * <reason>` rather than silently dropping keys.
+   */
+  sslkeylogfile?: string;
 };
 
 /**
@@ -140,6 +149,10 @@ export function computeChannelBindingData(cert: tls.PeerCertificate): Buffer {
  * (`cert` / `key` / `ca` / `crl`). Read failures bubble out as
  * `could not read ssl<…>: <message>` so the caller sees the libpq diagnostic
  * shape rather than a bare ENOENT.
+ *
+ * `fileOpts.sslkeylogfile`, when set, is pre-checked for writability here and
+ * wired to a `'keylog'` listener on the upgraded socket so TLS session keys
+ * are appended for offline decryption.
  */
 export async function negotiateTls(
   socket: net.Socket,
@@ -155,7 +168,7 @@ export async function negotiateTls(
 
   if (reply === 'S') {
     const mergedOpts = await loadTlsFileOptions(tlsOpts, fileOpts, sslMode);
-    return upgradeToTls(socket, mergedOpts);
+    return upgradeToTls(socket, mergedOpts, fileOpts.sslkeylogfile);
   }
 
   // reply === 'N': server refused TLS.
@@ -272,7 +285,32 @@ export async function loadTlsFileOptions(
     merged.passphrase = fileOpts.sslpassword;
   }
 
+  // sslkeylogfile is not a tls.connect option; the keylog listener is wired
+  // in `upgradeToTls`. We pre-check it here (the home of file diagnostics)
+  // by opening it for append, so an unwritable path fails fast at connect
+  // time with `could not open sslkeylogfile "<path>": <reason>` rather than
+  // silently dropping keys mid-handshake.
+  if (fileOpts.sslkeylogfile !== undefined && fileOpts.sslkeylogfile !== '') {
+    await assertKeyLogFileWritable(fileOpts.sslkeylogfile);
+  }
+
   return merged;
+}
+
+/**
+ * Pre-flight the `sslkeylogfile` target by opening it for append (creating
+ * it if absent) and immediately closing the handle. Surfaces libpq-style
+ * `could not open sslkeylogfile "<path>": <reason>` on any failure (e.g. an
+ * unwritable directory) before the handshake starts.
+ */
+async function assertKeyLogFileWritable(filePath: string): Promise<void> {
+  try {
+    const handle = await fs.open(filePath, 'a');
+    await handle.close();
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`could not open sslkeylogfile "${filePath}": ${reason}`);
+  }
 }
 
 async function readPem(label: string, filePath: string): Promise<Buffer> {
@@ -445,6 +483,7 @@ function getServername(tlsOpts: tls.ConnectionOptions): string | undefined {
 function upgradeToTls(
   socket: net.Socket,
   tlsOpts: tls.ConnectionOptions,
+  sslkeylogfile?: string,
 ): Promise<TlsResult> {
   return new Promise((resolve, reject) => {
     const onError = (err: Error): void => {
@@ -493,5 +532,38 @@ function upgradeToTls(
       tlsSocket.removeListener('error', onError);
     };
     tlsSocket.on('error', onError);
+
+    // libpq `sslkeylogfile`: append each emitted key-log line so the
+    // handshake can be decrypted offline. The path was pre-checked for
+    // writability in loadTlsFileOptions.
+    if (sslkeylogfile !== undefined && sslkeylogfile !== '') {
+      attachKeyLogListener(tlsSocket, sslkeylogfile);
+    }
+  });
+}
+
+/**
+ * Wire a TLSSocket's `'keylog'` event to append each emitted key-log line to
+ * `filePath`. Node emits one already-newline-terminated Buffer per event. A
+ * write that fails after the pre-check (e.g. the directory was removed
+ * mid-session) is re-emitted as a socket `'error'` rather than crashing the
+ * process.
+ *
+ * Accepts a minimal event-emitter shape so it can be unit-tested against a
+ * fake socket without a real TLS handshake. Exported for tests.
+ */
+export function attachKeyLogListener(
+  socket: {
+    on: (event: 'keylog', listener: (line: Buffer) => void) => unknown;
+    emit: (event: 'error', err: Error) => unknown;
+  },
+  filePath: string,
+): void {
+  socket.on('keylog', (line: Buffer) => {
+    try {
+      appendFileSync(filePath, line);
+    } catch (err) {
+      socket.emit('error', err instanceof Error ? err : new Error(String(err)));
+    }
   });
 }

@@ -23,6 +23,7 @@ import { Buffer } from 'node:buffer';
 import type * as tls from 'node:tls';
 
 import {
+  attachKeyLogListener,
   computeChannelBindingData,
   loadTlsFileOptions,
   mapTlsHandshakeError,
@@ -597,6 +598,80 @@ describe('loadTlsFileOptions', () => {
     } finally {
       if (saved === undefined) delete process.env.SSL_CERT_FILE;
       else process.env.SSL_CERT_FILE = saved;
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // sslkeylogfile: pre-checked for writability at connect time.
+  // -------------------------------------------------------------------------
+  test('sslkeylogfile pre-check accepts a writable path', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-klf-'));
+    try {
+      const klf = path.join(dir, 'keys.log');
+      await expect(
+        loadTlsFileOptions({}, { sslkeylogfile: klf }),
+      ).resolves.toBeDefined();
+      // The pre-check opens the file for append, creating it.
+      expect(fs.existsSync(klf)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('sslkeylogfile in an unwritable dir surfaces "could not open"', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-klf-'));
+    try {
+      // A path whose parent directory does not exist cannot be opened.
+      const klf = path.join(dir, 'no-such-subdir', 'keys.log');
+      await expect(
+        loadTlsFileOptions({}, { sslkeylogfile: klf }),
+      ).rejects.toThrow(/could not open sslkeylogfile ".*keys\.log"/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// attachKeyLogListener: append each emitted keylog line to the target file.
+// ---------------------------------------------------------------------------
+describe('attachKeyLogListener', () => {
+  test('appends each keylog line to the file in order', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-klf-'));
+    try {
+      const klf = path.join(dir, 'keys.log');
+      const emitter = new EventEmitter();
+      attachKeyLogListener(
+        emitter as unknown as Parameters<typeof attachKeyLogListener>[0],
+        klf,
+      );
+      emitter.emit('keylog', Buffer.from('CLIENT_RANDOM aaa 111\n'));
+      emitter.emit('keylog', Buffer.from('CLIENT_RANDOM bbb 222\n'));
+      const contents = fs.readFileSync(klf, 'utf8');
+      expect(contents).toBe('CLIENT_RANDOM aaa 111\nCLIENT_RANDOM bbb 222\n');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('re-emits a socket error when the append fails', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-klf-'));
+    try {
+      // Target a path under a file (not a directory) so appendFileSync throws.
+      const notADir = path.join(dir, 'a-file');
+      fs.writeFileSync(notADir, 'x');
+      const klf = path.join(notADir, 'keys.log');
+      const emitter = new EventEmitter();
+      const errors: Error[] = [];
+      emitter.on('error', (e: Error) => errors.push(e));
+      attachKeyLogListener(
+        emitter as unknown as Parameters<typeof attachKeyLogListener>[0],
+        klf,
+      );
+      emitter.emit('keylog', Buffer.from('CLIENT_RANDOM aaa 111\n'));
+      expect(errors).toHaveLength(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

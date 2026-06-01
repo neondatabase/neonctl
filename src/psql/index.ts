@@ -422,6 +422,7 @@ const KNOWN_QUERY_KEYS = new Set([
   'sslrootcert',
   'sslcrl',
   'sslcrldir',
+  'sslkeylogfile',
   'sslsni',
   'requirepeer',
   'ssl_min_protocol_version',
@@ -723,6 +724,7 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
   const sslcrl = nonEmpty(raw.query.get('sslcrl'));
   const sslcrldir = nonEmpty(raw.query.get('sslcrldir'));
+  const sslkeylogfile = nonEmpty(raw.query.get('sslkeylogfile'));
 
   // libpq: `sslrootcert=system` raises the effective sslmode to verify-full.
   // verify-full is the strongest mode, so this only ever raises it.
@@ -766,6 +768,7 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     ...(sslrootcert !== undefined ? { sslrootcert } : {}),
     ...(sslcrl !== undefined ? { sslcrl } : {}),
     ...(sslcrldir !== undefined ? { sslcrldir } : {}),
+    ...(sslkeylogfile !== undefined ? { sslkeylogfile } : {}),
     ...(sslMinProtocolVersion !== undefined ? { sslMinProtocolVersion } : {}),
     ...(sslMaxProtocolVersion !== undefined ? { sslMaxProtocolVersion } : {}),
   };
@@ -1098,6 +1101,9 @@ const applyConninfoPair = (
       return;
     case 'sslcrldir':
       if (value !== '') out.sslcrldir = value;
+      return;
+    case 'sslkeylogfile':
+      if (value !== '') out.sslkeylogfile = value;
       return;
     case 'hostaddr':
       if (value !== '') out.hostaddr = value;
@@ -1537,6 +1543,8 @@ export const parseConnectionUriPartial = (
   if (sslcrl !== undefined) out.sslcrl = sslcrl;
   const sslcrldir = nonEmpty(raw.query.get('sslcrldir'));
   if (sslcrldir !== undefined) out.sslcrldir = sslcrldir;
+  const sslkeylogfile = nonEmpty(raw.query.get('sslkeylogfile'));
+  if (sslkeylogfile !== undefined) out.sslkeylogfile = sslkeylogfile;
   const hostaddr = nonEmpty(raw.query.get('hostaddr'));
   if (hostaddr !== undefined) out.hostaddr = hostaddr;
   const sslMin = normalizeTlsProtocolVersion(
@@ -1584,6 +1592,7 @@ const PG_ENV_FIELD_MAP: Readonly<Record<string, keyof ConnectOptions>> = {
   PGSSLCERTMODE: 'sslcertmode',
   PGSSLCRL: 'sslcrl',
   PGSSLCRLDIR: 'sslcrldir',
+  PGSSLKEYLOGFILE: 'sslkeylogfile',
   PGCHANNELBINDING: 'channelBinding',
 };
 
@@ -1686,6 +1695,9 @@ const applyEnvValue = (
       return;
     case 'sslcrldir':
       out.sslcrldir = value;
+      return;
+    case 'sslkeylogfile':
+      out.sslkeylogfile = value;
       return;
     case 'hostaddr':
       out.hostaddr = value;
@@ -1801,6 +1813,9 @@ export const serviceEntryToConnectOptions = (
         break;
       case 'sslcrldir':
         if (v !== '') out.sslcrldir = v;
+        break;
+      case 'sslkeylogfile':
+        if (v !== '') out.sslkeylogfile = v;
         break;
       case 'hostaddr':
         if (v !== '') out.hostaddr = v;
