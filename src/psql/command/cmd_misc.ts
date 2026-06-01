@@ -6,9 +6,10 @@
  * standalone "do one thing" commands (e.g. `\dconfig`, `\sf+`, `\watch+`)
  * can land here without spinning up a new module per command.
  *
- * TODO: when adding new misc commands, register them in
- * {@link registerMiscCommands} and re-export the spec from this file so
- * tests can drive them in isolation.
+ * Convention for adding a misc command: export its {@link BackslashCmdSpec}
+ * (so tests can drive it in isolation) and add a `registry.register(...)` line
+ * in {@link registerMiscCommands} below — `cmdCrosstabview` is the worked
+ * example.
  */
 
 import type {

@@ -256,6 +256,33 @@ const corpus: CorpusCase[] = [
     expectedFinalKind: 'eof', // beginDepth > 0 doesn't open a quote/paren/etc
   },
 
+  // --- Plain-string ("legacy") CREATE FUNCTION bodies ---
+  // The pre-SQL-standard idiom puts the function body in a single-quoted
+  // (or dollar-quoted) string literal: `CREATE FUNCTION ... AS '...body...'`.
+  // The scanner header (see `sql.ts`, `<xq>`/`<xdolq>` mapping) handles these
+  // through the ordinary quote-state machine, so semicolons embedded in the
+  // body are swallowed by the quoted run and never terminate the surrounding
+  // CREATE. These cases pin that behaviour so it can't silently regress; the
+  // `begin_depth` machinery above is only needed for *unquoted* SQL-standard
+  // bodies (`BEGIN ATOMIC ... END`).
+  {
+    name: 'plain single-quoted SQL function body with embedded ;',
+    input:
+      "CREATE FUNCTION add(integer, integer) RETURNS integer AS 'select $1 + $2;' LANGUAGE SQL;",
+    expectedSplits: [
+      "CREATE FUNCTION add(integer, integer) RETURNS integer AS 'select $1 + $2;' LANGUAGE SQL;",
+    ],
+  },
+  {
+    name: 'plain single-quoted plpgsql body with multiple embedded ;',
+    input:
+      "CREATE FUNCTION f() RETURNS int AS 'BEGIN; x := 1; RETURN x; END;' LANGUAGE plpgsql;\nSELECT f();",
+    expectedSplits: [
+      "CREATE FUNCTION f() RETURNS int AS 'BEGIN; x := 1; RETURN x; END;' LANGUAGE plpgsql;",
+      '\nSELECT f();',
+    ],
+  },
+
   // --- Multi-line ---
   {
     name: 'multi-line single statement',

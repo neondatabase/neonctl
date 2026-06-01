@@ -28,7 +28,7 @@
  *            statement-boundary purposes only the surrounding quote characters matter —
  *            no escapes inside them affect whether the closing quote is found.
  *
- * What's deliberately out of scope (with TODOs):
+ * What's deliberately out of scope:
  *
  *  - `COPY … FROM STDIN` data-line handling. Upstream's `<xcopy>` state is
  *    **mainloop-owned, not scanner-owned**: once libpq returns `PGRES_COPY_IN`
@@ -51,14 +51,27 @@
  *    `varLookup` is supplied (legacy call site or `\set NEW :OLD` chains
  *    that should keep the literal), no substitution happens.
  *  - Tab-completion helpers (`psqlscan_test_*`). Not needed for the REPL.
- *  - PG's `BEGIN … END` block tracking for function bodies (`begin_depth`). Upstream
- *    uses it so that `;` inside a function body doesn't terminate the surrounding
- *    `CREATE FUNCTION` statement; the modern idiom is to use dollar-quoting for
- *    function bodies (which we **do** support). Plain-string function bodies with
- *    embedded `;`s are an uncommon legacy shape — track in `// TODO(WP-04-followup)`.
  *  - U&'…' and U&"…" Unicode-escape forms — folded into the standard quoted paths;
  *    the `u&` prefix is treated as two identifier characters and the following quote
  *    starts the regular quoted run. Boundary detection is unaffected.
+ *
+ * CREATE FUNCTION / PROCEDURE bodies (fully handled — noted here because the
+ * surrounding flex machinery can make it look like an open question):
+ *
+ *  - All three body shapes split correctly, so an embedded `;` never terminates
+ *    the surrounding CREATE:
+ *      • dollar-quoted bodies (`AS $$…$$`) — the modern idiom — via `<xdolq>`;
+ *      • plain single-quoted bodies (`AS '…'`) — the pre-SQL-standard legacy
+ *        idiom — via `<xq>` (the quote-state machine swallows the body, `;`s
+ *        and all, with no special-casing required);
+ *      • unquoted SQL-standard bodies (`BEGIN ATOMIC … END`, PG14+) — via the
+ *        `begin_depth` tracking implemented in {@link maybeTrackBeginEnd}, which
+ *        mirrors upstream's `begin_depth` counter.
+ *    The first two are covered by the quote machine and the third by
+ *    `begin_depth`; together they span every body form a real query writes —
+ *    there is no remaining "legacy shape" gap here. Pinned by the
+ *    "Plain-string … CREATE FUNCTION bodies" and "BEGIN ATOMIC" corpus cases
+ *    in `sql.test.ts`.
  *
  * Incremental API:
  *
