@@ -1220,8 +1220,17 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
         parseConnectionUri('postgresql://h/db?ssl_min_protocol_version=TLSv9'),
       ).toThrow(/ssl_min_protocol_version/);
     });
-    it.skip('server fails to restart with min > max protocol versions', () => {
-      /* unreachable — server-side restart not in our scope */
+    // Client analog of upstream's "restart fails with incorrect SSL
+    // protocol bounds": `ssl_min/max_protocol_version` are libpq CLIENT
+    // params too, and libpq rejects an inverted range client-side before
+    // connecting. Our parser does the same — assert via the built parser.
+    it('client rejects ssl_min_protocol_version > ssl_max_protocol_version', async () => {
+      const parseConnectionUri = await loadParseUri();
+      expect(() =>
+        parseConnectionUri(
+          'postgresql://h/db?ssl_min_protocol_version=TLSv1.2&ssl_max_protocol_version=TLSv1.1',
+        ),
+      ).toThrow(/ssl_min_protocol_version must be <= ssl_max_protocol_version/);
     });
   });
 
@@ -1383,9 +1392,31 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     });
   });
 
-  describe('SKIPPED: server-side passphrase_cmd (server config, not wire layer)', () => {
-    it.skip('server-side password-protected key restart succeeds with passphrase_cmd', () => {
-      /* unreachable — fixture does not configure ssl_passphrase_command */
+  // Password-protected key — the CLIENT analog of upstream's server
+  // `passphrase_cmd` test. `sslpassword` is a libpq CLIENT param (the
+  // passphrase for the client's own encrypted private key). The
+  // correct-passphrase success and wrong-passphrase "bad decrypt" cases are
+  // covered in the cert-auth group above; here we add the missing case: an
+  // encrypted client key with NO passphrase supplied cannot be loaded, so
+  // the connection fails (mirrors a server that can't unlock its key).
+  describe('password-protected client key (sslpassword)', () => {
+    it('encrypted client key without sslpassword fails to load', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const encryptedKey = client.encryptedKey;
+      if (encryptedKey === undefined) {
+        throw new Error('fixture did not produce encrypted ssltestuser key');
+      }
+      const conn = await tryConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: client.cert,
+        sslkey: encryptedKey,
+        // sslpassword intentionally omitted.
+      });
+      expect(conn).toBeNull();
     });
   });
 
