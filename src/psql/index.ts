@@ -1,4 +1,4 @@
-import type { ConnectOptions } from './types/connection.js';
+import type { ConnectOptions, RequireAuthMethod } from './types/connection.js';
 import type { REPLContext, Stdio } from './types/repl.js';
 import type { StartupAction } from './core/startup.js';
 
@@ -404,6 +404,7 @@ const KNOWN_QUERY_KEYS = new Set([
   'password',
   'passfile',
   'channel_binding',
+  'require_auth',
   'connect_timeout',
   'client_encoding',
   'options',
@@ -1001,6 +1002,11 @@ const applyConninfoPair = (
       if (cb !== undefined) out.channelBinding = cb;
       return;
     }
+    case 'require_auth': {
+      const ra = normalizeRequireAuth(value);
+      if (ra !== undefined) out.requireAuth = ra;
+      return;
+    }
     case 'connect_timeout': {
       const t = Number.parseInt(value, 10);
       if (Number.isFinite(t) && t >= 0) {
@@ -1119,6 +1125,56 @@ const normalizeChannelBinding = (
       // returns `undefined` above so the wire-layer default applies.
       throw new Error(`invalid channel_binding value: "${raw}"`);
   }
+};
+
+const VALID_REQUIRE_AUTH_METHODS = new Set<RequireAuthMethod>([
+  'password',
+  'md5',
+  'gss',
+  'sspi',
+  'scram-sha-256',
+  'creds',
+  'none',
+]);
+
+/**
+ * Parse libpq's `require_auth` value: a comma-separated list of method
+ * names where each entry may be prefixed with `!` to negate. Mixing
+ * positive and negative entries is forbidden (libpq matches this).
+ *
+ * Returns `undefined` for empty input so the wire-layer default applies.
+ * Throws on invalid syntax with libpq-parity wording, surfaced via the
+ * outer `psql: error: ...` channel.
+ */
+const normalizeRequireAuth = (
+  raw: string | null,
+): ConnectOptions['requireAuth'] => {
+  if (raw === null || raw === '') return undefined;
+  const tokens = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (tokens.length === 0) return undefined;
+  const methods = new Set<RequireAuthMethod>();
+  let polarity: boolean | null = null;
+  for (const token of tokens) {
+    const isNeg = token.startsWith('!');
+    const name = (isNeg ? token.slice(1) : token).toLowerCase();
+    if (!VALID_REQUIRE_AUTH_METHODS.has(name as RequireAuthMethod)) {
+      throw new Error(`invalid require_auth method: "${token}"`);
+    }
+    if (polarity === null) {
+      polarity = isNeg;
+    } else if (polarity !== isNeg) {
+      // libpq wording: "negative require_auth method ... cannot be mixed
+      // with non-negative methods". We use a slightly shorter form here.
+      throw new Error(
+        'require_auth methods cannot mix positive and negative entries',
+      );
+    }
+    methods.add(name as RequireAuthMethod);
+  }
+  return { methods, negated: polarity ?? false };
 };
 
 /**
@@ -1305,6 +1361,9 @@ export const parseConnectionUriPartial = (
 
   const cb = normalizeChannelBinding(raw.query.get('channel_binding') ?? null);
   if (cb !== undefined) out.channelBinding = cb;
+
+  const ra = normalizeRequireAuth(raw.query.get('require_auth') ?? null);
+  if (ra !== undefined) out.requireAuth = ra;
 
   const options = raw.query.get('options');
   if (options !== undefined && options !== '') out.options = options;
@@ -1538,6 +1597,11 @@ export const serviceEntryToConnectOptions = (
       case 'channel_binding': {
         const cb = normalizeChannelBinding(v);
         if (cb !== undefined) out.channelBinding = cb;
+        break;
+      }
+      case 'require_auth': {
+        const ra = normalizeRequireAuth(v);
+        if (ra !== undefined) out.requireAuth = ra;
         break;
       }
       case 'options':

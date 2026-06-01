@@ -145,6 +145,35 @@ export type Connection = {
   isClosed(): boolean;
 };
 
+/**
+ * Authentication method names recognised by libpq's `require_auth`
+ * parameter. We accept all of libpq's set as input even though some
+ * (`gss`, `sspi`, `creds`) are never satisfiable in our wire layer —
+ * keeps URI parsing portable across libpq-built environments.
+ */
+export type RequireAuthMethod =
+  | 'password'
+  | 'md5'
+  | 'gss'
+  | 'sspi'
+  | 'scram-sha-256'
+  | 'creds'
+  | 'none';
+
+/**
+ * Parsed form of libpq's `require_auth` connection parameter.
+ *
+ * libpq forbids mixing positive and negative entries in the same value,
+ * which gives this two-field representation: a `methods` set plus a
+ * single `negated` flag. `negated=false` means "server must request a
+ * method in this set"; `negated=true` means "server must NOT request any
+ * method in this set".
+ */
+export type RequireAuthPolicy = {
+  methods: ReadonlySet<RequireAuthMethod>;
+  negated: boolean;
+};
+
 export type ConnectOptions = {
   /**
    * Host to connect to. Either a TCP hostname / IP, or — if the value
@@ -160,6 +189,14 @@ export type ConnectOptions = {
   applicationName?: string;
   ssl: 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
   channelBinding?: 'disable' | 'prefer' | 'require';
+  /**
+   * libpq `require_auth`: restrict the set of authentication methods the
+   * server is permitted to ask for. Each entry is a canonical method name
+   * (lowercase). When `negated` is true, the set is interpreted as a deny
+   * list (entries originally had `!` prefixes); otherwise it's an allow
+   * list. Set to `undefined` to disable the check entirely (libpq default).
+   */
+  requireAuth?: RequireAuthPolicy;
   connectTimeoutMs?: number;
   clientEncoding?: string;
   options?: string;
