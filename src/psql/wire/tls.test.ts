@@ -952,6 +952,36 @@ describe('mapTlsHandshakeError', () => {
     const err = Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' });
     expect(mapTlsHandshakeError(err, 'h')).toBe(err);
   });
+
+  test('maps ERR_OSSL_BAD_DECRYPT to libpq private-key-file wording with path', () => {
+    const err = Object.assign(
+      new Error('error:1C800064:Provider routines::bad decrypt'),
+      { code: 'ERR_OSSL_BAD_DECRYPT' },
+    );
+    const mapped = mapTlsHandshakeError(err, 'h', '/keys/client.key');
+    expect(mapped.message).toBe(
+      'could not load private key file "/keys/client.key": error:1C800064:Provider routines::bad decrypt',
+    );
+    // The libpq-asserted `bad decrypt` token survives in the message tail.
+    expect(mapped.message).toMatch(/private key file ".*".*bad decrypt/);
+    expect((mapped as Error & { cause?: unknown }).cause).toBe(err);
+  });
+
+  test('maps a bad-decrypt message even without an OpenSSL error code', () => {
+    const err = new Error('something something bad decrypt failure');
+    const mapped = mapTlsHandshakeError(err, undefined, '/k.key');
+    expect(mapped.message).toBe(
+      'could not load private key file "/k.key": something something bad decrypt failure',
+    );
+  });
+
+  test('bad-decrypt mapping omits the path segment when keyPath is unknown', () => {
+    const err = Object.assign(new Error('bad decrypt'), {
+      code: 'ERR_OSSL_BAD_DECRYPT',
+    });
+    const mapped = mapTlsHandshakeError(err);
+    expect(mapped.message).toBe('could not load private key file: bad decrypt');
+  });
 });
 
 // ---------------------------------------------------------------------------

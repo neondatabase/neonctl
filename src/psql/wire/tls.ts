@@ -195,14 +195,24 @@ export async function negotiateTls(
   // encrypted mode — never falling back to plaintext.
   if (negotiation === 'direct') {
     const mergedOpts = await loadTlsFileOptions(tlsOpts, fileOpts, sslMode);
-    return upgradeToTls(socket, mergedOpts, fileOpts.sslkeylogfile);
+    return upgradeToTls(
+      socket,
+      mergedOpts,
+      fileOpts.sslkeylogfile,
+      fileOpts.sslkey,
+    );
   }
 
   const reply = await sendSslRequest(socket);
 
   if (reply === 'S') {
     const mergedOpts = await loadTlsFileOptions(tlsOpts, fileOpts, sslMode);
-    return upgradeToTls(socket, mergedOpts, fileOpts.sslkeylogfile);
+    return upgradeToTls(
+      socket,
+      mergedOpts,
+      fileOpts.sslkeylogfile,
+      fileOpts.sslkey,
+    );
   }
 
   // reply === 'N': server refused TLS.
@@ -570,15 +580,39 @@ export function sendSslRequest(socket: net.Socket): Promise<'S' | 'N'> {
  *   - Hostname mismatch (`ERR_TLS_CERT_ALTNAME_INVALID`, Node's
  *     "Hostname/IP does not match certificate's altnames") →
  *     `server certificate for "<host>" does not match host name "<host>"`.
- *   - Encrypted-key decrypt failures (`error:...:bad decrypt`) are already
- *     phrased with "bad decrypt"; we leave the OpenSSL text intact since it
- *     already contains the libpq-asserted token.
+ *   - Encrypted-key decrypt failures (`ERR_OSSL_BAD_DECRYPT`, or an OpenSSL
+ *     message containing `bad decrypt`) → libpq's
+ *     `could not load private key file "<path>": <openssl text>` shape. The
+ *     raw OpenSSL text (which carries the `bad decrypt` token upstream's
+ *     `001_ssltests.pl` matches on) is preserved in the message tail. When the
+ *     key path is unknown the path segment is omitted but the `bad decrypt`
+ *     token is still surfaced.
+ *
+ * `keyPath`, when supplied, is the configured `sslkey` path — used only to
+ * fill libpq's `private key file "<path>"` phrasing on a decrypt failure.
  *
  * Exported for unit tests.
  */
-export function mapTlsHandshakeError(err: Error, servername?: string): Error {
+export function mapTlsHandshakeError(
+  err: Error,
+  servername?: string,
+  keyPath?: string,
+): Error {
   const code = (err as NodeJS.ErrnoException).code;
   const msg = err.message;
+
+  // Encrypted client-key decrypt failure (wrong / missing `sslpassword`).
+  // OpenSSL throws this synchronously out of `tls.connect`; reshape it to
+  // libpq's `could not load private key file "<path>": ... bad decrypt`.
+  if (code === 'ERR_OSSL_BAD_DECRYPT' || /bad decrypt/i.test(msg)) {
+    const where =
+      keyPath !== undefined && keyPath !== ''
+        ? `private key file "${keyPath}"`
+        : 'private key file';
+    const mapped = new Error(`could not load ${where}: ${msg}`);
+    (mapped as Error & { cause?: unknown }).cause = err;
+    return mapped;
+  }
 
   if (code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
     const host = servername ?? '';
@@ -619,53 +653,77 @@ function upgradeToTls(
   socket: net.Socket,
   tlsOpts: tls.ConnectionOptions,
   sslkeylogfile?: string,
+  keyPath?: string,
 ): Promise<TlsResult> {
   return new Promise((resolve, reject) => {
+    let tlsSocket: tls.TLSSocket | undefined;
+    const cleanup = (): void => {
+      tlsSocket?.removeListener('error', onError);
+    };
     const onError = (err: Error): void => {
       cleanup();
-      reject(mapTlsHandshakeError(err, getServername(tlsOpts)));
+      reject(mapTlsHandshakeError(err, getServername(tlsOpts), keyPath));
     };
-    const tlsSocket = tls.connect(
-      {
-        ...tlsOpts,
-        socket,
-      },
-      () => {
-        cleanup();
-        let channelBindingData: Buffer | null = null;
-        try {
-          // Prefer the modern X509Certificate API (Node 15.6+): it returns a
-          // proper `X509Certificate` instance whose `.raw` is the DER-encoded
-          // cert. Falls back to the legacy `getPeerCertificate(true)` for
-          // compatibility.
-          const x509 = (
-            tlsSocket as unknown as {
-              getPeerX509Certificate?: () => { raw: Buffer } | undefined;
+    // OpenSSL surfaces an un-decryptable client key (wrong / missing
+    // `sslpassword`) by throwing synchronously out of `tls.connect` rather
+    // than emitting `'error'`. Catch it here so it flows through the same
+    // libpq-wording mapper as asynchronous handshake failures.
+    try {
+      tlsSocket = tls.connect(
+        {
+          ...tlsOpts,
+          socket,
+        },
+        () => {
+          cleanup();
+          // `tlsSocket` is always assigned by the time this async handshake
+          // callback fires (tls.connect returns it synchronously above); the
+          // guard simply narrows the `| undefined` for the type checker.
+          const established = tlsSocket;
+          if (established === undefined) return;
+          let channelBindingData: Buffer | null = null;
+          try {
+            // Prefer the modern X509Certificate API (Node 15.6+): it returns a
+            // proper `X509Certificate` instance whose `.raw` is the
+            // DER-encoded cert. Falls back to the legacy
+            // `getPeerCertificate(true)` for compatibility.
+            const x509 = (
+              established as unknown as {
+                getPeerX509Certificate?: () => { raw: Buffer } | undefined;
+              }
+            ).getPeerX509Certificate?.();
+            if (x509?.raw && x509.raw.length > 0) {
+              channelBindingData = createHash('sha256')
+                .update(x509.raw)
+                .digest();
+            } else {
+              // `detailed = true` gets us the full peer cert chain. Some
+              // Node/OpenSSL combinations leave `.raw` undefined on the legacy
+              // API when `rejectUnauthorized: false`; in that case we have to
+              // accept that channel binding is unavailable.
+              const peerCert = established.getPeerCertificate(true);
+              if (peerCert?.raw && peerCert.raw.length > 0) {
+                channelBindingData = computeChannelBindingData(peerCert);
+              }
             }
-          ).getPeerX509Certificate?.();
-          if (x509?.raw && x509.raw.length > 0) {
-            channelBindingData = createHash('sha256').update(x509.raw).digest();
-          } else {
-            // `detailed = true` gets us the full peer cert chain. Some
-            // Node/OpenSSL combinations leave `.raw` undefined on the legacy
-            // API when `rejectUnauthorized: false`; in that case we have to
-            // accept that channel binding is unavailable.
-            const peerCert = tlsSocket.getPeerCertificate(true);
-            if (peerCert?.raw && peerCert.raw.length > 0) {
-              channelBindingData = computeChannelBindingData(peerCert);
-            }
+          } catch {
+            // Best-effort: a missing peer cert => no channel binding. SASL
+            // path will fall back to SCRAM-SHA-256 (non-PLUS).
+            channelBindingData = null;
           }
-        } catch {
-          // Best-effort: a missing peer cert => no channel binding. SASL
-          // path will fall back to SCRAM-SHA-256 (non-PLUS).
-          channelBindingData = null;
-        }
-        resolve({ kind: 'tls', socket: tlsSocket, channelBindingData });
-      },
-    );
-    const cleanup = (): void => {
-      tlsSocket.removeListener('error', onError);
-    };
+          resolve({ kind: 'tls', socket: established, channelBindingData });
+        },
+      );
+    } catch (err) {
+      reject(
+        mapTlsHandshakeError(
+          err instanceof Error ? err : new Error(String(err)),
+          getServername(tlsOpts),
+          keyPath,
+        ),
+      );
+      return;
+    }
     tlsSocket.on('error', onError);
 
     // libpq `sslkeylogfile`: append each emitted key-log line so the
