@@ -5,29 +5,31 @@
 //
 // What this spec verifies
 // ---------------------------------------------------------------------------
-// SCRAM authentication combined with TLS channel binding. Concretely:
+// SCRAM authentication combined with TLS channel binding and
+// `require_auth`. Concretely:
 //
-//   1. `channel_binding=invalid_value` is rejected at URI/conninfo parse
-//      time (libpq parity: `invalid channel_binding value: "..."`).
-//   2. SCRAM-SHA-256 over SSL with `channel_binding=disable` succeeds —
-//      the auth layer falls back to plain SCRAM-SHA-256 and ignores
-//      channel binding entirely.
-//   3. SCRAM-SHA-256 over SSL with `channel_binding=require` succeeds —
-//      the auth layer negotiates SCRAM-SHA-256-PLUS with the
-//      `tls-server-end-point` binding type and the handshake completes.
-//   4. MD5 over SSL with `channel_binding=require` fails — MD5 cannot
-//      channel-bind, so a require-mode client must error out.
-//   5. Cert authentication + `channel_binding=require` succeeds (the
-//      `cert` HBA method skips password auth entirely; channel binding
-//      is moot but the connection should not error on the flag).
-//
-// What's deferred (`it.todo`)
-// ---------------------------------------------------------------------------
-//   * `require_auth=<method>` combinations — our wire layer has no
-//     `require_auth` plumbing yet. Engine gap, not test gap.
-//   * RSA-PSS server cert + channel binding — `X509_get_signature_info`
-//     branch in libpq, exercises a different OpenSSL surface. Out of
-//     scope for now.
+//   1. `channel_binding=invalid_value` rejected at URI/conninfo parse
+//      (libpq parity: `invalid channel_binding value: "..."`).
+//   2. SCRAM-SHA-256 + SSL + `channel_binding=disable` connects (plain
+//      SCRAM, no PLUS).
+//   3. SCRAM-SHA-256 + SSL + `channel_binding=require` connects
+//      (auto-negotiates SCRAM-SHA-256-PLUS, `tls-server-end-point`).
+//   4. MD5 + SSL + `channel_binding=require` FAILS — libpq wording:
+//      "channel binding required but not supported by server's
+//      authentication request".
+//   5. cert auth + SSL + `channel_binding=require` FAILS — libpq wording:
+//      "channel binding required, but server authenticated client
+//      without channel binding" (the `cert` HBA method skips SASL
+//      entirely, so cb=require has nothing to attach to).
+//   6. `require_auth=scram-sha-256` + `channel_binding=disable` connects.
+//   7. `require_auth=md5` (satisfied) + `channel_binding=require` FAILS
+//      with the cb wording — cb check fires before require_auth would
+//      have been validated, so the cb error wins.
+//   8. `require_auth=scram-sha-256` + `channel_binding=require` connects.
+//   9. SCRAM + SSL + `channel_binding=require` against an RSA-PSS server
+//      cert connects (upstream bug #17760 / HAVE_X509_GET_SIGNATURE_INFO
+//      branch — we mint an rsassaPss leaf in CertVault and swap the
+//      active cert at runtime).
 //
 // What's covered by sibling unit tests (NOT re-run here)
 // ---------------------------------------------------------------------------
@@ -39,8 +41,9 @@
 // Fixture
 // ---------------------------------------------------------------------------
 // Uses the shared `pg-fixture-tls.ts` container. Two additional users
-// (`scramuser`, `md5user`) and matching `hostssl` HBA rules were added
-// to that fixture in this PR — see the INIT_SQL block there.
+// (`scramuser`, `md5user`) and matching `hostssl` HBA rules are wired
+// into that fixture, along with an RSA-PSS server leaf cert (`pss`) in
+// the CertVault.
 
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -51,6 +54,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   isOpensslAvailable,
   setupTlsPg,
+  switchServerCertSql,
   teardownTlsPg,
   type TlsPgConn,
 } from '../harness/pg-fixture-tls.js';
@@ -83,6 +87,12 @@ type WireOpts = {
   database: string;
   ssl: 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
   channelBinding?: 'disable' | 'prefer' | 'require';
+  /**
+   * Structural mirror of `RequireAuthPolicy` from the wire types — kept
+   * inline so the conformance tsconfig doesn't need to extend its
+   * rootDir into src/.
+   */
+  requireAuth?: { methods: ReadonlySet<string>; negated: boolean };
   sslcert?: string;
   sslkey?: string;
   sslrootcert?: string;
@@ -241,14 +251,12 @@ describe.skipIf(!SHOULD_RUN)('tap/002_scram', () => {
   // -------------------------------------------------------------------------
   // 4. MD5 + SSL + channel_binding=require fails.
   //
-  //    MD5 has no channel-binding capability. The client must reject
-  //    instead of silently downgrading. Upstream asserts a specific
-  //    error pattern; we assert the connection FAILED — the engine's
-  //    diagnostic wording may differ from libpq's verbatim ("channel
-  //    binding required but not supported by server's authentication
-  //    request"), so we don't pin the exact string.
+  //    MD5 has no channel-binding capability. With cb=require the client
+  //    must refuse the AuthenticationMD5Password request before sending
+  //    credentials. Upstream wording (asserted verbatim): "channel binding
+  //    required but not supported by server's authentication request".
   // -------------------------------------------------------------------------
-  it('MD5 + SSL + channel_binding=require fails', async () => {
+  it('MD5 + SSL + channel_binding=require fails with libpq wording', async () => {
     const wire = await loadWire();
     const t = ensureTls();
     await expect(
@@ -261,33 +269,66 @@ describe.skipIf(!SHOULD_RUN)('tap/002_scram', () => {
         ssl: 'require',
         channelBinding: 'require',
       }),
-    ).rejects.toBeInstanceOf(Error);
+    ).rejects.toThrow(
+      /channel binding required but not supported by server's authentication request/,
+    );
   });
 
   // -------------------------------------------------------------------------
-  // 5. Cert auth + channel_binding=require succeeds.
+  // 5. Cert auth + channel_binding=require FAILS (upstream parity).
   //
-  //    The `cert` HBA method (clientcert=verify-full) skips password
-  //    authentication entirely — channel binding has no SCRAM flow to
-  //    attach to. The connection should NOT error on the flag.
+  //    The `cert` HBA method (clientcert=verify-full) authenticates the
+  //    client via the TLS-layer cert and the server sends AuthenticationOk
+  //    without any SASL exchange. With cb=require the client must refuse —
+  //    no SCRAM channel binding actually took place. Upstream wording:
+  //    "channel binding required, but server authenticated client without
+  //    channel binding" (note the comma — libpq has it, MD5 wording does
+  //    not).
   // -------------------------------------------------------------------------
-  it('cert auth + SSL + channel_binding=require succeeds', async () => {
+  it('cert auth + SSL + channel_binding=require fails (no SCRAM took place)', async () => {
     const wire = await loadWire();
     const t = ensureTls();
     const userCert = t.vault.getClientCert('ssltestuser');
+    await expect(
+      wire.PgConnection.connect({
+        host: t.host,
+        port: t.port,
+        user: 'ssltestuser',
+        database: t.db,
+        ssl: 'require',
+        sslcert: userCert.cert,
+        sslkey: userCert.key,
+        sslrootcert: t.vault.getRootServerBundle(),
+        channelBinding: 'require',
+      }),
+    ).rejects.toThrow(
+      /channel binding required, but server authenticated client without channel binding/,
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // 6. require_auth=scram-sha-256 + channel_binding=disable connects.
+  //
+  //    require_auth=scram-sha-256 demands a SASL exchange; the server
+  //    sends AuthenticationSASL for scramuser, the wire-level check
+  //    permits it, channel binding is opted out, and the plain SCRAM
+  //    handshake completes.
+  // -------------------------------------------------------------------------
+  it('require_auth=scram-sha-256 + channel_binding=disable connects', async () => {
+    const wire = await loadWire();
+    const t = ensureTls();
     const conn = await wire.PgConnection.connect({
       host: t.host,
       port: t.port,
-      user: 'ssltestuser',
+      user: 'scramuser',
+      password: 'pencil',
       database: t.db,
       ssl: 'require',
-      sslcert: userCert.cert,
-      sslkey: userCert.key,
-      sslrootcert: t.vault.getRootServerBundle(),
-      channelBinding: 'require',
+      channelBinding: 'disable',
+      requireAuth: { methods: new Set(['scram-sha-256']), negated: false },
     });
     try {
-      const rs = await conn.execSimple("SELECT 'cert-require'");
+      const rs = await conn.execSimple("SELECT 'scram-require-auth-disable'");
       expect(rs.length).toBeGreaterThan(0);
     } finally {
       await conn.close();
@@ -295,29 +336,121 @@ describe.skipIf(!SHOULD_RUN)('tap/002_scram', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Deferred — require_auth not implemented in our wire layer yet. Each
-  // upstream subtest carries a precise reason so the next pass can pick
-  // up exactly the right thread.
-  // -------------------------------------------------------------------------
-
-  it.todo(
-    'require_auth=scram-sha-256 + channel_binding=disable — wire layer has no `require_auth` plumbing yet',
-  );
-  it.todo('require_auth=md5 + channel_binding=require — same gap as above');
-  it.todo(
-    'require_auth=scram-sha-256 + channel_binding=require — same gap as above',
-  );
-
-  // -------------------------------------------------------------------------
-  // RSA-PSS server certificate + channel binding.
+  // 7. require_auth=md5 (satisfied) + channel_binding=require (cannot be
+  //    satisfied) — the channel-binding error fires *even though*
+  //    require_auth was met.
   //
-  // Upstream gates this on `HAVE_X509_GET_SIGNATURE_INFO` and only runs
-  // when the build's OpenSSL is recent enough. Our fixture mints only
-  // RSA-PKCS1 certs today; minting an RSA-PSS leaf would require a
-  // separate vault entry. Out of scope until someone needs it.
+  //    Mirrors upstream `channel_binding can fail even when require_auth
+  //    succeeds`. Asserts the cb wording wins over the require_auth
+  //    wording — the ordering matters: cb check runs first in the
+  //    AuthenticationMD5Password branch.
   // -------------------------------------------------------------------------
+  it('require_auth=md5 + channel_binding=require fails on cb (require_auth satisfied)', async () => {
+    const wire = await loadWire();
+    const t = ensureTls();
+    await expect(
+      wire.PgConnection.connect({
+        host: t.host,
+        port: t.port,
+        user: 'md5user',
+        password: 'pencil',
+        database: t.db,
+        ssl: 'require',
+        channelBinding: 'require',
+        requireAuth: { methods: new Set(['md5']), negated: false },
+      }),
+    ).rejects.toThrow(
+      /channel binding required but not supported by server's authentication request/,
+    );
+  });
 
-  it.todo(
-    'SCRAM + SSL + channel_binding=require with an RSA-PSS server cert — requires fixture extension to mint an RSA-PSS leaf',
-  );
+  // -------------------------------------------------------------------------
+  // 8. require_auth=scram-sha-256 + channel_binding=require connects.
+  //
+  //    Combination of #3 and #6 — the strictest viable case. The server
+  //    must offer SCRAM-SHA-256-PLUS (TLS is up + scram-sha-256 password
+  //    encryption), the wire layer negotiates PLUS, require_auth permits
+  //    scram-sha-256, and the connection completes.
+  // -------------------------------------------------------------------------
+  it('require_auth=scram-sha-256 + channel_binding=require connects', async () => {
+    const wire = await loadWire();
+    const t = ensureTls();
+    const conn = await wire.PgConnection.connect({
+      host: t.host,
+      port: t.port,
+      user: 'scramuser',
+      password: 'pencil',
+      database: t.db,
+      ssl: 'require',
+      channelBinding: 'require',
+      requireAuth: { methods: new Set(['scram-sha-256']), negated: false },
+    });
+    try {
+      const rs = await conn.execSimple("SELECT 'scram-require-auth-require'");
+      expect(rs.length).toBeGreaterThan(0);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // 9. SCRAM + SSL + channel_binding=require with an RSA-PSS server cert.
+  //
+  //    Verifies that the wire layer doesn't choke on a server cert whose
+  //    SubjectPublicKeyInfo is `rsassaPss` (upstream bug #17760). Channel
+  //    binding uses `tls-server-end-point`, which hashes the server cert
+  //    via the signature algorithm's digest — Node's TLS layer must
+  //    expose the correct hash for RSA-PSS, otherwise PLUS verification
+  //    fails.
+  //
+  //    Switches the active server cert to the RSA-PSS leaf, then connects.
+  //    Runs LAST in this file so the cert swap doesn't leak to other
+  //    subtests. (Each spec gets its own fixture instance via
+  //    `setupTlsPg()`, but the cert state still mutates on disk + GUC
+  //    within the lifetime of this one.)
+  // -------------------------------------------------------------------------
+  it('SCRAM + SSL + channel_binding=require connects against an RSA-PSS server cert', async () => {
+    const wire = await loadWire();
+    const t = ensureTls();
+
+    // Switch the active server cert via ALTER SYSTEM + pg_reload_conf.
+    // Connect as the testcontainers superuser (default `testuser`) over
+    // sslmode=prefer so the switch itself isn't blocked by a half-loaded
+    // cert state.
+    const admin = await wire.PgConnection.connect({
+      host: t.host,
+      port: t.port,
+      user: t.user,
+      password: t.password,
+      database: t.db,
+      ssl: 'prefer',
+    });
+    try {
+      for (const stmt of switchServerCertSql('pss')) {
+        await admin.execSimple(stmt);
+      }
+      await admin.execSimple('SELECT pg_reload_conf()');
+    } finally {
+      await admin.close();
+    }
+    // pg_reload_conf is async; the next SSL handshake picks up the new
+    // cert after a beat.
+    await new Promise((r) => setTimeout(r, 250));
+
+    const conn = await wire.PgConnection.connect({
+      host: t.host,
+      port: t.port,
+      user: 'scramuser',
+      password: 'pencil',
+      database: t.db,
+      ssl: 'require',
+      channelBinding: 'require',
+    });
+    try {
+      const rs = await conn.execSimple("SELECT 'pss-cert-require'");
+      expect(rs.length).toBeGreaterThan(0);
+    } finally {
+      await conn.close();
+    }
+  });
 });
