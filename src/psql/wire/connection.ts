@@ -546,7 +546,22 @@ export class PgConnection implements Connection {
     // Active for every mode, not just `load_balance_hosts=random`: even
     // `disable` benefits from the fall-through behaviour when the first
     // A record is dead. Mirrors upstream `004_load_balance_dns.pl`.
-    const candidates = await expandHostsViaDns(seed);
+    //
+    // `hostaddr` short-circuits the lookup entirely: libpq connects to the
+    // fixed IP without consulting DNS while still using `host` for TLS SNI /
+    // certificate hostname verification. We map this onto the same
+    // `addressOverride` seam the DNS fan-out uses — the literal IP becomes
+    // the candidate's `address`, and `host` (the user-typed name) is
+    // preserved for SNI / `conn.host`. Only the single-host form carries a
+    // `hostaddr`; libpq does not support a hostaddr-per-host list here.
+    const candidates =
+      opts.hostaddr !== undefined && opts.hostaddr !== ''
+        ? seed.map((c) => ({
+            host: c.host,
+            address: opts.hostaddr,
+            port: c.port,
+          }))
+        : await expandHostsViaDns(seed);
 
     if (opts.loadBalanceHosts === 'random') {
       shuffleInPlace(candidates, PgConnection._loadBalanceRng ?? Math.random);
@@ -677,6 +692,7 @@ export class PgConnection implements Connection {
       if (opts.ssl !== 'verify-full') {
         tlsConnectionOptions.checkServerIdentity = (): undefined => undefined;
       }
+      applyTlsProtocolVersionRange(tlsConnectionOptions, opts);
       const tlsResult = await negotiateTls(
         rawSocket,
         // libpq refuses TLS on a socket connection even for sslmode=allow /
@@ -691,6 +707,7 @@ export class PgConnection implements Connection {
           sslpassword: opts.sslpassword,
           sslrootcert: opts.sslrootcert,
           sslcrl: opts.sslcrl,
+          sslcrldir: opts.sslcrldir,
         },
       );
       if (tlsResult.kind === 'tls') {
@@ -1146,7 +1163,15 @@ export class PgConnection implements Connection {
     // Per the PG protocol, CancelRequest is sent on a *fresh* connection,
     // not the one running the query. We TLS-negotiate against the same
     // sslmode but we don't auth — we just write the request and close.
-    const cancelSocket = await openSocket(this.opts);
+    // Honour `hostaddr` on the cancel connection too: dial the fixed IP while
+    // keeping the user-typed host for SNI / cert verification, mirroring the
+    // primary connect path's `addressOverride`.
+    const cancelSocket = await openSocket(
+      this.opts,
+      this.opts.hostaddr !== undefined && this.opts.hostaddr !== ''
+        ? this.opts.hostaddr
+        : undefined,
+    );
     let writeSocket: AnySocket = cancelSocket;
     try {
       const cancelTlsOpts: tls.ConnectionOptions = {
@@ -1158,6 +1183,7 @@ export class PgConnection implements Connection {
       if (this.opts.ssl !== 'verify-full') {
         cancelTlsOpts.checkServerIdentity = (): undefined => undefined;
       }
+      applyTlsProtocolVersionRange(cancelTlsOpts, this.opts);
       const t = await negotiateTls(
         cancelSocket,
         // Unix-domain socket: no TLS, regardless of caller's sslmode.
@@ -1169,6 +1195,7 @@ export class PgConnection implements Connection {
           sslpassword: this.opts.sslpassword,
           sslrootcert: this.opts.sslrootcert,
           sslcrl: this.opts.sslcrl,
+          sslcrldir: this.opts.sslcrldir,
         },
       );
       writeSocket = t.kind === 'tls' ? t.socket : t.socket;
@@ -2791,6 +2818,43 @@ async function expandHostsViaDns(
     }
   }
   return out;
+}
+
+/**
+ * Map a libpq protocol-version string (`TLSv1` / `TLSv1.1` / `TLSv1.2` /
+ * `TLSv1.3`) to Node's `SecureVersion` literal. Returns `undefined` for
+ * unset / empty input. Unknown values shouldn't reach here (the parsing
+ * layer in `index.ts` validates them), but we return `undefined` rather than
+ * casting so a stray value can't smuggle a bogus literal into Node's TLS
+ * options.
+ */
+function toSecureVersion(
+  value: string | undefined,
+): tls.SecureVersion | undefined {
+  switch (value) {
+    case 'TLSv1':
+    case 'TLSv1.1':
+    case 'TLSv1.2':
+    case 'TLSv1.3':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Map libpq's `ssl_min_protocol_version` / `ssl_max_protocol_version` onto
+ * Node's `tls.connect` `minVersion` / `maxVersion`. Unset values leave Node's
+ * compiled-in defaults in place.
+ */
+function applyTlsProtocolVersionRange(
+  tlsOpts: tls.ConnectionOptions,
+  opts: Pick<ConnectOptions, 'sslMinProtocolVersion' | 'sslMaxProtocolVersion'>,
+): void {
+  const min = toSecureVersion(opts.sslMinProtocolVersion);
+  if (min !== undefined) tlsOpts.minVersion = min;
+  const max = toSecureVersion(opts.sslMaxProtocolVersion);
+  if (max !== undefined) tlsOpts.maxVersion = max;
 }
 
 function openSocket(

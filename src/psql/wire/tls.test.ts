@@ -25,6 +25,7 @@ import type * as tls from 'node:tls';
 import {
   computeChannelBindingData,
   loadTlsFileOptions,
+  mapTlsHandshakeError,
   negotiateTls,
   sendSslRequest,
 } from './tls.js';
@@ -202,6 +203,10 @@ describe('loadTlsFileOptions', () => {
     fs.writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\nca-bytes\n');
     fs.writeFileSync(certPath, '-----BEGIN CERTIFICATE-----\ncert-bytes\n');
     fs.writeFileSync(keyPath, '-----BEGIN PRIVATE KEY-----\nkey-bytes\n');
+    // A real private key must be u=rw-only; loadTlsFileOptions enforces the
+    // same libpq permission check, so the fixture key has to be 0600 or the
+    // read is (correctly) refused.
+    fs.chmodSync(keyPath, 0o600);
     fs.writeFileSync(crlPath, '-----BEGIN X509 CRL-----\ncrl-bytes\n');
     return {
       dir,
@@ -379,6 +384,135 @@ describe('loadTlsFileOptions', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // sslkey permission guard (libpq's group/world-access stat check).
+  // -------------------------------------------------------------------------
+  test('rejects a group/world-readable sslkey (0644)', async () => {
+    if (process.platform === 'win32') return; // POSIX mode bits only.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-pem-'));
+    try {
+      const keyPath = path.join(dir, 'loose.key');
+      fs.writeFileSync(keyPath, '-----BEGIN PRIVATE KEY-----\nk\n');
+      fs.chmodSync(keyPath, 0o644);
+      await expect(
+        loadTlsFileOptions({}, { sslkey: keyPath }, 'require'),
+      ).rejects.toThrow(
+        `private key file "${keyPath}" has group or world access`,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('accepts a 0600 sslkey', async () => {
+    if (process.platform === 'win32') return;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-pem-'));
+    try {
+      const keyPath = path.join(dir, 'tight.key');
+      fs.writeFileSync(keyPath, '-----BEGIN PRIVATE KEY-----\nk\n');
+      fs.chmodSync(keyPath, 0o600);
+      const merged = await loadTlsFileOptions(
+        {},
+        { sslkey: keyPath },
+        'require',
+      );
+      expect(Buffer.isBuffer(merged.key)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // sslcrldir: read + concatenate every CRL file in the directory.
+  // -------------------------------------------------------------------------
+  test('reads every CRL file in sslcrldir', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-crl-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'a.crl'),
+        '-----BEGIN X509 CRL-----\ncrl-a\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'b.crl'),
+        '-----BEGIN X509 CRL-----\ncrl-b\n',
+      );
+      const merged = await loadTlsFileOptions({}, { sslcrldir: dir });
+      // Two files → crl is an array of two buffers.
+      expect(Array.isArray(merged.crl)).toBe(true);
+      const joined = (merged.crl as Buffer[]).map((b) => b.toString()).join('');
+      expect(joined).toContain('crl-a');
+      expect(joined).toContain('crl-b');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('combines sslcrl + sslcrldir into the crl array', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-crl-'));
+    try {
+      const single = path.join(dir, 'single.pem');
+      fs.writeFileSync(single, '-----BEGIN X509 CRL-----\nsingle\n');
+      const crlDir = path.join(dir, 'crls');
+      fs.mkdirSync(crlDir);
+      fs.writeFileSync(
+        path.join(crlDir, 'dir.crl'),
+        '-----BEGIN X509 CRL-----\nfrom-dir\n',
+      );
+      const merged = await loadTlsFileOptions(
+        {},
+        { sslcrl: single, sslcrldir: crlDir },
+      );
+      const joined = (merged.crl as Buffer[]).map((b) => b.toString()).join('');
+      expect(joined).toContain('single');
+      expect(joined).toContain('from-dir');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('surfaces a clear error when sslcrldir is missing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neonctl-psql-crl-'));
+    try {
+      const missing = path.join(dir, 'no-such-dir');
+      await expect(
+        loadTlsFileOptions({}, { sslcrldir: missing }),
+      ).rejects.toThrow(/could not read sslcrldir ".*no-such-dir"/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// libpq-style TLS handshake error wording.
+// ---------------------------------------------------------------------------
+describe('mapTlsHandshakeError', () => {
+  test('maps hostname mismatch to libpq wording with the servername', () => {
+    const err = Object.assign(
+      new Error("Hostname/IP does not match certificate's altnames"),
+      { code: 'ERR_TLS_CERT_ALTNAME_INVALID' },
+    );
+    const mapped = mapTlsHandshakeError(err, 'db.example.com');
+    expect(mapped.message).toBe(
+      'server certificate for "db.example.com" does not match host name "db.example.com"',
+    );
+    expect((mapped as Error & { cause?: unknown }).cause).toBe(err);
+  });
+
+  test('maps chain-verification failures to "certificate verify failed"', () => {
+    const err = Object.assign(new Error('self-signed certificate'), {
+      code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+    });
+    const mapped = mapTlsHandshakeError(err, 'h');
+    expect(mapped.message).toBe('certificate verify failed');
+    expect((mapped as Error & { cause?: unknown }).cause).toBe(err);
+  });
+
+  test('passes through unrelated errors unchanged', () => {
+    const err = Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' });
+    expect(mapTlsHandshakeError(err, 'h')).toBe(err);
   });
 });
 

@@ -2210,6 +2210,51 @@ describe('PgConnection multi-host', () => {
       )._loadBalanceRng = null;
     }
   });
+
+  test('hostaddr dials the fixed IP and bypasses DNS while host stays for identity', async () => {
+    const a = await startRoleServer({ inRecovery: false });
+    servers.push(a);
+
+    // If hostaddr is honoured the resolver must never be consulted — make a
+    // call fail the test loudly.
+    let resolverCalls = 0;
+    (
+      PgConnection as unknown as {
+        _dnsLookupAll:
+          | ((host: string) => Promise<{ address: string; family: number }[]>)
+          | null;
+      }
+    )._dnsLookupAll = () => {
+      resolverCalls += 1;
+      return Promise.reject(
+        new Error('resolver should not be called when hostaddr is set'),
+      );
+    };
+    try {
+      const conn = await PgConnection.connect({
+        // A name that would never resolve — proving the connect used hostaddr.
+        host: 'db.example.invalid',
+        hostaddr: '127.0.0.1',
+        port: a.port,
+        user: 'u',
+        database: 'db',
+        ssl: 'disable',
+      });
+      expect(resolverCalls).toBe(0);
+      // conn.host reports the user-typed hostname (TLS-stable identity).
+      expect(conn.host).toBe('db.example.invalid');
+      expect(conn.port).toBe(a.port);
+      await conn.close();
+    } finally {
+      (
+        PgConnection as unknown as {
+          _dnsLookupAll:
+            | ((host: string) => Promise<{ address: string; family: number }[]>)
+            | null;
+        }
+      )._dnsLookupAll = null;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

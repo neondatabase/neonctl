@@ -32,6 +32,7 @@ import type * as net from 'node:net';
 import * as tls from 'node:tls';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
 import { SSLRequest } from './protocol.js';
 
 export type SslMode =
@@ -80,6 +81,13 @@ export type TlsFileOptions = {
   sslrootcert?: string;
   /** Path to CRL (PEM). Mapped to `crl`. */
   sslcrl?: string;
+  /**
+   * Path to a directory of CRL files (libpq `sslcrldir`). Every regular file
+   * in the directory is read and concatenated onto the `crl` bytes (after
+   * {@link sslcrl}, if both are set). A read failure on the directory or any
+   * file surfaces as `could not read sslcrldir "<path>": <reason>`.
+   */
+  sslcrldir?: string;
 };
 
 /**
@@ -189,10 +197,23 @@ export async function loadTlsFileOptions(
     merged.cert = await readPem('sslcert', fileOpts.sslcert);
   }
   if (fileOpts.sslkey !== undefined && fileOpts.sslkey !== '') {
+    await assertKeyPermissions(fileOpts.sslkey);
     merged.key = await readPem('sslkey', fileOpts.sslkey);
   }
+  // CRLs come from a single file (`sslcrl`) and/or every file in a directory
+  // (`sslcrldir`). Node's `crl` option accepts an array of PEM buffers, so we
+  // collect each source and only set `crl` when at least one was read.
+  const crls: Buffer[] = [];
   if (fileOpts.sslcrl !== undefined && fileOpts.sslcrl !== '') {
-    merged.crl = await readPem('sslcrl', fileOpts.sslcrl);
+    crls.push(await readPem('sslcrl', fileOpts.sslcrl));
+  }
+  if (fileOpts.sslcrldir !== undefined && fileOpts.sslcrldir !== '') {
+    crls.push(...(await readCrlDir(fileOpts.sslcrldir)));
+  }
+  if (crls.length === 1) {
+    merged.crl = crls[0];
+  } else if (crls.length > 1) {
+    merged.crl = crls;
   }
   // sslpassword is plumbed through verbatim — OpenSSL applies it when it
   // sees an encrypted key. Empty string is "no passphrase" (libpq's
@@ -204,13 +225,71 @@ export async function loadTlsFileOptions(
   return merged;
 }
 
-async function readPem(label: string, path: string): Promise<Buffer> {
+async function readPem(label: string, filePath: string): Promise<Buffer> {
   try {
-    return await fs.readFile(path);
+    return await fs.readFile(filePath);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`could not read ${label} "${path}": ${reason}`);
+    throw new Error(`could not read ${label} "${filePath}": ${reason}`);
   }
+}
+
+/**
+ * libpq-style permission guard for the client private key (`sslkey`). libpq
+ * (`fe-secure-openssl.c`) `stat()`s the key file and refuses to load it when
+ * it is a regular file with any group or world access bits set, unless it is
+ * root-owned with at most `u=rw,g=r` (0640). Mirroring that keeps an
+ * accidentally world-readable key from being used silently.
+ *
+ * The check is a no-op on Windows, where the POSIX mode bits are not
+ * meaningful (matching libpq, which `#ifndef WIN32`-guards the same check),
+ * and when the key path is a directory / special file (only regular files
+ * carry a private key here).
+ */
+async function assertKeyPermissions(keyPath: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  let stat: import('node:fs').Stats;
+  try {
+    stat = await fs.stat(keyPath);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`could not read sslkey "${keyPath}": ${reason}`);
+  }
+  if (!stat.isFile()) return;
+  // Low 9 mode bits: rwx for user/group/other.
+  const mode = stat.mode & 0o777;
+  const groupOrWorld = mode & 0o077;
+  if (groupOrWorld === 0) return;
+  // Root-owned keys are allowed to be u=rw,g=r (0640) or less, matching
+  // libpq's relaxed allowance for system-managed keys: no bits outside the
+  // 0640 mask may be set.
+  if (stat.uid === 0 && (mode & ~0o640) === 0) {
+    return;
+  }
+  throw new Error(`private key file "${keyPath}" has group or world access`);
+}
+
+/**
+ * Read every regular file in an `sslcrldir` directory and return their PEM
+ * bytes. Subdirectories are skipped (libpq's c_rehash-style directory only
+ * holds hashed CRL files). A failure to list the directory or read any file
+ * surfaces with the `sslcrldir` label so the caller sees which option was
+ * misconfigured.
+ */
+async function readCrlDir(dirPath: string): Promise<Buffer[]> {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`could not read sslcrldir "${dirPath}": ${reason}`);
+  }
+  const out: Buffer[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    out.push(await readPem('sslcrldir', path.join(dirPath, entry.name)));
+  }
+  return out;
 }
 
 /**
@@ -256,6 +335,63 @@ export function sendSslRequest(socket: net.Socket): Promise<'S' | 'N'> {
   });
 }
 
+/**
+ * Translate a Node/OpenSSL TLS handshake error into libpq-style wording so
+ * our diagnostics match upstream psql/libpq exactly (the cases asserted by
+ * upstream `001_ssltests.pl`). Unrecognised errors pass through unchanged.
+ * The original error is preserved on `cause` for callers that introspect.
+ *
+ *   - Chain-verification failures (`ERR_TLS_CERT_ALTNAME_INVALID` excluded)
+ *     → `certificate verify failed` (libpq's `SSL error: certificate verify
+ *     failed`).
+ *   - Hostname mismatch (`ERR_TLS_CERT_ALTNAME_INVALID`, Node's
+ *     "Hostname/IP does not match certificate's altnames") →
+ *     `server certificate for "<host>" does not match host name "<host>"`.
+ *   - Encrypted-key decrypt failures (`error:...:bad decrypt`) are already
+ *     phrased with "bad decrypt"; we leave the OpenSSL text intact since it
+ *     already contains the libpq-asserted token.
+ *
+ * Exported for unit tests.
+ */
+export function mapTlsHandshakeError(err: Error, servername?: string): Error {
+  const code = (err as NodeJS.ErrnoException).code;
+  const msg = err.message;
+
+  if (code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+    const host = servername ?? '';
+    const mapped = new Error(
+      `server certificate for "${host}" does not match host name "${host}"`,
+    );
+    (mapped as Error & { cause?: unknown }).cause = err;
+    return mapped;
+  }
+
+  // OpenSSL chain-verification failures surface with a `code` like
+  // `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `DEPTH_ZERO_SELF_SIGNED_CERT`,
+  // `SELF_SIGNED_CERT_IN_CHAIN`, `CERT_HAS_EXPIRED`, etc. libpq collapses
+  // them all to `certificate verify failed`.
+  const isVerifyFailure =
+    code !== undefined &&
+    code !== 'ERR_TLS_CERT_ALTNAME_INVALID' &&
+    /CERT|SIGNATURE|SELF_SIGNED|UNABLE_TO|CHAIN|EXPIRED|NOT_YET_VALID|INVALID_CA/.test(
+      code,
+    );
+  if (isVerifyFailure || /certificate verify failed/i.test(msg)) {
+    const mapped = new Error('certificate verify failed');
+    (mapped as Error & { cause?: unknown }).cause = err;
+    return mapped;
+  }
+
+  return err;
+}
+
+/** Pull the SNI `servername` from the TLS options for error messages. */
+function getServername(tlsOpts: tls.ConnectionOptions): string | undefined {
+  return typeof tlsOpts.servername === 'string'
+    ? tlsOpts.servername
+    : undefined;
+}
+
 function upgradeToTls(
   socket: net.Socket,
   tlsOpts: tls.ConnectionOptions,
@@ -263,7 +399,7 @@ function upgradeToTls(
   return new Promise((resolve, reject) => {
     const onError = (err: Error): void => {
       cleanup();
-      reject(err);
+      reject(mapTlsHandshakeError(err, getServername(tlsOpts)));
     };
     const tlsSocket = tls.connect(
       {

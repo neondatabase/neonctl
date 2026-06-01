@@ -420,6 +420,7 @@ const KNOWN_QUERY_KEYS = new Set([
   'sslkey',
   'sslrootcert',
   'sslcrl',
+  'sslcrldir',
   'sslsni',
   'requirepeer',
   'ssl_min_protocol_version',
@@ -717,6 +718,20 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   const sslkey = nonEmpty(raw.query.get('sslkey'));
   const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
   const sslcrl = nonEmpty(raw.query.get('sslcrl'));
+  const sslcrldir = nonEmpty(raw.query.get('sslcrldir'));
+
+  // libpq `hostaddr`: a fixed IP that bypasses DNS while `host` still drives
+  // TLS SNI / cert verification. Empty string is "not set".
+  const hostaddr = nonEmpty(raw.query.get('hostaddr'));
+  const sslMinProtocolVersion = normalizeTlsProtocolVersion(
+    nonEmpty(raw.query.get('ssl_min_protocol_version')),
+    'ssl_min_protocol_version',
+  );
+  const sslMaxProtocolVersion = normalizeTlsProtocolVersion(
+    nonEmpty(raw.query.get('ssl_max_protocol_version')),
+    'ssl_max_protocol_version',
+  );
+  assertTlsProtocolRange(sslMinProtocolVersion, sslMaxProtocolVersion);
 
   return {
     host,
@@ -728,6 +743,7 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     channelBinding,
     applicationName,
     options,
+    ...(hostaddr !== undefined ? { hostaddr } : {}),
     ...(replication !== undefined ? { replication } : {}),
     ...(hostsTuples.length > 1
       ? { hosts: hostsTuples.map((t) => ({ host: t.host, port: t.port })) }
@@ -738,6 +754,9 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     ...(sslkey !== undefined ? { sslkey } : {}),
     ...(sslrootcert !== undefined ? { sslrootcert } : {}),
     ...(sslcrl !== undefined ? { sslcrl } : {}),
+    ...(sslcrldir !== undefined ? { sslcrldir } : {}),
+    ...(sslMinProtocolVersion !== undefined ? { sslMinProtocolVersion } : {}),
+    ...(sslMaxProtocolVersion !== undefined ? { sslMaxProtocolVersion } : {}),
   };
 };
 
@@ -834,6 +853,19 @@ const computeHostsTuples = (input: {
 
 const parsePort = (raw: string | undefined): number => {
   if (raw === undefined || raw === '') return 5432;
+  // `Number.parseInt` silently tolerates trailing junk (`parseInt("12345 12")`
+  // === 12345), which would let an internal-whitespace value like the upstream
+  // `port = 12345 12` URI case sneak through as port 12345. libpq rejects that
+  // shape with `invalid integer value "<v>" for connection option "port"`,
+  // pointing at the whole bogus value (the whitespace included) rather than a
+  // generic out-of-range message. Detect any digits-then-garbage value here so
+  // that exact wording fires; genuinely non-numeric (`abc`) and out-of-range
+  // (`99999`) values keep the shorter `invalid port:` diagnostic.
+  if (/^\d/.test(raw) && !/^\d+$/.test(raw)) {
+    throw new Error(
+      `invalid integer value "${raw}" for connection option "port"`,
+    );
+  }
   const p = Number.parseInt(raw, 10);
   if (!Number.isFinite(p) || p <= 0 || p > 65535) {
     throw new Error(`invalid port: ${raw}`);
@@ -946,6 +978,7 @@ export const parseConninfo = (input: string): Partial<ConnectOptions> => {
   // reading it.
   delete out._hostList;
   delete out._portList;
+  assertTlsProtocolRange(out.sslMinProtocolVersion, out.sslMaxProtocolVersion);
   return out;
 };
 
@@ -1047,16 +1080,34 @@ const applyConninfoPair = (
     case 'sslcrl':
       if (value !== '') out.sslcrl = value;
       return;
-    // Recognised libpq keys that we don't model — accept silently so we
-    // don't reject legitimate connection strings (matches the URI
-    // allowlist's "known but not honored" entries like hostaddr).
+    case 'sslcrldir':
+      if (value !== '') out.sslcrldir = value;
+      return;
     case 'hostaddr':
+      if (value !== '') out.hostaddr = value;
+      return;
+    case 'ssl_min_protocol_version': {
+      const v = normalizeTlsProtocolVersion(
+        value === '' ? undefined : value,
+        'ssl_min_protocol_version',
+      );
+      if (v !== undefined) out.sslMinProtocolVersion = v;
+      return;
+    }
+    case 'ssl_max_protocol_version': {
+      const v = normalizeTlsProtocolVersion(
+        value === '' ? undefined : value,
+        'ssl_max_protocol_version',
+      );
+      if (v !== undefined) out.sslMaxProtocolVersion = v;
+      return;
+    }
+    // Recognised libpq keys that we don't model — accept silently so we
+    // don't reject legitimate connection strings.
     case 'passfile':
     case 'sslcompression':
     case 'sslsni':
     case 'requirepeer':
-    case 'ssl_min_protocol_version':
-    case 'ssl_max_protocol_version':
     case 'krbsrvname':
     case 'gsslib':
     case 'fallback_application_name':
@@ -1106,6 +1157,53 @@ const normalizeSslMode = (raw: string | null): ConnectOptions['ssl'] => {
       return value;
     default:
       return 'prefer';
+  }
+};
+
+/**
+ * libpq's accepted TLS protocol-version names, in ascending order. The
+ * index doubles as the comparison key for the `min > max` check. Matching
+ * is case-insensitive on input (libpq lowercases before comparing) but we
+ * keep the canonical mixed-case spelling Node's `tls` module expects for
+ * `minVersion` / `maxVersion`.
+ */
+const TLS_PROTOCOL_VERSIONS = ['TLSv1', 'TLSv1.1', 'TLSv1.2', 'TLSv1.3'];
+
+/**
+ * Validate and canonicalise a `ssl_{min,max}_protocol_version` value. Returns
+ * the canonical spelling (`TLSv1.2` etc.) or `undefined` for empty / unset.
+ * Throws libpq's `invalid <key> value: "<raw>"` wording on a malformed value.
+ */
+const normalizeTlsProtocolVersion = (
+  raw: string | undefined,
+  key: 'ssl_min_protocol_version' | 'ssl_max_protocol_version',
+): string | undefined => {
+  if (raw === undefined || raw === '') return undefined;
+  const match = TLS_PROTOCOL_VERSIONS.find(
+    (v) => v.toLowerCase() === raw.toLowerCase(),
+  );
+  if (match === undefined) {
+    throw new Error(`invalid ${key} value: "${raw}"`);
+  }
+  return match;
+};
+
+/**
+ * Reject a `ssl_min_protocol_version` that is higher than
+ * `ssl_max_protocol_version`, matching libpq's
+ * `ssl_min_protocol_version must be <= ssl_max_protocol_version` diagnostic.
+ * Both arguments must already be canonicalised by
+ * {@link normalizeTlsProtocolVersion}.
+ */
+const assertTlsProtocolRange = (
+  min: string | undefined,
+  max: string | undefined,
+): void => {
+  if (min === undefined || max === undefined) return;
+  if (TLS_PROTOCOL_VERSIONS.indexOf(min) > TLS_PROTOCOL_VERSIONS.indexOf(max)) {
+    throw new Error(
+      `ssl_min_protocol_version must be <= ssl_max_protocol_version`,
+    );
   }
 };
 
@@ -1396,6 +1494,21 @@ export const parseConnectionUriPartial = (
   if (sslrootcert !== undefined) out.sslrootcert = sslrootcert;
   const sslcrl = nonEmpty(raw.query.get('sslcrl'));
   if (sslcrl !== undefined) out.sslcrl = sslcrl;
+  const sslcrldir = nonEmpty(raw.query.get('sslcrldir'));
+  if (sslcrldir !== undefined) out.sslcrldir = sslcrldir;
+  const hostaddr = nonEmpty(raw.query.get('hostaddr'));
+  if (hostaddr !== undefined) out.hostaddr = hostaddr;
+  const sslMin = normalizeTlsProtocolVersion(
+    nonEmpty(raw.query.get('ssl_min_protocol_version')),
+    'ssl_min_protocol_version',
+  );
+  if (sslMin !== undefined) out.sslMinProtocolVersion = sslMin;
+  const sslMax = normalizeTlsProtocolVersion(
+    nonEmpty(raw.query.get('ssl_max_protocol_version')),
+    'ssl_max_protocol_version',
+  );
+  if (sslMax !== undefined) out.sslMaxProtocolVersion = sslMax;
+  assertTlsProtocolRange(out.sslMinProtocolVersion, out.sslMaxProtocolVersion);
 
   const connectTimeoutSec = raw.query.get('connect_timeout');
   if (connectTimeoutSec !== undefined && connectTimeoutSec !== '') {
@@ -1415,6 +1528,7 @@ export const parseConnectionUriPartial = (
 // only depends on whether the var is set.
 const PG_ENV_FIELD_MAP: Readonly<Record<string, keyof ConnectOptions>> = {
   PGHOST: 'host',
+  PGHOSTADDR: 'hostaddr',
   PGPORT: 'port',
   PGUSER: 'user',
   PGDATABASE: 'database',
@@ -1426,6 +1540,8 @@ const PG_ENV_FIELD_MAP: Readonly<Record<string, keyof ConnectOptions>> = {
   PGSSLROOTCERT: 'sslrootcert',
   PGSSLCERT: 'sslcert',
   PGSSLKEY: 'sslkey',
+  PGSSLCRL: 'sslcrl',
+  PGSSLCRLDIR: 'sslcrldir',
   PGCHANNELBINDING: 'channelBinding',
 };
 
@@ -1440,9 +1556,9 @@ const PG_ENV_FIELD_MAP: Readonly<Record<string, keyof ConnectOptions>> = {
  * "could not parse" message, but the env-var lookup itself does not throw.
  *
  * Notes:
- *   - `PGHOSTADDR` is intentionally NOT consulted. The neonctl-psql TCP
- *     client resolves names via Node's DNS; we don't surface a separate
- *     "bypass DNS" path.
+ *   - `PGHOSTADDR` maps to {@link ConnectOptions.hostaddr}: the wire layer
+ *     dials this fixed IP while `PGHOST` still drives TLS SNI / cert
+ *     verification.
  *   - `PGCONNECT_TIMEOUT` is in seconds; we convert to milliseconds.
  *   - `PGCHANNELBINDING` accepts disable/prefer/require.
  *   - `PGSERVICE` is consumed by the caller (it drives the
@@ -1517,6 +1633,15 @@ const applyEnvValue = (
       return;
     case 'sslkey':
       out.sslkey = value;
+      return;
+    case 'sslcrl':
+      out.sslcrl = value;
+      return;
+    case 'sslcrldir':
+      out.sslcrldir = value;
+      return;
+    case 'hostaddr':
+      out.hostaddr = value;
       return;
     case 'channelBinding': {
       const cb = normalizeChannelBinding(value);
@@ -1622,17 +1747,40 @@ export const serviceEntryToConnectOptions = (
       case 'sslcrl':
         if (v !== '') out.sslcrl = v;
         break;
+      case 'sslcrldir':
+        if (v !== '') out.sslcrldir = v;
+        break;
+      case 'hostaddr':
+        if (v !== '') out.hostaddr = v;
+        break;
+      case 'ssl_min_protocol_version': {
+        const pv = normalizeTlsProtocolVersion(
+          v === '' ? undefined : v,
+          'ssl_min_protocol_version',
+        );
+        if (pv !== undefined) out.sslMinProtocolVersion = pv;
+        break;
+      }
+      case 'ssl_max_protocol_version': {
+        const pv = normalizeTlsProtocolVersion(
+          v === '' ? undefined : v,
+          'ssl_max_protocol_version',
+        );
+        if (pv !== undefined) out.sslMaxProtocolVersion = pv;
+        break;
+      }
       case 'connect_timeout': {
         const t = Number.parseInt(v, 10);
         if (Number.isFinite(t) && t >= 0) out.connectTimeoutMs = t * 1000;
         break;
       }
-      // Recognised but not mapped — service files may contain `hostaddr`,
-      // `passfile`, etc. We drop silently rather than complain.
+      // Recognised but not mapped — service files may contain `passfile`,
+      // `krbsrvname`, etc. We drop silently rather than complain.
       default:
         break;
     }
   }
+  assertTlsProtocolRange(out.sslMinProtocolVersion, out.sslMaxProtocolVersion);
   return out;
 };
 

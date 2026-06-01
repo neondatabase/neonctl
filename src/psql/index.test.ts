@@ -690,26 +690,103 @@ describe('parseConnectionUri — TLS PEM file paths', () => {
     );
     expect(got).toMatchObject({ sslrootcert: '/etc/pg/ca.pem' });
   });
+
+  it('threads sslcrldir into ConnectOptions', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslcrldir=/etc/pg/crls',
+    );
+    expect(got).toMatchObject({ sslcrldir: '/etc/pg/crls' });
+  });
+
+  it('omits sslcrldir when the query parameter is empty', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslcrldir=');
+    expect(got).not.toHaveProperty('sslcrldir');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TLS protocol-version range (ssl_min/max_protocol_version).
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — ssl protocol version range', () => {
+  it('threads and canonicalises min / max protocol versions', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?ssl_min_protocol_version=TLSv1.2' +
+        '&ssl_max_protocol_version=TLSv1.3',
+    );
+    expect(got).toMatchObject({
+      sslMinProtocolVersion: 'TLSv1.2',
+      sslMaxProtocolVersion: 'TLSv1.3',
+    });
+  });
+
+  it('canonicalises case-insensitive input (tlsv1.2 -> TLSv1.2)', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?ssl_min_protocol_version=tlsv1.2',
+    );
+    expect(got.sslMinProtocolVersion).toBe('TLSv1.2');
+  });
+
+  it('rejects a malformed protocol-version value', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://u@h/db?ssl_min_protocol_version=TLSv9'),
+    ).toThrow('invalid ssl_min_protocol_version value: "TLSv9"');
+  });
+
+  it('rejects min > max', () => {
+    expect(() =>
+      parseConnectionUri(
+        'postgresql://u@h/db?ssl_min_protocol_version=TLSv1.3' +
+          '&ssl_max_protocol_version=TLSv1.2',
+      ),
+    ).toThrow('ssl_min_protocol_version must be <= ssl_max_protocol_version');
+  });
+
+  it('omits the fields when the query parameters are empty', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?ssl_min_protocol_version=&ssl_max_protocol_version=',
+    );
+    expect(got).not.toHaveProperty('sslMinProtocolVersion');
+    expect(got).not.toHaveProperty('sslMaxProtocolVersion');
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Upstream cases we deliberately do NOT cover. Kept here so the gap is
 // documented next to the conformance corpus rather than buried in a README.
 // ---------------------------------------------------------------------------
-describe('parseConnectionUri — upstream cases not supported', () => {
-  // libpq's `hostaddr` skips DNS resolution. neonctl-psql connects via the
-  // standard Node TLS stack, which always resolves. We don't surface this
-  // libpq-specific knob.
-  it.todo('postgresql://?hostaddr=127.0.0.1 — hostaddr not modelled');
-  it.todo('postgresql://example.com?hostaddr=63.1.2.4 — hostaddr not modelled');
+describe('parseConnectionUri — hostaddr', () => {
+  // libpq's `hostaddr` connects to a fixed IP while `host` still drives TLS
+  // SNI / cert verification. We model it as `ConnectOptions.hostaddr`; the
+  // wire layer maps it onto its `addressOverride` seam.
+  it('parses ?hostaddr=127.0.0.1 with no host (host defaults)', () => {
+    const got = parseConnectionUri('postgresql://?hostaddr=127.0.0.1');
+    expect(got.hostaddr).toBe('127.0.0.1');
+  });
 
-  // Internal whitespace inside a query value: handled by our port validator
-  // (the trimmed value is "12345 12" which fails `invalid port`), but the
-  // libpq stderr targets the whitespace itself. We don't attempt to match
-  // that more specific error, so it stays a todo.
-  it.todo(
-    'postgresql://host?  user  = uri-user  & port = 12345 12 — internal whitespace in value',
-  );
+  it('keeps host for SNI while hostaddr carries the dial IP', () => {
+    const got = parseConnectionUri(
+      'postgresql://example.com?hostaddr=63.1.2.4',
+    );
+    expect(got.host).toBe('example.com');
+    expect(got.hostaddr).toBe('63.1.2.4');
+  });
+
+  it('omits hostaddr when the query parameter is empty', () => {
+    const got = parseConnectionUri('postgresql://example.com?hostaddr=');
+    expect(got).not.toHaveProperty('hostaddr');
+  });
+});
+
+describe('parseConnectionUri — internal whitespace in a query value', () => {
+  // A value like `12345 12` for `port` has internal whitespace after trim.
+  // `Number.parseInt` would silently truncate it to 12345; instead we surface
+  // libpq's `invalid integer value "<v>" for connection option "port"`
+  // wording, which points at the whole bogus value.
+  it('rejects port = 12345 12 with libpq integer-value wording', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://host?user=uri-user&port=12345 12'),
+    ).toThrow('invalid integer value "12345 12" for connection option "port"');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -787,6 +864,44 @@ describe('parseConninfo', () => {
     expect(parseConninfo('load_balance_hosts=random')).toEqual({
       loadBalanceHosts: 'random',
     });
+  });
+
+  it('threads hostaddr into ConnectOptions', () => {
+    expect(parseConninfo('host=example.com hostaddr=63.1.2.4')).toEqual({
+      host: 'example.com',
+      hostaddr: '63.1.2.4',
+    });
+  });
+
+  it('threads sslcrldir into ConnectOptions', () => {
+    expect(parseConninfo('sslcrldir=/etc/pg/crls')).toEqual({
+      sslcrldir: '/etc/pg/crls',
+    });
+  });
+
+  it('threads and canonicalises ssl protocol-version range', () => {
+    expect(
+      parseConninfo(
+        'ssl_min_protocol_version=tlsv1.2 ssl_max_protocol_version=TLSv1.3',
+      ),
+    ).toEqual({
+      sslMinProtocolVersion: 'TLSv1.2',
+      sslMaxProtocolVersion: 'TLSv1.3',
+    });
+  });
+
+  it('rejects a malformed ssl protocol-version value', () => {
+    expect(() => parseConninfo('ssl_min_protocol_version=bogus')).toThrow(
+      'invalid ssl_min_protocol_version value: "bogus"',
+    );
+  });
+
+  it('rejects ssl protocol-version min > max', () => {
+    expect(() =>
+      parseConninfo(
+        'ssl_min_protocol_version=TLSv1.3 ssl_max_protocol_version=TLSv1.2',
+      ),
+    ).toThrow('ssl_min_protocol_version must be <= ssl_max_protocol_version');
   });
 });
 

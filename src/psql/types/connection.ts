@@ -201,6 +201,14 @@ export type ConnectOptions = {
    * path, matching libpq's `pqUnixSocketPath()`).
    */
   host: string;
+  /**
+   * libpq `hostaddr`: a fixed numeric IP to connect to, bypassing DNS
+   * resolution of {@link host}. When set, the wire layer dials this address
+   * but keeps {@link host} for TLS SNI and certificate hostname verification
+   * (verify-full), exactly as libpq does. Mapped onto the connection layer's
+   * `addressOverride` seam.
+   */
+  hostaddr?: string;
   port: number;
   user: string;
   password?: string;
@@ -234,6 +242,23 @@ export type ConnectOptions = {
   sslrootcert?: string;
   /** Path to CRL (PEM). Mapped to `crl`. */
   sslcrl?: string;
+  /**
+   * libpq `sslcrldir`: directory containing CRL files. Every file in the
+   * directory is read and concatenated into the `crl` bytes handed to
+   * `tls.connect` (in addition to {@link sslcrl}, if both are set), so a
+   * revoked server certificate is rejected at verify time. Read failures
+   * surface as `could not read sslcrldir "<path>": <reason>`.
+   */
+  sslcrldir?: string;
+  /**
+   * libpq `ssl_min_protocol_version` / `ssl_max_protocol_version`: bound the
+   * TLS protocol versions offered in the handshake. Accepted values mirror
+   * libpq (`TLSv1`, `TLSv1.1`, `TLSv1.2`, `TLSv1.3`) and map to Node TLS
+   * `minVersion` / `maxVersion`. Validated (and `min > max` rejected) at
+   * parse time.
+   */
+  sslMinProtocolVersion?: string;
+  sslMaxProtocolVersion?: string;
   /**
    * Open the connection in replication mode (walsender). Values:
    *   - 'true': physical replication (libpq accepts 'true' / 'on' / 'yes' /
