@@ -13,50 +13,44 @@
 // plus an sslmode-aware `sslrootcert` read, which together unblock a
 // large slice of the upstream test surface.
 //
-// What we PORT (32 active `it()` subtests + 1 gate `it()`):
+// What we PORT (active `it()` subtests; see COVERAGE_EXCEPTIONS.md):
 //
-//   1. `sslmode={disable,require,verify-ca,verify-full}` happy / sad paths
-//      against the active server cert, with / without sslrootcert.
-//   2. Server cert SAN / IP-SAN / wildcard host-match (after switching the
-//      active server cert via `ALTER SYSTEM SET ssl_cert_file`).
+//   1. `sslmode={disable,require,verify-ca,verify-full}` happy / sad paths.
+//   2. Server cert SAN / IP-SAN / wildcard host-match (cert switching).
 //   3. Certificate-bundle root files — `root+server_ca.crt` order 1 and 2.
-//   4. Client-cert authorization — pass / fail with the `cert` HBA method
-//      (`clientcert=verify-full` and `clientcert=verify-ca`).
-//   5. Encrypted-PEM client key + `sslpassword` happy and sad paths.
-//   6. Intermediate client_ca chain attached to the client cert succeeds;
-//      bare leaf cert without the intermediate is rejected.
-//   7. `pg_stat_ssl` for both SSL and plaintext connections, including
-//      client_dn population when a client cert is presented.
+//   4. Client-cert authorization — `cert` HBA (verify-full / verify-ca),
+//      incl. a `pg_ident.conf` username map (CN→role).
+//   5. Encrypted-PEM client key + `sslpassword` happy / sad paths.
+//   6. Intermediate client_ca chain; bare leaf rejected.
+//   7. `pg_stat_ssl` for SSL + plaintext, with client_dn population.
+//   8. CRL revocation via `sslcrl=` and `sslcrldir=` (CertVault mints a
+//      server-CA CRL revoking the active leaf).
+//   9. `ssl_min/max_protocol_version` range (correct connects; min>max
+//      fails; malformed rejected at the parse layer).
+//  10. `sslcertmode={disable,allow,require}`; `sslrootcert=system` (trust
+//      store + SSL_CERT_FILE override; verify-full raise at parse layer);
+//      `sslkeylogfile` (written on connect; bad path errors).
+//  11. DER-format client cert + key (auto-detected and converted).
+//  12. Group/world-readable client key rejection (POSIX).
+//  13. libpq-exact diagnostics — "no pg_hba.conf entry", "certificate
+//      verify failed", "does not match host name", "bad decrypt".
 //
-// `it.todo` subtests: NONE (the previous 2 todos are now `it()` after
-// the fixture extension + wire-layer additions).
+// `it.todo`: NONE.
 //
-// What we SKIP (with `it.skip(reason)` so they show up in the rollup):
+// What we SKIP (deliberate exceptions — full rationale in
+// COVERAGE_EXCEPTIONS.md). All remaining skips are server-side config or a
+// Node/OpenSSL behavioral difference, NOT unimplemented client features:
 //
-//   * CRL revocation chains — fixture has no CRL infrastructure (and the
-//     wire layer's `sslcrl` was tested in isolation).
-//   * `ssl_min_protocol_version` / `ssl_max_protocol_version` — Node TLS
-//     doesn't expose protocol-version knobs.
-//   * `sslcertmode={disable,allow,require}` — not exposed by our impl
-//     (libpq-specific concept we don't intend to add).
-//   * `sslkeylogfile` — not implemented (debug feature).
-//   * `sslrootcert=system` — platform CA store integration is a separate
-//     feature.
-//   * DER-format client cert / key — libpq supports both PEM and DER;
-//     Node's TLS accepts PEM only, so the DER variants are out of scope.
-//   * Client key file-permission enforcement — libpq's check; our impl
-//     defers to Node's TLS layer which is permissive.
-//   * `pg_ident.conf` DN mapping — server-side admin not in our scope.
-//   * Long client cert subject log truncation — server log inspection.
-//   * libpq exact-error-text assertions (`certificate verify failed` /
-//     `does not match host name` / `bad decrypt`) — our diagnostic
-//     strings differ from libpq's.
+//   * Server-side CRL (`ssl_crl_file` revoking client certs; non-ASCII
+//     subjects) — tests PG's enforcement, not our client.
+//   * `server fails to restart with min > max` / `passphrase_cmd` / long
+//     client-cert-subject log truncation — server-side config / log
+//     inspection.
+//   * `sslcrl` pointing at an unrelated CA — OpenSSL/Node silently ignore a
+//     CRL whose issuer isn't in the chain, so there is no client-side
+//     assertion (matching-CRL revocation IS tested).
 //
-// PORTED / SKIPPED ACCOUNTING (vitest reports for this file):
-//   * Ported `it` (passing):                32 (+ 1 gate `it()`)
-//   * `it.todo` (impl / fixture gap):        0
-//   * `it.skip` (out of scope / not impl):  27 individual `it.skip`s
-//                                           across 7 SKIPPED groups
+// (Plus the conditional gate skips: RUN_INTEGRATION / openssl / dist.)
 //
 // IMPORTANT: This spec boots its OWN postgres container with `ssl=on` via
 // the shared `pg-fixture-tls.ts` helper, NOT the plaintext fixture from

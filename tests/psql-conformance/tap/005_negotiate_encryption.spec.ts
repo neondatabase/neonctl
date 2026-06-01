@@ -18,11 +18,11 @@
 //     scope. The skipped subtests are listed in SKIPPED_GSS below for
 //     auditability.
 //
-//   * `sslnegotiation=direct` (PG 17+) requires the client to ALPN-
-//     negotiate "postgresql" *before* sending an SSLRequest, skipping the
-//     libpq-style "send SSLRequest, wait for S/N, then upgrade" dance.
-//     Our TS impl in `src/psql/wire/tls.ts` only implements the
-//     traditional path. Every `sslnegotiation=direct` row is `it.skip`.
+//   * `sslnegotiation=direct` (PG 17+) is now IMPLEMENTED: the wire layer
+//     skips the SSLRequest and ALPN-negotiates "postgresql" directly. The
+//     require+SSL-on / require+SSL-off rows are active tests; the
+//     direct+weak-sslmode rejection is a parse-layer check asserted via the
+//     built parser. (Only GSS rows below remain skipped.)
 //
 //   * The `injection_points` extension is a server-side build-time
 //     feature that lets the perl test simulate "backend errors at point
@@ -42,13 +42,12 @@
 // CLI through a PTY — there is no terminal interaction here, only TCP +
 // TLS handshake outcomes to verify.
 //
-// PORTED / SKIPPED ACCOUNTING (see bottom of file for the rollup):
-//   * Ported `it`:                 20
-//   * Skipped (GSS):                4
-//   * Skipped (direct SSL nego):    3
-//   * Skipped (injection points):   3
-//   * Skipped (unix socket):        2
-//   * `it.todo` (TS impl gap):      0
+// PORTED / SKIPPED ACCOUNTING (see COVERAGE_EXCEPTIONS.md for rationale):
+//   * Ported `it`:                 23  (incl. direct-SSL require on/off +
+//                                       direct+weak-sslmode parse rejection)
+//   * Skipped (GSS — no native dep): 6
+//   * Skipped (injection points):    3
+//   * `it.todo` (TS impl gap):       0
 //
 // IMPORTANT: This spec boots its OWN postgres container with `ssl=on` and
 // a self-signed cert (see `harness/pg-fixture-tls.ts`). It does NOT use
