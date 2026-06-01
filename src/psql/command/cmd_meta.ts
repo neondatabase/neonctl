@@ -27,16 +27,17 @@
  *   - `\!` always returns `{ status: 'ok' }` — upstream does not propagate
  *     the child's exit status to the surrounding script, only the run-mode.
  *     Tests use a stdio mock; in interactive use the child inherits stdio.
- *   - `\prompt -` (no-echo password prompting) is stubbed with a TODO that
- *     points at WP-24 (line editor). We currently fall back to echoing
- *     reads so the test surface is the same shape.
+ *   - `\prompt -` (no-echo password prompting) reads via the shared input
+ *     layer with echo suppressed on a TTY (falling back to a plain read on
+ *     non-interactive input).
  *   - `\qecho` writes to `settings.logfile` if set, else stdout. Upstream
  *     additionally honours a separate "query output" file set via `\o`;
  *     that wiring lives in WP-15 and we leave the hook in place.
  */
 
 import { spawnSync } from 'node:child_process';
-import { createInterface } from 'node:readline';
+
+import { readLine } from '../io/input.js';
 
 import type {
   BackslashCmdSpec,
@@ -200,12 +201,15 @@ export const cmdWarn: BackslashCmdSpec = {
  * `\prompt [TEXT] varname`
  *
  * Upstream: read one line of input from the terminal, optionally with a
- * prompt prefix, and assign it to a psql variable. The `-` flag (no echo)
- * is used for password prompting; we stub it with a TODO (WP-24) and fall
- * back to echoed reads.
+ * prompt prefix, and assign it to a psql variable. A leading `-` flag
+ * requests a no-echo read (used for password prompts); we honour it by
+ * reading through the shared input layer with echo suppressed on a TTY
+ * (and a plain read otherwise — non-interactive input still consumes the
+ * line, matching upstream).
  *
- * If only one arg is given, it is the variable name and no prompt prefix
- * is shown. If two, the first is the prompt and the second the variable.
+ * Args after the optional `-` flag are `[TEXT] varname`: if only one
+ * remains it is the variable name and no prompt prefix is shown; if two,
+ * the first is the prompt and the second the variable.
  */
 export const cmdPrompt: BackslashCmdSpec = {
   name: 'prompt',
@@ -217,13 +221,19 @@ export const cmdPrompt: BackslashCmdSpec = {
       if (a === null) break;
       args.push(a);
     }
+
+    // A leading `-` selects the no-echo (password) read path.
+    let echo = true;
+    if (args.length > 0 && args[0] === '-') {
+      echo = false;
+      args.shift();
+    }
+
     if (args.length === 0) {
       writeErr(`\\${ctx.cmdName}: missing required argument\n`);
       return { status: 'error' };
     }
 
-    // TODO(WP-24): support `-` flag for no-echo (password) reads through the
-    // line editor. For now we treat it as a no-op prefix and read normally.
     let promptText = '';
     let varname: string;
     if (args.length === 1) {
@@ -233,29 +243,12 @@ export const cmdPrompt: BackslashCmdSpec = {
       varname = args[1];
     }
 
-    const rl = createInterface({
-      input: process.stdin,
-      output: process.stderr,
-      terminal: false,
-    });
-    try {
-      const line = await new Promise<string>((resolve) => {
-        if (promptText) process.stderr.write(promptText);
-        rl.once('line', (l) => {
-          resolve(l);
-        });
-        rl.once('close', () => {
-          resolve('');
-        });
-      });
-      if (!ctx.settings.vars.set(varname, line)) {
-        writeErr(`\\${ctx.cmdName}: invalid variable name "${varname}"\n`);
-        return { status: 'error' };
-      }
-      return { status: 'ok' };
-    } finally {
-      rl.close();
+    const line = await readLine(promptText, { echo });
+    if (!ctx.settings.vars.set(varname, line)) {
+      writeErr(`\\${ctx.cmdName}: invalid variable name "${varname}"\n`);
+      return { status: 'error' };
     }
+    return { status: 'ok' };
   },
 };
 

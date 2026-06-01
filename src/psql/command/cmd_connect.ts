@@ -58,8 +58,6 @@ import {
   pbkdf2Sync,
   randomBytes as nodeRandomBytes,
 } from 'node:crypto';
-import { createInterface } from 'node:readline';
-
 import type {
   BackslashCmdSpec,
   BackslashContext,
@@ -69,6 +67,7 @@ import type {
 import type { Connection, ConnectOptions } from '../types/connection.js';
 import type { PsqlSettings } from '../types/settings.js';
 
+import { readLine as readInputLine } from '../io/input.js';
 import { PgConnection } from '../wire/connection.js';
 
 import { writeErr, writeOut } from './shared.js';
@@ -634,76 +633,17 @@ export const scramSha256Verifier = (
   );
 };
 
-async function defaultReadLine(
+/**
+ * Default password / prompt reader. Delegates to the shared input layer
+ * ({@link readInputLine}), which suppresses echo on a TTY and falls back to a
+ * plain line read otherwise. Kept as a named function so the test seam in
+ * {@link CmdConnectDeps} can swap it out.
+ */
+function defaultReadLine(
   prompt: string,
   opts: { echo: boolean },
 ): Promise<string> {
-  // TODO(WP-24): hook into the line editor once it lands so we can suppress
-  // echo natively. For now we read a full line; on a TTY this echoes, which
-  // is a leak we accept until WP-24. `echo: false` is honoured on a best
-  // effort basis by toggling raw mode if the stdin is a TTY.
-  const isTty =
-    process.stdin.isTTY && typeof process.stdin.setRawMode === 'function';
-  if (!opts.echo && isTty) {
-    return readPasswordTty(prompt);
-  }
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-    terminal: false,
-  });
-  try {
-    return await new Promise<string>((resolve) => {
-      if (prompt.length > 0) process.stderr.write(prompt);
-      rl.once('line', (l) => {
-        resolve(l);
-      });
-      rl.once('close', () => {
-        resolve('');
-      });
-    });
-  } finally {
-    rl.close();
-  }
-}
-
-function readPasswordTty(prompt: string): Promise<string> {
-  return new Promise<string>((resolve) => {
-    process.stderr.write(prompt);
-    const stdin = process.stdin;
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding('utf8');
-    let buf = '';
-    const onData = (chunk: string): void => {
-      for (const ch of chunk) {
-        if (ch === '\n' || ch === '\r' || ch === '') {
-          stdin.setRawMode(false);
-          stdin.pause();
-          stdin.removeListener('data', onData);
-          process.stderr.write('\n');
-          resolve(buf);
-          return;
-        }
-        if (ch === '') {
-          // Ctrl-C: cancel, fail silently.
-          stdin.setRawMode(false);
-          stdin.pause();
-          stdin.removeListener('data', onData);
-          process.stderr.write('\n');
-          resolve('');
-          return;
-        }
-        if (ch === '' || ch === '\b') {
-          // Backspace.
-          buf = buf.slice(0, -1);
-          continue;
-        }
-        buf += ch;
-      }
-    };
-    stdin.on('data', onData);
-  });
+  return readInputLine(prompt, { echo: opts.echo });
 }
 
 /** `\password [USERNAME]` — change a role's password, locally hashed as SCRAM. */

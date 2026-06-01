@@ -5,6 +5,14 @@ import type { PsqlSettings } from '../types/settings.js';
 import { createVarStore } from '../core/variables.js';
 import { defaultSettings } from '../core/settings.js';
 
+// Stub the shared input layer so `\prompt` doesn't touch the real stdin and we
+// can assert which echo mode it selects.
+const readLineMock = vi.fn<[string, { echo: boolean }], Promise<string>>();
+vi.mock('../io/input.js', () => ({
+  readLine: (prompt: string, opts: { echo: boolean }) =>
+    readLineMock(prompt, opts),
+}));
+
 import {
   cmdCd,
   cmdCopyright,
@@ -12,6 +20,7 @@ import {
   cmdErrverbose,
   cmdGetenv,
   cmdHelpSQL,
+  cmdPrompt,
   cmdQecho,
   cmdQuit,
   cmdSet,
@@ -454,6 +463,55 @@ describe('\\errverbose', () => {
     expect(stderr()).not.toMatch(/^psql: /m);
     expect(stderr()).toMatch(/oops/);
     expect(stderr()).toMatch(/42P01/);
+  });
+});
+
+describe('\\prompt', () => {
+  beforeEach(() => {
+    readLineMock.mockReset();
+    readLineMock.mockResolvedValue('typed-value');
+  });
+
+  test('reads with echo on and stores the value', async () => {
+    const settings = defaultSettings(createVarStore());
+    const ctx = makeMockCtx('prompt', "'Name: ' myvar", settings);
+    const r = await run(cmdPrompt, ctx);
+    expect(r.status).toBe('ok');
+    expect(readLineMock).toHaveBeenCalledWith('Name: ', { echo: true });
+    expect(settings.vars.get('myvar')).toBe('typed-value');
+  });
+
+  test('a leading "-" selects the no-echo (password) read path', async () => {
+    const settings = defaultSettings(createVarStore());
+    const ctx = makeMockCtx('prompt', "- 'Password: ' pw", settings);
+    const r = await run(cmdPrompt, ctx);
+    expect(r.status).toBe('ok');
+    expect(readLineMock).toHaveBeenCalledWith('Password: ', { echo: false });
+    expect(settings.vars.get('pw')).toBe('typed-value');
+  });
+
+  test('"-" with only a varname shows no prompt and reads no-echo', async () => {
+    const settings = defaultSettings(createVarStore());
+    const ctx = makeMockCtx('prompt', '- pw', settings);
+    const r = await run(cmdPrompt, ctx);
+    expect(r.status).toBe('ok');
+    expect(readLineMock).toHaveBeenCalledWith('', { echo: false });
+    expect(settings.vars.get('pw')).toBe('typed-value');
+  });
+
+  test('errors when no variable name is given', async () => {
+    const ctx = makeMockCtx('prompt', '-');
+    const r = await run(cmdPrompt, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/missing required argument/);
+    expect(readLineMock).not.toHaveBeenCalled();
+  });
+
+  test('rejects an invalid variable name', async () => {
+    const ctx = makeMockCtx('prompt', '1bad');
+    const r = await run(cmdPrompt, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/invalid variable name/);
   });
 });
 
