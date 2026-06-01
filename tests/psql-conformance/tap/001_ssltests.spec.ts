@@ -78,6 +78,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   isOpensslAvailable,
+  LONG_CERT_USER,
   setupTlsPg,
   switchServerCertSql,
   teardownTlsPg,
@@ -1155,10 +1156,21 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
       }
     });
 
-    // Non-ASCII cert subjects would need a dedicated non-ASCII-CN cert in
-    // CertVault; the revocation mechanism itself is covered above.
-    it.skip('server-side CRL handles non-ASCII subjects', () => {
-      /* low value — needs a non-ASCII-CN cert minted in CertVault */
+    // The client-CA CRL also lists the `nonascii` cert (UTF-8 CN). That the
+    // server parsed that CRL without breaking is already proven by the
+    // "non-revoked still connects" test above; here we confirm the revoked
+    // non-ASCII cert is itself rejected at the TLS layer.
+    it('rejects a revoked client cert with a non-ASCII subject', async () => {
+      const t = ensureFixture();
+      const nonascii = t.tls.vault.getClientCert('nonascii');
+      const conn = await tryConnect({
+        user: 'revokeduser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: nonascii.cert,
+        sslkey: nonascii.key,
+      });
+      expect(conn).toBeNull();
     });
   });
 
@@ -1350,8 +1362,24 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
         await conn.close();
       }
     });
-    it.skip('long client cert subject is truncated in the server log', () => {
-      /* unreachable — log inspection not supported via wire layer */
+    // Over-long cert subject (security). Upstream asserts the SERVER LOG
+    // truncates a >NAMEDATALEN subject (log inspection, out of scope). The
+    // client-observable property: a valid, trusted, non-revoked cert whose
+    // CN (64 bytes) is longer than a role name can hold (63) must NOT
+    // authenticate — the full CN can't equal the truncated role under
+    // verify-full, so the connection is rejected.
+    it('rejects a valid cert whose subject is too long to match a role', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const longCert = t.tls.vault.getClientCert('longsubject');
+      const conn = await tryConnect({
+        user: LONG_CERT_USER, // the 63-byte role the 64-byte CN truncates to
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: longCert.cert,
+        sslkey: longCert.key,
+      });
+      expect(conn).toBeNull();
     });
   });
 

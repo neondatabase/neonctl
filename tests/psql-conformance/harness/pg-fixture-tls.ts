@@ -128,7 +128,31 @@ export type ServerCertName =
   | 'pss';
 
 /** Identifier for a client cert the spec can pass via sslcert/sslkey. */
-export type ClientCertName = 'ssltestuser' | 'anotheruser' | 'revokeduser';
+export type ClientCertName =
+  | 'ssltestuser'
+  | 'anotheruser'
+  | 'revokeduser'
+  /** Non-ASCII (UTF-8) CN; revoked by the client-CA CRL — exercises CRL
+   * handling of non-ASCII subjects (`server-side CRL non-ASCII` test). */
+  | 'nonascii'
+  /** CN longer than NAMEDATALEN-1 (63 bytes); valid + trusted but its
+   * subject cannot round-trip to a role, so verify-full must reject it. */
+  | 'longsubject';
+
+/**
+ * CN of the `longsubject` client cert: `ssl-` + 60 chars = 64 bytes, one
+ * past PostgreSQL's NAMEDATALEN-1 (63) identifier limit. Mirrors upstream
+ * `client-long`'s `ssl-1234…` subject.
+ */
+export const LONG_CERT_CN = 'ssl-' + '1234567890'.repeat(6);
+/**
+ * The role/HBA name a 64-byte CN collapses to once stored as a PG `name`
+ * (truncated to 63 bytes). The full-length cert CN can never equal this,
+ * so verify-full rejects it — that is the property the test asserts.
+ */
+export const LONG_CERT_USER = LONG_CERT_CN.slice(0, 63);
+/** CN of the non-ASCII client cert revoked by the client-CA CRL. */
+export const NONASCII_CERT_CN = 'révoqué-Ünïcode-Пользователь';
 
 /**
  * Container-side paths the server reads its TLS material from. The init
@@ -240,6 +264,11 @@ export class CertVault {
     // `revokeduser` exists solely to be revoked by the client-CA CRL the
     // server loads via `ssl_crl_file` (server-side revocation test).
     this.mintClientCert('revokeduser', '/CN=revokeduser');
+    // Non-ASCII CN, also revoked — exercises CRL handling of UTF-8 subjects.
+    this.mintClientCert('nonascii', `/CN=${NONASCII_CERT_CN}`);
+    // Over-long CN (64 bytes) — valid + trusted, NOT revoked; used to prove
+    // a subject too long to store as a role can't authenticate.
+    this.mintClientCert('longsubject', `/CN=${LONG_CERT_CN}`);
 
     // 7. Encrypted variant of ssltestuser's key. PKCS#8 AES-256, passphrase
     // "testpw". We don't keep the unencrypted key path under a different
@@ -268,7 +297,7 @@ export class CertVault {
     // is checkable. Without it, verifying a non-revoked cert fails with
     // "unknown ca". So each `sslcrl` / `ssl_crl_file` is a PEM bundle of the
     // revoking CA's CRL + the root CA's empty CRL.
-    const rootCaCrl = this.mintCrl('root', rootCert, rootKey, null, 'root.crl');
+    const rootCaCrl = this.mintCrl('root', rootCert, rootKey, [], 'root.crl');
 
     // 8a. Client-side `sslcrl`: server_ca CRL revoking the active server leaf
     // (cn-and-san) + root CRL. The client passes this to reject a revoked
@@ -279,7 +308,7 @@ export class CertVault {
       'server',
       this.serverCaCertPath,
       this.path('server_ca.key'),
-      serverLeaf.cert,
+      [serverLeaf.cert],
       'server_ca_only.crl',
     );
     this.serverCrlPath = this.path('server_ca.crl');
@@ -289,15 +318,19 @@ export class CertVault {
     );
 
     // 8b. Server-side `ssl_crl_file`: client_ca CRL revoking `revokeduser`
-    // + root CRL. The server loads this to reject the revoked client cert.
+    // AND the non-ASCII-CN cert (proves the CRL path handles UTF-8 subjects)
+    // + root CRL. The server loads this to reject the revoked client certs.
     const revoked = this.clientCerts.get('revokeduser');
-    if (!revoked) throw new Error('CertVault: revokeduser cert not minted');
+    const nonascii = this.clientCerts.get('nonascii');
+    if (!revoked || !nonascii) {
+      throw new Error('CertVault: revoked client certs not minted');
+    }
     if (!this.clientCaCertPath) throw new Error('CertVault: client CA missing');
     const clientCaCrl = this.mintCrl(
       'client',
       this.clientCaCertPath,
       this.path('client_ca.key'),
-      revoked.cert,
+      [revoked.cert, nonascii.cert],
       'client_ca_only.crl',
     );
     this.clientCrlPath = this.path('client_ca.crl');
@@ -319,7 +352,7 @@ export class CertVault {
     slug: string,
     caCertPath: string,
     caKeyPath: string,
-    revokeCertPath: string | null,
+    revokeCertPaths: string[],
     outName: string,
   ): string {
     const indexPath = this.path(`crl-${slug}-index.txt`);
@@ -360,11 +393,11 @@ export class CertVault {
       ].join('\n') + '\n',
     );
 
-    // Mark the cert revoked in the CA database (if any), then emit the CRL.
-    // A null `revokeCertPath` yields an EMPTY CRL — needed for intermediate
-    // CAs so OpenSSL's CRL_CHECK_ALL can confirm they aren't revoked.
-    if (revokeCertPath !== null) {
-      runOpenssl(['ca', '-config', configPath, '-revoke', revokeCertPath]);
+    // Mark each cert revoked in the CA database, then emit the CRL. An empty
+    // `revokeCertPaths` yields an EMPTY CRL — needed for intermediate CAs so
+    // OpenSSL's CRL_CHECK_ALL can confirm they aren't revoked.
+    for (const certPath of revokeCertPaths) {
+      runOpenssl(['ca', '-config', configPath, '-revoke', certPath]);
     }
     runOpenssl(['ca', '-config', configPath, '-gencrl', '-out', crlPath]);
     return crlPath;
@@ -645,6 +678,9 @@ export class CertVault {
       key,
       '-out',
       csr,
+      // `-utf8` so a non-ASCII CN (the `nonascii` client cert) is encoded as
+      // UTF8String rather than mangled; harmless for ASCII subjects.
+      '-utf8',
       '-subj',
       subj,
     ]);
@@ -745,6 +781,9 @@ CREATE USER mappeduser;
 -- Reachable only via cert auth; its cert is listed in the client-CA CRL,
 -- so it is rejected once the server loads ssl_crl_file.
 CREATE USER revokeduser;
+-- The role a 64-byte cert CN truncates to (63 bytes). The full-length CN
+-- can never equal this, so verify-full rejects the over-long cert.
+CREATE USER "${LONG_CERT_USER}";
 
 -- Password-auth users for the 002_scram suite. The cluster default
 -- \`password_encryption\` is scram-sha-256 (PG 14+), so the SCRAM user
@@ -815,6 +854,10 @@ hostssl        all       mappeduser   ::/0            cert clientcert=verify-ful
 # revokeduser: cert auth; rejected once ssl_crl_file lists its cert.
 hostssl        all       revokeduser  0.0.0.0/0       cert clientcert=verify-full
 hostssl        all       revokeduser  ::/0            cert clientcert=verify-full
+# Over-long cert subject: rule matches the 63-byte truncated role, but the
+# 64-byte cert CN can't equal it under verify-full -> auth rejected.
+hostssl        all       "${LONG_CERT_USER}"  0.0.0.0/0   cert clientcert=verify-full
+hostssl        all       "${LONG_CERT_USER}"  ::/0        cert clientcert=verify-full
 # Password-auth users for the 002_scram suite. Both are TLS-only so
 # the auth flow exercises SCRAM channel binding when channel_binding
 # is requested. The methods are per-user (not catch-all) so plaintext
