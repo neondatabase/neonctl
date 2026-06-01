@@ -1988,14 +1988,13 @@ describe('PgConnection multi-host', () => {
     const b = await startRoleServer({ inRecovery: false });
     servers.push(a, b);
 
-    // Inject a fake resolver: `pg-loadbalancetest` → 127.0.0.1 (both
-    // entries, since we can't bind 127.0.0.2/3 portably in this test
-    // env). The fan-out semantics — one DNS lookup turning into N
-    // candidates — are still exercised: the SECOND IP from the lookup
-    // is what the deterministic shuffle picks.
-    //
-    // For the test to be deterministic we ALSO inject a Fisher-Yates
-    // RNG that returns 0.0 (always picks j=0), reversing the list.
+    // Inject a fake resolver: `pg-loadbalancetest` → 127.0.0.1 for both
+    // (host, port) entries in the list (we can't bind 127.0.0.2/3
+    // portably in this test env). The fan-out semantics — one DNS
+    // lookup turning into N candidates — are still exercised end-to-
+    // end: with `_loadBalanceRng=0` the Fisher-Yates shuffle reverses
+    // the expanded list, so `b.port` (the second entry) is tried first
+    // and accepted.
     (
       PgConnection as unknown as {
         _dnsLookupAll:
@@ -2004,24 +2003,14 @@ describe('PgConnection multi-host', () => {
       }
     )._dnsLookupAll = async (host) => {
       if (host === 'pg-loadbalancetest') {
-        return Promise.resolve([
-          // Two entries point at our two test servers' ports via the
-          // candidate's port; but DNS only returns addresses, not ports.
-          // Workaround: drive the fan-out from a `hosts` list with the
-          // same hostname listed twice, each entry carrying its own
-          // port. This is the OTHER half of fan-out — the (host, port)
-          // pair contributes one entry per A record for THAT port.
-          { address: '127.0.0.1', family: 4 },
-        ]);
+        return Promise.resolve([{ address: '127.0.0.1', family: 4 }]);
       }
       throw new Error(`unexpected dns.lookup(${host})`);
     };
+    (
+      PgConnection as unknown as { _loadBalanceRng: (() => number) | null }
+    )._loadBalanceRng = (): number => 0;
     try {
-      // hosts=[loadbalancetest:portA, loadbalancetest:portB], dns
-      // returns single A record per lookup. After fan-out the list is
-      // [(127.0.0.1, portA), (127.0.0.1, portB)] — same shape as the
-      // existing multi-host tests, proving the lookup ran and produced
-      // the expected (address, port) pairs.
       const conn = await PgConnection.connect({
         host: 'pg-loadbalancetest',
         port: a.port,
@@ -2032,9 +2021,13 @@ describe('PgConnection multi-host', () => {
         user: 'u',
         database: 'db',
         ssl: 'disable',
+        loadBalanceHosts: 'random',
       });
+      // After fan-out the candidate list is
+      //   [(127.0.0.1, a.port), (127.0.0.1, b.port)]
+      // Reversed by the deterministic shuffle → b.port lands first.
       expect(conn.host).toBe('127.0.0.1');
-      expect(conn.port).toBe(a.port);
+      expect(conn.port).toBe(b.port);
       await conn.close();
     } finally {
       (
@@ -2044,10 +2037,13 @@ describe('PgConnection multi-host', () => {
             | null;
         }
       )._dnsLookupAll = null;
+      (
+        PgConnection as unknown as { _loadBalanceRng: (() => number) | null }
+      )._loadBalanceRng = null;
     }
   });
 
-  test('IP literals bypass DNS lookup (no resolver call)', async () => {
+  test('IP literals bypass DNS lookup (no resolver call) under load_balance_hosts=random', async () => {
     const a = await startRoleServer({ inRecovery: false });
     servers.push(a);
 
@@ -2069,6 +2065,7 @@ describe('PgConnection multi-host', () => {
         user: 'u',
         database: 'db',
         ssl: 'disable',
+        loadBalanceHosts: 'random',
       });
       expect(resolverCalls).toBe(0);
       expect(conn.host).toBe('127.0.0.1');
@@ -2104,6 +2101,13 @@ describe('PgConnection multi-host', () => {
       }
       return Promise.resolve([{ address: '127.0.0.1', family: 4 }]);
     };
+    // Inject `Math.random => 1` so Fisher-Yates with `Math.floor(rng()*n)`
+    // returns the LAST index — keeping the order stable. (`=> 0` would
+    // reverse the list, putting the unresolvable host last after fan-
+    // out, also acceptable for this test; we just need determinism.)
+    (
+      PgConnection as unknown as { _loadBalanceRng: (() => number) | null }
+    )._loadBalanceRng = (): number => 0.999_999;
     try {
       // First host fails to resolve; second is the live server. Fan-out
       // drops the unresolvable one, the connect loop succeeds on the
@@ -2118,6 +2122,7 @@ describe('PgConnection multi-host', () => {
         user: 'u',
         database: 'db',
         ssl: 'disable',
+        loadBalanceHosts: 'random',
       });
       expect(conn.host).toBe('127.0.0.1');
       expect(conn.port).toBe(a.port);
@@ -2130,6 +2135,9 @@ describe('PgConnection multi-host', () => {
             | null;
         }
       )._dnsLookupAll = null;
+      (
+        PgConnection as unknown as { _loadBalanceRng: (() => number) | null }
+      )._loadBalanceRng = null;
     }
   });
 });

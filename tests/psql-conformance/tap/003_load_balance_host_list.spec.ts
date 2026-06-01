@@ -249,15 +249,23 @@ const bootThreeNodes = async (): Promise<NodeInfo[]> => {
     builders.map((b) => b.start()),
   );
   nodeContainers = started;
-  return started.map((c) => ({
-    // testcontainers' getHost() returns 'localhost' on local docker; the
-    // wire layer happily accepts either '127.0.0.1' or 'localhost'.
-    host: c.getHost(),
-    port: c.getPort(),
-    user: c.getUsername(),
-    password: c.getPassword(),
-    database: c.getDatabase(),
-  }));
+  return started.map((c) => {
+    // testcontainers' `getHost()` returns `localhost` on local docker.
+    // We normalise to `127.0.0.1` so the wire's DNS fan-out (only fires
+    // for `load_balance_hosts=random`, but worth being explicit) doesn't
+    // expand `localhost` to both `::1` and `127.0.0.1` and change the
+    // deterministic-shuffle test's first-pick port. Docker port mapping
+    // is on `127.0.0.1` only; `::1` would refuse the connection.
+    const rawHost = c.getHost();
+    const host = rawHost === 'localhost' ? '127.0.0.1' : rawHost;
+    return {
+      host,
+      port: c.getPort(),
+      user: c.getUsername(),
+      password: c.getPassword(),
+      database: c.getDatabase(),
+    };
+  });
 };
 
 /**

@@ -526,11 +526,17 @@ export class PgConnection implements Connection {
         : [{ host: opts.host, port: opts.port }];
 
     // DNS fan-out: a single hostname can resolve to multiple A/AAAA records,
-    // and libpq treats each resulting IP as its own candidate (so
-    // `load_balance_hosts=random` shuffles the FLAT (ip, port) list, not
-    // the (hostname, port) list). Unix-domain socket paths and IP literals
-    // bypass the lookup. Mirrors upstream `004_load_balance_dns.pl`.
-    const candidates = await expandHostsViaDns(seed);
+    // and libpq treats each resulting IP as its own candidate so
+    // `load_balance_hosts=random` shuffles the FLAT (ip, port) list rather
+    // than the (hostname, port) list. We only fan out when load balancing
+    // is actually requested — for the default `disable` mode Node's
+    // `net.connect({host: 'localhost'})` picks one IP itself, AND
+    // preserving the original hostname is required for TLS SAN
+    // verification (the `host` value is the SNI / verify-full identity).
+    // Unix-domain socket paths and IP literals bypass the lookup either
+    // way. Mirrors upstream `004_load_balance_dns.pl`.
+    const candidates =
+      opts.loadBalanceHosts === 'random' ? await expandHostsViaDns(seed) : seed;
 
     if (opts.loadBalanceHosts === 'random') {
       shuffleInPlace(candidates, PgConnection._loadBalanceRng ?? Math.random);
