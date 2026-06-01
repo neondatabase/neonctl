@@ -130,6 +130,7 @@ import {
   Query_for_list_of_timezone_names_quoted_out,
   Query_for_list_of_types,
   Query_for_list_of_views,
+  Query_for_values_of_enum_GUC,
   runCatalogQuery,
 } from './queries.js';
 import {
@@ -2453,6 +2454,25 @@ const sqlRules = async (
       ? Query_for_list_of_timezone_names_quoted_in
       : Query_for_list_of_timezone_names_quoted_out;
     const cands = await runCatalogQuery(conn, query, currentWord);
+    return { candidates: cands };
+  }
+  // `SET <name> TO|= <prefix>` for any enum-typed GUC — emit the legal
+  // values from `pg_settings.enumvals`. Mirrors upstream `tab-complete.in.c`
+  // `Query_for_values_of_enum_GUC`. Enum-typed GUCs (intervalstyle,
+  // bytea_output, synchronous_commit, plpgsql.variable_conflict, …) get
+  // value completion; non-enum GUCs return an empty rowset (no candidates)
+  // — matching upstream, which also emits nothing for unknown GUCs once a
+  // value position is reached.
+  if (TailMatches(prevWords, ['SET', MatchAny, 'TO|='])) {
+    if (!conn) return { candidates: [] };
+    // Walk back to the GUC name (the word before TO/=).
+    const gucName = prevWords[prevWords.length - 2];
+    const cands = await runCatalogQuery(
+      conn,
+      Query_for_values_of_enum_GUC,
+      currentWord,
+      [gucName],
+    );
     return { candidates: cands };
   }
   // `SET <name> <TAB>` (no operator yet) → TO.

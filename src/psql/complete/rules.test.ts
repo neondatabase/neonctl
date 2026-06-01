@@ -706,6 +706,55 @@ describe('findCompletions: GUC names via pg_settings', () => {
     expect(r.candidates).toContain('SQL');
     expect(r.candidates).toContain('POSTGRES');
   });
+
+  // GUC enum value completion — Query_for_values_of_enum_GUC. Backs the
+  // upstream test "complete a GUC enum value" (010_tab_completion.pl line
+  // 370). The mock conn keys the canned rowset off the
+  // `enumvals` substring in the SQL — see makeMockConn above.
+  it('SET intervalstyle TO iso → iso_8601 (enum GUC value)', async () => {
+    const conn = makeMockConn({
+      enumvals: ['postgres', 'postgres_verbose', 'sql_standard', 'iso_8601'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SET', 'intervalstyle', 'TO'], 'iso', ctx);
+    expect(r.candidates).toEqual(['iso_8601']);
+  });
+
+  it('SET plpgsql.variable_conflict TO USE_C → use_column (qualified enum GUC)', async () => {
+    const conn = makeMockConn({
+      enumvals: ['error', 'use_variable', 'use_column'],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(
+      ['SET', 'plpgsql.variable_conflict', 'TO'],
+      'USE_C',
+      ctx,
+    );
+    expect(r.candidates).toEqual(['use_column']);
+  });
+
+  it('SET work_mem TO → empty (non-enum GUC has no enumvals)', async () => {
+    // Mock conn returns empty rowset since no `enumvals` substring match
+    // → simulates the catalog returning no rows for a non-enum GUC.
+    const conn = makeMockConn({});
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SET', 'work_mem', 'TO'], '', ctx);
+    expect(r.candidates).toEqual([]);
+  });
+
+  it('SET plpg → plpgsql.* qualified GUCs (via pg_settings)', async () => {
+    const conn = makeMockConn({
+      'pg_catalog.pg_settings': [
+        'plpgsql.check_asserts',
+        'plpgsql.extra_errors',
+        'plpgsql.variable_conflict',
+      ],
+    });
+    const ctx = { settings: makeSettings(conn) };
+    const r = await findCompletions(['SET'], 'plpg', ctx);
+    expect(r.candidates).toContain('plpgsql.check_asserts');
+    expect(r.candidates).toContain('plpgsql.variable_conflict');
+  });
 });
 
 // ---------------------------------------------------------------------------
