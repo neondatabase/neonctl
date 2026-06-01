@@ -41,21 +41,21 @@
  */
 
 import { Buffer } from 'node:buffer';
-// `pg-protocol@1.14` is published as CommonJS. Node's ESM static
-// analyzer extracts only `module.exports.__esModule = true` style
-// named exports from CJS; the actual function exports on
-// `module.exports` (including `serialize`) aren't visible to a named
-// import. tsc with `module: NodeNext` preserves the import verbatim,
-// so a `import { serialize } from 'pg-protocol'` at runtime under
-// Node ESM dies with `SyntaxError: Named export 'serialize' not
-// found`. Use the default-import + destructure form which node-
-// postgres itself uses for the same reason.
-import pgProtocol from 'pg-protocol';
+// pg-protocol@1.14 ships two entry points via its `exports` map:
+//   - `./esm/index.js` (the `"import"` key) — a thin ESM wrapper that does
+//     `import * as protocol from '../dist/index.js'`.
+//   - `./dist/index.js` (the `"require"` / `"default"` keys) — the actual
+//     CJS implementation.
+// On Node 20, resolving `'pg-protocol'` from an ESM context picks the
+// `esm/index.js` wrapper, BUT the surrounding `package.json` has no
+// `"type": "module"` field. Node 20 still parses the wrapper as CJS, hits
+// the `import` syntax, and dies with `SyntaxError: Cannot use import
+// statement outside a module`. Node 22+ honours the `"import"` exports
+// key as a forced-ESM hint and avoids this. To stay portable across both,
+// we import the CJS implementation directly — same pattern node-postgres
+// uses for the `Parser` subpath, and what we already do on the next line.
+import pgProtocol from 'pg-protocol/dist/index.js';
 const { serialize } = pgProtocol;
-// `Parser` is not part of pg-protocol's top-level exports (only `serialize`,
-// `parse`, and `DatabaseError` are). The package's `exports` map permits
-// `./dist/*` subpath imports, which is the canonical way to reach the parser
-// class — node-postgres' own pg client does the same.
 import { Parser } from 'pg-protocol/dist/parser.js';
 
 // ---------------------------------------------------------------------------
