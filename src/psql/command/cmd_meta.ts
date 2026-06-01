@@ -36,8 +36,13 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { readLine } from '../io/input.js';
+import { getHistory } from '../io/history.js';
+import { slashUsage } from '../core/help.js';
 
 import type {
   BackslashCmdSpec,
@@ -851,6 +856,172 @@ export const cmdHelpSQL: BackslashCmdSpec = {
     // multi-word topics like "CREATE TABLE" come through intact.
     const topic = ctx.restOfLine();
     helpSQL(process.stdout, topic.length === 0 ? null : topic, screenWidth());
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * `\?` — show help for the backslash commands.
+ *
+ * Delegates to {@link slashUsage} in `core/help.ts`. We pass the output
+ * stream (`process.stdout`) and request the pager only when that stream is
+ * an interactive TTY — `slashUsage`/`emitHelp` re-check interactivity, but
+ * gating the request here keeps the non-interactive path (scripts, piped
+ * output, the regress harness) writing straight to stdout with no pager.
+ *
+ * Upstream `exec_command_help` reads `[commands|options|variables]`; we
+ * mirror the default (backslash commands) form, which is the only variant
+ * `\?` reaches without an argument. The remainder of the line is consumed
+ * so a stray topic doesn't leak into the next command.
+ */
+export const cmdSlashHelp: BackslashCmdSpec = {
+  name: '?',
+  argMode: 'whole-line',
+  helpKey: '?',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    // Consume the rest of the line (`\? options`, `\? variables`) so the
+    // cursor doesn't strand trailing text; we only render the command help.
+    ctx.restOfLine();
+    const out = process.stdout;
+    const pager = Boolean((out as NodeJS.WriteStream).isTTY);
+    slashUsage(out, pager);
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * Resolve the editor command psql would launch for `\e` / `\ef` / `\ev`,
+ * mirroring upstream `editFile` / `get_alternate_expansion`:
+ *
+ *   $PSQL_EDITOR  ||  $EDITOR  ||  $VISUAL  ||  platform default
+ *
+ * The platform default is `notepad.exe` on Windows and `vi` elsewhere,
+ * matching upstream's `DEFAULT_EDITOR`.
+ */
+export const resolveEditor = (
+  env: Record<string, string | undefined> = process.env,
+): string => {
+  const explicit = env.PSQL_EDITOR ?? env.EDITOR ?? env.VISUAL;
+  if (explicit !== undefined && explicit.length > 0) return explicit;
+  return process.platform === 'win32' ? 'notepad.exe' : 'vi';
+};
+
+/**
+ * `\e` / `\edit [FILE] [LINE]` — edit the current query buffer (or a file)
+ * in the user's editor, then load the edited text back into the query
+ * buffer.
+ *
+ * This port implements the common no-FILE form: dump the current query
+ * buffer to a temp file, spawn the editor on it inheriting stdio (upstream
+ * `do_edit` → `editFile`), and on a clean exit read the file back and
+ * return it as the new query buffer via `status: 'reset-buf'`. Upstream
+ * strips a single trailing newline the editor may add; we do the same so
+ * round-tripping an unchanged buffer is a no-op.
+ *
+ * Editor selection follows {@link resolveEditor}. The spawn uses
+ * `spawnSync(..., { stdio: 'inherit' })` so the editor owns the terminal.
+ * If the editor exits non-zero (or fails to spawn) we leave the buffer
+ * untouched and report an error, matching upstream's behaviour of not
+ * importing a failed edit.
+ *
+ * FILE / LINE arguments are accepted but the buffer is still seeded from
+ * the current query buffer; a future WP can layer file-backed editing
+ * (`\e file`) and `\ef`/`\ev` on top.
+ */
+export const cmdEdit: BackslashCmdSpec = {
+  name: 'e',
+  aliases: ['edit'],
+  argMode: 'whole-line',
+  helpKey: 'e',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    // We don't yet support `\e FILE`; consume the args so they don't strand.
+    ctx.restOfLine();
+
+    const editor = resolveEditor();
+    // psql seeds the temp file with the current query buffer. A trailing
+    // newline keeps editors that expect newline-terminated files happy.
+    const seed =
+      ctx.queryBuf.length > 0 && !ctx.queryBuf.endsWith('\n')
+        ? ctx.queryBuf + '\n'
+        : ctx.queryBuf;
+
+    let dir: string | null = null;
+    try {
+      dir = mkdtempSync(join(tmpdir(), 'psql.edit.'));
+      const file = join(dir, 'edit.sql');
+      writeFileSync(file, seed, 'utf8');
+
+      const result = spawnSync(editor, [file], { stdio: 'inherit' });
+      if (result.error || (result.status !== null && result.status !== 0)) {
+        const why = result.error
+          ? result.error.message
+          : `editor exited with status ${String(result.status)}`;
+        writeErr(`\\${ctx.cmdName}: ${why}\n`);
+        return Promise.resolve({ status: 'error' });
+      }
+
+      let edited = readFileSync(file, 'utf8');
+      // Upstream drops a single trailing newline the editor may have added
+      // so an unchanged round-trip restores the original buffer exactly.
+      if (edited.endsWith('\n')) edited = edited.slice(0, -1);
+      return Promise.resolve({ status: 'reset-buf', newBuf: edited });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeErr(`\\${ctx.cmdName}: ${msg}\n`);
+      return Promise.resolve({ status: 'error' });
+    } finally {
+      if (dir) {
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch {
+          // Temp-dir cleanup is best-effort; a leftover dir is harmless.
+        }
+      }
+    }
+  },
+};
+
+/**
+ * `\s [FILENAME]` — print the command-line history, or save it to FILENAME.
+ *
+ * Mirrors upstream `exec_command_s` / `printHistory`:
+ *
+ *   - No argument: write the in-memory history (one entry per line) to
+ *     stdout. Multi-line entries are printed verbatim (with their embedded
+ *     newlines), matching readline's `\s` dump.
+ *   - FILENAME given: write the same dump to that file. On success, and
+ *     unless `\set QUIET` is in effect, print `Wrote history to file
+ *     "<file>".` to stdout. On failure, emit the OS error to stderr and
+ *     return an error.
+ *
+ * The history source is {@link getHistory}, the session's in-memory list
+ * populated as each line is submitted (see `io/history.ts`).
+ */
+export const cmdS: BackslashCmdSpec = {
+  name: 's',
+  helpKey: 's',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    const fname = ctx.nextArg('normal');
+    const entries = getHistory();
+    // Each entry is one logical command; readline's `\s` prints them one
+    // per line, so a trailing newline per entry reproduces that layout.
+    const body = entries.map((e) => e + '\n').join('');
+
+    if (fname === null || fname.length === 0) {
+      writeOut(body);
+      return Promise.resolve({ status: 'ok' });
+    }
+
+    try {
+      writeFileSync(fname, body, 'utf8');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeErr(`\\${ctx.cmdName}: ${msg}\n`);
+      return Promise.resolve({ status: 'error' });
+    }
+    if (!ctx.settings.quiet) {
+      writeOut(`Wrote history to file "${fname}".\n`);
+    }
     return Promise.resolve({ status: 'ok' });
   },
 };

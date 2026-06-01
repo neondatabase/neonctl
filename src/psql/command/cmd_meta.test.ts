@@ -1,3 +1,13 @@
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { BackslashContext, BackslashCmdSpec } from '../types/backslash.js';
@@ -17,20 +27,27 @@ import {
   cmdCd,
   cmdCopyright,
   cmdEcho,
+  cmdEdit,
   cmdErrverbose,
   cmdGetenv,
   cmdHelpSQL,
   cmdPrompt,
   cmdQecho,
   cmdQuit,
+  cmdS,
   cmdSet,
   cmdSetenv,
   cmdShell,
+  cmdSlashHelp,
   cmdTiming,
   cmdUnset,
   cmdWarn,
   formatErrorReport,
+  resolveEditor,
 } from './cmd_meta.js';
+import { clearHistory, recordHistory } from '../io/history.js';
+import { setHelpPagerOpener } from '../core/help.js';
+import type { PagerHandle } from '../print/pager.js';
 
 // Mock context factory — each call yields a one-shot scanner over the
 // given rawArgs string. Args are parsed naively by whitespace splitting,
@@ -943,5 +960,239 @@ describe('\\h / \\help (SQL command help)', () => {
     // The alias is a config-level fact; just assert it's on the spec so a
     // future refactor that drops it would break this test.
     expect(cmdHelpSQL.aliases).toContain('help');
+  });
+});
+
+describe('\\? (backslash command help)', () => {
+  // `\?` renders help to `process.stdout` and asks for the pager only when
+  // that stream is an interactive TTY. We install a capturing pager opener
+  // (via help.ts's test hook) and toggle `process.stdout.isTTY` to assert
+  // the interactivity-driven decision end-to-end through the real
+  // `slashUsage` → `emitHelp` path.
+  type PagerOpener = Parameters<typeof setHelpPagerOpener>[0];
+
+  let restore: (() => void) | null;
+  let opened: number;
+  let pagerWrites: string[];
+  let ttyOrig: boolean | undefined;
+
+  beforeEach(() => {
+    opened = 0;
+    pagerWrites = [];
+    const handle: PagerHandle = {
+      out: {
+        write(chunk: string | Uint8Array): boolean {
+          pagerWrites.push(
+            typeof chunk === 'string' ? chunk : chunk.toString(),
+          );
+          return true;
+        },
+      } as unknown as NodeJS.WritableStream,
+      spawned: true,
+      close: () => Promise.resolve(0),
+    };
+    const opener: PagerOpener = () => {
+      opened++;
+      return handle;
+    };
+    restore = setHelpPagerOpener(opener);
+    ttyOrig = (process.stdout as NodeJS.WriteStream).isTTY;
+  });
+
+  afterEach(() => {
+    restore?.();
+    restore = null;
+    (process.stdout as NodeJS.WriteStream).isTTY = ttyOrig ?? false;
+  });
+
+  test('interactive stdout routes help through the pager', async () => {
+    (process.stdout as NodeJS.WriteStream).isTTY = true;
+    const ctx = makeMockCtx('?', '');
+    const r = await run(cmdSlashHelp, ctx);
+    expect(r.status).toBe('ok');
+    // Pager engaged because stdout is interactive and we requested it.
+    expect(opened).toBe(1);
+    expect(pagerWrites.join('')).toMatch(/General/);
+  });
+
+  test('non-interactive stdout writes help straight to stdout (no pager)', async () => {
+    (process.stdout as NodeJS.WriteStream).isTTY = false;
+    const ctx = makeMockCtx('?', '');
+    const r = await run(cmdSlashHelp, ctx);
+    expect(r.status).toBe('ok');
+    // No pager because stdout isn't a TTY; output lands on captured stdout.
+    expect(opened).toBe(0);
+    expect(stdout()).toMatch(/General/);
+  });
+});
+
+describe('\\s (command history)', () => {
+  beforeEach(() => {
+    clearHistory();
+  });
+  afterEach(() => {
+    clearHistory();
+  });
+
+  test('no argument prints the in-memory history to stdout', async () => {
+    recordHistory('SELECT 1;');
+    recordHistory('SELECT 2;');
+    const ctx = makeMockCtx('s', '');
+    const r = await run(cmdS, ctx);
+    expect(r.status).toBe('ok');
+    expect(stdout()).toBe('SELECT 1;\nSELECT 2;\n');
+  });
+
+  test('with FILENAME writes history to the file and confirms', async () => {
+    recordHistory('SELECT 1;');
+    recordHistory('SELECT 2;');
+    const dir = mkdtempSync(join(tmpdir(), 'psql-s-'));
+    const file = join(dir, 'hist.out');
+    try {
+      const ctx = makeMockCtx('s', file);
+      const r = await run(cmdS, ctx);
+      expect(r.status).toBe('ok');
+      expect(readFileSync(file, 'utf8')).toBe('SELECT 1;\nSELECT 2;\n');
+      // Non-quiet session reports where the history went.
+      expect(stdout()).toBe(`Wrote history to file "${file}".\n`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('with FILENAME stays silent under \\set QUIET', async () => {
+    recordHistory('SELECT 1;');
+    const settings = defaultSettings(createVarStore());
+    settings.quiet = true;
+    const dir = mkdtempSync(join(tmpdir(), 'psql-s-'));
+    const file = join(dir, 'hist.out');
+    try {
+      const ctx = makeMockCtx('s', file, settings);
+      const r = await run(cmdS, ctx);
+      expect(r.status).toBe('ok');
+      expect(readFileSync(file, 'utf8')).toBe('SELECT 1;\n');
+      expect(stdout()).toBe('');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('unwritable FILENAME reports an error', async () => {
+    recordHistory('SELECT 1;');
+    // A path whose parent directory does not exist can't be created.
+    const bogus = join(tmpdir(), `psql-s-missing-${Date.now()}`, 'nope.out');
+    const ctx = makeMockCtx('s', bogus);
+    const r = await run(cmdS, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/\\s:/);
+  });
+});
+
+describe('\\e (edit query buffer)', () => {
+  describe('resolveEditor', () => {
+    test('prefers $PSQL_EDITOR, then $EDITOR, then $VISUAL', () => {
+      expect(
+        resolveEditor({ PSQL_EDITOR: 'pe', EDITOR: 'e', VISUAL: 'v' }),
+      ).toBe('pe');
+      expect(resolveEditor({ EDITOR: 'e', VISUAL: 'v' })).toBe('e');
+      expect(resolveEditor({ VISUAL: 'v' })).toBe('v');
+    });
+
+    test('falls back to the platform default when none are set', () => {
+      const fallback = process.platform === 'win32' ? 'notepad.exe' : 'vi';
+      expect(resolveEditor({})).toBe(fallback);
+    });
+  });
+
+  // Build a context whose query buffer we control (the shared makeMockCtx
+  // hard-codes an empty buffer).
+  const editCtx = (queryBuf: string): BackslashContext => {
+    const base = makeMockCtx('e', '');
+    return { ...base, queryBuf };
+  };
+
+  // Spawning a real editor under stdio:'inherit' is fine in the test runner
+  // (no TTY needed — `vi` etc. are never launched here). We point
+  // $PSQL_EDITOR at a tiny POSIX shell script that rewrites the file with
+  // known content, deterministically simulating a user edit. Windows lacks
+  // an equivalent one-liner, so the spawn-based cases are POSIX-only; the
+  // editor-selection logic above is covered cross-platform.
+  const posix = process.platform !== 'win32';
+  const withFakeEditor = (
+    body: string,
+    fn: () => Promise<void>,
+  ): (() => Promise<void>) => {
+    return async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'psql-e-'));
+      const editor = join(dir, 'fake-editor.sh');
+      writeFileSync(editor, body, 'utf8');
+      chmodSync(editor, 0o755);
+      const prev = process.env.PSQL_EDITOR;
+      process.env.PSQL_EDITOR = editor;
+      try {
+        await fn();
+      } finally {
+        if (prev === undefined) delete process.env.PSQL_EDITOR;
+        else process.env.PSQL_EDITOR = prev;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+  };
+
+  test.runIf(posix)(
+    'loads the edited contents back into the query buffer',
+    withFakeEditor(
+      // `$1` is the temp file path psql passes to the editor.
+      '#!/bin/sh\nprintf "SELECT 42;\\n" > "$1"\n',
+      async () => {
+        const ctx = editCtx('SELECT 1;');
+        const r = await run(cmdEdit, ctx);
+        expect(r.status).toBe('reset-buf');
+        // The trailing newline the "editor" wrote is stripped on load.
+        expect(r.newBuf).toBe('SELECT 42;');
+      },
+    ),
+  );
+
+  test.runIf(posix)(
+    'a no-op edit round-trips the original buffer unchanged',
+    withFakeEditor(
+      // Editor that leaves the file exactly as seeded.
+      '#!/bin/sh\nexit 0\n',
+      async () => {
+        const ctx = editCtx('SELECT 1;');
+        const r = await run(cmdEdit, ctx);
+        expect(r.status).toBe('reset-buf');
+        expect(r.newBuf).toBe('SELECT 1;');
+      },
+    ),
+  );
+
+  test.runIf(posix)(
+    'a non-zero editor exit leaves the buffer untouched and errors',
+    withFakeEditor('#!/bin/sh\nexit 3\n', async () => {
+      const ctx = editCtx('SELECT 1;');
+      const r = await run(cmdEdit, ctx);
+      expect(r.status).toBe('error');
+      expect(stderr()).toMatch(/\\e:/);
+    }),
+  );
+
+  test('a non-existent editor reports an error without crashing', async () => {
+    const prev = process.env.PSQL_EDITOR;
+    process.env.PSQL_EDITOR = '/definitely/does/not/exist/editor-xyz';
+    try {
+      const ctx = editCtx('SELECT 1;');
+      const r = await run(cmdEdit, ctx);
+      expect(r.status).toBe('error');
+      expect(stderr()).toMatch(/\\e:/);
+    } finally {
+      if (prev === undefined) delete process.env.PSQL_EDITOR;
+      else process.env.PSQL_EDITOR = prev;
+    }
+  });
+
+  test('exposes the `edit` alias', () => {
+    expect(cmdEdit.aliases).toContain('edit');
   });
 });

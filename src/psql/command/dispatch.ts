@@ -46,6 +46,7 @@ import {
   cmdCd,
   cmdCopyright,
   cmdEcho,
+  cmdEdit,
   cmdErrverbose,
   cmdGetenv,
   cmdHelpSQL,
@@ -53,9 +54,11 @@ import {
   cmdQecho,
   cmdQuit,
   cmdReset,
+  cmdS,
   cmdSet,
   cmdSetenv,
   cmdShell,
+  cmdSlashHelp,
   cmdTiming,
   cmdUnset,
   cmdWarn,
@@ -346,35 +349,23 @@ export const defaultRegistry = (): BackslashRegistry => {
   r.register(cmdTiming);
   r.register(cmdCopyright);
   r.register(cmdHelpSQL);
-  // Stubs for command names that exist in vanilla psql but aren't wired up
-  // here yet — registering them as no-ops keeps `\if false ... \?  ... \endif`
-  // from emitting spurious "invalid command" diagnostics that vanilla
-  // suppresses (it just skips known names in inactive branches). The
-  // commands are otherwise unreachable today; full impls are tracked
-  // separately.
-  r.register({
-    name: '?',
-    argMode: 'whole-line',
-    helpKey: '?',
-    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
-  });
-  r.register({
-    name: 'e',
-    aliases: ['edit'],
-    argMode: 'whole-line',
-    helpKey: 'e',
-    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
-  });
-  r.register({
-    name: 'html',
-    helpKey: 'html',
-    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
-  });
-  r.register({
-    name: 's',
-    helpKey: 's',
-    run: (): Promise<BackslashResult> => Promise.resolve({ status: 'ok' }),
-  });
+  // `\?` (backslash-command help), `\e`/`\edit` (edit query buffer in an
+  // external editor), and `\s` (print/save command history) are full
+  // implementations living in `cmd_meta.ts`. They previously sat here as
+  // no-op stubs only so the `\if false ... <cmd> ... \endif` inactive-branch
+  // enumeration didn't emit spurious "invalid command" diagnostics; now that
+  // they do real work the inactive-branch guard still skips them (it only
+  // checks that the name is registered).
+  r.register(cmdSlashHelp);
+  r.register(cmdEdit);
+  r.register(cmdS);
+  // NOTE: vanilla psql has NO `\html` command — HTML output is the `\H`
+  // toggle (see `cmd_format.ts`). `\html` appears only in psql's
+  // tab-completion `backslash_commands[]` list (mirrored in
+  // `complete/rules.ts`), which is purely a completion catalogue and does
+  // not imply a dispatchable command. A stub was registered here by mistake,
+  // making `\html` silently succeed where vanilla rejects it as an invalid
+  // command; it has been removed so behaviour matches upstream.
   // Format.
   r.register(cmdA);
   r.register(cmdC);

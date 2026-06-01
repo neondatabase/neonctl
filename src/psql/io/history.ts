@@ -44,6 +44,46 @@ import type { HistControl } from '../types/settings.js';
 /** psql's compiled-in default for HISTSIZE (see `src/bin/psql/settings.h`). */
 const DEFAULT_HISTSIZE = 500;
 
+/**
+ * In-memory command-line history for the current session, oldest first.
+ *
+ * Upstream psql delegates history to GNU readline, whose `history_list()`
+ * backs the `\s` meta-command (`exec_command_s` in `command.c` prints the
+ * live in-memory history, NOT the on-disk file). We keep our own
+ * process-local mirror here, populated by {@link recordHistory} from the
+ * same funnel the REPL uses to persist a submitted line ({@link
+ * appendHistory}). `\s` reads it via {@link getHistory}.
+ *
+ * Module-level state matches the single-session lifetime of a psql process;
+ * tests reset it with {@link clearHistory}.
+ */
+let inMemoryHistory: string[] = [];
+
+/**
+ * Record one submitted line in the session's in-memory history.
+ *
+ * Empty lines and an exact duplicate of the immediately preceding entry are
+ * dropped, mirroring readline's default behaviour (and {@link
+ * LineEditor.pushHistory}); HISTCONTROL filtering is applied by the caller
+ * ({@link appendHistory}) before this is reached.
+ */
+export const recordHistory = (entry: string): void => {
+  if (entry.length === 0) return;
+  if (inMemoryHistory[inMemoryHistory.length - 1] === entry) return;
+  inMemoryHistory.push(entry);
+};
+
+/**
+ * Return the session's in-memory history (oldest first). Returns a copy so
+ * callers can't mutate the backing store.
+ */
+export const getHistory = (): string[] => inMemoryHistory.slice();
+
+/** Reset the in-memory history. Primarily for tests and `\s`-less restarts. */
+export const clearHistory = (): void => {
+  inMemoryHistory = [];
+};
+
 /** Encode a single in-memory entry to the on-disk libreadline form. */
 const encodeEntry = (entry: string): string =>
   entry.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
@@ -177,6 +217,12 @@ export const appendHistory = async (
     }
     if (shouldIgnore(entry, prev, histcontrol)) return;
   }
+
+  // Mirror the line into the session's in-memory history (what `\s` prints)
+  // using the same funnel that persists it to disk, so the two stay in
+  // lock-step under HISTCONTROL. Recording happens AFTER the ignore check
+  // so an ignored line is absent from both.
+  recordHistory(entry);
 
   await fs.appendFile(filePath, encodeEntry(entry) + '\n', 'utf8');
 };
