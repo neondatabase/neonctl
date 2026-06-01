@@ -533,19 +533,27 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
     'finish one of multiple quoted choices — `2<tab>` → `246" ` (line 170; needs chained session state)',
   );
 
-  // Index name for referenced table (lines 211-228). Upstream's
-  // tab-complete.in.c parses `ALTER TABLE x DROP CONSTRAINT y` and offers
-  // index/constraint names of `x`; our engine has no constraint-name
-  // completion at all.
-  it.todo(
-    'complete index name for referenced table — `alter table tab1 drop constraint t<tab>` → tab1_pkey (line 211; needs ALTER TABLE … DROP CONSTRAINT rule)',
-  );
-  it.todo(
-    'complete index name for referenced table, with downcasing — TAB1 (line 218; same gap)',
-  );
-  it.todo(
-    'complete index name for referenced table, with schema and quoting — public."tab1" (line 225; same gap)',
-  );
+  // Index/constraint name for referenced table (lines 211-228). Upstream
+  // tab-complete.in.c parses `ALTER TABLE <ref> DROP CONSTRAINT y` and
+  // queries `pg_constraint` joined to `pg_class` on conrelid for names
+  // attached to the referenced table. Our rule uses the same query;
+  // `parseTableRef` in rules.ts handles bare/quoted/schema-qualified
+  // forms with case-folding for unquoted identifiers.
+  it('complete constraint name for referenced table — alter table tab1 drop constraint t<tab> → tab1_pkey (line 211)', async () => {
+    await checkCompletion('alter table tab1 drop constraint t\t', /tab1_pkey /);
+  });
+  it('complete constraint name for referenced table, with downcasing — TAB1 (line 218)', async () => {
+    await checkCompletion(
+      'alter table TAB1 drop constraint TAB1_\t',
+      /tab1_pkey /,
+    );
+  });
+  it('complete constraint name for referenced table, with schema and quoting — public."tab1" (line 225)', async () => {
+    await checkCompletion(
+      'alter table public."tab1" drop constraint t\t',
+      /tab1_pkey /,
+    );
+  });
 
   // Qualified name from object reference (line 234) — multi-line tab
   // completion that uses the COMMENT ON CONSTRAINT context to resolve
@@ -605,25 +613,34 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
     expect(buf).toMatch(/afile123[\s\S]*afile456[\s\S]*somefile/);
   });
 
-  // Enum label completion (lines 284-295). Needs the `ALTER TYPE ...
-  // RENAME VALUE 'X<tab>` rule + a string-literal context detector
-  // (so that the `'` quote opens a value completer rather than running
-  // the SQL keyword rules).
-  it.todo(
-    "offer multiple enum choices — ALTER TYPE enum1 RENAME VALUE 'ba<tab><tab> (line 284; needs ALTER TYPE … RENAME VALUE + enum rule)",
-  );
-  it.todo(
-    "enum labels are case sensitive — ALTER TYPE enum1 RENAME VALUE 'B<tab> → BLACK (line 292; same gap)",
-  );
+  // Enum label completion (lines 284-295). String-literal context is
+  // detected by `currentWord.startsWith("'")` in the rule; the LIKE
+  // pattern is the post-quote prefix so `'ba` matches enumlabels `bar`
+  // and `baz`. Case-sensitive (matches upstream — uses LIKE not ILIKE).
+  it("offer multiple enum choices — ALTER TYPE enum1 RENAME VALUE 'ba<tab><tab> (line 284)", async () => {
+    h.clear();
+    sendKeys(h, "ALTER TYPE enum1 RENAME VALUE 'ba\t\t\t");
+    await new Promise<void>((r) => setTimeout(r, 500));
+    const buf = h.clean();
+    expect(buf).toMatch(/'bar'[\s\S]*'baz'/);
+  });
+  it("enum labels are case sensitive — ALTER TYPE enum1 RENAME VALUE 'B<tab> → 'BLACK' (line 292)", async () => {
+    await checkCompletion("ALTER TYPE enum1 RENAME VALUE 'B\t", /'BLACK'/);
+  });
 
-  // Timezone name completion (lines 300-303). Would need a
-  // `pg_timezone_names` query-driven rule.
-  it.todo(
-    "offer partial timezone name — SET timezone TO am<tab> → 'America/ (line 300; needs pg_timezone_names rule)",
-  );
-  it.todo(
-    'complete partial timezone name — new_<tab> → New_York (line 303; needs pg_timezone_names rule)',
-  );
+  // Timezone name completion (lines 300-303). Backed by
+  // `pg_timezone_names()`; rule picks `quoted_out` when the user has
+  // not opened a `'` yet (so we wrap candidates) and `quoted_in` when
+  // mid-literal (so the LIKE pattern matches the quoted form).
+  it("offer partial timezone name — SET timezone TO am<tab> → 'America/ (line 300)", async () => {
+    await checkCompletion('SET timezone TO am\t', /'America\//);
+  });
+  it("complete partial timezone name — 'America/New_<tab> → 'America/New_York' (line 303)", async () => {
+    await checkCompletion(
+      "SET timezone TO 'America/New_\t",
+      /'America\/New_York'/,
+    );
+  });
 
   // SchemaQuery keyword + create_command_generator (lines 328-339).
   // The DROP TYPE → bigint case wants type-name completion to include

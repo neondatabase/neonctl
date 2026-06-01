@@ -103,9 +103,12 @@ import type { PsqlSettings } from '../types/settings.js';
 import { completeFilenames, isCopyFromOrTo } from './filenames.js';
 import { HeadMatches, MatchAny, TailMatches } from './matcher.js';
 import {
+  Query_for_constraint_of_table,
+  Query_for_constraint_of_table_in_schema,
   Query_for_list_of_casts,
   Query_for_list_of_databases,
   Query_for_list_of_datatypes,
+  Query_for_list_of_enum_values_quoted,
   Query_for_list_of_extensions,
   Query_for_list_of_functions,
   Query_for_list_of_index_access_methods,
@@ -123,6 +126,8 @@ import {
   Query_for_list_of_tables,
   Query_for_list_of_tables_views,
   Query_for_list_of_tablespaces,
+  Query_for_list_of_timezone_names_quoted_in,
+  Query_for_list_of_timezone_names_quoted_out,
   Query_for_list_of_types,
   Query_for_list_of_views,
   runCatalogQuery,
@@ -986,6 +991,76 @@ const splitSchemaPrefix = (
   return { schema, prefix: after, schemaWasQuoted };
 };
 
+/**
+ * Parse a table reference (the `<ref>` slot in
+ * `ALTER TABLE <ref> DROP CONSTRAINT y`) from the already-tokenized
+ * `prevWords` slice between `ALTER TABLE` and the action keyword.
+ *
+ * The scanner can produce the reference as 1 or 2 tokens depending on
+ * quoting:
+ *
+ *   - `tab1`            → `["tab1"]`               (bare, case-folded)
+ *   - `"tab1"`          → `["\"tab1\""]`           (quoted, exact-case)
+ *   - `public.tab1`     → `["public.tab1"]`        (single token, dotted)
+ *   - `public."tab1"`   → `["public.\"tab1\""]`    (single token, dotted+quoted)
+ *
+ * Returns the parsed parts with case-folding applied to UNQUOTED
+ * identifiers (matching `pg_strcasecmp` semantics) so the caller can
+ * pass them straight to a `WHERE relname = $N` catalog query.
+ *
+ * Returns `null` when the tokens don't look like a valid reference.
+ */
+const parseTableRef = (
+  refTokens: readonly string[],
+): { schema: string | null; table: string } | null => {
+  const stripQuote = (s: string): { v: string; quoted: boolean } => {
+    if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+      return { v: s.slice(1, -1).replace(/""/g, '"'), quoted: true };
+    }
+    return { v: s, quoted: false };
+  };
+  // Two-token form: `public.` + `"tab1"` (our scanner ends the first
+  // token on the dot when the relation half is quoted).
+  if (refTokens.length === 2) {
+    const first = refTokens[0];
+    if (!first.endsWith('.')) return null;
+    const s = stripQuote(first.slice(0, -1));
+    const t = stripQuote(refTokens[1]);
+    if (t.v.length === 0) return null;
+    return {
+      schema: s.quoted ? s.v : s.v.toLowerCase(),
+      table: t.quoted ? t.v : t.v.toLowerCase(),
+    };
+  }
+  if (refTokens.length !== 1) return null;
+  const tok = refTokens[0];
+  // Single-token form. Schema-qualified? Find the FIRST dot that isn't
+  // inside `"..."`.
+  let inQuote = false;
+  let dot = -1;
+  for (let i = 0; i < tok.length; i++) {
+    const ch = tok[i];
+    if (ch === '"') {
+      inQuote = !inQuote;
+    } else if (ch === '.' && !inQuote) {
+      dot = i;
+      break;
+    }
+  }
+  if (dot >= 0) {
+    const s = stripQuote(tok.slice(0, dot));
+    const t = stripQuote(tok.slice(dot + 1));
+    if (t.v.length === 0) return null;
+    return {
+      schema: s.quoted ? s.v : s.v.toLowerCase(),
+      table: t.quoted ? t.v : t.v.toLowerCase(),
+    };
+  }
+  const t = stripQuote(tok);
+  if (t.v.length === 0) return null;
+  return { schema: null, table: t.quoted ? t.v : t.v.toLowerCase() };
+};
+
 // ---------------------------------------------------------------------------
 // Entry point.
 // ---------------------------------------------------------------------------
@@ -1546,6 +1621,33 @@ const sqlRules = async (
       candidates: filterAndCase(ALTER_TABLE_DROP, currentWord, ctx.settings),
     };
   }
+  // `ALTER TABLE <ref> DROP CONSTRAINT <prefix>` — constraint names on
+  // the referenced table. Mirrors upstream tab-complete.in.c ~line 1280
+  // (`COMPLETE_WITH_QUERY(Query_for_constraint_of_table)`).
+  if (
+    HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
+    TailMatches(prevWords, ['DROP', 'CONSTRAINT'])
+  ) {
+    if (!conn) return { candidates: [] };
+    const refTokens = prevWords.slice(2, prevWords.length - 2);
+    const ref = parseTableRef(refTokens);
+    if (!ref) return { candidates: [] };
+    const cands =
+      ref.schema === null
+        ? await runCatalogQuery(
+            conn,
+            Query_for_constraint_of_table,
+            currentWord,
+            [ref.table],
+          )
+        : await runCatalogQuery(
+            conn,
+            Query_for_constraint_of_table_in_schema,
+            currentWord,
+            [ref.schema, ref.table],
+          );
+    return { candidates: cands };
+  }
   if (
     HeadMatches(prevWords, ['ALTER', 'TABLE']) &&
     TailMatches(prevWords, ['RENAME'])
@@ -1682,6 +1784,26 @@ const sqlRules = async (
   }
 
   // ---- ALTER TYPE ----
+  // `ALTER TYPE <enum> RENAME VALUE 'X<TAB>` — enum labels of the named
+  // type, wrapped in single quotes since the user is mid-string-literal.
+  // Mirrors upstream tab-complete.in.c ~line 1480.
+  if (
+    TailMatches(prevWords, ['ALTER', 'TYPE', MatchAny, 'RENAME', 'VALUE']) &&
+    currentWord.startsWith("'")
+  ) {
+    if (!conn) return { candidates: [] };
+    const typeName = prevWords[prevWords.length - 3].toLowerCase();
+    // Strip the leading quote so the LIKE pattern matches `bar`/`BLACK`
+    // (enumlabel column) rather than `'bar`/`'BLACK`.
+    const labelPrefix = currentWord.slice(1);
+    const cands = await runCatalogQuery(
+      conn,
+      Query_for_list_of_enum_values_quoted,
+      labelPrefix,
+      [typeName],
+    );
+    return { candidates: cands };
+  }
   if (TailMatches(prevWords, ['ALTER', 'TYPE', MatchAny])) {
     return {
       candidates: filterAndCase(ALTER_TYPE_ACTIONS, currentWord, ctx.settings),
@@ -2294,6 +2416,30 @@ const sqlRules = async (
     return {
       candidates: filterAndCase(DATESTYLE_VALUES, currentWord, ctx.settings),
     };
+  }
+  // `SET timezone TO <prefix>` — names from pg_timezone_names. Two
+  // variants depending on whether the user has opened a single quote:
+  //   - `SET timezone TO am<TAB>`  → user typed an unquoted prefix; we
+  //     respond with `'America/'`-style quoted candidates so the next
+  //     keystroke continues inside the string literal. The
+  //     `Query_for_list_of_timezone_names_quoted_out` template matches
+  //     LIKE against the unquoted name and returns `quote_literal(name)`.
+  //   - `SET timezone TO 'America/New_<TAB>` → user is mid-literal;
+  //     `Query_for_list_of_timezone_names_quoted_in` matches the LIKE
+  //     pattern against the quoted form so the partial `'America/New_`
+  //     resolves correctly.
+  // Mirrors upstream tab-complete.in.c ~line 4530.
+  if (
+    TailMatches(prevWords, ['SET', 'timezone', 'TO|=']) ||
+    TailMatches(prevWords, ['SET', 'TIMEZONE', 'TO|=']) ||
+    TailMatches(prevWords, ['SET', 'TimeZone', 'TO|='])
+  ) {
+    if (!conn) return { candidates: [] };
+    const query = currentWord.startsWith("'")
+      ? Query_for_list_of_timezone_names_quoted_in
+      : Query_for_list_of_timezone_names_quoted_out;
+    const cands = await runCatalogQuery(conn, query, currentWord);
+    return { candidates: cands };
   }
   // `SET <name> <TAB>` (no operator yet) → TO.
   // Upstream tab-complete.in.c uses `COMPLETE_WITH("TO")` here even

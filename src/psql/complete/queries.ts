@@ -303,6 +303,136 @@ export const Query_for_list_of_relations_in_schema = `
 `;
 
 /**
+ * Constraint names attached to a referenced table. Mirrors upstream's
+ * `Query_for_constraint_of_table` (tab-complete.in.c ~line 453), which
+ * joins `pg_constraint` to `pg_class` via `conrelid` and filters by the
+ * referenced table name.
+ *
+ * Caller passes `[refName]` (the table the user typed between
+ * `ALTER TABLE` and `DROP CONSTRAINT`, already case-folded for unquoted
+ * input — see `parseTableRef` in rules.ts) and the ILIKE prefix.
+ *
+ * Visibility is checked via `pg_table_is_visible(c.oid)` so the user's
+ * `search_path` controls which schema's `tab1` is matched when the user
+ * gives an unqualified reference.
+ */
+export const Query_for_constraint_of_table = `
+  SELECT pg_catalog.quote_ident(con.conname)
+  FROM pg_catalog.pg_constraint con, pg_catalog.pg_class c
+  WHERE con.conrelid = c.oid
+    AND c.relname = $1
+    AND pg_catalog.pg_table_is_visible(c.oid)
+    AND con.conname ILIKE $2
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/**
+ * Constraint names attached to a referenced table within a specific
+ * schema. Used when the user qualified the reference, e.g.
+ * `ALTER TABLE public."tab1" DROP CONSTRAINT t<TAB>`. The schema name is
+ * matched case-insensitively against `pg_namespace.nspname` so
+ * `PUBLIC.tab1` still resolves to constraints in the `public` schema.
+ *
+ * Caller passes `[schema, refName]` (with `refName` already case-folded
+ * for the unquoted form), and the ILIKE prefix as the trailing parameter.
+ */
+export const Query_for_constraint_of_table_in_schema = `
+  SELECT pg_catalog.quote_ident(con.conname)
+  FROM pg_catalog.pg_constraint con
+  JOIN pg_catalog.pg_class c ON con.conrelid = c.oid
+  JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+  WHERE pg_catalog.lower(n.nspname) = pg_catalog.lower($1)
+    AND c.relname = $2
+    AND con.conname ILIKE $3
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/**
+ * Enum label values for the named enum type. Mirrors upstream's
+ * `Query_for_list_of_enum_values_quoted` / `…_unquoted` (tab-complete.in.c
+ * ~line 602-618), with a parameter-bound type name in place of upstream's
+ * `set_completion_reference()` macro state.
+ *
+ * The caller picks the variant based on whether the user is mid-string-
+ * literal (current word starts with `'`), and passes `[typeName]` along
+ * with the ILIKE prefix as the trailing parameter. The quoted variant
+ * uses `quote_literal` so candidates come back as `'BLACK'` rather than
+ * bare `BLACK`, and the case-sensitive `enumlabel LIKE` ensures upstream
+ * parity for tests like `RENAME VALUE 'B<TAB>` → `'BLACK'`.
+ */
+export const Query_for_list_of_enum_values_quoted = `
+  SELECT pg_catalog.quote_literal(e.enumlabel)
+  FROM pg_catalog.pg_enum e, pg_catalog.pg_type t
+  WHERE t.oid = e.enumtypid
+    AND t.typname = $1
+    AND pg_catalog.pg_type_is_visible(t.oid)
+    AND e.enumlabel LIKE $2
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+export const Query_for_list_of_enum_values_unquoted = `
+  SELECT e.enumlabel
+  FROM pg_catalog.pg_enum e, pg_catalog.pg_type t
+  WHERE t.oid = e.enumtypid
+    AND t.typname = $1
+    AND pg_catalog.pg_type_is_visible(t.oid)
+    AND e.enumlabel LIKE $2
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/**
+ * Timezone names from `pg_timezone_names()`. Three variants mirror
+ * upstream's `COMPLETE_WITH_TIMEZONE_NAME()` macro (tab-complete.in.c
+ * ~line 1160-1173) — different result shapes for the three contexts:
+ *
+ *   - `…_unquoted`     emits the bare name `America/New_York`. Used when
+ *                      the cursor is already inside an opened single-
+ *                      quoted string (`SET timezone TO 'America/New_<TAB>`),
+ *                      so the editor inserts the rest of the name and the
+ *                      closing quote.
+ *   - `…_quoted_out`   emits the candidate wrapped in single quotes —
+ *                      `'America/New_York'`. Used when the user hasn't
+ *                      typed any quote yet (`SET timezone TO am<TAB>` →
+ *                      `'America/`).
+ *   - `…_quoted_in`    emits the quoted form AND matches the quoted form
+ *                      against the LIKE pattern. Used when the user's
+ *                      partial word itself starts with `'` (so we feed
+ *                      `'am%` to the LIKE), so the editor can complete
+ *                      from inside the literal.
+ *
+ * All three are case-insensitive on the name (lower(name) LIKE lower(pat))
+ * because IANA names like `America/New_York` mix case but should still
+ * match a lowercase prefix.
+ */
+export const Query_for_list_of_timezone_names_unquoted = `
+  SELECT name
+  FROM pg_catalog.pg_timezone_names()
+  WHERE pg_catalog.lower(name) LIKE pg_catalog.lower($1)
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+export const Query_for_list_of_timezone_names_quoted_out = `
+  SELECT pg_catalog.quote_literal(name) AS name
+  FROM pg_catalog.pg_timezone_names()
+  WHERE pg_catalog.lower(name) LIKE pg_catalog.lower($1)
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+export const Query_for_list_of_timezone_names_quoted_in = `
+  SELECT pg_catalog.quote_literal(name) AS name
+  FROM pg_catalog.pg_timezone_names()
+  WHERE pg_catalog.quote_literal(pg_catalog.lower(name)) LIKE pg_catalog.lower($1)
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
+/**
  * Run one of the templates above against a connection and return the
  * single-column results as a string array. Empty array on any error so the
  * completer degrades gracefully — a flaky catalog query shouldn't crash the
