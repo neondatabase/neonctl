@@ -704,6 +704,7 @@ export class PgConnection implements Connection {
         {
           sslcert: opts.sslcert,
           sslkey: opts.sslkey,
+          sslcertmode: opts.sslcertmode,
           sslpassword: opts.sslpassword,
           sslrootcert: opts.sslrootcert,
           sslcrl: opts.sslcrl,
@@ -1192,6 +1193,7 @@ export class PgConnection implements Connection {
         {
           sslcert: this.opts.sslcert,
           sslkey: this.opts.sslkey,
+          sslcertmode: this.opts.sslcertmode,
           sslpassword: this.opts.sslpassword,
           sslrootcert: this.opts.sslrootcert,
           sslcrl: this.opts.sslcrl,

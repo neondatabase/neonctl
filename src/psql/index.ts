@@ -418,6 +418,7 @@ const KNOWN_QUERY_KEYS = new Set([
   'sslcompression',
   'sslcert',
   'sslkey',
+  'sslcertmode',
   'sslrootcert',
   'sslcrl',
   'sslcrldir',
@@ -716,6 +717,9 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   // like `?sslcert=` doesn't surface as an attempt to load `""` from disk.
   const sslcert = nonEmpty(raw.query.get('sslcert'));
   const sslkey = nonEmpty(raw.query.get('sslkey'));
+  const sslcertmode = normalizeSslCertMode(
+    raw.query.get('sslcertmode') ?? null,
+  );
   const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
   const sslcrl = nonEmpty(raw.query.get('sslcrl'));
   const sslcrldir = nonEmpty(raw.query.get('sslcrldir'));
@@ -752,6 +756,7 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     ...(loadBalanceHosts !== undefined ? { loadBalanceHosts } : {}),
     ...(sslcert !== undefined ? { sslcert } : {}),
     ...(sslkey !== undefined ? { sslkey } : {}),
+    ...(sslcertmode !== undefined ? { sslcertmode } : {}),
     ...(sslrootcert !== undefined ? { sslrootcert } : {}),
     ...(sslcrl !== undefined ? { sslcrl } : {}),
     ...(sslcrldir !== undefined ? { sslcrldir } : {}),
@@ -1074,6 +1079,11 @@ const applyConninfoPair = (
     case 'sslkey':
       if (value !== '') out.sslkey = value;
       return;
+    case 'sslcertmode': {
+      const cm = normalizeSslCertMode(value);
+      if (cm !== undefined) out.sslcertmode = cm;
+      return;
+    }
     case 'sslrootcert':
       if (value !== '') out.sslrootcert = value;
       return;
@@ -1222,6 +1232,27 @@ const normalizeChannelBinding = (
       // diagnostic (upstream test `002_scram.pl`). Empty / unset
       // returns `undefined` above so the wire-layer default applies.
       throw new Error(`invalid channel_binding value: "${raw}"`);
+  }
+};
+
+/**
+ * Parse libpq's `sslcertmode` value (`disable` / `allow` / `require`).
+ * Empty / unset returns `undefined` so the wire-layer default (`allow`)
+ * applies. A malformed value throws libpq's
+ * `invalid sslcertmode value: "<raw>"` diagnostic.
+ */
+const normalizeSslCertMode = (
+  raw: string | null,
+): ConnectOptions['sslcertmode'] => {
+  if (raw === null || raw === '') return undefined;
+  const value = raw.toLowerCase();
+  switch (value) {
+    case 'disable':
+    case 'allow':
+    case 'require':
+      return value;
+    default:
+      throw new Error(`invalid sslcertmode value: "${raw}"`);
   }
 };
 
@@ -1490,6 +1521,10 @@ export const parseConnectionUriPartial = (
   if (sslcert !== undefined) out.sslcert = sslcert;
   const sslkey = nonEmpty(raw.query.get('sslkey'));
   if (sslkey !== undefined) out.sslkey = sslkey;
+  const sslcertmode = normalizeSslCertMode(
+    raw.query.get('sslcertmode') ?? null,
+  );
+  if (sslcertmode !== undefined) out.sslcertmode = sslcertmode;
   const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
   if (sslrootcert !== undefined) out.sslrootcert = sslrootcert;
   const sslcrl = nonEmpty(raw.query.get('sslcrl'));
@@ -1540,6 +1575,7 @@ const PG_ENV_FIELD_MAP: Readonly<Record<string, keyof ConnectOptions>> = {
   PGSSLROOTCERT: 'sslrootcert',
   PGSSLCERT: 'sslcert',
   PGSSLKEY: 'sslkey',
+  PGSSLCERTMODE: 'sslcertmode',
   PGSSLCRL: 'sslcrl',
   PGSSLCRLDIR: 'sslcrldir',
   PGCHANNELBINDING: 'channelBinding',
@@ -1634,6 +1670,11 @@ const applyEnvValue = (
     case 'sslkey':
       out.sslkey = value;
       return;
+    case 'sslcertmode': {
+      const cm = normalizeSslCertMode(value);
+      if (cm !== undefined) out.sslcertmode = cm;
+      return;
+    }
     case 'sslcrl':
       out.sslcrl = value;
       return;
@@ -1741,6 +1782,11 @@ export const serviceEntryToConnectOptions = (
       case 'sslkey':
         if (v !== '') out.sslkey = v;
         break;
+      case 'sslcertmode': {
+        const cm = normalizeSslCertMode(v);
+        if (cm !== undefined) out.sslcertmode = cm;
+        break;
+      }
       case 'sslrootcert':
         if (v !== '') out.sslrootcert = v;
         break;

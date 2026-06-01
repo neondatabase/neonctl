@@ -483,6 +483,66 @@ describe('loadTlsFileOptions', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // -------------------------------------------------------------------------
+  // sslcertmode: disable suppresses the client cert/key; require demands one.
+  // -------------------------------------------------------------------------
+  test('sslcertmode=disable skips the client cert/key even when both are set', async () => {
+    const f = fixtures();
+    try {
+      const merged = await loadTlsFileOptions(
+        {},
+        { sslcert: f.certPath, sslkey: f.keyPath, sslcertmode: 'disable' },
+      );
+      expect(merged.cert).toBeUndefined();
+      expect(merged.key).toBeUndefined();
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test('sslcertmode=allow sends the cert/key when present', async () => {
+    const f = fixtures();
+    try {
+      const merged = await loadTlsFileOptions(
+        {},
+        { sslcert: f.certPath, sslkey: f.keyPath, sslcertmode: 'allow' },
+      );
+      expect((merged.cert as Buffer).toString()).toContain('cert-bytes');
+      expect((merged.key as Buffer).toString()).toContain('key-bytes');
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test('sslcertmode=require throws when no client cert is configured', async () => {
+    await expect(
+      loadTlsFileOptions({}, { sslcertmode: 'require' }),
+    ).rejects.toThrow(
+      'sslcertmode value "require" requires a client certificate',
+    );
+  });
+
+  test('sslcertmode=require with an empty sslcert path still throws', async () => {
+    await expect(
+      loadTlsFileOptions({}, { sslcert: '', sslcertmode: 'require' }),
+    ).rejects.toThrow(
+      'sslcertmode value "require" requires a client certificate',
+    );
+  });
+
+  test('sslcertmode=require with a configured cert loads it', async () => {
+    const f = fixtures();
+    try {
+      const merged = await loadTlsFileOptions(
+        {},
+        { sslcert: f.certPath, sslkey: f.keyPath, sslcertmode: 'require' },
+      );
+      expect((merged.cert as Buffer).toString()).toContain('cert-bytes');
+    } finally {
+      f.cleanup();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

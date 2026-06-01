@@ -70,6 +70,19 @@ export type TlsFileOptions = {
   /** Path to client key (PEM). Mapped to tls.connect's `key`. */
   sslkey?: string;
   /**
+   * libpq `sslcertmode`: governs whether the client cert/key are sent.
+   *   - `disable`: never load / send {@link sslcert} or {@link sslkey},
+   *     even when both are set.
+   *   - `allow` (default when unset): load and send them when present.
+   *   - `require`: a client cert MUST be present — if {@link sslcert} is
+   *     unset, `loadTlsFileOptions` throws
+   *     `sslcertmode value "require" requires a client certificate`.
+   * (libpq additionally honours a default cert at
+   * `~/.postgresql/postgresql.crt`; this client only sends an explicitly
+   * configured {@link sslcert}, so "available" means "sslcert is set".)
+   */
+  sslcertmode?: 'disable' | 'allow' | 'require';
+  /**
    * Passphrase for an encrypted PEM key supplied via {@link sslkey}.
    * Mapped to tls.connect's `passphrase` option; OpenSSL uses it to
    * decrypt the key at handshake time. Required when sslkey is an
@@ -193,12 +206,29 @@ export async function loadTlsFileOptions(
   ) {
     merged.ca = await readPem('sslrootcert', fileOpts.sslrootcert);
   }
-  if (fileOpts.sslcert !== undefined && fileOpts.sslcert !== '') {
-    merged.cert = await readPem('sslcert', fileOpts.sslcert);
+  // libpq `sslcertmode` gates whether the client cert/key are sent.
+  //   - `disable`: skip loading them entirely, even when configured.
+  //   - `require`: a cert MUST be configured (we only honour an explicit
+  //     `sslcert`, not libpq's default `~/.postgresql/postgresql.crt`).
+  //   - `allow` / unset: current behaviour (send when present).
+  const certMode = fileOpts.sslcertmode ?? 'allow';
+  const clientCert =
+    fileOpts.sslcert !== undefined && fileOpts.sslcert !== ''
+      ? fileOpts.sslcert
+      : undefined;
+  if (certMode === 'require' && clientCert === undefined) {
+    throw new Error(
+      `sslcertmode value "require" requires a client certificate`,
+    );
   }
-  if (fileOpts.sslkey !== undefined && fileOpts.sslkey !== '') {
-    await assertKeyPermissions(fileOpts.sslkey);
-    merged.key = await readPem('sslkey', fileOpts.sslkey);
+  if (certMode !== 'disable') {
+    if (clientCert !== undefined) {
+      merged.cert = await readPem('sslcert', clientCert);
+    }
+    if (fileOpts.sslkey !== undefined && fileOpts.sslkey !== '') {
+      await assertKeyPermissions(fileOpts.sslkey);
+      merged.key = await readPem('sslkey', fileOpts.sslkey);
+    }
   }
   // CRLs come from a single file (`sslcrl`) and/or every file in a directory
   // (`sslcrldir`). Node's `crl` option accepts an array of PEM buffers, so we

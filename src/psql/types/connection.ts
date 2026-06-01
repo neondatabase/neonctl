@@ -238,6 +238,17 @@ export type ConnectOptions = {
    * Matches libpq's `sslpassword` connection parameter.
    */
   sslpassword?: string;
+  /**
+   * libpq `sslcertmode`: governs whether a client certificate is sent.
+   *   - `disable`: never send a client cert/key, even if {@link sslcert} /
+   *     {@link sslkey} are present.
+   *   - `allow` (default when unset): send the cert/key when one is
+   *     available; otherwise proceed without.
+   *   - `require`: a client cert MUST be available; the connection fails at
+   *     TLS-setup time if none is configured.
+   * Validated at parse time (`invalid sslcertmode value: "<raw>"`).
+   */
+  sslcertmode?: 'disable' | 'allow' | 'require';
   /** Path to CA cert(s) (PEM, may contain bundle). Mapped to `ca`. */
   sslrootcert?: string;
   /** Path to CRL (PEM). Mapped to `crl`. */

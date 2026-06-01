@@ -22,6 +22,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  envConnectionDefaults,
   looksLikeConnectionString,
   parseConninfo,
   parseConnectionUri,
@@ -701,6 +702,66 @@ describe('parseConnectionUri — TLS PEM file paths', () => {
   it('omits sslcrldir when the query parameter is empty', () => {
     const got = parseConnectionUri('postgresql://u@h/db?sslcrldir=');
     expect(got).not.toHaveProperty('sslcrldir');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sslcertmode (disable / allow / require) — parse + validation across the
+// URI, conninfo, and PG* env entry points.
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — sslcertmode', () => {
+  it('threads sslcertmode=disable into ConnectOptions', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslcertmode=disable');
+    expect(got).toMatchObject({ sslcertmode: 'disable' });
+  });
+
+  it('threads sslcertmode=require into ConnectOptions', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslcertmode=require');
+    expect(got).toMatchObject({ sslcertmode: 'require' });
+  });
+
+  it('lower-cases sslcertmode input (ALLOW -> allow)', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslcertmode=ALLOW');
+    expect(got.sslcertmode).toBe('allow');
+  });
+
+  it('omits sslcertmode when the query parameter is empty', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslcertmode=');
+    expect(got).not.toHaveProperty('sslcertmode');
+  });
+
+  it('rejects a bogus sslcertmode value with libpq wording', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://u@h/db?sslcertmode=bogus'),
+    ).toThrow('invalid sslcertmode value: "bogus"');
+  });
+});
+
+describe('parseConninfo — sslcertmode', () => {
+  it('parses sslcertmode=require from a keyword/value string', () => {
+    expect(parseConninfo('sslcertmode=require')).toMatchObject({
+      sslcertmode: 'require',
+    });
+  });
+
+  it('rejects a bogus sslcertmode value', () => {
+    expect(() => parseConninfo('sslcertmode=nope')).toThrow(
+      'invalid sslcertmode value: "nope"',
+    );
+  });
+});
+
+describe('envConnectionDefaults — PGSSLCERTMODE', () => {
+  it('maps PGSSLCERTMODE=disable onto sslcertmode', () => {
+    expect(envConnectionDefaults({ PGSSLCERTMODE: 'disable' })).toMatchObject({
+      sslcertmode: 'disable',
+    });
+  });
+
+  it('rejects a bogus PGSSLCERTMODE value', () => {
+    expect(() => envConnectionDefaults({ PGSSLCERTMODE: 'bogus' })).toThrow(
+      'invalid sslcertmode value: "bogus"',
+    );
   });
 });
 
