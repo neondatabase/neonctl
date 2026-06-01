@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import type { BackslashContext, BackslashCmdSpec } from '../types/backslash.js';
 import type { PsqlSettings } from '../types/settings.js';
+import type { Connection } from '../types/connection.js';
 import { createVarStore } from '../core/variables.js';
 import { defaultSettings } from '../core/settings.js';
 
@@ -56,6 +57,47 @@ const makeMockCtx = (
       return tail;
     },
   };
+};
+
+// Records `\encoding`'s coupling to the live connection. Only the methods
+// `cmdEncoding` actually touches are meaningful — everything else on the
+// Connection surface throws so an accidental call is caught instead of
+// silently passing. `calls` captures each `setClientEncoding(name)` arg;
+// `failWith`, when set, makes `setClientEncoding` reject (simulating a
+// server-side SET refusal).
+type MockConnection = Connection & {
+  calls: string[];
+  failWith: Error | null;
+};
+
+const makeMockConnection = (): MockConnection => {
+  const unused = (): never => {
+    throw new Error('not implemented in mock');
+  };
+  const conn: MockConnection = {
+    calls: [],
+    failWith: null,
+    setClientEncoding(name: string): Promise<void> {
+      conn.calls.push(name);
+      return conn.failWith ? Promise.reject(conn.failWith) : Promise.resolve();
+    },
+    serverVersion: 170000,
+    parameterStatus: () => undefined,
+    query: unused,
+    execSimple: unused,
+    prepare: unused,
+    startCopyIn: unused,
+    startCopyOut: unused,
+    pipeline: unused,
+    cancel: unused,
+    escapeIdentifier: (v: string) => v,
+    escapeLiteral: (v: string) => v,
+    onNotice: () => () => undefined,
+    onNotification: () => () => undefined,
+    close: () => Promise.resolve(),
+    isClosed: () => false,
+  };
+  return conn;
 };
 
 let stdoutChunks: string[];
@@ -221,6 +263,61 @@ describe('\\encoding', () => {
     const settings = defaultSettings(createVarStore());
     await run(cmdEncoding, makeMockCtx('encoding', 'LATIN1', settings));
     expect(settings.popt.topt.encoding).toBe('LATIN1');
+  });
+
+  test('no arg prints current encoding and does not touch the connection', async () => {
+    const settings = defaultSettings(createVarStore());
+    const db = makeMockConnection();
+    settings.db = db;
+    const res = await run(cmdEncoding, makeMockCtx('encoding', '', settings));
+    expect(res.status).toBe('ok');
+    expect(stdout().trim()).toBe(settings.popt.topt.encoding);
+    expect(db.calls).toEqual([]);
+  });
+
+  test('valid name updates topt and pushes to the connection', async () => {
+    const settings = defaultSettings(createVarStore());
+    const db = makeMockConnection();
+    settings.db = db;
+    const res = await run(
+      cmdEncoding,
+      makeMockCtx('encoding', 'LATIN1', settings),
+    );
+    expect(res.status).toBe('ok');
+    expect(settings.popt.topt.encoding).toBe('LATIN1');
+    expect(db.calls).toEqual(['LATIN1']);
+  });
+
+  test('invalid name errors and does not call setClientEncoding', async () => {
+    const settings = defaultSettings(createVarStore());
+    settings.popt.topt.encoding = 'UTF8';
+    const db = makeMockConnection();
+    settings.db = db;
+    const res = await run(
+      cmdEncoding,
+      makeMockCtx('encoding', 'NO_SUCH_ENC', settings),
+    );
+    expect(res.status).toBe('error');
+    // Encoding left unchanged and the connection was never touched.
+    expect(settings.popt.topt.encoding).toBe('UTF8');
+    expect(db.calls).toEqual([]);
+    expect(stderr()).toContain('invalid encoding name "NO_SUCH_ENC"');
+  });
+
+  test('server-side SET refusal surfaces the error and leaves topt unchanged', async () => {
+    const settings = defaultSettings(createVarStore());
+    settings.popt.topt.encoding = 'UTF8';
+    const db = makeMockConnection();
+    db.failWith = new Error('SET refused by server');
+    settings.db = db;
+    const res = await run(
+      cmdEncoding,
+      makeMockCtx('encoding', 'LATIN1', settings),
+    );
+    expect(res.status).toBe('error');
+    expect(db.calls).toEqual(['LATIN1']);
+    expect(settings.popt.topt.encoding).toBe('UTF8');
+    expect(stderr()).toContain('SET refused by server');
   });
 });
 

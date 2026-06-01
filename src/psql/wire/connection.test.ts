@@ -739,6 +739,73 @@ describe('PgConnection', () => {
     await conn.close();
   });
 
+  test('setClientEncoding issues SET and folds the echoed ParameterStatus', async () => {
+    let seenQuery: string | null = null;
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(parameterStatus('client_encoding', 'UTF8'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+      } else if (msg.type === 'Query') {
+        seenQuery = (msg as unknown as { sql: string }).sql;
+        // The backend acknowledges a SET client_encoding by echoing the new
+        // value in a ParameterStatus before CommandComplete.
+        client.send(parameterStatus('client_encoding', 'LATIN1'));
+        client.send(commandComplete('SET'));
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    expect(conn.parameterStatus('client_encoding')).toBe('UTF8');
+    await conn.setClientEncoding('LATIN1');
+    // libpq sends the value as a single-quoted literal.
+    expect(seenQuery).toBe("SET client_encoding TO 'LATIN1'");
+    // The echoed ParameterStatus is folded into the live connection state.
+    expect(conn.parameterStatus('client_encoding')).toBe('LATIN1');
+    await conn.close();
+  });
+
+  test('setClientEncoding rejects when the server refuses the SET', async () => {
+    server = await startFakeServer((msg, client) => {
+      if (msg.type === 'Startup') {
+        client.send(authenticationOk());
+        client.send(parameterStatus('server_version', '16.2'));
+        client.send(backendKeyData(1, 2));
+        client.send(readyForQuery('I'));
+      } else if (msg.type === 'Query') {
+        client.send(
+          errorResponse({
+            S: 'ERROR',
+            C: '22023',
+            M: 'invalid value for parameter "client_encoding": "BOGUS"',
+          }),
+        );
+        client.send(readyForQuery('I'));
+      }
+    });
+
+    const conn = await PgConnection.connect({
+      host: '127.0.0.1',
+      port: server.port,
+      user: 'u',
+      database: 'db',
+      ssl: 'disable',
+    });
+    await expect(conn.setClientEncoding('BOGUS')).rejects.toMatchObject({
+      message: 'invalid value for parameter "client_encoding": "BOGUS"',
+    });
+    await conn.close();
+  });
+
   test('SASL/SCRAM-SHA-256 happy path', async () => {
     const password = 'hunter2';
     const salt = Buffer.from('1234567890abcdef', 'hex');

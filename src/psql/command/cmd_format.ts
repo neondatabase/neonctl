@@ -11,11 +11,12 @@
  * separate exports so the registry can advertise them under their public
  * names without aliasing oddities.
  *
- * Encoding & connection coupling: `\encoding NAME` should propagate the
- * client encoding to the live connection. The {@link Connection} interface
- * in WP-02 does not yet expose `setClientEncoding`; we guard the call with
- * an `'setClientEncoding' in db` check and leave the upstream-equivalent
- * `// TODO(WP-02)` marker so this lights up once the wire layer ships.
+ * Encoding & connection coupling: `\encoding NAME` propagates the client
+ * encoding to the live connection via {@link Connection.setClientEncoding}
+ * (libpq's `PQsetClientEncoding`). Following upstream `do_encoding`, we
+ * validate the name client-side first — an unrecognised name prints
+ * `invalid encoding name "<name>"` and leaves the encoding unchanged,
+ * never touching the connection.
  *
  * Error format: upstream uses `\\<cmd>: <message>` for diagnostics. We
  * mirror that exactly, writing to stderr and returning
@@ -215,43 +216,126 @@ export const cmdX: BackslashCmdSpec = {
 };
 
 /**
+ * Canonical PostgreSQL encoding names, normalised the way upstream
+ * `pg_char_to_encoding` (`src/common/encnames.c`) normalises before
+ * comparing: lowercased with every `-` and `_` removed. The set covers the
+ * full `pg_enc2name` table — both the backend-usable encodings and the
+ * client-only ones (SJIS, BIG5, …) — because upstream `\encoding` validates
+ * via `pg_char_to_encoding`, which accepts any recognised name and lets the
+ * server reject genuinely unusable ones.
+ */
+const NORMALISED_ENCODINGS: ReadonlySet<string> = new Set([
+  'sqlascii',
+  'eucjp',
+  'euccn',
+  'euckr',
+  'euctw',
+  'eucjis2004',
+  'utf8',
+  'muleinternal',
+  'latin1',
+  'latin2',
+  'latin3',
+  'latin4',
+  'latin5',
+  'latin6',
+  'latin7',
+  'latin8',
+  'latin9',
+  'latin10',
+  'win1256',
+  'win1258',
+  'win866',
+  'win874',
+  'koi8r',
+  'win1251',
+  'win1252',
+  'iso88595',
+  'iso88596',
+  'iso88597',
+  'iso88598',
+  'win1250',
+  'win1253',
+  'win1254',
+  'win1255',
+  'win1257',
+  'koi8u',
+  'sjis',
+  'big5',
+  'gbk',
+  'uhc',
+  'gb18030',
+  'johab',
+  'shiftjis2004',
+  // Aliases upstream's encoding_match_list accepts as recognised names.
+  'unicode', // → UTF8
+  'mskanji', // → SJIS
+  'shiftjis', // → SJIS
+  'windows949', // → UHC
+  'windows950', // → BIG5
+  'windows936', // → GBK
+  'tcvn', // → WIN1258
+  'tcvn5712', // → WIN1258
+  'vscii', // → WIN1258
+  'alt', // → WIN866
+  'win', // → WIN1251
+  'koi8', // → KOI8R
+  'abc', // → WIN1258
+]);
+
+/**
+ * Mirror upstream `pg_char_to_encoding`'s name normalisation: drop every
+ * `-` and `_`, lowercase, and look the result up in the canonical set.
+ * Used to reproduce `\encoding`'s `invalid encoding name` guard without a
+ * server round-trip.
+ */
+const isValidEncodingName = (name: string): boolean =>
+  NORMALISED_ENCODINGS.has(name.replace(/[-_]/g, '').toLowerCase());
+
+/**
  * `\encoding [name]` — show or set the client encoding.
  *
- * No arg: print the current `topt.encoding`. With an arg: update
- * `topt.encoding` and try to push it to the connection. The
- * `setClientEncoding` method isn't on the {@link Connection} interface yet
- * (WP-02), so we guard with an `'in'` check; once that wire-layer landing
- * adds the method, the call lights up automatically.
+ * No arg: print the current `topt.encoding`. With an arg: validate the name
+ * the way upstream `do_encoding` does (`pg_char_to_encoding` >= 0) — an
+ * unrecognised name prints `\encoding: invalid encoding name "<name>"`,
+ * leaves `topt.encoding` untouched, and never calls the connection.
+ * Otherwise push it to the live connection via
+ * {@link Connection.setClientEncoding} (libpq `PQsetClientEncoding`) and
+ * mirror it into `topt.encoding` so prompts/printer see the new value.
  */
 export const cmdEncoding: BackslashCmdSpec = {
   name: 'encoding',
   helpKey: 'encoding',
-  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+  run: async (ctx: BackslashContext): Promise<BackslashResult> => {
     const arg = ctx.nextArg('normal');
     if (arg === null) {
       writeOut(`${ctx.settings.popt.topt.encoding}\n`);
-      return Promise.resolve({ status: 'ok' });
+      return { status: 'ok' };
     }
-    ctx.settings.popt.topt.encoding = arg;
+    if (!isValidEncodingName(arg)) {
+      // Upstream `do_encoding` reports the rejected name verbatim and leaves
+      // the current encoding in place.
+      writeErr(`\\${ctx.cmdName}: invalid encoding name "${arg}"\n`);
+      return { status: 'error', errorWritten: true };
+    }
     const { db } = ctx.settings;
-    // TODO(WP-02): wire setClientEncoding once the Connection interface
-    // exposes it. Until then we still mutate topt so prompts/printer see
-    // the requested encoding.
-    if (db && 'setClientEncoding' in db) {
-      const fn = (
-        db as unknown as {
-          setClientEncoding: (name: string) => unknown;
-        }
-      ).setClientEncoding;
+    // `PgConnection` always implements setClientEncoding; the optional call
+    // only short-circuits when there's no live connection (or a partial mock
+    // in tests), in which case we still mirror the encoding into topt below.
+    if (db?.setClientEncoding) {
       try {
-        fn(arg);
+        await db.setClientEncoding(arg);
       } catch (err) {
+        // Server refused the SET (or the connection failed mid-flight);
+        // surface the diagnostic and leave topt.encoding unchanged, matching
+        // upstream's "leave the encoding as it was on failure" behaviour.
         const msg = err instanceof Error ? err.message : String(err);
         writeErr(`\\${ctx.cmdName}: ${msg}\n`);
-        return Promise.resolve({ status: 'error', errorWritten: true });
+        return { status: 'error', errorWritten: true };
       }
     }
-    return Promise.resolve({ status: 'ok' });
+    ctx.settings.popt.topt.encoding = arg;
+    return { status: 'ok' };
   },
 };
 

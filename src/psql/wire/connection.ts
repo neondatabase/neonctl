@@ -1210,6 +1210,23 @@ export class PgConnection implements Connection {
     return "'" + doubled + "'";
   }
 
+  public async setClientEncoding(name: string): Promise<void> {
+    // libpq's PQsetClientEncoding sends `SET client_encoding TO '<value>'`
+    // down the wire (see fe-connect.c). We do the same via the simple-query
+    // path, quoting the value as a string literal so encoding names are
+    // never mistaken for SQL tokens. On success the server emits a
+    // `client_encoding` ParameterStatus which the message loop folds into
+    // `this.params` (see the ParameterStatus cases), so
+    // `parameterStatus('client_encoding')` is up to date afterwards.
+    //
+    // We keep no separate client-side decoder state: text-format values are
+    // always decoded as UTF-8 in `decodeDataRow`, matching how the rest of
+    // this client treats backend text. Tracking only the ParameterStatus is
+    // therefore sufficient. A non-zero `SET` failure (e.g. a name the server
+    // rejects) surfaces as a thrown ConnectError from `execSimple`.
+    await this.execSimple(`SET client_encoding TO ${this.escapeLiteral(name)}`);
+  }
+
   public onNotice(handler: (notice: Notice) => void): () => void {
     return this.notify.onNotice(handler);
   }

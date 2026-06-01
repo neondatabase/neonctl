@@ -137,6 +137,25 @@ export type Connection = {
   cancel(): Promise<void>;
   escapeIdentifier(value: string): string;
   escapeLiteral(value: string): string;
+  /**
+   * Change the live connection's client encoding by issuing
+   * `SET client_encoding TO <value>`. Mirrors libpq's
+   * `PQsetClientEncoding`, which upstream psql's `\encoding NAME` calls
+   * after validating the name. The server echoes the new value back in a
+   * `client_encoding` ParameterStatus, so `parameterStatus('client_encoding')`
+   * reflects the change once this resolves.
+   *
+   * Rejects (propagating the server's ErrorResponse) if the server refuses
+   * the encoding — the caller is expected to have already validated the
+   * name client-side, so this only fires on genuine server-side failures.
+   *
+   * Optional on the interface for the same reason as
+   * {@link closePreparedStatement}: existing mocks implement the surface as
+   * object literals and shouldn't all need a stub at once. `PgConnection`
+   * always supplies the real method; the only caller (`\encoding`) invokes
+   * it whenever a connection is present.
+   */
+  setClientEncoding?(name: string): Promise<void>;
   onNotice(handler: (notice: Notice) => void): () => void;
   onNotification(
     handler: (channel: string, payload: string, pid: number) => void,
