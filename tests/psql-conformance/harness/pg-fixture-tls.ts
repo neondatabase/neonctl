@@ -519,6 +519,17 @@ CREATE USER ssluser;
 CREATE USER nossluser;
 CREATE USER ssltestuser;
 CREATE USER anotheruser;
+
+-- Password-auth users for the 002_scram suite. The cluster default
+-- \`password_encryption\` is scram-sha-256 (PG 14+), so the SCRAM user
+-- ends up with a SCRAM verifier; we explicitly flip the GUC to 'md5'
+-- around the md5user's CREATE so it gets an MD5-hashed password
+-- instead. Both share the same plaintext to keep the spec simple.
+SET password_encryption = 'scram-sha-256';
+CREATE USER scramuser WITH PASSWORD 'pencil';
+SET password_encryption = 'md5';
+CREATE USER md5user WITH PASSWORD 'pencil';
+RESET password_encryption;
 `;
 
 /**
@@ -570,6 +581,15 @@ hostssl        all       ssltestuser  0.0.0.0/0       cert clientcert=verify-ful
 hostssl        all       ssltestuser  ::/0            cert clientcert=verify-full
 hostssl        all       anotheruser  0.0.0.0/0       trust clientcert=verify-ca
 hostssl        all       anotheruser  ::/0            trust clientcert=verify-ca
+# Password-auth users for the 002_scram suite. Both are TLS-only so
+# the auth flow exercises SCRAM channel binding when channel_binding
+# is requested. The methods are per-user (not catch-all) so plaintext
+# transport falls through to a "no pg_hba.conf entry" rejection,
+# preserving the contract that 002_scram only tests TLS-mediated auth.
+hostssl        all       scramuser    0.0.0.0/0       scram-sha-256
+hostssl        all       scramuser    ::/0            scram-sha-256
+hostssl        all       md5user      0.0.0.0/0       md5
+hostssl        all       md5user      ::/0            md5
 host           all       testuser     0.0.0.0/0       trust
 host           all       testuser     ::/0            trust
 # Default rules for the testcontainers superuser ("test" by default;
