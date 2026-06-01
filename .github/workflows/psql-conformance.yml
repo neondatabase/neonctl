@@ -104,6 +104,14 @@ jobs:
           # tracked inline via it.todo/it.skip; raw stderr surfaces in
           # the run log.
           PSQL_BINARY: ${{ github.workspace }}/dist/psql/cli.js
+          # Opt in to the TAP-style integration specs (001_basic,
+          # 010_tab_completion, 020_cancel, 030_pager, 001_ssltests,
+          # 005_negotiate_encryption, 003_load_balance_host_list, the
+          # seam mode of 004_load_balance_dns, 006_service). Without
+          # this they self-skip — see `tap/_helpers.ts:RUN_INTEGRATION`.
+          # The real-DNS variant of 004 is run by the separate
+          # `loadbalance-dns` job below, not from this matrix.
+          RUN_INTEGRATION: '1'
           # Point the harness's pg-fixture at the GHA service container
           # instead of booting a testcontainer in CI.
           PGCONFORMANCE_PG_HOST: 127.0.0.1
@@ -127,5 +135,143 @@ jobs:
           # we suffix with the PG major from the matrix.
           name: psql-conformance-pg-${{ matrix.pg }}
           path: psql-conformance.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Dedicated job for the real-DNS variant of upstream's
+  # `004_load_balance_dns.pl`. Runs the custom fixture from
+  # `tests/psql-conformance/fixtures/loadbalance-dns/` which:
+  #   - hosts 3 postgres clusters bound to 127.0.0.{1,2,3}:5432, and
+  #   - relies on `/etc/hosts` mapping `pg-loadbalancetest` to those
+  #     three IPs so Node's `dns.lookup(host, {all: true})` actually
+  #     returns three records.
+  #
+  # The matrix job above exercises the same DNS fan-out engine logic
+  # via the `_dnsLookupAll` seam (portable across macOS / Windows
+  # runners). This job is the byte-faithful real-DNS counterpart —
+  # Linux-only because user-space binding to 127.0.0.2 / 127.0.0.3 is
+  # a Linux-only convenience (other OSes need `ifconfig alias` setup).
+  #
+  # The job is gated by the same `continue-on-error: true` as the
+  # matrix — non-blocking until coverage stabilises.
+  # ---------------------------------------------------------------------------
+  loadbalance-dns:
+    name: psql-conformance loadbalance-dns (real)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version-file: .tool-versions
+
+      - name: Install pnpm
+        run: npm install -g pnpm@9.15.9
+
+      - name: Install
+        run: pnpm install
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Seed /etc/hosts with pg-loadbalancetest → 127.0.0.{1,2,3}
+        # Required so Node's `dns.lookup(HOSTNAME, {all: true})` inside
+        # the spec sees all three A records. The fixture container's
+        # entrypoint seeds its OWN /etc/hosts but that doesn't help the
+        # spec process running on the runner (network=host shares the
+        # network namespace but not /etc/hosts). One-shot, idempotent.
+        run: |
+          set -euo pipefail
+          if ! grep -q 'pg-loadbalancetest' /etc/hosts; then
+            sudo tee -a /etc/hosts > /dev/null <<'EOF'
+          127.0.0.1 pg-loadbalancetest
+          127.0.0.2 pg-loadbalancetest
+          127.0.0.3 pg-loadbalancetest
+          EOF
+          fi
+          # Verify the seed took.
+          getent hosts pg-loadbalancetest
+
+      - name: Build the loadbalance-dns fixture image
+        run: |
+          docker build \
+            -f tests/psql-conformance/fixtures/loadbalance-dns/Dockerfile \
+            -t pg-loadbalance-dns:ci \
+            tests/psql-conformance/fixtures/loadbalance-dns
+
+      - name: Start the fixture container
+        # `--network=host` is the only way the spec process can reach
+        # 127.0.0.2 and 127.0.0.3 — Docker's default bridge would
+        # NAT the IPs back to a single bridge address. `--network=host`
+        # works on Linux only; this whole job is Linux-only.
+        run: |
+          docker run -d \
+            --name pg-loadbalance-dns \
+            --network=host \
+            pg-loadbalance-dns:ci
+          # Wait for the three postgres clusters to come up. The
+          # entrypoint uses `pg_ctl -w start` so by the time `docker
+          # logs` shows "database system is ready" we're good. Poll
+          # via pg_isready against each IP rather than parsing logs.
+          for ip in 127.0.0.1 127.0.0.2 127.0.0.3; do
+            for i in $(seq 1 30); do
+              if PGPASSWORD=postgres pg_isready -h "$ip" -p 5432 -U postgres >/dev/null 2>&1; then
+                echo "$ip: ready"
+                break
+              fi
+              sleep 1
+              if [ "$i" -eq 30 ]; then
+                echo "::error::$ip not ready after 30s"
+                docker logs pg-loadbalance-dns
+                exit 1
+              fi
+            done
+          done
+
+      - name: Run real-DNS load-balance spec
+        continue-on-error: true
+        env:
+          PSQL_BINARY: ${{ github.workspace }}/dist/psql/cli.js
+          RUN_INTEGRATION: '1'
+          # Opts the spec body in. Matches upstream's
+          # PG_TEST_EXTRA=load_balance gate semantically.
+          LOAD_BALANCE_REAL: '1'
+          PG_TEST_EXTRA: load_balance
+          # The shared pg-fixture isn't used by this spec but the
+          # global-setup still expects to find SOMETHING reachable;
+          # point it at node1 of the fixture.
+          PGCONFORMANCE_PG_HOST: 127.0.0.1
+          PGCONFORMANCE_PG_PORT: '5432'
+          PGCONFORMANCE_PG_USER: postgres
+          PGCONFORMANCE_PG_PASSWORD: postgres
+          PGCONFORMANCE_PG_DB: postgres
+          PGCONFORMANCE_PG_MAJOR: '18'
+        run: |
+          set -o pipefail
+          pnpm exec vitest run \
+            --config tests/psql-conformance/vitest.config.ts \
+            tests/psql-conformance/tap/004_load_balance_dns_real.spec.ts \
+            2>&1 | tee loadbalance-dns.log
+
+      - name: Capture fixture container logs (on failure)
+        if: failure() || cancelled()
+        run: docker logs pg-loadbalance-dns || true
+
+      - name: Stop fixture container
+        if: always()
+        run: docker rm -f pg-loadbalance-dns || true
+
+      - name: Upload spec log
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: psql-conformance-loadbalance-dns
+          path: loadbalance-dns.log
           if-no-files-found: warn
           retention-days: 14
