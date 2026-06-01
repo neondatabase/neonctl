@@ -519,19 +519,35 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   // a follow-up agent can pick exactly the next gap.
   // -------------------------------------------------------------------------
 
-  // The `mytab123` listing then `2<tab>` follow-up is testing cycle-and-
-  // commit semantics that depend on knowing the current cycle index from
-  // the previous tap. Our `CompletionState` does cycle, but the "type 2
-  // after the listing" path requires the in-progress buffer to become
-  // `mytab2` and then re-trigger as a single-candidate match — which
-  // works in isolation but is hard to express here without a chained
-  // session.
-  it.todo(
-    'finish one of multiple table choices — `2<tab>` → `246 ` (line 154; needs chained session state)',
-  );
-  it.todo(
-    'finish one of multiple quoted choices — `2<tab>` → `246" ` (line 170; needs chained session state)',
-  );
+  // Upstream's `2<tab>` follow-up after the multi-candidate listing.
+  // Sequence:
+  //   1. Type `select * from my<TAB>` — the editor inserts the common
+  //      prefix `mytab` (no trailing space because the match isn't
+  //      unique).
+  //   2. Type `2<TAB>` — the live buffer extends to `select * from
+  //      mytab2`, which uniquely matches `mytab246`. The completion
+  //      engine inserts `46 ` (with the trailing space the editor
+  //      appends for unique matches).
+  //
+  // The two steps share the prompt's in-flight buffer; we deliberately
+  // don't `resetPrompt` between them. `afterEach` (registered above)
+  // resets at the end of the test so the next test starts clean.
+  it('finish one of multiple table choices — `2<tab>` → `246 ` (line 154)', async () => {
+    h.clear();
+    sendKeys(h, 'select * from my\t');
+    await waitForOutput(h, /select \* from mytab/, 5_000);
+    h.clear();
+    sendKeys(h, '2\t');
+    await waitForOutput(h, /mytab246 /, 5_000);
+  });
+  it('finish one of multiple quoted choices — `2<tab>` → `246" ` (line 170)', async () => {
+    h.clear();
+    sendKeys(h, 'select * from "my\t');
+    await waitForOutput(h, /select \* from "mytab/, 5_000);
+    h.clear();
+    sendKeys(h, '2\t');
+    await waitForOutput(h, /"mytab246" /, 5_000);
+  });
 
   // Index/constraint name for referenced table (lines 211-228). Upstream
   // tab-complete.in.c parses `ALTER TABLE <ref> DROP CONSTRAINT y` and
