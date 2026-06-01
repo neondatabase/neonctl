@@ -40,6 +40,7 @@ The workflow opens a **draft** PR titled `chore: release neonctl@vX.Y.Z`.
 
 ### 2. Review and merge the release PR
 
+- Click **Ready for review** to take the PR out of draft. GitHub blocks merging while it's a draft, and this flip (under your identity, not `GITHUB_TOKEN`) is what makes the required checks attach to the PR.
 - Approve the PR.
 - Wait for required checks.
 - Click **Squash and merge** manually in the UI. **Do not enable auto-merge.**
