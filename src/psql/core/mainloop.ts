@@ -1051,7 +1051,12 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   const processChunk = async (chunk: string): Promise<void> => {
     let working = chunk;
     while (working.length > 0) {
-      const result = scanSql(working, scanState, sqlVarLookup, slashCmdMode);
+      // SINGLELINE (-S / `\set SINGLELINE on`): the scanner treats a top-level
+      // newline as an implicit `;`, so each input line dispatches on its own.
+      // Read the flag fresh each pass — `\set SINGLELINE` can flip it mid-REPL.
+      const result = scanSql(working, scanState, sqlVarLookup, slashCmdMode, {
+        singleline: ctx.settings.singleline,
+      });
       scanState = result.nextState;
 
       if (result.kind === 'semicolon') {

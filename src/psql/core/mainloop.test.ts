@@ -290,6 +290,22 @@ describe('runMainLoop — SQL', () => {
     const code = await runMainLoop(ctx);
     expect(code).toBe(EXIT_SUCCESS);
   });
+
+  test('SINGLELINE: a newline terminates each statement (no trailing `;`)', async () => {
+    // With SINGLELINE on, each input line dispatches on its own — the scanner
+    // treats the line-ending newline as an implicit `;`. Two un-terminated
+    // lines therefore run as two separate queries.
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1', 'SELECT 2'],
+      settingsOverride: (s) => {
+        s.singleline = true;
+      },
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // The mock connection trims SQL, so the trailing `\n` is normalised away.
+    expect(db?.calls).toEqual(['SELECT 1', 'SELECT 2']);
+  });
 });
 
 // ---------------------------------------------------------------------------

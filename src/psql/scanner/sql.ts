@@ -461,12 +461,34 @@ export type SlashCmdModeLookup = (
   cmdName: string,
 ) => SlashCmdArgMode | undefined;
 
+/**
+ * Per-call scanner options. Threaded alongside {@link ScanState} but carries
+ * caller *configuration* rather than lexer state — so it isn't cloned into
+ * the result's `nextState`.
+ *
+ * `singleline` mirrors psql's SINGLELINE setting (`-S` / `\set SINGLELINE on`).
+ * Upstream's `MainLoop()` consults `pset.singleline` and treats the end of an
+ * input line as an implicit statement terminator: a top-level newline acts
+ * like a `;`. We honour that here in the scanner so the boundary handling
+ * stays in one place. The newline only terminates when we're at the INITIAL
+ * top level (not inside a quote / comment / paren / dollar-quoted block and
+ * not inside a `BEGIN … END` function body) AND the statement scanned so far
+ * holds non-whitespace SQL — a blank or whitespace-only line never produces
+ * an empty statement (matching upstream, which skips empty input lines before
+ * the scanner ever sees them).
+ */
+export type ScanOptions = {
+  singleline?: boolean;
+};
+
 export const scanSql = (
   input: string,
   state?: ScanState,
   varLookup?: VarLookup,
   slashCmdMode?: SlashCmdModeLookup,
+  options?: ScanOptions,
 ): ScanResult => {
+  const singleline = options?.singleline ?? false;
   // Local working copy; we mutate freely and clone at exit.
   const st = cloneState(state ?? initialScanState());
 
@@ -587,6 +609,34 @@ export const scanSql = (
     }
 
     // --- Top-level / INITIAL state. ---
+
+    // SINGLELINE (-S): a top-level newline is an implicit statement
+    // terminator, behaving exactly like `;`. Upstream's `MainLoop()` adds the
+    // implicit semicolon when `pset.singleline` is set; we apply it here so
+    // the boundary logic lives in one place. We're guaranteed to be at the
+    // INITIAL top level here (the quote / comment / paren / dollar-quote
+    // guards above already `continue`d), but still gate on `beginDepth === 0`
+    // so a newline inside a `CREATE FUNCTION … BEGIN … END` body doesn't split
+    // the surrounding statement — matching the `;` rule below. Only fire when
+    // the statement scanned so far carries non-whitespace SQL; a blank or
+    // whitespace-only line emits the newline and keeps scanning so it never
+    // dispatches an empty statement.
+    if (
+      singleline &&
+      (c === '\n' || c === '\r') &&
+      st.beginDepth === 0 &&
+      sql.trim().length > 0
+    ) {
+      sql += c;
+      i++;
+      // Reset per-statement state, mirroring the `;` boundary below.
+      return {
+        kind: 'semicolon',
+        sql,
+        consumed: i,
+        nextState: initialScanState(),
+      };
+    }
 
     // Block comment start.
     if (c === '/' && input[i + 1] === '*') {
@@ -953,6 +1003,7 @@ export const splitStatements = (
   input: string,
   varLookup?: VarLookup,
   slashCmdMode?: SlashCmdModeLookup,
+  options?: ScanOptions,
 ): string[] => {
   const out: string[] = [];
   let remaining = input;
@@ -962,7 +1013,7 @@ export const splitStatements = (
   let safety = 0;
   while (remaining.length > 0) {
     if (++safety > input.length + 10) break;
-    const r = scanSql(remaining, state, varLookup, slashCmdMode);
+    const r = scanSql(remaining, state, varLookup, slashCmdMode, options);
     if (r.kind === 'semicolon') {
       // When the caller requested variable substitution, the scanner has
       // already applied it to `r.sql` — we must push the transformed text,

@@ -40,9 +40,11 @@
  *
  * What's deliberately not done here:
  *
- *   - SINGLELINE (-S): treating LF as a semicolon belongs in the scanner; we
- *     surface a TODO so WP-24 can pick it up. The flag is read off
- *     `settings.singleline` for completeness but currently has no effect.
+ *   - SINGLELINE (-S): treating LF as a semicolon is a scanner concern, so it
+ *     lives there — `scanSql` honours `ScanOptions.singleline` and the mainloop
+ *     passes `settings.singleline` through on each pass. `sendQuery` itself
+ *     needs no SINGLELINE branch; by the time a statement reaches here the
+ *     scanner has already drawn the boundary.
  *
  *   - Pipeline mode (-X / `\startpipeline`): upstream gates SendQuery on
  *     `pset.send_mode == PSQL_SEND_PIPELINE`; that path is owned by WP-21.
@@ -1165,10 +1167,11 @@ export const sendQuery = async (
     }
   }
 
-  // SINGLELINE (-S): treat newlines as semicolons. This belongs in the
-  // scanner — keep the flag readable here so a future WP-24 patch can
-  // pivot from a single touch-point.
-  // TODO(WP-24): wire ctx.settings.singleline into the scanner.
+  // SINGLELINE (-S): treating a newline as a semicolon is a scanner concern
+  // and is wired through `scanSql`'s `ScanOptions.singleline` (the mainloop
+  // forwards `ctx.settings.singleline` on each pass). No work is required in
+  // `sendQuery`: the statement boundary has already been drawn before we get
+  // here.
 
   const db = ctx.settings.db;
   const autocommit = readAutocommit(ctx.settings);

@@ -1394,3 +1394,121 @@ describe('scanSql — :NAME variable substitution', () => {
     expect(r.sql).toBe('SELECT :{?};');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Same-line backslash dispatch after buffered SQL.
+//
+// Upstream `psqlscan.l` recognises a backslash boundary regardless of whether
+// the SQL buffer is empty, handing the accumulated SQL back so buffer-consuming
+// commands (`\g`, `\watch`, …) can read and execute it. These assert the
+// scanner peels off `cmd` + `rest` AND returns the preceding SQL via `sql` for
+// the named-flag `\watch`, `\g | <program>` pipe, multi-statement, and COPY
+// shapes — the cases the conformance harness exercises against real psql.
+// ---------------------------------------------------------------------------
+
+describe('scanSql — backslash on the same line as SQL', () => {
+  test('SELECT 1 \\watch c=3 i=0.01 dispatches with buffered SQL', () => {
+    const r = scanSql('SELECT 1 \\watch c=3 i=0.01');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('watch');
+    expect(r.rest).toBe(' c=3 i=0.01');
+    expect(r.sql).toBe('SELECT 1 ');
+  });
+
+  test('SELECT 1 \\g | cat dispatches with buffered SQL', () => {
+    const r = scanSql('SELECT 1 \\g | cat');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('g');
+    expect(r.rest).toBe(' | cat');
+    expect(r.sql).toBe('SELECT 1 ');
+  });
+
+  test('multi-statement SELECT …; SELECT … \\g | cat splits then dispatches', () => {
+    // First boundary is the `;` after `SELECT 1`; the second statement carries
+    // the inline `\g | cat` pipe with its own buffered SQL.
+    expect(splitStatements('SELECT 1; SELECT 2 \\g | cat')).toEqual([
+      'SELECT 1;',
+      ' SELECT 2 \\g | cat',
+    ]);
+    const r = scanSql(' SELECT 2 \\g | cat');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('g');
+    expect(r.rest).toBe(' | cat');
+    expect(r.sql).toBe(' SELECT 2 ');
+  });
+
+  test('COPY (VALUES (1)) TO STDOUT \\g | cat dispatches with buffered SQL', () => {
+    const r = scanSql('COPY (VALUES (1)) TO STDOUT \\g | cat');
+    expect(r.kind).toBe('backslash');
+    if (r.kind !== 'backslash') return;
+    expect(r.cmd).toBe('g');
+    expect(r.rest).toBe(' | cat');
+    expect(r.sql).toBe('COPY (VALUES (1)) TO STDOUT ');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SINGLELINE (-S): a top-level newline terminates a statement like a `;`.
+// ---------------------------------------------------------------------------
+
+describe('scanSql — SINGLELINE newline-as-terminator', () => {
+  test('a top-level newline terminates the statement like a semicolon', () => {
+    const r = scanSql('SELECT 1\n', undefined, undefined, undefined, {
+      singleline: true,
+    });
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    // The whole line, including the terminating newline, is the statement.
+    expect(r.sql).toBe('SELECT 1\n');
+    expect(r.consumed).toBe('SELECT 1\n'.length);
+  });
+
+  test('without singleline the same input is an unterminated `eof`', () => {
+    const r = scanSql('SELECT 1\n');
+    expect(r.kind).toBe('eof');
+  });
+
+  test('two lines split into two statements under singleline', () => {
+    expect(
+      splitStatements('SELECT 1\nSELECT 2\n', undefined, undefined, {
+        singleline: true,
+      }),
+    ).toEqual(['SELECT 1\n', 'SELECT 2\n']);
+  });
+
+  test('a whitespace-only line does not produce an empty statement', () => {
+    // Leading blank lines are emitted but never dispatched on their own; the
+    // newline only terminates once real SQL has accumulated.
+    expect(
+      splitStatements('\n\nSELECT 1\n', undefined, undefined, {
+        singleline: true,
+      }),
+    ).toEqual(['\n\nSELECT 1\n']);
+  });
+
+  test('newline inside an open quote does not terminate under singleline', () => {
+    const r = scanSql("SELECT '\n", undefined, undefined, undefined, {
+      singleline: true,
+    });
+    // Still mid-string — the newline is part of the literal, not a boundary.
+    expect(r.kind).toBe('incomplete');
+  });
+
+  test('newline inside a CREATE FUNCTION BEGIN…END body does not terminate', () => {
+    const r = scanSql(
+      'CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC\nSELECT 1;\nEND;\n',
+      undefined,
+      undefined,
+      undefined,
+      { singleline: true },
+    );
+    // The body newlines must not split the surrounding CREATE; the first
+    // boundary is the final `;` after END.
+    expect(r.kind).toBe('semicolon');
+    if (r.kind !== 'semicolon') return;
+    expect(r.sql).toContain('END;');
+  });
+});
