@@ -687,16 +687,18 @@ describe.skipIf(!SHOULD_RUN)('tap/010_tab_completion', () => {
   });
 
   // Multi-line completion / ANALYZE ( (line 360). Tab completion mid-
-  // statement after an `(` on its own line. Our LineEditor passes only
-  // the current line to the completer (mainloop.ts:259) — the `analyze (`
-  // from the previous line is gone by the time the second-line tab
-  // fires, so we can't see the parenthesised-option-list context.
-  // Adding it would require either plumbing the in-flight query buffer
-  // into the completer, or having the engine read the multi-line state
-  // from a shared session reference.
-  it.todo(
-    'check ANALYZE (VERBOSE ... — multi-line completion of `analyze (` (line 360; LineEditor passes only the current line to the completer, so the `(` opened on the previous line is invisible — needs multi-line buffer plumbing)',
-  );
+  // statement after an `(` on its own line. The queryBuf plumbing in
+  // mainloop wires the prior-line `analyze (` through to the completer
+  // via `CompleteContext.queryBuf`, so the parenthesised-option-list rule
+  // in `complete/rules.ts` fires on the second-line Tab and lists
+  // VERBOSE / SKIP_LOCKED / BUFFER_USAGE_LIMIT.
+  it('check ANALYZE (VERBOSE ... — multi-line completion of `analyze (` (line 360)', async () => {
+    h.clear();
+    sendKeys(h, 'analyze (\n\t\t');
+    await new Promise<void>((r) => setTimeout(r, 500));
+    const buf = h.clean();
+    expect(buf).toMatch(/VERBOSE/);
+  });
 
   // GUC completion (lines 366-387). We support unqualified GUC names
   // via `Query_for_list_of_set_vars`; the first tab on `interval`

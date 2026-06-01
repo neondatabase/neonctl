@@ -1196,3 +1196,73 @@ describe('findCompletions: COPY WITH option keywords', () => {
     expect(r.candidates).toContain('FORMAT');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-line completion: cross-line context via `ctx.queryBuf`.
+// ---------------------------------------------------------------------------
+
+describe('findCompletions: multi-line ANALYZE ( option list', () => {
+  it('emits VERBOSE/SKIP_LOCKED/BUFFER_USAGE_LIMIT when prior line opened `analyze (`', async () => {
+    const ctx = {
+      settings: makeSettings(),
+      queryBuf: 'analyze (\n',
+    };
+    const r = await findCompletions([], '', ctx);
+    expect(r.candidates).toContain('VERBOSE');
+    expect(r.candidates).toContain('SKIP_LOCKED');
+    expect(r.candidates).toContain('BUFFER_USAGE_LIMIT');
+  });
+
+  it('emits the option list after a comma continuation across lines', async () => {
+    const ctx = {
+      settings: makeSettings(),
+      queryBuf: 'analyze (verbose,\n',
+    };
+    const r = await findCompletions([], '', ctx);
+    expect(r.candidates).toContain('VERBOSE');
+    expect(r.candidates).toContain('SKIP_LOCKED');
+    expect(r.candidates).toContain('BUFFER_USAGE_LIMIT');
+  });
+
+  it('filters by prefix when the user has typed partial option name', async () => {
+    const ctx = {
+      settings: makeSettings(),
+      queryBuf: 'analyze (\n',
+    };
+    const r = await findCompletions([], 'VER', ctx);
+    expect(r.candidates).toContain('VERBOSE');
+    // SKIP_LOCKED / BUFFER_USAGE_LIMIT shouldn't survive the `VER` filter.
+    expect(r.candidates).not.toContain('SKIP_LOCKED');
+    expect(r.candidates).not.toContain('BUFFER_USAGE_LIMIT');
+  });
+
+  it('emits ON/OFF after a boolean-typed option like VERBOSE', async () => {
+    const ctx = {
+      settings: makeSettings(),
+      queryBuf: 'analyze (verbose\n',
+    };
+    const r = await findCompletions([], '', ctx);
+    expect(r.candidates).toContain('ON');
+    expect(r.candidates).toContain('OFF');
+  });
+
+  it('does not fire when the parenthesized form has been closed', async () => {
+    const ctx = {
+      settings: makeSettings(),
+      queryBuf: 'analyze (verbose);\n',
+    };
+    const r = await findCompletions([], '', ctx);
+    // Closed form → falls through to the top-of-statement keyword list, not
+    // the ANALYZE option set.
+    expect(r.candidates).not.toContain('SKIP_LOCKED');
+    expect(r.candidates).not.toContain('BUFFER_USAGE_LIMIT');
+  });
+
+  it('falls through to the empty-line fallback when queryBuf is empty', async () => {
+    const ctx = { settings: makeSettings(), queryBuf: '' };
+    const r = await findCompletions([], '', ctx);
+    // Top-of-statement keyword list — SELECT, INSERT INTO, etc.
+    expect(r.candidates).toContain('SELECT');
+    expect(r.candidates).not.toContain('SKIP_LOCKED');
+  });
+});

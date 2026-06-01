@@ -101,7 +101,7 @@ import type { Connection } from '../types/connection.js';
 import type { PsqlSettings } from '../types/settings.js';
 
 import { completeFilenames, isCopyFromOrTo } from './filenames.js';
-import { HeadMatches, MatchAny, TailMatches } from './matcher.js';
+import { HeadMatches, MatchAny, TailMatches, tokenize } from './matcher.js';
 import {
   Query_for_constraint_of_table,
   Query_for_constraint_of_table_in_schema,
@@ -1155,6 +1155,27 @@ export const findCompletions = async (
     return await backslashArgRules(prevWords, currentWord, ctx, conn);
   }
 
+  // ----- Multi-line SQL: rules that need to see across the line boundary
+  // re-tokenize `queryBuf` and consult the COMBINED token sequence. The
+  // standard single-line `prevWords` view stays untouched so the bulk of
+  // the rule grammar (which is happy to match on the current line alone)
+  // isn't disturbed.
+  //
+  // Upstream's `get_previous_words` pastes `tab_completion_query_buf` in
+  // front of `rl_line_buffer` with a `\n` separator and tokenizes the
+  // whole thing — see tab-complete.in.c ~line 6670. We mirror that, but
+  // gate the cross-line view to specific rules so the existing tail-match
+  // arms keep their familiar (line-local) semantics.
+  const combined = combinedPrevWords(ctx.queryBuf, prevWords);
+  const multiLine = await multiLineSqlRules(
+    combined,
+    prevWords,
+    currentWord,
+    ctx,
+    conn,
+  );
+  if (multiLine !== null) return multiLine;
+
   // ----- SQL: top-of-statement keyword completion.
   if (prevWords.length === 0) {
     return {
@@ -1163,6 +1184,130 @@ export const findCompletions = async (
   }
 
   return await sqlRules(prevWords, currentWord, ctx, conn);
+};
+
+/**
+ * Tokenize `queryBuf` and concatenate with the current line's `prevWords`.
+ * The result matches what upstream's `get_previous_words` produces for a
+ * multi-line statement: tokens from prior lines first, then tokens from the
+ * current line up to the cursor.
+ *
+ * Tokens cross the line boundary harmlessly because our tokenizer treats
+ * `\n` as whitespace (a separator). Newlines INSIDE a `'...'`/`"..."`
+ * literal are absorbed by the quoted-string handling and don't split the
+ * literal into two tokens.
+ */
+const combinedPrevWords = (
+  queryBuf: string | undefined,
+  prevWords: string[],
+): string[] => {
+  if (queryBuf === undefined || queryBuf.length === 0) return prevWords;
+  const bufTokens = tokenize(queryBuf).map((t) => t.text);
+  return [...bufTokens, ...prevWords];
+};
+
+/**
+ * Rules that fire only when the user is in the middle of a multi-line
+ * statement (`queryBuf` non-empty / the combined-token view is longer than
+ * the current-line view). Today this covers:
+ *
+ *   - `ANALYZE (` opened on a previous line — emit the option list.
+ *
+ * Returns the rule's `RuleResult` when an arm matches, or `null` when the
+ * combined-token view doesn't add anything (so the caller continues with
+ * the line-local rule grammar).
+ */
+// Async signature today is forward-compatible with rules that need to hit
+// the catalog (e.g. a future COMMENT ON CONSTRAINT … ON arm that looks up
+// the table holding the named constraint). The lone ANALYZE arm doesn't
+// touch the catalog, so eslint flags the no-await async; we keep the
+// signature uniform and silence the rule here.
+/* eslint-disable @typescript-eslint/require-await */
+const multiLineSqlRules = async (
+  combined: string[],
+  prevWords: string[],
+  currentWord: string,
+  ctx: CompleteContext,
+  conn: Connection | null,
+): Promise<RuleResult | null> => {
+  // Skip if there's no cross-line context to add.
+  if (combined.length === prevWords.length) return null;
+
+  // ----- ANALYZE ( <prefix> — option list inside the parenthesized form.
+  // Mirrors upstream:
+  //
+  //   else if (HeadMatches("ANALYZE", "(*") &&
+  //            !HeadMatches("ANALYZE", "(*)"))
+  //   {
+  //       if (ends_with(prev_wd, '(') || ends_with(prev_wd, ','))
+  //           COMPLETE_WITH("VERBOSE", "SKIP_LOCKED", "BUFFER_USAGE_LIMIT");
+  //       else if (TailMatches("VERBOSE|SKIP_LOCKED"))
+  //           COMPLETE_WITH("ON", "OFF");
+  //   }
+  //
+  // Our scanner splits `(` and `,` as their own tokens (the C tokenizer
+  // keeps `(verbose` as one word), so `ends_with(prev_wd, '(')` becomes
+  // "previous token IS `(`" and similarly for `,`.
+  if (
+    HeadMatches(combined, ['ANALYZE']) &&
+    isInsideOpenParen(combined.slice(1))
+  ) {
+    const lastTok = combined[combined.length - 1];
+    if (lastTok === '(' || lastTok === ',') {
+      return {
+        candidates: filterAndCase(
+          ['VERBOSE', 'SKIP_LOCKED', 'BUFFER_USAGE_LIMIT'],
+          currentWord,
+          ctx.settings,
+        ),
+      };
+    }
+    // Inside the option list with a partial option name in the current
+    // word — filter the option list by the prefix.
+    if (
+      currentWord.length > 0 &&
+      (lastTok === undefined || /^[A-Za-z_]+$/.test(currentWord))
+    ) {
+      return {
+        candidates: filterAndCase(
+          ['VERBOSE', 'SKIP_LOCKED', 'BUFFER_USAGE_LIMIT'],
+          currentWord,
+          ctx.settings,
+        ),
+      };
+    }
+    // `VERBOSE` / `SKIP_LOCKED` boolean continuation — ON / OFF.
+    if (TailMatches(combined, ['VERBOSE|SKIP_LOCKED'])) {
+      return {
+        candidates: filterAndCase(['ON', 'OFF'], currentWord, ctx.settings),
+      };
+    }
+  }
+
+  void conn;
+  return null;
+};
+/* eslint-enable @typescript-eslint/require-await */
+
+/**
+ * Return true when the tokens (after dropping a leading `ANALYZE` keyword)
+ * are inside an unclosed parenthesized form — i.e. there's a `(` somewhere
+ * and no matching `)` at the trailing position. Mirrors upstream's
+ * `HeadMatches("ANALYZE", "(*") && !HeadMatches("ANALYZE", "(*)")`
+ * pattern under our split-punctuation tokenizer.
+ */
+const isInsideOpenParen = (tokens: readonly string[]): boolean => {
+  let depth = 0;
+  let sawOpen = false;
+  for (const t of tokens) {
+    if (t === '(') {
+      depth++;
+      sawOpen = true;
+    } else if (t === ')') {
+      depth--;
+    }
+  }
+  return sawOpen && depth > 0;
 };
 
 // ---------------------------------------------------------------------------
