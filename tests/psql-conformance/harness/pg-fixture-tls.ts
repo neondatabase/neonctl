@@ -167,6 +167,7 @@ export class CertVault {
   private clientCaCertPath: string | null = null;
   private bundleRootServerPath: string | null = null;
   private bundleRootClientPath: string | null = null;
+  private serverCrlPath: string | null = null;
 
   public constructor(workDir: string) {
     this.workDir = workDir;
@@ -256,6 +257,66 @@ export class CertVault {
       'aes-256-cbc',
     ]);
     userCert.encryptedKey = encryptedKey;
+
+    // 8. A CRL signed by the server CA that revokes the active server leaf
+    // cert (cn-and-san). The client passes this via `sslcrl` to prove that
+    // a revoked server certificate is rejected at verify time.
+    this.mintServerCrl();
+  }
+
+  /**
+   * Generate a CRL signed by the server CA that lists the active server
+   * leaf cert (`cn-and-san`) as revoked. Uses the `openssl ca -gencrl`
+   * workflow, which needs a tiny CA database (index + crlnumber) and a
+   * config naming the issuing cert/key. Stored at `server_ca.crl`.
+   */
+  private mintServerCrl(): void {
+    if (!this.serverCaCertPath) throw new Error('CertVault: server CA missing');
+    const serverLeaf = this.serverCerts.get('cn-and-san');
+    if (!serverLeaf) throw new Error('CertVault: cn-and-san cert not minted');
+
+    const indexPath = this.path('crl-index.txt');
+    const crlNumberPath = this.path('crl-number.txt');
+    const serialPath = this.path('crl-serial.txt');
+    const configPath = this.path('crl-ca.cnf');
+    const crlPath = this.path('server_ca.crl');
+
+    writeFileSync(indexPath, '');
+    writeFileSync(crlNumberPath, '1000\n');
+    writeFileSync(serialPath, '1000\n');
+    // Minimal `openssl ca` config: just enough for -revoke and -gencrl.
+    writeFileSync(
+      configPath,
+      [
+        '[ca]',
+        'default_ca = CA_default',
+        '',
+        '[CA_default]',
+        `dir = ${this.workDir}`,
+        `database = ${indexPath}`,
+        `crlnumber = ${crlNumberPath}`,
+        `serial = ${serialPath}`,
+        `new_certs_dir = ${this.workDir}`,
+        `certificate = ${this.serverCaCertPath}`,
+        `private_key = ${this.path('server_ca.key')}`,
+        'default_md = sha256',
+        'default_crl_days = 30',
+        'default_days = 30',
+        'policy = policy_any',
+        '',
+        '[policy_any]',
+        'commonName = optional',
+        'countryName = optional',
+        'stateOrProvinceName = optional',
+        'organizationName = optional',
+        'organizationalUnitName = optional',
+      ].join('\n') + '\n',
+    );
+
+    // Mark the server leaf revoked in the CA database, then emit the CRL.
+    runOpenssl(['ca', '-config', configPath, '-revoke', serverLeaf.cert]);
+    runOpenssl(['ca', '-config', configPath, '-gencrl', '-out', crlPath]);
+    this.serverCrlPath = crlPath;
   }
 
   // -------------------------------------------------------------------------
@@ -278,6 +339,11 @@ export class CertVault {
   public getRootServerBundle(): string {
     if (!this.bundleRootServerPath) throw new Error('CertVault: not minted');
     return this.bundleRootServerPath;
+  }
+  /** CRL (signed by server CA) revoking the active `cn-and-san` server cert. */
+  public getServerCrl(): string {
+    if (!this.serverCrlPath) throw new Error('CertVault: CRL not minted');
+    return this.serverCrlPath;
   }
   /** PEM bundle of root_ca + client_ca — the server's `ssl_ca_file`. */
   public getRootClientBundle(): string {

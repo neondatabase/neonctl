@@ -68,7 +68,9 @@
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -1013,21 +1015,68 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
   // SKIPPED SUBTESTS — explicit `it.skip` so the report inventories them.
   // ---------------------------------------------------------------------
 
-  describe('SKIPPED: CRL revocation (fixture has no CRL infrastructure)', () => {
-    it.skip('connects with no CRL; fails with matching CRL via sslcrl=', () => {
-      /* unreachable */
+  describe('CRL revocation (client-side sslcrl / sslcrldir)', () => {
+    // The CertVault mints a CRL (signed by the server CA) that revokes the
+    // active `cn-and-san` server leaf. With verify-ca, Node enables CRL
+    // checking when a `crl` is supplied, so a revoked server cert is
+    // rejected. Each test pins the active server cert to cn-and-san first
+    // (earlier groups switch it around).
+    it('connects with no CRL; fails with matching CRL via sslcrl=', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const root = t.tls.vault.getRootServerBundle();
+
+      // No CRL → verify-ca succeeds.
+      const ok = await mustConnect({
+        user: 'testuser',
+        ssl: 'verify-ca',
+        sslrootcert: root,
+      });
+      await ok.close();
+
+      // CRL revoking the server cert → verification fails.
+      const conn = await tryConnect({
+        user: 'testuser',
+        ssl: 'verify-ca',
+        sslrootcert: root,
+        sslcrl: t.tls.vault.getServerCrl(),
+      });
+      expect(conn).toBeNull();
     });
-    it.skip('connects with no CRL; fails with matching CRL via sslcrldir=', () => {
-      /* unreachable — sslcrldir not exposed in ConnectOptions */
+
+    it('fails with matching CRL via sslcrldir=', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const root = t.tls.vault.getRootServerBundle();
+
+      // sslcrldir points at a directory; the wire layer reads every file
+      // in it into Node's `crl` option.
+      const crlDir = join(t.workDir, 'crldir');
+      mkdirSync(crlDir, { recursive: true });
+      copyFileSync(t.tls.vault.getServerCrl(), join(crlDir, 'server_ca.crl'));
+
+      const conn = await tryConnect({
+        user: 'testuser',
+        ssl: 'verify-ca',
+        sslrootcert: root,
+        sslcrldir: crlDir,
+      });
+      expect(conn).toBeNull();
     });
+
+    // An unrelated CRL (different issuer than the server cert) is not a
+    // meaningful client-side assertion in Node — OpenSSL only consults a
+    // CRL whose issuer matches a cert in the chain, so an unrelated CRL is
+    // simply ignored rather than "rejected". Upstream's check targets a
+    // server-side scenario. Left out of scope.
     it.skip('sslcrl pointing at unrelated CA is rejected at verify time', () => {
-      /* unreachable */
+      /* out of scope — Node ignores a CRL whose issuer is not in the chain */
     });
     it.skip('server-side CRL directory revokes client certs', () => {
-      /* unreachable */
+      /* server-side ssl_crl_file config, not a wire-layer concern */
     });
     it.skip('server-side CRL handles non-ASCII subjects', () => {
-      /* unreachable */
+      /* server-side config, not a wire-layer concern */
     });
   });
 
@@ -1150,8 +1199,8 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     it.skip('invalid sslkeylogfile path surfaces "could not open"', () => {
       /* unreachable */
     });
-    it.skip('sslcrldir=... reads CRLs from a directory', () => {
-      /* unreachable */
+    it.skip('sslcrldir=... reads CRLs from a directory — covered by the CRL revocation group above', () => {
+      /* implemented: see "fails with matching CRL via sslcrldir=" */
     });
   });
 
