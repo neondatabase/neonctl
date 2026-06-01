@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
+
+import type { PagerHandle } from '../print/pager.js';
 
 import {
   helpSQL,
   helpVariables,
+  setHelpPagerOpener,
   slashUsage,
   slashUsageHelp,
   usage,
@@ -11,6 +14,8 @@ import {
 /** Minimal WritableStream stand-in that records every `.write()` call. */
 class MemoryStream {
   chunks: string[] = [];
+  /** Toggled by the pager-routing tests to fake an interactive terminal. */
+  isTTY = false;
   write(chunk: string | Uint8Array): boolean {
     this.chunks.push(typeof chunk === 'string' ? chunk : chunk.toString());
     return true;
@@ -104,6 +109,83 @@ describe('slashUsage', () => {
       });
     });
     expect(out).not.toContain('\\s [FILE]');
+  });
+});
+
+describe('slashUsage pager routing', () => {
+  type PagerOpener = Parameters<typeof setHelpPagerOpener>[0];
+
+  /** A capturing PagerHandle plus a spy opener that returns it. */
+  const fakePager = (): {
+    opener: Mock<Parameters<PagerOpener>, PagerHandle>;
+    captured: string[];
+    closed: () => boolean;
+  } => {
+    const captured: string[] = [];
+    let didClose = false;
+    const handle: PagerHandle = {
+      out: {
+        write(chunk: string | Uint8Array): boolean {
+          captured.push(typeof chunk === 'string' ? chunk : chunk.toString());
+          return true;
+        },
+      } as unknown as NodeJS.WritableStream,
+      spawned: true,
+      close: () => {
+        didClose = true;
+        return Promise.resolve(0);
+      },
+    };
+    const opener = vi.fn<Parameters<PagerOpener>, PagerHandle>(() => handle);
+    return { opener, captured, closed: () => didClose };
+  };
+
+  it('routes through the pager when enabled and output is interactive', () => {
+    const { opener, captured, closed } = fakePager();
+    const restore = setHelpPagerOpener(opener);
+    try {
+      const out = new MemoryStream() as unknown as NodeJS.WriteStream;
+      out.isTTY = true;
+      slashUsage(out, true);
+      // Nothing should have been written directly to the TTY stream...
+      expect((out as unknown as MemoryStream).text()).toBe('');
+      // ...the pager received the full help text instead.
+      expect(opener).toHaveBeenCalledTimes(1);
+      const text = captured.join('');
+      expect(text).toContain('General\n');
+      expect(text).toContain('\\q                     quit psql');
+      expect(closed()).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('writes inline (no pager) when output is not a TTY', () => {
+    const { opener } = fakePager();
+    const restore = setHelpPagerOpener(opener);
+    try {
+      const out = new MemoryStream();
+      // pager requested, but the stream is not interactive.
+      slashUsage(out as unknown as NodeJS.WritableStream, true);
+      expect(opener).not.toHaveBeenCalled();
+      expect(out.text()).toContain('General\n');
+    } finally {
+      restore();
+    }
+  });
+
+  it('writes inline (no pager) when paging is disabled even on a TTY', () => {
+    const { opener } = fakePager();
+    const restore = setHelpPagerOpener(opener);
+    try {
+      const out = new MemoryStream() as unknown as NodeJS.WriteStream;
+      out.isTTY = true;
+      slashUsage(out, false);
+      expect(opener).not.toHaveBeenCalled();
+      expect((out as unknown as MemoryStream).text()).toContain('General\n');
+    } finally {
+      restore();
+    }
   });
 });
 

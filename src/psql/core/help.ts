@@ -14,8 +14,70 @@
  * through the docs URL on each entry rather than being inlined here.
  */
 
+import { openPager, type PagerHandle } from '../print/pager.js';
+
 import { SQL_HELP, findMatches, formatEntry } from './sqlHelp.js';
 import type { SqlHelpEntry } from './sqlHelp.js';
+
+// ---------------------------------------------------------------------------
+// Pager routing
+// ---------------------------------------------------------------------------
+
+/**
+ * Pager opener seam. Defaults to {@link openPager}; tests swap it via
+ * {@link setHelpPagerOpener} so they can assert routing without spawning a
+ * real `less`. Mirrors the `setCmdConnectDeps` pattern used elsewhere.
+ */
+type PagerOpener = typeof openPager;
+let pagerOpener: PagerOpener = openPager;
+
+/** Override the pager opener (tests only). Returns a restore function. */
+export const setHelpPagerOpener = (opener: PagerOpener): (() => void) => {
+  const prev = pagerOpener;
+  pagerOpener = opener;
+  return () => {
+    pagerOpener = prev;
+  };
+};
+
+/** True when `out` is a TTY whose height we can sensibly page against. */
+const isInteractive = (out: NodeJS.WritableStream): boolean =>
+  Boolean((out as NodeJS.WriteStream).isTTY);
+
+/**
+ * Emit help text. When `pager` is requested and `out` is interactive, route
+ * the text through the external pager (upstream `PageOutput`); otherwise write
+ * it straight to `out`.
+ *
+ * The pager decision (TTY, line count vs. terminal height, resolved pager
+ * command) is delegated to {@link openPager}, which falls back to a no-op
+ * handle wrapping `out` when paging isn't warranted. We pass the help text's
+ * own line count so the auto threshold matches what the user will see.
+ */
+const emitHelp = (
+  out: NodeJS.WritableStream,
+  text: string,
+  pager: boolean,
+): void => {
+  if (!pager || !isInteractive(out)) {
+    out.write(text);
+    return;
+  }
+
+  // Count lines so `openPager`'s auto-mode threshold reflects the real output.
+  const lines = text.length === 0 ? 0 : text.split('\n').length;
+  const handle: PagerHandle = pagerOpener({
+    pager: 'on',
+    pagerMinLines: 0,
+    lines,
+    stdout: out,
+  });
+  handle.out.write(text);
+  // `close()` waits for the pager to drain & exit and never rejects (spawn
+  // failures settle to a non-zero code), so detaching it here cannot produce
+  // an unhandled rejection. When no pager spawned, this resolves immediately.
+  void handle.close();
+};
 
 /** Default options shared by every help function. Mirrors upstream constants
  * (`DEFAULT_FIELD_SEP`, `DEFAULT_CSV_FIELD_SEP`, `DEFAULT_WATCH_INTERVAL`) and
@@ -82,8 +144,9 @@ const expandedLabel = (v: boolean | 'auto'): string =>
 /**
  * `psql --help` text — top-level command-line options.
  *
- * TODO(WP-11): respect pager when output is interactive and exceeds screen
- * height. For now we just write the buffer to `out`.
+ * Always written inline: this is the `--help` path (and `\? options`), which
+ * upstream emits without a pager. Interactive `\?` paging is handled by
+ * {@link slashUsage} via its `pager` flag.
  */
 export const usage = (out: NodeJS.WritableStream, opts?: HelpOpts): void => {
   const o = resolve(opts);
@@ -192,17 +255,15 @@ export const usage = (out: NodeJS.WritableStream, opts?: HelpOpts): void => {
 /**
  * `\?` general output — help for the backslash commands.
  *
- * TODO(WP-11): when `pager` is true and output is interactive, route through
- * the pager. For Phase-0 we ignore `pager` and write straight to `out`.
+ * When `pager` is true and `out` is interactive, the rendered text is routed
+ * through the external pager (see {@link emitHelp}); otherwise it is written
+ * straight to `out`.
  */
 export const slashUsage = (
   out: NodeJS.WritableStream,
   pager: boolean,
   opts?: HelpOpts,
 ): void => {
-  // pager is accepted for API compatibility; pager spawning is WP-11.
-  void pager;
-
   const o = resolve(opts);
   const buf: string[] = [];
   const w = (s: string): void => {
@@ -481,7 +542,7 @@ export const slashUsage = (
     '  \\syncpipeline          add a synchronisation point to an ongoing pipeline\n',
   );
 
-  out.write(buf.join(''));
+  emitHelp(out, buf.join(''), pager);
 };
 
 /**
