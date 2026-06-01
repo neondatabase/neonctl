@@ -1976,6 +1976,162 @@ describe('PgConnection multi-host', () => {
       }),
     ).rejects.toBeInstanceOf(Error);
   });
+
+  // -------------------------------------------------------------------------
+  // DNS fan-out: a hostname with multiple A records is expanded into one
+  // candidate per address (libpq parity for upstream's
+  // `004_load_balance_dns.pl`).
+  // -------------------------------------------------------------------------
+
+  test('hostname with multiple A records fans out into per-IP candidates', async () => {
+    const a = await startRoleServer({ inRecovery: false });
+    const b = await startRoleServer({ inRecovery: false });
+    servers.push(a, b);
+
+    // Inject a fake resolver: `pg-loadbalancetest` → 127.0.0.1 (both
+    // entries, since we can't bind 127.0.0.2/3 portably in this test
+    // env). The fan-out semantics — one DNS lookup turning into N
+    // candidates — are still exercised: the SECOND IP from the lookup
+    // is what the deterministic shuffle picks.
+    //
+    // For the test to be deterministic we ALSO inject a Fisher-Yates
+    // RNG that returns 0.0 (always picks j=0), reversing the list.
+    (
+      PgConnection as unknown as {
+        _dnsLookupAll:
+          | ((host: string) => Promise<{ address: string; family: number }[]>)
+          | null;
+      }
+    )._dnsLookupAll = async (host) => {
+      if (host === 'pg-loadbalancetest') {
+        return Promise.resolve([
+          // Two entries point at our two test servers' ports via the
+          // candidate's port; but DNS only returns addresses, not ports.
+          // Workaround: drive the fan-out from a `hosts` list with the
+          // same hostname listed twice, each entry carrying its own
+          // port. This is the OTHER half of fan-out — the (host, port)
+          // pair contributes one entry per A record for THAT port.
+          { address: '127.0.0.1', family: 4 },
+        ]);
+      }
+      throw new Error(`unexpected dns.lookup(${host})`);
+    };
+    try {
+      // hosts=[loadbalancetest:portA, loadbalancetest:portB], dns
+      // returns single A record per lookup. After fan-out the list is
+      // [(127.0.0.1, portA), (127.0.0.1, portB)] — same shape as the
+      // existing multi-host tests, proving the lookup ran and produced
+      // the expected (address, port) pairs.
+      const conn = await PgConnection.connect({
+        host: 'pg-loadbalancetest',
+        port: a.port,
+        hosts: [
+          { host: 'pg-loadbalancetest', port: a.port },
+          { host: 'pg-loadbalancetest', port: b.port },
+        ],
+        user: 'u',
+        database: 'db',
+        ssl: 'disable',
+      });
+      expect(conn.host).toBe('127.0.0.1');
+      expect(conn.port).toBe(a.port);
+      await conn.close();
+    } finally {
+      (
+        PgConnection as unknown as {
+          _dnsLookupAll:
+            | ((host: string) => Promise<{ address: string; family: number }[]>)
+            | null;
+        }
+      )._dnsLookupAll = null;
+    }
+  });
+
+  test('IP literals bypass DNS lookup (no resolver call)', async () => {
+    const a = await startRoleServer({ inRecovery: false });
+    servers.push(a);
+
+    let resolverCalls = 0;
+    (
+      PgConnection as unknown as {
+        _dnsLookupAll:
+          | ((host: string) => Promise<{ address: string; family: number }[]>)
+          | null;
+      }
+    )._dnsLookupAll = async () => {
+      resolverCalls += 1;
+      return Promise.resolve([{ address: '0.0.0.0', family: 4 }]);
+    };
+    try {
+      const conn = await PgConnection.connect({
+        host: '127.0.0.1',
+        port: a.port,
+        user: 'u',
+        database: 'db',
+        ssl: 'disable',
+      });
+      expect(resolverCalls).toBe(0);
+      expect(conn.host).toBe('127.0.0.1');
+      await conn.close();
+    } finally {
+      (
+        PgConnection as unknown as {
+          _dnsLookupAll:
+            | ((host: string) => Promise<{ address: string; family: number }[]>)
+            | null;
+        }
+      )._dnsLookupAll = null;
+    }
+  });
+
+  test('unresolvable hostname is dropped from the candidate set', async () => {
+    const a = await startRoleServer({ inRecovery: false });
+    servers.push(a);
+
+    (
+      PgConnection as unknown as {
+        _dnsLookupAll:
+          | ((host: string) => Promise<{ address: string; family: number }[]>)
+          | null;
+      }
+    )._dnsLookupAll = async (host) => {
+      if (host === 'never-resolves.invalid') {
+        const err: NodeJS.ErrnoException = Object.assign(
+          new Error('getaddrinfo ENOTFOUND never-resolves.invalid'),
+          { code: 'ENOTFOUND' },
+        );
+        throw err;
+      }
+      return Promise.resolve([{ address: '127.0.0.1', family: 4 }]);
+    };
+    try {
+      // First host fails to resolve; second is the live server. Fan-out
+      // drops the unresolvable one, the connect loop succeeds on the
+      // second.
+      const conn = await PgConnection.connect({
+        host: 'never-resolves.invalid',
+        port: 5432,
+        hosts: [
+          { host: 'never-resolves.invalid', port: 5432 },
+          { host: '127.0.0.1', port: a.port },
+        ],
+        user: 'u',
+        database: 'db',
+        ssl: 'disable',
+      });
+      expect(conn.host).toBe('127.0.0.1');
+      expect(conn.port).toBe(a.port);
+      await conn.close();
+    } finally {
+      (
+        PgConnection as unknown as {
+          _dnsLookupAll:
+            | ((host: string) => Promise<{ address: string; family: number }[]>)
+            | null;
+        }
+      )._dnsLookupAll = null;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@
  *     statements, pipeline) is WP-21. We throw clearly when called.
  */
 
+import * as dns from 'node:dns/promises';
 import * as net from 'node:net';
 import * as tls from 'node:tls';
 import { createHash } from 'node:crypto';
@@ -486,6 +487,20 @@ export class PgConnection implements Connection {
   public static _loadBalanceRng: (() => number) | null = null;
 
   /**
+   * Pluggable DNS resolver for the multi-IP host fan-out (libpq's
+   * `getaddrinfo`-then-iterate behaviour, exercised by upstream's
+   * `004_load_balance_dns.pl`). Tests inject a fake to drive a hostname
+   * through a fixed IP set without touching the real resolver; production
+   * code leaves it `null` and falls back to `dns.lookup(host, {all: true})`.
+   * Returning an empty array signals "treat as unresolvable" and the
+   * candidate is dropped from the iteration set (matching libpq's "no
+   * results from getaddrinfo" path).
+   */
+  public static _dnsLookupAll:
+    | ((host: string) => Promise<{ address: string; family: number }[]>)
+    | null = null;
+
+  /**
    * Open a Postgres connection. Supports multi-host (`opts.hosts`) with
    * sequential or random iteration, a `target_session_attrs` filter, and the
    * libpq-style `prefer-standby` two-pass fallback.
@@ -505,10 +520,17 @@ export class PgConnection implements Connection {
    *      (preserves the most-recent failure mode for diagnostics).
    */
   public static async connect(opts: ConnectOptions): Promise<PgConnection> {
-    const candidates =
+    const seed =
       opts.hosts !== undefined && opts.hosts.length > 0
         ? [...opts.hosts]
         : [{ host: opts.host, port: opts.port }];
+
+    // DNS fan-out: a single hostname can resolve to multiple A/AAAA records,
+    // and libpq treats each resulting IP as its own candidate (so
+    // `load_balance_hosts=random` shuffles the FLAT (ip, port) list, not
+    // the (hostname, port) list). Unix-domain socket paths and IP literals
+    // bypass the lookup. Mirrors upstream `004_load_balance_dns.pl`.
+    const candidates = await expandHostsViaDns(seed);
 
     if (opts.loadBalanceHosts === 'random') {
       shuffleInPlace(candidates, PgConnection._loadBalanceRng ?? Math.random);
@@ -2593,6 +2615,55 @@ export function isUnixSocketHost(host: string): boolean {
  */
 export function unixSocketPath(dir: string, port: number): string {
   return `${dir}/.s.PGSQL.${String(port)}`;
+}
+
+/**
+ * Expand the configured (host, port) list by resolving each hostname to
+ * its full set of A/AAAA records. Mirrors libpq's `getaddrinfo`-then-
+ * iterate-all behaviour exercised by upstream's
+ * `src/interfaces/libpq/t/004_load_balance_dns.pl`. Without this step a
+ * single hostname that resolves to N IPs would only ever produce one
+ * candidate (Node's `net.connect({host})` picks one address from the
+ * lookup result), so `load_balance_hosts=random` couldn't shuffle across
+ * the DNS-returned set.
+ *
+ *   - Unix-domain socket paths (`/var/run/postgres`) are passed through
+ *     unchanged — they don't participate in DNS at all.
+ *   - IPv4/IPv6 literals are passed through unchanged — DNS resolution
+ *     would just round-trip them.
+ *   - Hostnames are resolved via `dns.lookup(host, {all: true})`. The
+ *     test seam `PgConnection._dnsLookupAll` overrides the resolver so
+ *     unit tests can drive a hostname through a fixed IP set without
+ *     touching the real DNS.
+ *   - A hostname that fails to resolve (or returns zero records) is
+ *     dropped from the iteration set. The connect loop's `lastErr`
+ *     surfaces the original error if every host fails.
+ */
+async function expandHostsViaDns(
+  seed: readonly { host: string; port: number }[],
+): Promise<{ host: string; port: number }[]> {
+  const out: { host: string; port: number }[] = [];
+  for (const c of seed) {
+    if (isUnixSocketHost(c.host) || net.isIP(c.host) !== 0) {
+      out.push({ host: c.host, port: c.port });
+      continue;
+    }
+    let addrs: { address: string; family: number }[];
+    try {
+      addrs = PgConnection._dnsLookupAll
+        ? await PgConnection._dnsLookupAll(c.host)
+        : await dns.lookup(c.host, { all: true, family: 0 });
+    } catch {
+      // dns.lookup rejects with ENOTFOUND / EAI_AGAIN / EAI_NONAME on
+      // resolution failure. Skip this host; the outer connect loop will
+      // surface the failure via `lastErr` if every candidate is dropped.
+      continue;
+    }
+    for (const a of addrs) {
+      out.push({ host: a.address, port: c.port });
+    }
+  }
+  return out;
 }
 
 function openSocket(opts: ConnectOptions): Promise<net.Socket> {

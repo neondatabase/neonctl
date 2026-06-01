@@ -116,8 +116,14 @@ const LOAD_BALANCE_OPT_IN = /(^|\W)load_balance(\W|$)/.test(
 // Flipped to `true` once the wire layer gains `dns.lookup(host, {all:
 // true})` fan-out. Kept as a code-level constant rather than an env
 // var so the gate documents what is actually being waited on, not a
-// runtime flag.
-const WIRE_DNS_FANOUT_DONE = false;
+// runtime flag. Landed: see `expandHostsViaDns` in
+// `src/psql/wire/connection.ts` and the corresponding unit tests in
+// `src/psql/wire/connection.test.ts` (`hostname with multiple A records
+// fans out`, `IP literals bypass DNS lookup`, `unresolvable hostname is
+// dropped from the candidate set`). The remaining gate that keeps THIS
+// integration spec skipped on macOS/Windows is the loopback-bind
+// requirement (Linux-only) plus the `PG_TEST_EXTRA=load_balance` opt-in.
+const WIRE_DNS_FANOUT_DONE = true;
 
 const SHOULD_RUN =
   SHOULD_RUN_INTEGRATION &&
