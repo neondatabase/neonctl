@@ -232,6 +232,13 @@ export class LineEditor {
         return;
       }
       this.render();
+      // If a previous readLine submitted mid-chunk and left residual key
+      // events queued (e.g. the user pasted `analyze (\n\t\t` — after the
+      // `\n` triggered submit, the `\t\t` was already decoded but sat in
+      // `eventQueue` because `active` had been nulled), drain them now
+      // against the new line buffer. Mirrors readline's natural behaviour
+      // of carrying buffered input across the line boundary.
+      if (this.eventQueue.length > 0) void this.drainQueue();
     });
   }
 
