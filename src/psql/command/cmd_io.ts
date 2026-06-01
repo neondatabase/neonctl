@@ -2159,7 +2159,12 @@ export const cmdWatch: BackslashCmdSpec = {
             );
           }
           const parsed = parseStrictNonNegativeInt(value);
-          if (parsed === null) {
+          // Upstream parses the count with `option_parse_int(..., 1, INT_MAX)`
+          // so the iteration count must be >= 1; `c=0` is rejected as out of
+          // range. We reserve the internal `iterMax = 0` sentinel purely for
+          // "no `c=` given" (unlimited continuous mode), so accepting `c=0`
+          // here would silently cap the loop at a single iteration instead.
+          if (parsed === null || parsed === 0) {
             return errResult(ctx, `incorrect iteration count "${value}"`);
           }
           iterMax = parsed;
@@ -2229,6 +2234,12 @@ export const cmdWatch: BackslashCmdSpec = {
     const out = pager?.stream ?? pickOut(ctx.settings, null);
 
     try {
+      // CONTINUOUS mode: when `c=` is absent, `iterSet` stays false and the
+      // iteration-cap break below never fires, so the loop re-runs the query
+      // on the interval forever — exactly upstream `do_watch`'s `for (i = 0;
+      // !iter || i < iter; i++)` when `iter == 0`. The only exits are a
+      // SIGINT (or the test controller) aborting `controller.signal`, a
+      // server error, or the `min_rows` CONTINUE predicate failing.
       let iter = 0;
       while (!controller.signal.aborted) {
         iter++;

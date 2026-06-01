@@ -1193,6 +1193,44 @@ describe('\\watch', () => {
     expect(count).toBe(3);
   });
 
+  test('runs unbounded (continuous) when no `c=` is given, stopping on abort', async () => {
+    // Bare `\watch i=...` with no `c=` must re-run the query forever until
+    // interrupted — upstream `do_watch`'s `iter == 0` (unlimited) path. We
+    // let it spin well past any plausible default cap, then abort via the
+    // test controller (the same seam SIGINT uses in a real session) and
+    // assert it kept going past a single iteration.
+    const conn = makeMockConn();
+    let count = 0;
+    const controller = new AbortController();
+    WATCH_TEST_CONTROLLER.ref = controller;
+    conn.reply = () => {
+      count += 1;
+      // Far more than the bounded-test counts (2, 3) — proves the loop is
+      // genuinely unbounded and not silently capped.
+      if (count >= 25) controller.abort();
+      return [rs(['n'], [[count]])];
+    };
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'i=0.001', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('reset-buf');
+    expect(count).toBeGreaterThanOrEqual(25);
+  });
+
+  test('rejects `c=0` (iteration count must be >= 1, not a 1-iteration cap)', async () => {
+    // `c=0` is out of range upstream (`option_parse_int(..., 1, INT_MAX)`).
+    // The internal `iterMax = 0` sentinel means "no `c=`" (unlimited), so
+    // accepting `c=0` would silently cap the loop at one iteration — reject
+    // it instead.
+    const conn = makeMockConn();
+    const s = makeSettings(conn);
+    const ctx = makeMockCtx('watch', 'c=0 i=0.001', s, 'select 1');
+    const r = await run(cmdWatch, ctx);
+    expect(r.status).toBe('error');
+    expect(stderr()).toMatch(/incorrect iteration count "0"/);
+    expect(conn.history.length).toBe(0);
+  });
+
   test('parses `min_rows=` as a synonym for `m=`', async () => {
     const conn = makeMockConn();
     // Return FEWER than min_rows tuples so the watch loop stops on
