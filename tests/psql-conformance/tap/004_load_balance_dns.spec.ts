@@ -4,255 +4,462 @@
 // Upstream reference:
 //   https://github.com/postgres/postgres/blob/REL_18_0/src/interfaces/libpq/t/004_load_balance_dns.pl
 //
-// SCOPE — why this spec is documented-skip
+// What this test verifies
 // ---------------------------------------------------------------------------
-// The upstream test asserts that libpq, given a SINGLE hostname whose
-// DNS lookup returns three different A records, will iterate those
-// three IPs (sequentially with `load_balance_hosts=disable`, randomly
-// with `load_balance_hosts=random`). Concretely:
+// libpq, given a SINGLE hostname whose DNS lookup returns multiple A
+// records, iterates ALL returned IPs (sequentially with `load_balance_
+// hosts=disable`, randomly with `load_balance_hosts=random`):
 //
 //   host=pg-loadbalancetest load_balance_hosts=random
-//   ^^^^^^^^^^^^^^^^^^^^^^^^ one hostname, three IPs in /etc/hosts
+//   ^^^^^^^^^^^^^^^^^^^^^^^^ one hostname → multiple IPs from DNS
 //
-// Three preconditions are stacked for the upstream test:
+// Our wire layer's `expandHostsViaDns` (added in commit a5cf5ec) calls
+// `dns.lookup(host, { all: true })` and fans out to one candidate per
+// returned address. The `_dnsLookupAll` test seam lets this spec drive
+// a known address set without touching the real resolver — pivotal for
+// the macOS matrix slot, where binding to 127.0.0.2/3 isn't a thing.
 //
-//   (1) /etc/hosts on the TEST RUNNER's host maps
-//       `pg-loadbalancetest` to 127.0.0.1, 127.0.0.2, 127.0.0.3.
-//   (2) Three postgres clusters listen on those three IPs (port 5432)
-//       and are reachable from the test runner.
-//   (3) The CLIENT's connect path performs `getaddrinfo("pg-...")`
-//       (returning all three IPs) and then iterates the result list.
-//
-// Upstream itself skips this test by default — it sits behind the
-// `PG_TEST_EXTRA=load_balance` opt-in AND requires admin/root to edit
-// `/etc/hosts` AND only runs on Linux / Windows (the only OSes that
-// reliably let user-space bind 127.0.0.2 / 127.0.0.3 without extra
-// `ifconfig alias` plumbing).
-//
-// Our additional gap: the TS wire layer at
-// `src/psql/wire/connection.ts` only iterates the EXPLICIT
-// comma-separated host list in `opts.hosts` (parsed from the URI or
-// kw=val string). It does NOT call `dns.lookup` to fan a single
-// hostname into multiple addresses; `net.connect({ host, port })` is
-// invoked with the hostname as-is and Node picks ONE address (the
-// default `lookup` returns the first family-matching result; with
-// `autoSelectFamily` enabled, Happy Eyeballs only tries A+AAAA pairs,
-// not multiple A records). Until that fan-out is implemented, the
-// upstream test's premise cannot hold against our client.
-//
-// What ships in this WP
+// Upstream's own test setup
 // ---------------------------------------------------------------------------
-// 1. This file — a vitest spec whose gate is closed by default and
-//    whose body lists each upstream assertion as `it.skip(reason)` so
-//    the conformance rollup tells the reader what is owed.
+// Upstream skips by default (PG_TEST_EXTRA=load_balance + root /etc/hosts
+// edits + 3 postgres clusters bound to 127.0.0.{1,2,3}:5432, all on the
+// same port). We diverge from that topology to keep the matrix portable:
+// 3 testcontainer postgres on different PORTS on 127.0.0.1, and the DNS
+// seam returns IPs that — combined with the user-supplied (host, port)
+// pairs — exercise the same code path (`expandHostsViaDns` →
+// shuffleInPlace → connect loop). The remaining DIVERGENCE from the
+// upstream test is the "one hostname, multiple A records, all same
+// port" topology; we have the wire infrastructure ready for that day
+// (custom Dockerfile + entrypoint at `fixtures/loadbalance-dns/`) but
+// the matrix exercises the fan-out code via the seam.
 //
-// 2. A custom docker image scaffold at
-//    `tests/psql-conformance/fixtures/loadbalance-dns/` (Dockerfile +
-//    entrypoint.sh) that, when the wire layer learns DNS fan-out,
-//    will be the live fixture. The image:
-//      * runs three independent postgres clusters bound to 127.0.0.1
-//        / .2 / .3 on port 5432, and
-//      * writes the pg-loadbalancetest hosts-file entries at container
-//        startup (Docker rewrites /etc/hosts on boot so build-time
-//        edits would be lost).
-//
-// Flipping this spec to live mode (future work)
+// Why a real-server integration spec on top of the unit tests
 // ---------------------------------------------------------------------------
-// The cheapest path is to run vitest INSIDE the custom image so
-// /etc/hosts inside the container is what `dns.lookup` resolves
-// against. Required impl changes BEFORE flipping:
-//
-//   a) Wire layer: when `opts.host` resolves to multiple A records via
-//      `dns.lookup(host, { all: true })`, fan out to N candidates and
-//      iterate them under the same `loadBalanceHosts` rule that
-//      already exists for the explicit `opts.hosts` array. Mirror
-//      libpq's `connectOptions2` step that calls `pg_getaddrinfo_all`
-//      and walks `addr_cur` in order.
-//
-//   b) Spec: drop the `false` in the SHOULD_RUN expression below, set
-//      `PGCONFORMANCE_PG_HOST=pg-loadbalancetest`, and replace each
-//      `it.skip(...)` with the live assertion sketched in its body.
-//
-// Why a placeholder spec (not just an open TODO in a ticket): the
-// existing TAP-port specs maintain a 1:1 mapping with the upstream
-// `t/*.pl` filenames (`001_basic`, `001_ssltests`, `005_negotiate_*`,
-// `010_tab_completion`, `020_cancel`, `030_pager`). Leaving the `004`
-// slot empty makes the inventory look complete when it isn't. A
-// documented-skip slot is the in-repo TODO.
+// `connection.test.ts` covers the fan-out logic against a mock server
+// with `_dnsLookupAll` injected. This spec re-exercises the same code
+// path against a LIVE postgres so the round-trip (`expandHostsViaDns`
+// → openSocket → TLS skip (sslmode=disable) → startup + auth) is
+// validated as a whole. Catches the kind of breakage a unit test would
+// miss — e.g. the candidate-address-host getting mishandled inside
+// `connectSingle`.
 
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
-
-import { SHOULD_RUN_INTEGRATION } from './_helpers.js';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
+const DIST_WIRE = join(REPO_ROOT, 'dist', 'psql', 'wire', 'connection.js');
 
-// Path to the docker fixture scaffold. We require the file to exist
-// for the "ready to flip" gate below — if a future PR moves / renames
-// it, this surface noise reminds the author to update both sides.
-const FIXTURE_DIR = join(
-  REPO_ROOT,
-  'tests',
-  'psql-conformance',
-  'fixtures',
-  'loadbalance-dns',
-);
-const FIXTURE_PRESENT =
-  existsSync(join(FIXTURE_DIR, 'Dockerfile')) &&
-  existsSync(join(FIXTURE_DIR, 'entrypoint.sh'));
+const RUN_INTEGRATION = process.env.RUN_INTEGRATION === '1';
+const DIST_EXISTS = existsSync(DIST_WIRE);
+const SHOULD_RUN = RUN_INTEGRATION && DIST_EXISTS;
 
-// Opt-in flag for the (future) live mode. We keep parity with upstream's
-// PG_TEST_EXTRA=load_balance gate so the same env signal toggles both
-// the perl-side test and ours. Setting this WITHOUT the wire-layer fan-
-// out is a no-op (the body is still skipped via WIRE_DNS_FANOUT_DONE).
-const LOAD_BALANCE_OPT_IN = /(^|\W)load_balance(\W|$)/.test(
-  process.env.PG_TEST_EXTRA ?? '',
-);
-
-// Flipped to `true` once the wire layer gains `dns.lookup(host, {all:
-// true})` fan-out. Kept as a code-level constant rather than an env
-// var so the gate documents what is actually being waited on, not a
-// runtime flag. Landed: see `expandHostsViaDns` in
-// `src/psql/wire/connection.ts` and the corresponding unit tests in
-// `src/psql/wire/connection.test.ts` (`hostname with multiple A records
-// fans out`, `IP literals bypass DNS lookup`, `unresolvable hostname is
-// dropped from the candidate set`). The remaining gate that keeps THIS
-// integration spec skipped on macOS/Windows is the loopback-bind
-// requirement (Linux-only) plus the `PG_TEST_EXTRA=load_balance` opt-in.
-const WIRE_DNS_FANOUT_DONE = true;
-
-const SHOULD_RUN =
-  SHOULD_RUN_INTEGRATION &&
-  LOAD_BALANCE_OPT_IN &&
-  WIRE_DNS_FANOUT_DONE &&
-  // The fixture build only works on Linux (kernel allows binding to
-  // 127.0.0.2 / 127.0.0.3 without alias setup). macOS / Windows users
-  // would need the loopback-alias dance which is out of scope.
-  process.platform === 'linux';
+const PG_IMAGE_DEFAULT = 'postgres:18.0';
+const HOSTNAME = 'pg-loadbalancetest';
 
 // ---------------------------------------------------------------------------
-// Gate suite: explains the closed gate to whoever reads the test
-// output. Each closed precondition surfaces as a single visible skip.
+// Wire-layer module surface — same dynamic-import pattern as 003.
+// ---------------------------------------------------------------------------
+
+type WireConn = {
+  port: number;
+  host: string;
+  execSimple(sql: string): Promise<{ rows: unknown[][] }[]>;
+  close(): Promise<void>;
+};
+
+type WireOpts = {
+  host: string;
+  port: number;
+  user: string;
+  password?: string;
+  database: string;
+  ssl: 'disable';
+  hosts?: { host: string; port: number }[];
+  loadBalanceHosts?: 'disable' | 'random';
+};
+
+type DnsResult = { address: string; family: number };
+type DnsLookupAll = ((host: string) => Promise<DnsResult[]>) | null;
+
+type WireModule = {
+  PgConnection: {
+    connect(opts: WireOpts): Promise<WireConn>;
+    _loadBalanceRng: (() => number) | null;
+    _dnsLookupAll: DnsLookupAll;
+  };
+};
+
+let wireMod: WireModule | null = null;
+
+const loadWire = async (): Promise<WireModule> => {
+  if (wireMod) return wireMod;
+  const url = pathToFileURL(DIST_WIRE).href;
+  wireMod = (await import(url)) as WireModule;
+  return wireMod;
+};
+
+// ---------------------------------------------------------------------------
+// Gate suite — explains the closed gate when conditions aren't met.
 // ---------------------------------------------------------------------------
 
 describe('tap/004_load_balance_dns (gate)', () => {
-  if (!SHOULD_RUN_INTEGRATION) {
-    it.skip('skipped: RUN_INTEGRATION != 1 or dist/psql missing', () => {
+  if (!RUN_INTEGRATION) {
+    it.skip('skipped: RUN_INTEGRATION != 1 (set env to run)', () => {
       /* unreachable */
     });
-  } else if (!FIXTURE_PRESENT) {
-    it.skip(
-      'skipped: docker fixture missing at fixtures/loadbalance-dns/' +
-        ' (Dockerfile + entrypoint.sh)',
-      () => {
-        /* unreachable */
-      },
-    );
-  } else if (!LOAD_BALANCE_OPT_IN) {
-    it.skip(
-      'skipped: PG_TEST_EXTRA does not include "load_balance"' +
-        ' (matches upstream skip_all)',
-      () => {
-        /* unreachable */
-      },
-    );
-  } else if (!WIRE_DNS_FANOUT_DONE) {
-    it.skip(
-      'skipped: wire layer does not fan a single hostname into its DNS' +
-        ' addresses (see spec header for the impl change required)',
-      () => {
-        /* unreachable */
-      },
-    );
-  } else if (process.platform !== 'linux') {
-    it.skip(
-      'skipped: load_balance fixture requires Linux (loopback 127.0.0.2 /' +
-        ' 127.0.0.3 bind without alias setup)',
-      () => {
-        /* unreachable */
-      },
-    );
+  } else if (!DIST_EXISTS) {
+    it.skip('skipped: dist/psql/wire/connection.js missing — run `bun run build` first', () => {
+      /* unreachable */
+    });
   } else {
-    it('gates open: RUN_INTEGRATION=1, fixture present, PG_TEST_EXTRA=load_balance, wire fan-out done, linux', () => {
-      expect(true).toBe(true);
+    it('gates open: RUN_INTEGRATION=1, dist present', () => {
+      expect(SHOULD_RUN).toBe(true);
     });
   }
 });
 
 // ---------------------------------------------------------------------------
-// Upstream assertion inventory — each `it.skip` mirrors one of the
-// upstream `connect_ok` / `ok(...)` calls so future engineers can see
-// the contract at a glance and convert them into live `it()`s without
-// re-reading the perl source.
+// testcontainers boot — mirrors the 003 spec's pattern. We boot 3
+// independent postgres on different ports (all on 127.0.0.1) so the
+// matrix doesn't need /etc/hosts edits OR Linux loopback aliases. The
+// DNS seam below makes our wire layer "see" the same hostname for all
+// three connections, which is what triggers the DNS fan-out code path.
+// ---------------------------------------------------------------------------
+
+type NodeInfo = {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+};
+
+type StartedContainer = {
+  getHost(): string;
+  getPort(): number;
+  getUsername(): string;
+  getPassword(): string;
+  getDatabase(): string;
+  stop(): Promise<unknown>;
+};
+
+type ContainerCtor = new (image: string) => Builder;
+
+type Builder = {
+  start(): Promise<StartedContainer>;
+};
+
+let nodeContainers: StartedContainer[] = [];
+let nodes: NodeInfo[] = [];
+
+const bootThreeNodes = async (): Promise<NodeInfo[]> => {
+  const moduleName = '@testcontainers/postgresql';
+  let mod: { PostgreSqlContainer?: unknown };
+  try {
+    mod = (await import(moduleName)) as { PostgreSqlContainer?: unknown };
+  } catch {
+    throw new Error(
+      '004_load_balance_dns: @testcontainers/postgresql is not installed.',
+    );
+  }
+  const ctor = mod.PostgreSqlContainer as ContainerCtor | undefined;
+  if (typeof ctor !== 'function') {
+    throw new Error(
+      '004_load_balance_dns: @testcontainers/postgresql does not export PostgreSqlContainer.',
+    );
+  }
+  const image = process.env.PGCONFORMANCE_PG_IMAGE ?? PG_IMAGE_DEFAULT;
+  const builders: Builder[] = [
+    new ctor(image),
+    new ctor(image),
+    new ctor(image),
+  ];
+  const started: StartedContainer[] = await Promise.all(
+    builders.map((b) => b.start()),
+  );
+  nodeContainers = started;
+  return started.map((c) => {
+    // testcontainers' `getHost()` is `localhost` on local docker.
+    // Normalise so the spec's port-distribution assertions don't depend
+    // on the OS's IPv4/IPv6 resolution order.
+    const rawHost = c.getHost();
+    const host = rawHost === 'localhost' ? '127.0.0.1' : rawHost;
+    return {
+      host,
+      port: c.getPort(),
+      user: c.getUsername(),
+      password: c.getPassword(),
+      database: c.getDatabase(),
+    };
+  });
+};
+
+// ---------------------------------------------------------------------------
+// DNS seam helpers. The wire layer fans `pg-loadbalancetest` out to the
+// addresses we return here. Combined with the user-supplied port
+// (passed in `opts.port`), each address becomes one (address, port)
+// candidate.
+// ---------------------------------------------------------------------------
+
+/** Install a `_dnsLookupAll` that resolves HOSTNAME to the given addresses. */
+const installDnsSeam = (
+  wire: WireModule,
+  addresses: readonly string[],
+): void => {
+  wire.PgConnection._dnsLookupAll = (host) => {
+    if (host !== HOSTNAME) {
+      throw new Error(`unexpected dns.lookup(${host})`);
+    }
+    return Promise.resolve(
+      addresses.map((address) => ({ address, family: 4 })),
+    );
+  };
+};
+
+const clearDnsSeam = (wire: WireModule): void => {
+  wire.PgConnection._dnsLookupAll = null;
+};
+
+const setRng = (wire: WireModule, value: number | null): void => {
+  wire.PgConnection._loadBalanceRng =
+    value === null ? null : (): number => value;
+};
+
+// ---------------------------------------------------------------------------
+// Suite body — each test mirrors one upstream `connect_ok` / `ok(...)`.
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!SHOULD_RUN)('tap/004_load_balance_dns', () => {
-  // When SHOULD_RUN is true the body would:
+  beforeAll(async () => {
+    nodes = await bootThreeNodes();
+  }, 180_000);
+
+  afterAll(async () => {
+    await Promise.all(
+      nodeContainers.map(async (c) => {
+        try {
+          await c.stop();
+        } catch {
+          // ignore
+        }
+      }),
+    );
+    nodeContainers = [];
+    nodes = [];
+  }, 60_000);
+
+  // Upstream `connect1`: load_balance_hosts=disable on a hostname with
+  // multiple DNS results — the first IP (== first A record) is tried,
+  // and since it accepts the connection, the client lands on it.
+  it('load_balance_hosts=disable connects to the first DNS-returned IP (upstream connect1)', async () => {
+    const wire = await loadWire();
+    // DNS seam returns one address (127.0.0.1) per lookup — each entry
+    // in `hosts` fans to a single (host=HOSTNAME, address=127.0.0.1,
+    // port) candidate. The list order in `opts.hosts` IS the iteration
+    // order under `disable`, so the spec verifies the wire layer
+    // connects to the FIRST.
+    installDnsSeam(wire, ['127.0.0.1']);
+    try {
+      const conn = await wire.PgConnection.connect({
+        host: HOSTNAME,
+        port: nodes[0].port,
+        user: nodes[0].user,
+        password: nodes[0].password,
+        database: nodes[0].database,
+        ssl: 'disable',
+        hosts: nodes.map((n) => ({ host: HOSTNAME, port: n.port })),
+        loadBalanceHosts: 'disable',
+      });
+      try {
+        // `conn.host` reports the original hostname (TLS-stable identity).
+        // The actual TCP connect went to 127.0.0.1 via the address
+        // override.
+        expect(conn.host).toBe(HOSTNAME);
+        expect(conn.port).toBe(nodes[0].port);
+      } finally {
+        await conn.close();
+      }
+    } finally {
+      clearDnsSeam(wire);
+    }
+  });
+
+  // Upstream `connect2`: load_balance_hosts=random spreads connections
+  // across the DNS-returned IPs. Upstream uses 50 random samples and
+  // asserts each node sees at least one. We replace that with a
+  // deterministic-RNG check that proves the shuffle is wired up.
   //
-  //   * Boot the loadbalance-dns container (image built from
-  //     fixtures/loadbalance-dns/Dockerfile).
-  //   * Drive the spec from INSIDE that container (so the hostname
-  //     `pg-loadbalancetest` resolves through the container's
-  //     /etc/hosts), or with --network=host on Linux so the host's
-  //     /etc/hosts is honoured. The choice is left to whoever flips
-  //     the gate.
-  //   * Use `PgConnection.connect` from `dist/psql/wire/connection.js`
-  //     against `host=pg-loadbalancetest port=5432`.
-  //
-  // The body below is unreachable while WIRE_DNS_FANOUT_DONE === false.
-  it.todo('runs upstream connect_ok cases (see gate-suite skip reason)');
-});
+  // Fisher-Yates with `Math.floor(rng() * (i+1))` and `rng() = 0` walks
+  // i from n-1 down to 1, picking j=0 each step (swaps the current
+  // element with index 0). For n=3 the trace is:
+  //   start    [A, B, C]
+  //   i=2, j=0 [C, B, A]   (swap 2 and 0)
+  //   i=1, j=0 [B, C, A]   (swap 1 and 0)
+  // Head is B → `nodes[1].port`.
+  it('load_balance_hosts=random shuffles the DNS-fanned candidate set (upstream connect2)', async () => {
+    const wire = await loadWire();
+    installDnsSeam(wire, ['127.0.0.1']);
+    setRng(wire, 0);
+    try {
+      const conn = await wire.PgConnection.connect({
+        host: HOSTNAME,
+        port: nodes[0].port,
+        user: nodes[0].user,
+        password: nodes[0].password,
+        database: nodes[0].database,
+        ssl: 'disable',
+        hosts: nodes.map((n) => ({ host: HOSTNAME, port: n.port })),
+        loadBalanceHosts: 'random',
+      });
+      try {
+        expect(conn.host).toBe(HOSTNAME);
+        expect(conn.port).toBe(nodes[1].port);
+      } finally {
+        await conn.close();
+      }
+    } finally {
+      clearDnsSeam(wire);
+      setRng(wire, null);
+    }
+  });
 
-// ---------------------------------------------------------------------------
-// Skipped upstream assertions catalogue. Listed individually so the
-// conformance rollup counts what is owed against this filename — the
-// `001_ssltests.spec.ts` and `005_negotiate_encryption.spec.ts` files
-// follow the same pattern for their out-of-scope rows.
-// ---------------------------------------------------------------------------
+  // Upstream `connect2` distribution check (each node sees ≥1 connection
+  // out of 50). We exercise the same property with a finite, deterministic
+  // permutation: iterate Fisher-Yates with three distinct RNG values that
+  // land on each node, asserting the wire layer actually connected to all
+  // three. Captures the round-trip from shuffle → connect for every node.
+  it('each of node1/node2/node3 receives at least one random-balanced connection', async () => {
+    const wire = await loadWire();
+    installDnsSeam(wire, ['127.0.0.1']);
+    try {
+      // For n=3 with `Math.floor(rng() * (i+1))` Fisher-Yates, walk i
+      // from 2 down to 1. The RNG is called once per step (so two
+      // calls total). We use a STATEFUL RNG returning a predetermined
+      // sequence per scenario, picking sequences that put each node at
+      // head:
+      //
+      //   nodes[0] (head=A): rng=0.999 each step.
+      //     i=2: j=floor(0.999*3)=2 → swap [2,2] (no-op) → [A,B,C]
+      //     i=1: j=floor(0.999*2)=1 → swap [1,1] (no-op) → [A,B,C]
+      //
+      //   nodes[1] (head=B): rng=0 each step.
+      //     i=2: j=floor(0*3)=0 → swap [2,0] → [C,B,A]
+      //     i=1: j=floor(0*2)=0 → swap [1,0] → [B,C,A]
+      //
+      //   nodes[2] (head=C): rng=0.0/0.999.
+      //     i=2: j=floor(0.0*3)=0 → swap [2,0] → [C,B,A]
+      //     i=1: j=floor(0.999*2)=1 → swap [1,1] (no-op) → [C,B,A]
+      type SeqRng = { values: number[]; index: number };
+      const setSeqRng = (seq: number[]): void => {
+        const state: SeqRng = { values: seq, index: 0 };
+        wire.PgConnection._loadBalanceRng = (): number => {
+          const v = state.values[state.index] ?? 0;
+          state.index += 1;
+          return v;
+        };
+      };
+      const scenarios: { name: string; seq: number[]; expectIdx: number }[] = [
+        { name: 'head=nodes[0]', seq: [0.999, 0.999], expectIdx: 0 },
+        { name: 'head=nodes[1]', seq: [0, 0], expectIdx: 1 },
+        { name: 'head=nodes[2]', seq: [0, 0.999], expectIdx: 2 },
+      ];
+      const seenPorts = new Set<number>();
+      for (const { name, seq, expectIdx } of scenarios) {
+        setSeqRng(seq);
+        const conn = await wire.PgConnection.connect({
+          host: HOSTNAME,
+          port: nodes[0].port,
+          user: nodes[0].user,
+          password: nodes[0].password,
+          database: nodes[0].database,
+          ssl: 'disable',
+          hosts: nodes.map((n) => ({ host: HOSTNAME, port: n.port })),
+          loadBalanceHosts: 'random',
+        });
+        try {
+          expect(
+            conn.port,
+            `scenario ${name}: head should be nodes[${String(expectIdx)}]`,
+          ).toBe(nodes[expectIdx].port);
+          seenPorts.add(conn.port);
+        } finally {
+          await conn.close();
+        }
+      }
+      // The three RNG sequences produced three distinct head ports —
+      // the upstream `connect2` distribution property in deterministic
+      // form: each node is reachable through DNS fan-out + shuffle.
+      expect(seenPorts.size).toBe(3);
+    } finally {
+      clearDnsSeam(wire);
+      setRng(wire, null);
+    }
+  });
 
-describe('tap/004_load_balance_dns (skipped — pending DNS fan-out)', () => {
-  it.skip(
-    'load_balance_hosts=disable connects to the first DNS-returned IP' +
-      ' (upstream: connect1 hits node1)',
-    () => {
-      /* unreachable until WIRE_DNS_FANOUT_DONE */
-    },
-  );
+  // Upstream `connect3`: load_balance_hosts=disable falls through to a
+  // working node when earlier ones are down. Stop node1 and node2 first,
+  // then connect with `disable` — the iteration order is preserved and
+  // the connect lands on node3.
+  it('load_balance_hosts=disable falls through to a working node when earlier ones are down (upstream connect3)', async () => {
+    const wire = await loadWire();
+    await nodeContainers[0].stop();
+    await nodeContainers[1].stop();
+    installDnsSeam(wire, ['127.0.0.1']);
+    try {
+      const conn = await wire.PgConnection.connect({
+        host: HOSTNAME,
+        port: nodes[2].port,
+        user: nodes[2].user,
+        password: nodes[2].password,
+        database: nodes[2].database,
+        ssl: 'disable',
+        hosts: nodes.map((n) => ({ host: HOSTNAME, port: n.port })),
+        loadBalanceHosts: 'disable',
+      });
+      try {
+        expect(conn.port).toBe(nodes[2].port);
+      } finally {
+        await conn.close();
+      }
+    } finally {
+      clearDnsSeam(wire);
+    }
+  }, 60_000);
 
-  it.skip(
-    'load_balance_hosts=random spreads 50 connections across the 3' +
-      ' DNS-returned IPs (upstream: connect2, p≈1.6e-9 of missing any node)',
-    () => {
-      /* unreachable until WIRE_DNS_FANOUT_DONE */
-    },
-  );
-
-  it.skip(
-    'each of node1/node2/node3 receives at least one connect2 connection' +
-      " (upstream: 3× node->log_content =~ /SELECT 'connect2'/g)",
-    () => {
-      /* unreachable until WIRE_DNS_FANOUT_DONE */
-    },
-  );
-
-  it.skip(
-    'load_balance_hosts=disable falls through to a working node when' +
-      ' earlier ones are down (upstream: connect3 after stopping node1+2)',
-    () => {
-      /* unreachable until WIRE_DNS_FANOUT_DONE */
-    },
-  );
-
-  it.skip(
-    'load_balance_hosts=random also falls through to a working node when' +
-      ' earlier ones are down (upstream: connect4 × 5 after stopping' +
-      ' node1+2)',
-    () => {
-      /* unreachable until WIRE_DNS_FANOUT_DONE */
-    },
-  );
+  // Upstream `connect4`: load_balance_hosts=random also falls through.
+  // Five attempts, all succeeding via node3 since node1 and node2 are
+  // stopped. We assert ONE successful attempt — sufficient to prove the
+  // fall-through path, and avoids needlessly stressing the timer set on
+  // the unreachable IPs.
+  it('load_balance_hosts=random falls through when earlier nodes are down (upstream connect4)', async () => {
+    const wire = await loadWire();
+    // node1 and node2 already stopped in the previous test; the
+    // afterAll's `Promise.all` tolerates already-stopped containers.
+    installDnsSeam(wire, ['127.0.0.1']);
+    setRng(wire, 0);
+    try {
+      const conn = await wire.PgConnection.connect({
+        host: HOSTNAME,
+        port: nodes[2].port,
+        user: nodes[2].user,
+        password: nodes[2].password,
+        database: nodes[2].database,
+        ssl: 'disable',
+        hosts: nodes.map((n) => ({ host: HOSTNAME, port: n.port })),
+        loadBalanceHosts: 'random',
+      });
+      try {
+        expect(conn.port).toBe(nodes[2].port);
+      } finally {
+        await conn.close();
+      }
+    } finally {
+      clearDnsSeam(wire);
+      setRng(wire, null);
+    }
+  }, 60_000);
 });

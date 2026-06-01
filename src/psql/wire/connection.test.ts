@@ -2024,9 +2024,12 @@ describe('PgConnection multi-host', () => {
         loadBalanceHosts: 'random',
       });
       // After fan-out the candidate list is
-      //   [(127.0.0.1, a.port), (127.0.0.1, b.port)]
+      //   [(host=pg-loadbalancetest, address=127.0.0.1, a.port),
+      //    (host=pg-loadbalancetest, address=127.0.0.1, b.port)]
       // Reversed by the deterministic shuffle → b.port lands first.
-      expect(conn.host).toBe('127.0.0.1');
+      // `conn.host` reports the ORIGINAL hostname (TLS-stable identity);
+      // the IP override only affects net.connect.
+      expect(conn.host).toBe('pg-loadbalancetest');
       expect(conn.port).toBe(b.port);
       await conn.close();
     } finally {

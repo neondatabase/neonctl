@@ -526,17 +526,18 @@ export class PgConnection implements Connection {
         : [{ host: opts.host, port: opts.port }];
 
     // DNS fan-out: a single hostname can resolve to multiple A/AAAA records,
-    // and libpq treats each resulting IP as its own candidate so
-    // `load_balance_hosts=random` shuffles the FLAT (ip, port) list rather
-    // than the (hostname, port) list. We only fan out when load balancing
-    // is actually requested — for the default `disable` mode Node's
-    // `net.connect({host: 'localhost'})` picks one IP itself, AND
-    // preserving the original hostname is required for TLS SAN
-    // verification (the `host` value is the SNI / verify-full identity).
-    // Unix-domain socket paths and IP literals bypass the lookup either
-    // way. Mirrors upstream `004_load_balance_dns.pl`.
-    const candidates =
-      opts.loadBalanceHosts === 'random' ? await expandHostsViaDns(seed) : seed;
+    // and libpq treats each resulting IP as its own candidate so the
+    // iteration walks the FLAT (ip, port) list, not the (hostname, port)
+    // list. Each candidate carries BOTH the original hostname (for TLS
+    // SNI / SAN verification + `conn.host` reporting) AND the resolved
+    // address (used only by `net.connect`). Unix-domain socket paths
+    // and IP literals bypass the lookup — they become `{host, port}`
+    // with no address override.
+    //
+    // Active for every mode, not just `load_balance_hosts=random`: even
+    // `disable` benefits from the fall-through behaviour when the first
+    // A record is dead. Mirrors upstream `004_load_balance_dns.pl`.
+    const candidates = await expandHostsViaDns(seed);
 
     if (opts.loadBalanceHosts === 'random') {
       shuffleInPlace(candidates, PgConnection._loadBalanceRng ?? Math.random);
@@ -558,7 +559,10 @@ export class PgConnection implements Connection {
         };
         let conn: PgConnection;
         try {
-          conn = await PgConnection.connectSingle(candidateOpts);
+          conn = await PgConnection.connectSingle(
+            candidateOpts,
+            candidate.address,
+          );
         } catch (err) {
           lastErr = err;
           continue;
@@ -615,6 +619,13 @@ export class PgConnection implements Connection {
    */
   private static async connectSingle(
     opts: ConnectOptions,
+    /**
+     * Optional resolved IP address. When set, `openSocket` uses it for the
+     * actual `net.connect({host: address})`. `opts.host` remains the
+     * user-typed hostname so TLS SNI / SAN verification and `conn.host`
+     * report the original identity. Set by the DNS fan-out in `connect()`.
+     */
+    addressOverride?: string,
   ): Promise<PgConnection> {
     // TLS over Unix-domain sockets is meaningless (the kernel guarantees
     // the channel) and libpq refuses `sslmode=require|verify-*` for socket
@@ -631,7 +642,7 @@ export class PgConnection implements Connection {
       );
     }
 
-    const rawSocket = await openSocket(opts);
+    const rawSocket = await openSocket(opts, addressOverride);
     let socket: AnySocket = rawSocket;
     let channelBindingData: Buffer | null = null;
     try {
@@ -2647,10 +2658,12 @@ export function unixSocketPath(dir: string, port: number): string {
  */
 async function expandHostsViaDns(
   seed: readonly { host: string; port: number }[],
-): Promise<{ host: string; port: number }[]> {
-  const out: { host: string; port: number }[] = [];
+): Promise<{ host: string; address?: string; port: number }[]> {
+  const out: { host: string; address?: string; port: number }[] = [];
   for (const c of seed) {
     if (isUnixSocketHost(c.host) || net.isIP(c.host) !== 0) {
+      // Unix-domain socket paths and IP literals don't go through DNS.
+      // Leave `address` undefined so `openSocket` uses `host` directly.
       out.push({ host: c.host, port: c.port });
       continue;
     }
@@ -2666,17 +2679,33 @@ async function expandHostsViaDns(
       continue;
     }
     for (const a of addrs) {
-      out.push({ host: a.address, port: c.port });
+      // Keep the ORIGINAL hostname on `host` so TLS SNI / verify-full
+      // and `conn.host` see the user-typed name. The IP goes on
+      // `address`, used only by `openSocket` for the actual TCP connect.
+      out.push({ host: c.host, address: a.address, port: c.port });
     }
   }
   return out;
 }
 
-function openSocket(opts: ConnectOptions): Promise<net.Socket> {
+function openSocket(
+  opts: ConnectOptions,
+  /**
+   * Pre-resolved IP. When set, used for `net.connect({host})` instead
+   * of `opts.host` — lets DNS fan-out direct the TCP connect to a
+   * specific A record while keeping the user-typed hostname elsewhere
+   * (TLS SNI / `conn.host`). Ignored for Unix-domain socket paths,
+   * which take their address from `opts.host` directly.
+   */
+  addressOverride?: string,
+): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = isUnixSocketHost(opts.host)
       ? net.connect({ path: unixSocketPath(opts.host, opts.port) })
-      : net.connect({ host: opts.host, port: opts.port });
+      : net.connect({
+          host: addressOverride ?? opts.host,
+          port: opts.port,
+        });
     const timeout = opts.connectTimeoutMs;
     let timer: ReturnType<typeof setTimeout> | null = null;
     if (timeout !== undefined && timeout > 0) {
