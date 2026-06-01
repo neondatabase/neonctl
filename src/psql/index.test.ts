@@ -774,6 +774,167 @@ describe('envConnectionDefaults — PGSSLCERTMODE', () => {
 });
 
 // ---------------------------------------------------------------------------
+// sslnegotiation (postgres / direct, libpq PG17+ direct-SSL) — parse +
+// validation across the URI, conninfo, DSN-partial, pg_service, and PG* env
+// surfaces, plus the direct+weak-sslmode rejection.
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — sslnegotiation', () => {
+  it('threads sslnegotiation=direct (with an encrypted sslmode)', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslnegotiation=direct&sslmode=require',
+    );
+    expect(got).toMatchObject({ sslnegotiation: 'direct', ssl: 'require' });
+  });
+
+  it('threads sslnegotiation=postgres into ConnectOptions', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslnegotiation=postgres',
+    );
+    expect(got.sslnegotiation).toBe('postgres');
+  });
+
+  it('lower-cases sslnegotiation input (DIRECT -> direct)', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslnegotiation=DIRECT&sslmode=verify-full',
+    );
+    expect(got.sslnegotiation).toBe('direct');
+  });
+
+  it('omits sslnegotiation when the query parameter is empty', () => {
+    const got = parseConnectionUri('postgresql://u@h/db?sslnegotiation=');
+    expect(got).not.toHaveProperty('sslnegotiation');
+  });
+
+  it('rejects a bogus sslnegotiation value with libpq wording', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://u@h/db?sslnegotiation=bogus'),
+    ).toThrow('invalid sslnegotiation value: "bogus"');
+  });
+
+  it.each(['disable', 'allow', 'prefer'] as const)(
+    'rejects sslnegotiation=direct with weak sslmode=%s',
+    (mode) => {
+      expect(() =>
+        parseConnectionUri(
+          `postgresql://u@h/db?sslnegotiation=direct&sslmode=${mode}`,
+        ),
+      ).toThrow(
+        `weak sslmode "${mode}" may not be used with sslnegotiation=direct`,
+      );
+    },
+  );
+
+  it('rejects sslnegotiation=direct with the default (prefer) sslmode', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://u@h/db?sslnegotiation=direct'),
+    ).toThrow(
+      'weak sslmode "prefer" may not be used with sslnegotiation=direct',
+    );
+  });
+
+  it.each(['require', 'verify-ca', 'verify-full'] as const)(
+    'accepts sslnegotiation=direct with encrypted sslmode=%s',
+    (mode) => {
+      const got = parseConnectionUri(
+        `postgresql://u@h/db?sslnegotiation=direct&sslmode=${mode}`,
+      );
+      expect(got).toMatchObject({ sslnegotiation: 'direct', ssl: mode });
+    },
+  );
+
+  it('accepts direct when sslrootcert=system raises sslmode to verify-full', () => {
+    const got = parseConnectionUri(
+      'postgresql://u@h/db?sslnegotiation=direct&sslrootcert=system',
+    );
+    expect(got).toMatchObject({ sslnegotiation: 'direct', ssl: 'verify-full' });
+  });
+});
+
+describe('parseConninfo — sslnegotiation', () => {
+  it('parses sslnegotiation=direct from a keyword/value string', () => {
+    expect(
+      parseConninfo('sslnegotiation=direct sslmode=require'),
+    ).toMatchObject({ sslnegotiation: 'direct' });
+  });
+
+  it('rejects a bogus sslnegotiation value', () => {
+    expect(() => parseConninfo('sslnegotiation=nope')).toThrow(
+      'invalid sslnegotiation value: "nope"',
+    );
+  });
+});
+
+describe('parseConnectionUriPartial — sslnegotiation', () => {
+  it('parses sslnegotiation=direct from a DSN-partial URI', () => {
+    expect(
+      parseConnectionUriPartial(
+        'postgresql://?sslnegotiation=direct&sslmode=verify-full',
+      ),
+    ).toMatchObject({ sslnegotiation: 'direct' });
+  });
+});
+
+describe('serviceEntryToConnectOptions — sslnegotiation', () => {
+  it('parses sslnegotiation=direct from a service entry', () => {
+    expect(
+      serviceEntryToConnectOptions({ sslnegotiation: 'direct' }),
+    ).toMatchObject({ sslnegotiation: 'direct' });
+  });
+
+  it('rejects a bogus sslnegotiation value', () => {
+    expect(() =>
+      serviceEntryToConnectOptions({ sslnegotiation: 'nope' }),
+    ).toThrow('invalid sslnegotiation value: "nope"');
+  });
+});
+
+describe('envConnectionDefaults — PGSSLNEGOTIATION', () => {
+  it('maps PGSSLNEGOTIATION=direct onto sslnegotiation', () => {
+    expect(envConnectionDefaults({ PGSSLNEGOTIATION: 'direct' })).toMatchObject(
+      { sslnegotiation: 'direct' },
+    );
+  });
+
+  it('rejects a bogus PGSSLNEGOTIATION value', () => {
+    expect(() => envConnectionDefaults({ PGSSLNEGOTIATION: 'bogus' })).toThrow(
+      'invalid sslnegotiation value: "bogus"',
+    );
+  });
+});
+
+describe('mergeConnectOptions — sslnegotiation=direct weak-sslmode guard', () => {
+  it('rejects direct paired with a weak sslmode across layers', () => {
+    expect(() =>
+      mergeConnectOptions(
+        [{ sslnegotiation: 'direct' }, { ssl: 'prefer' }],
+        libpqConnectionDefaults({}),
+      ),
+    ).toThrow(
+      'weak sslmode "prefer" may not be used with sslnegotiation=direct',
+    );
+  });
+
+  it('accepts direct when a layer supplies an encrypted sslmode', () => {
+    const merged = mergeConnectOptions(
+      [{ sslnegotiation: 'direct' }, { ssl: 'require' }],
+      libpqConnectionDefaults({}),
+    );
+    expect(merged).toMatchObject({ sslnegotiation: 'direct', ssl: 'require' });
+  });
+
+  it('accepts direct when sslrootcert=system raises the merged sslmode', () => {
+    const merged = mergeConnectOptions(
+      [{ sslnegotiation: 'direct' }, { sslrootcert: 'system', ssl: 'require' }],
+      libpqConnectionDefaults({}),
+    );
+    expect(merged).toMatchObject({
+      sslnegotiation: 'direct',
+      ssl: 'verify-full',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // sslrootcert=system: the special trust-store value raises the effective
 // sslmode to verify-full (libpq).
 // ---------------------------------------------------------------------------

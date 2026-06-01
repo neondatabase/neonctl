@@ -43,6 +43,20 @@ export type SslMode =
   | 'verify-ca'
   | 'verify-full';
 
+/**
+ * libpq `sslnegotiation`: how TLS is initiated on the connection.
+ *
+ *   - `postgres` (default): the classic flow — send the 8-byte `SSLRequest`
+ *     packet and await the server's single-byte 'S'/'N' reply before starting
+ *     the TLS handshake.
+ *   - `direct` (PG 17+): skip `SSLRequest` entirely and begin the TLS
+ *     handshake immediately on the raw socket, advertising the `postgresql`
+ *     ALPN protocol so a PG 17+ server (or TLS-aware proxy) recognises the
+ *     direct-TLS ClientHello. Requires an encrypted sslmode (the parse and
+ *     connection layers enforce that); there is no plaintext fallback.
+ */
+export type SslNegotiation = 'postgres' | 'direct';
+
 export type TlsResult =
   | { kind: 'plain'; socket: net.Socket }
   | {
@@ -155,15 +169,33 @@ export function computeChannelBindingData(cert: tls.PeerCertificate): Buffer {
  * `fileOpts.sslkeylogfile`, when set, is pre-checked for writability here and
  * wired to a `'keylog'` listener on the upgraded socket so TLS session keys
  * are appended for offline decryption.
+ *
+ * `negotiation` selects how TLS is started (libpq `sslnegotiation`):
+ *   - `'postgres'` (default): send `SSLRequest` and await the 'S'/'N' reply.
+ *   - `'direct'`: skip `SSLRequest` and start the TLS handshake immediately
+ *     on the raw socket (PG 17+). The caller must have set
+ *     `tlsOpts.ALPNProtocols` to `['postgresql']`; there is no plaintext
+ *     fallback, so a server that does not speak TLS surfaces the handshake
+ *     failure rather than a quiet downgrade.
  */
 export async function negotiateTls(
   socket: net.Socket,
   sslMode: SslMode,
   tlsOpts: tls.ConnectionOptions = {},
   fileOpts: TlsFileOptions = {},
+  negotiation: SslNegotiation = 'postgres',
 ): Promise<TlsResult> {
   if (sslMode === 'disable') {
     return { kind: 'plain', socket };
+  }
+
+  // Direct SSL (libpq `sslnegotiation=direct`, PG 17+): skip the `SSLRequest`
+  // probe and start the TLS handshake straight away. The parse layer has
+  // already rejected weak sslmodes, so this path is only reached with an
+  // encrypted mode — never falling back to plaintext.
+  if (negotiation === 'direct') {
+    const mergedOpts = await loadTlsFileOptions(tlsOpts, fileOpts, sslMode);
+    return upgradeToTls(socket, mergedOpts, fileOpts.sslkeylogfile);
   }
 
   const reply = await sendSslRequest(socket);

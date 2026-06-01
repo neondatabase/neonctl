@@ -745,6 +745,13 @@ export class PgConnection implements Connection {
           sslcrldir: opts.sslcrldir,
           sslkeylogfile: opts.sslkeylogfile,
         },
+        // libpq `sslnegotiation=direct` (PG 17+): start TLS without the
+        // SSLRequest probe. Never reached for Unix-domain sockets (forced to
+        // sslmode 'disable' above) — direct SSL is a TCP-only concept. The
+        // ALPN protocol is already on `tlsConnectionOptions` for both paths.
+        isUnixSocketHost(opts.host)
+          ? 'postgres'
+          : (opts.sslnegotiation ?? 'postgres'),
       );
       if (tlsResult.kind === 'tls') {
         socket = tlsResult.socket;
@@ -1244,6 +1251,11 @@ export class PgConnection implements Connection {
           sslcrldir: this.opts.sslcrldir,
           sslkeylogfile: this.opts.sslkeylogfile,
         },
+        // Mirror the primary connect path's negotiation mode so a server
+        // configured for direct SSL also accepts the cancel connection.
+        isUnixSocketHost(this.opts.host)
+          ? 'postgres'
+          : (this.opts.sslnegotiation ?? 'postgres'),
       );
       writeSocket = t.kind === 'tls' ? t.socket : t.socket;
       await new Promise<void>((resolve, reject) => {

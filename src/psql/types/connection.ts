@@ -215,6 +215,18 @@ export type ConnectOptions = {
   database: string;
   applicationName?: string;
   ssl: 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
+  /**
+   * libpq `sslnegotiation`: how TLS is initiated on the connection.
+   *   - `postgres` (default when unset): send the classic `SSLRequest` packet
+   *     and await the server's 'S'/'N' reply before the TLS handshake.
+   *   - `direct` (PG 17+): skip `SSLRequest` and start the TLS handshake
+   *     immediately, advertising the `postgresql` ALPN protocol. Requires an
+   *     encrypted sslmode (`require` / `verify-ca` / `verify-full`); the parse
+   *     layer rejects a weak sslmode with
+   *     `weak sslmode "<mode>" may not be used with sslnegotiation=direct`.
+   * Validated at parse time (`invalid sslnegotiation value: "<raw>"`).
+   */
+  sslnegotiation?: 'postgres' | 'direct';
   channelBinding?: 'disable' | 'prefer' | 'require';
   /**
    * libpq `require_auth`: restrict the set of authentication methods the

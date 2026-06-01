@@ -417,6 +417,7 @@ const KNOWN_QUERY_KEYS = new Set([
   'keepalives_interval',
   'keepalives_count',
   'sslmode',
+  'sslnegotiation',
   'sslcompression',
   'sslcert',
   'sslkey',
@@ -723,6 +724,9 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   const sslcertmode = normalizeSslCertMode(
     raw.query.get('sslcertmode') ?? null,
   );
+  const sslnegotiation = normalizeSslNegotiation(
+    raw.query.get('sslnegotiation') ?? null,
+  );
   const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
   const sslcrl = nonEmpty(raw.query.get('sslcrl'));
   const sslcrldir = nonEmpty(raw.query.get('sslcrldir'));
@@ -755,6 +759,10 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     'ssl_max_protocol_version',
   );
   assertTlsProtocolRange(sslMinProtocolVersion, sslMaxProtocolVersion);
+  // libpq rejects `sslnegotiation=direct` paired with a weak sslmode. The URI
+  // surface always resolves a concrete `ssl` (defaulting to 'prefer'), so the
+  // check is authoritative here.
+  assertSslNegotiationModeCompatible(ssl, sslnegotiation);
 
   return {
     host,
@@ -766,6 +774,7 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     channelBinding,
     applicationName,
     options,
+    ...(sslnegotiation !== undefined ? { sslnegotiation } : {}),
     ...(hostaddr !== undefined ? { hostaddr } : {}),
     ...(replication !== undefined ? { replication } : {}),
     ...(hostsTuples.length > 1
@@ -1143,6 +1152,11 @@ const applyConninfoPair = (
       if (cm !== undefined) out.sslcertmode = cm;
       return;
     }
+    case 'sslnegotiation': {
+      const sn = normalizeSslNegotiation(value);
+      if (sn !== undefined) out.sslnegotiation = sn;
+      return;
+    }
     case 'sslrootcert':
       if (value !== '') out.sslrootcert = value;
       return;
@@ -1332,6 +1346,46 @@ const normalizeSslCertMode = (
     default:
       throw new Error(`invalid sslcertmode value: "${raw}"`);
   }
+};
+
+/**
+ * Parse libpq's `sslnegotiation` value (`postgres` / `direct`). Empty / unset
+ * returns `undefined` so the wire-layer default (`postgres`, the classic
+ * SSLRequest flow) applies. A malformed value throws libpq's
+ * `invalid sslnegotiation value: "<raw>"` diagnostic.
+ */
+const normalizeSslNegotiation = (
+  raw: string | null,
+): ConnectOptions['sslnegotiation'] => {
+  if (raw === null || raw === '') return undefined;
+  const value = raw.toLowerCase();
+  switch (value) {
+    case 'postgres':
+    case 'direct':
+      return value;
+    default:
+      throw new Error(`invalid sslnegotiation value: "${raw}"`);
+  }
+};
+
+/**
+ * libpq constraint: `sslnegotiation=direct` may only be used with an encrypted
+ * sslmode (`require` / `verify-ca` / `verify-full`). Direct SSL starts the TLS
+ * handshake immediately with no plaintext fallback, so a "weak" mode that could
+ * end up unencrypted (`disable` / `allow` / `prefer`) is rejected with libpq's
+ * exact `pqConnectOptions2` wording. No-op unless `sslnegotiation` is `direct`.
+ */
+const assertSslNegotiationModeCompatible = (
+  ssl: ConnectOptions['ssl'],
+  sslnegotiation: ConnectOptions['sslnegotiation'],
+): void => {
+  if (sslnegotiation !== 'direct') return;
+  if (ssl === 'require' || ssl === 'verify-ca' || ssl === 'verify-full') {
+    return;
+  }
+  throw new Error(
+    `weak sslmode "${ssl}" may not be used with sslnegotiation=direct`,
+  );
 };
 
 const VALID_REQUIRE_AUTH_METHODS = new Set<RequireAuthMethod>([
@@ -1603,6 +1657,10 @@ export const parseConnectionUriPartial = (
     raw.query.get('sslcertmode') ?? null,
   );
   if (sslcertmode !== undefined) out.sslcertmode = sslcertmode;
+  const sslnegotiation = normalizeSslNegotiation(
+    raw.query.get('sslnegotiation') ?? null,
+  );
+  if (sslnegotiation !== undefined) out.sslnegotiation = sslnegotiation;
   const sslrootcert = nonEmpty(raw.query.get('sslrootcert'));
   if (sslrootcert !== undefined) out.sslrootcert = sslrootcert;
   const sslcrl = nonEmpty(raw.query.get('sslcrl'));
@@ -1666,6 +1724,7 @@ const PG_ENV_FIELD_MAP: Readonly<Record<string, keyof ConnectOptions>> = {
   PGSSLCERT: 'sslcert',
   PGSSLKEY: 'sslkey',
   PGSSLCERTMODE: 'sslcertmode',
+  PGSSLNEGOTIATION: 'sslnegotiation',
   PGSSLCRL: 'sslcrl',
   PGSSLCRLDIR: 'sslcrldir',
   PGSSLKEYLOGFILE: 'sslkeylogfile',
@@ -1764,6 +1823,11 @@ const applyEnvValue = (
     case 'sslcertmode': {
       const cm = normalizeSslCertMode(value);
       if (cm !== undefined) out.sslcertmode = cm;
+      return;
+    }
+    case 'sslnegotiation': {
+      const sn = normalizeSslNegotiation(value);
+      if (sn !== undefined) out.sslnegotiation = sn;
       return;
     }
     case 'sslcrl':
@@ -1916,6 +1980,11 @@ export const serviceEntryToConnectOptions = (
         if (cm !== undefined) out.sslcertmode = cm;
         break;
       }
+      case 'sslnegotiation': {
+        const sn = normalizeSslNegotiation(v);
+        if (sn !== undefined) out.sslnegotiation = sn;
+        break;
+      }
       case 'sslrootcert':
         if (v !== '') out.sslrootcert = v;
         break;
@@ -2014,5 +2083,9 @@ export const mergeConnectOptions = (
   if (out.sslrootcert === 'system' && out.ssl !== 'verify-full') {
     out.ssl = 'verify-full';
   }
+  // libpq validates `sslnegotiation=direct` against the FINAL sslmode (after
+  // any `sslrootcert=system` raise and cross-layer merge), rejecting a weak
+  // mode that could end up plaintext. Authoritative check across all layers.
+  assertSslNegotiationModeCompatible(out.ssl, out.sslnegotiation);
   return out;
 };
