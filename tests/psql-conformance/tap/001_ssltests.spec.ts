@@ -13,7 +13,7 @@
 // plus an sslmode-aware `sslrootcert` read, which together unblock a
 // large slice of the upstream test surface.
 //
-// What we PORT (active `it()` subtests; see COVERAGE_EXCEPTIONS.md):
+// What we PORT (active `it()` subtests):
 //
 //   1. `sslmode={disable,require,verify-ca,verify-full}` happy / sad paths.
 //   2. Server cert SAN / IP-SAN / wildcard host-match (cert switching).
@@ -37,9 +37,9 @@
 //
 // `it.todo`: NONE.
 //
-// What we SKIP (deliberate exceptions — full rationale in
-// COVERAGE_EXCEPTIONS.md). All remaining skips are server-side config or a
-// Node/OpenSSL behavioral difference, NOT unimplemented client features:
+// What we SKIP (deliberate exceptions; each `it.skip` below carries its
+// own reason). All remaining skips are server-side config or a Node/OpenSSL
+// behavioral difference, NOT unimplemented client features:
 //
 //   * Server-side CRL (`ssl_crl_file` revoking client certs; non-ASCII
 //     subjects) — tests PG's enforcement, not our client.

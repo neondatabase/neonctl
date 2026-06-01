@@ -42,7 +42,7 @@
 // CLI through a PTY — there is no terminal interaction here, only TCP +
 // TLS handshake outcomes to verify.
 //
-// PORTED / SKIPPED ACCOUNTING (see COVERAGE_EXCEPTIONS.md for rationale):
+// PORTED / SKIPPED ACCOUNTING (each `it.skip` below carries its reason):
 //   * Ported `it`:                 23  (incl. direct-SSL require on/off +
 //                                       direct+weak-sslmode parse rejection)
 //   * Skipped (GSS — no native dep): 6
