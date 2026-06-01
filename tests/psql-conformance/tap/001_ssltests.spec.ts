@@ -138,6 +138,8 @@ type WireOpts = {
   sslMinProtocolVersion?: string;
   sslMaxProtocolVersion?: string;
   hostaddr?: string;
+  sslcertmode?: 'disable' | 'allow' | 'require';
+  sslkeylogfile?: string;
 };
 
 type WireModule = {
@@ -1126,15 +1128,54 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     });
   });
 
-  describe('SKIPPED: sslcertmode={disable,allow,require} (not in our ConnectOptions)', () => {
-    it.skip('sslcertmode=disable + valid cert → cert not sent → auth fails', () => {
-      /* unreachable */
+  describe('sslcertmode={disable,allow,require}', () => {
+    // `ssltestuser` is reachable only via the `cert` HBA method
+    // (clientcert=verify-full). Withholding the client cert therefore
+    // fails authentication.
+
+    // disable: even with a valid cert configured, it must NOT be sent, so
+    // the cert-HBA user can't authenticate.
+    it('sslcertmode=disable + valid cert → cert not sent → auth fails', async () => {
+      const t = ensureFixture();
+      const client = t.tls.vault.getClientCert('ssltestuser');
+      const conn = await tryConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcert: client.cert,
+        sslkey: client.key,
+        sslcertmode: 'disable',
+      });
+      expect(conn).toBeNull();
     });
-    it.skip('sslcertmode=allow + no client cert + cert HBA → fails', () => {
-      /* unreachable */
+
+    // allow + no cert: nothing to send → cert HBA fails.
+    it('sslcertmode=allow + no client cert + cert HBA → fails', async () => {
+      const t = ensureFixture();
+      const conn = await tryConnect({
+        user: 'ssltestuser',
+        ssl: 'require',
+        sslrootcert: t.tls.vault.getRootServerBundle(),
+        sslcertmode: 'allow',
+      });
+      expect(conn).toBeNull();
     });
-    it.skip('sslcertmode=require requires a client certificate to be sent', () => {
-      /* unreachable */
+
+    // require + no cert: rejected client-side before connecting.
+    it('sslcertmode=require requires a client certificate to be sent', async () => {
+      const t = ensureFixture();
+      const { PgConnection } = await loadWire();
+      await expect(
+        PgConnection.connect({
+          host: t.tls.host,
+          port: t.tls.port,
+          user: 'ssltestuser',
+          database: t.tls.db,
+          ssl: 'require',
+          sslrootcert: t.tls.vault.getRootServerBundle(),
+          sslcertmode: 'require',
+        }),
+      ).rejects.toThrow(/requires a client certificate/);
     });
   });
 
@@ -1183,22 +1224,92 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     });
   });
 
-  describe('SKIPPED: sslrootcert=system / sslkeylogfile / sslcrldir (not implemented)', () => {
-    it.skip('sslrootcert=system does not trust private CA', () => {
-      /* unreachable */
+  describe('sslrootcert=system / sslkeylogfile', () => {
+    // sslrootcert=system uses the trust store instead of a file: SSL_CERT_FILE
+    // if set, else Node's bundled roots. Our private test CA is in neither, so
+    // verify-full against the fixture's private-CA server is rejected.
+    // (Drive with explicit ssl='verify-full' — the system→verify-full bump
+    // lives in the URI/conninfo parse layer, covered by index.test.ts.)
+    it('sslrootcert=system does not trust private CA', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const saved = process.env.SSL_CERT_FILE;
+      delete process.env.SSL_CERT_FILE; // ensure the bundled store is used
+      try {
+        const conn = await tryConnect({
+          host: 'localhost',
+          user: 'testuser',
+          ssl: 'verify-full',
+          sslrootcert: 'system',
+        });
+        expect(conn).toBeNull();
+      } finally {
+        if (saved !== undefined) process.env.SSL_CERT_FILE = saved;
+      }
     });
-    it.skip('sslrootcert=system + SSL_CERT_FILE override trusts CA', () => {
-      /* unreachable */
+
+    it('sslrootcert=system + SSL_CERT_FILE override trusts CA', async () => {
+      const t = ensureFixture();
+      await switchServerCert('cn-and-san');
+      const saved = process.env.SSL_CERT_FILE;
+      // Point the "system" store at our private root+server bundle.
+      process.env.SSL_CERT_FILE = t.tls.vault.getRootServerBundle();
+      try {
+        const conn = await mustConnect({
+          host: 'localhost',
+          user: 'testuser',
+          ssl: 'verify-full',
+          sslrootcert: 'system',
+        });
+        try {
+          expect(conn.getTlsInfo?.()).toBeTruthy();
+        } finally {
+          await conn.close();
+        }
+      } finally {
+        if (saved === undefined) delete process.env.SSL_CERT_FILE;
+        else process.env.SSL_CERT_FILE = saved;
+      }
     });
-    it.skip('sslrootcert=system defaults to sslmode=verify-full', () => {
-      /* unreachable */
+
+    // The system→verify-full minimum bump happens at the URI/conninfo parse
+    // layer (index.ts), covered by src/psql/index.test.ts unit tests.
+    it.skip('sslrootcert=system defaults to sslmode=verify-full — parse-layer; see index.test.ts', () => {
+      /* covered by src/psql/index.test.ts parser unit tests */
     });
-    it.skip('sslkeylogfile is written on connect with correct permissions', () => {
-      /* unreachable */
+
+    it('sslkeylogfile is written on connect with correct permissions', async () => {
+      const t = ensureFixture();
+      const keylog = join(t.workDir, 'keylog.txt');
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'require',
+        sslkeylogfile: keylog,
+      });
+      try {
+        // TLS handshake completed → key-log lines have been appended.
+        expect(existsSync(keylog)).toBe(true);
+        expect(readFileSync(keylog, 'utf8').length).toBeGreaterThan(0);
+      } finally {
+        await conn.close();
+      }
     });
-    it.skip('invalid sslkeylogfile path surfaces "could not open"', () => {
-      /* unreachable */
+
+    it('invalid sslkeylogfile path surfaces "could not open"', async () => {
+      const t = ensureFixture();
+      const { PgConnection } = await loadWire();
+      await expect(
+        PgConnection.connect({
+          host: t.tls.host,
+          port: t.tls.port,
+          user: 'testuser',
+          database: t.tls.db,
+          ssl: 'require',
+          sslkeylogfile: join(t.workDir, 'no-such-dir', 'keylog.txt'),
+        }),
+      ).rejects.toThrow(/could not open sslkeylogfile/);
     });
+
     it.skip('sslcrldir=... reads CRLs from a directory — covered by the CRL revocation group above', () => {
       /* implemented: see "fails with matching CRL via sslcrldir=" */
     });
