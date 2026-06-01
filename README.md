@@ -101,12 +101,13 @@ The embedded implementation covers the common psql use cases, including:
 - libpq-equivalent connection-string lookup: argv flags > URI > `PG*` env vars > `~/.pgpass` > `pg_service.conf` > libpq defaults
 - Multi-host failover with `target_session_attrs` (any / read-write / read-only / primary / standby / prefer-standby) and `load_balance_hosts`
 - Unix-domain sockets (host beginning with `/`)
-- Client SSL PEM files via `sslcert` / `sslkey` / `sslrootcert` / `sslcrl`
+- Client SSL (PEM or DER) via `sslcert` / `sslkey` / `sslrootcert` / `sslcrl` / `sslcrldir`, default client-cert discovery (`~/.postgresql/postgresql.{crt,key}`), `sslcertmode`, `sslrootcert=system` (with `SSL_CERT_FILE` / `SSL_CERT_DIR`), `ssl_min/max_protocol_version`, `hostaddr`, `sslsni`, and direct-SSL negotiation (`sslnegotiation=direct`, PostgreSQL 17+)
 
 ### Known limitations
 
 - The `--fallback` flag is hidden in `--help` until we finish building out the conformance test suite. The behavior is safe to use today; the hide is a signal of "not yet flipped to default."
 - The conformance test suite is non-blocking in CI until coverage stabilises; deferred subtests are marked inline via `it.todo` / `it.skip` in the spec files.
+- **GSSAPI / SSPI is not supported** (`gssencmode`, Kerberos auth, `requirepeer`). GSS transport encryption (`gss_wrap`/`gss_unwrap`) requires a native Kerberos binding, which the embedded psql deliberately avoids (it is pure TypeScript with zero native dependencies — the same reason the line editor is hand-rolled). `node-postgres` does not support it either, and Neon does not use it. `gssencmode=disable` / `prefer` are accepted (neither needs GSS); `gssencmode=require` is rejected with a clear error.
 
 ## Configure autocompletion
 

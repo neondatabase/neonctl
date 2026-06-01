@@ -432,6 +432,7 @@ const KNOWN_QUERY_KEYS = new Set([
   'ssl_max_protocol_version',
   'krbsrvname',
   'gsslib',
+  'gssencmode',
   'service',
   'target_session_attrs',
   'load_balance_hosts',
@@ -701,6 +702,8 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
   const channelBinding = normalizeChannelBinding(
     raw.query.get('channel_binding') ?? null,
   );
+  // GSSAPI is unsupported (no native Kerberos dep); validate+reject require.
+  validateGssEncMode(raw.query.get('gssencmode') ?? null);
 
   const options = raw.query.get('options');
   // Match upstream psql: default `application_name` to `'psql'` so users see
@@ -1141,6 +1144,10 @@ const applyConninfoPair = (
       if (lbh !== undefined) out.loadBalanceHosts = lbh;
       return;
     }
+    case 'gssencmode':
+      // Unsupported (no GSSAPI); accept disable/prefer, reject require.
+      validateGssEncMode(value);
+      return;
     case 'sslcert':
       if (value !== '') out.sslcert = value;
       return;
@@ -1325,6 +1332,35 @@ const normalizeChannelBinding = (
       // returns `undefined` above so the wire-layer default applies.
       throw new Error(`invalid channel_binding value: "${raw}"`);
   }
+};
+
+/**
+ * Validate libpq's `gssencmode` (GSSAPI transport encryption).
+ *
+ * This client has NO GSSAPI support: GSS-API `gss_wrap`/`gss_unwrap` would
+ * require a native Kerberos addon (e.g. the `kerberos` npm), which the
+ * embedded psql deliberately avoids (pure-TS, zero native bindings — the
+ * same reason the line editor is hand-rolled). `node-postgres` doesn't
+ * support it either. So:
+ *   - `disable` / `prefer` — accepted and ignored: neither needs GSS
+ *     (`prefer` means "try GSS, else fall back", and falling back to the
+ *     non-GSS path is exactly what we always do).
+ *   - `require` — rejected with a clear diagnostic; we cannot satisfy it.
+ *   - anything else — `invalid gssencmode value`.
+ * We recognise the parameter (rather than rejecting it as an unknown key)
+ * so the many tools that always append `gssencmode=...` to a URI keep
+ * working against Neon.
+ */
+const validateGssEncMode = (raw: string | null): void => {
+  if (raw === null || raw === '') return;
+  const value = raw.toLowerCase();
+  if (value === 'disable' || value === 'prefer') return;
+  if (value === 'require') {
+    throw new Error(
+      'gssencmode=require is not supported: this client has no GSSAPI support',
+    );
+  }
+  throw new Error(`invalid gssencmode value: "${raw}"`);
 };
 
 /**
@@ -1772,6 +1808,10 @@ export const envConnectionDefaults = (
     const t = Number.parseInt(timeoutRaw, 10);
     if (Number.isFinite(t) && t >= 0) out.connectTimeoutMs = t * 1000;
   }
+
+  // GSSAPI is unsupported; PGGSSENCMODE=require is rejected, disable/prefer
+  // accepted-and-ignored. Same contract as the URI/conninfo `gssencmode`.
+  validateGssEncMode(get('PGGSSENCMODE') ?? null);
 
   return out;
 };

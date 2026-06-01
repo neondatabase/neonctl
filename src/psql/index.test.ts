@@ -476,6 +476,33 @@ describe('parseConnectionUri — error / malformed inputs', () => {
 // assert that the parser throws (and that the message matches a stable
 // fragment, so regressions surface clearly).
 // ---------------------------------------------------------------------------
+describe('parseConnectionUri — gssencmode (GSSAPI unsupported)', () => {
+  // The param is RECOGNISED (not rejected as unknown) so tools that always
+  // append gssencmode=... keep working. disable/prefer are accepted (neither
+  // needs GSS); require is rejected; junk is an invalid-value error.
+  it('accepts gssencmode=disable (no-op)', () => {
+    const got = parseConnectionUri('postgresql://host/db?gssencmode=disable');
+    expect(got.host).toBe('host');
+  });
+
+  it('accepts gssencmode=prefer (no-op, falls back to non-GSS)', () => {
+    const got = parseConnectionUri('postgresql://host/db?gssencmode=prefer');
+    expect(got.host).toBe('host');
+  });
+
+  it('rejects gssencmode=require (no GSSAPI support)', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://host/db?gssencmode=require'),
+    ).toThrow(/gssencmode=require is not supported/);
+  });
+
+  it('rejects an invalid gssencmode value', () => {
+    expect(() =>
+      parseConnectionUri('postgresql://host/db?gssencmode=bogus'),
+    ).toThrow(/invalid gssencmode value: "bogus"/);
+  });
+});
+
 describe('parseConnectionUri — libpq strict validation', () => {
   // Unknown query keys (libpq's "invalid URI query parameter" rejection).
   // Includes a percent-encoded form (u%7aer -> "uzer") to confirm we validate
