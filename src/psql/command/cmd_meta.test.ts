@@ -841,6 +841,10 @@ describe('\\copyright', () => {
     expect(out).toMatch(/Copyright/);
     expect(out).toContain('PostgreSQL Database Management System');
     expect(out).toContain('PostgreSQL Global Development Group');
+    // neonctl attribution block appended after the upstream notice.
+    expect(out).toContain('neonctl');
+    expect(out).toContain('Neon (https://neon.tech)');
+    expect(out).toContain('Databricks');
   });
 
   test('ignores extra arguments', async () => {

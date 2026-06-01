@@ -799,15 +799,33 @@ PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 `;
 
 /**
- * `\copyright` — print the PostgreSQL copyright / license notice. Takes
- * no arguments; matches upstream's static text verbatim so the conformance
- * regex `/Copyright/` (from upstream `001_basic.pl` line 75) is satisfied.
+ * neonctl-specific notice appended after the upstream PostgreSQL block.
+ * This psql is a pure-TypeScript reimplementation embedded in neonctl, not
+ * upstream psql — so we attribute it accordingly. No license claim is made
+ * here on purpose (see the project's LICENSE file for terms).
+ */
+const NEON_NOTICE = `
+This is an embedded psql reimplementation that ships with neonctl, the
+command-line interface for Neon (https://neon.tech). Neon is part of
+Databricks (https://www.databricks.com).
+
+It is an independent reimplementation of psql and is not affiliated with
+or endorsed by the PostgreSQL Global Development Group. See the neonctl
+LICENSE file for distribution terms.
+`;
+
+/**
+ * `\copyright` — print the PostgreSQL copyright / license notice, followed
+ * by a neonctl + Neon/Databricks attribution block. Takes no arguments.
+ * The upstream block is preserved verbatim so the conformance regex
+ * `/Copyright/` (from upstream `001_basic.pl` line 75) is satisfied; the
+ * Neon notice is appended after it.
  */
 export const cmdCopyright: BackslashCmdSpec = {
   name: 'copyright',
   helpKey: 'copyright',
   run: (): Promise<BackslashResult> => {
-    writeOut(COPYRIGHT_TEXT);
+    writeOut(COPYRIGHT_TEXT + NEON_NOTICE);
     return Promise.resolve({ status: 'ok' });
   },
 };
