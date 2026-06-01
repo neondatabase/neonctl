@@ -227,6 +227,31 @@ export const Query_for_list_of_set_vars = `
   LIMIT ${LIMIT}
 `;
 
+/**
+ * Allowed values of an enum-typed GUC — `pg_settings.enumvals`.
+ *
+ * The GUC name is the first parameter (matched case-insensitively against
+ * `pg_settings.name`, since names like `IntervalStyle` appear mixed-case in
+ * the catalog but are addressed in lowercase from user input). The ILIKE
+ * prefix on the unnested values is the trailing parameter.
+ *
+ * Mirrors upstream `tab-complete.in.c`'s `Query_for_values_of_enum_GUC`. The
+ * catalog stores enum values in lowercase (e.g. `iso_8601`, `use_column`),
+ * which matches how `SET <name> TO <value>` expects them.
+ */
+export const Query_for_values_of_enum_GUC = `
+  SELECT val
+  FROM (
+    SELECT pg_catalog.unnest(enumvals) AS val
+    FROM pg_catalog.pg_settings
+    WHERE pg_catalog.lower(name) = pg_catalog.lower($1)
+      AND enumvals IS NOT NULL
+  ) sub
+  WHERE val ILIKE $2
+  ORDER BY 1
+  LIMIT ${LIMIT}
+`;
+
 /** Access methods (index AMs primarily). */
 export const Query_for_list_of_access_methods = `
   SELECT pg_catalog.quote_ident(amname)
