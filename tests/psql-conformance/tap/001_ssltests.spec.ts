@@ -66,7 +66,14 @@
 // `bun run build` is required before this spec can run.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -125,6 +132,10 @@ type WireOpts = {
   sslpassword?: string;
   sslrootcert?: string;
   sslcrl?: string;
+  sslcrldir?: string;
+  sslMinProtocolVersion?: string;
+  sslMaxProtocolVersion?: string;
+  hostaddr?: string;
 };
 
 type WireModule = {
@@ -1020,15 +1031,46 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     });
   });
 
-  describe('SKIPPED: protocol-version negotiation (Node TLS does not expose ssl_min/max_protocol_version)', () => {
-    it.skip('connect succeeds with correct range of TLS protocol versions', () => {
-      /* unreachable */
+  describe('protocol-version negotiation (ssl_min/max_protocol_version)', () => {
+    // The wire layer maps these to Node TLS `minVersion`/`maxVersion`
+    // (connection.ts mapProtocolVersion). A range that brackets what the
+    // server offers connects cleanly.
+    it('connect succeeds with correct range of TLS protocol versions', async () => {
+      const conn = await mustConnect({
+        user: 'testuser',
+        ssl: 'require',
+        sslMinProtocolVersion: 'TLSv1.2',
+        sslMaxProtocolVersion: 'TLSv1.3',
+      });
+      try {
+        const info = conn.getTlsInfo?.();
+        expect(info).toBeTruthy();
+        // Negotiated protocol must fall inside the requested window.
+        expect(info?.protocol).toMatch(/TLSv1\.[23]/);
+      } finally {
+        await conn.close();
+      }
     });
-    it.skip('connect fails with incorrect range (min > max)', () => {
-      /* unreachable */
+
+    // min > max: Node's tls.connect rejects an inverted window, so the
+    // connection fails. (libpq also rejects this client-side; our parse
+    // layer additionally guards it — see the index.test.ts unit cases.)
+    it('connect fails with incorrect range (min > max)', async () => {
+      const conn = await tryConnect({
+        user: 'testuser',
+        ssl: 'require',
+        sslMinProtocolVersion: 'TLSv1.3',
+        sslMaxProtocolVersion: 'TLSv1.2',
+      });
+      expect(conn).toBeNull();
     });
-    it.skip('connect fails with malformed ssl_min/max_protocol_version values', () => {
-      /* unreachable */
+
+    // Malformed values (e.g. `TLSv9`) are rejected at the URI/conninfo
+    // PARSE layer (index.ts `normalizeTlsProtocolVersion` /
+    // `assertTlsProtocolRange`), not the wire layer — so this is covered
+    // by the parser unit tests in `src/psql/index.test.ts`, not here.
+    it.skip('connect fails with malformed ssl_min/max_protocol_version values — parse-layer; see index.test.ts', () => {
+      /* covered by src/psql/index.test.ts parser unit tests */
     });
     it.skip('server fails to restart with min > max protocol versions', () => {
       /* unreachable — server-side restart not in our scope */
@@ -1051,9 +1093,33 @@ describe.skipIf(!SHOULD_RUN)('tap/001_ssltests', () => {
     it.skip('certificate authorization succeeds with DER client cert + key', () => {
       /* unreachable — Node TLS accepts PEM only */
     });
-    it.skip('client key with group/world-readable perms is rejected', () => {
-      /* unreachable — our impl does not enforce perms; libpq does */
-    });
+    // libpq refuses a client key file that is group/world-readable; our
+    // wire layer now enforces the same POSIX stat-mode check. Windows has
+    // no equivalent perm model, so this is POSIX-only.
+    it.runIf(process.platform !== 'win32')(
+      'client key with group/world-readable perms is rejected',
+      async () => {
+        const t = ensureFixture();
+        const client = t.tls.vault.getClientCert('ssltestuser');
+        // Copy the key to a spec-owned temp path and make it world-readable.
+        const looseKey = join(t.workDir, 'ssltestuser-loose.key');
+        writeFileSync(looseKey, readFileSync(client.key), { mode: 0o644 });
+        chmodSync(looseKey, 0o644); // ensure, regardless of umask
+        const { PgConnection } = await loadWire();
+        await expect(
+          PgConnection.connect({
+            host: t.tls.host,
+            port: t.tls.port,
+            user: 'ssltestuser',
+            database: t.tls.db,
+            ssl: 'require',
+            sslrootcert: t.tls.vault.getRootServerBundle(),
+            sslcert: client.cert,
+            sslkey: looseKey,
+          }),
+        ).rejects.toThrow(/group or world access/);
+      },
+    );
     it.skip('cert DN mapping via pg_ident.conf — exact / regex / CN', () => {
       /* unreachable — server-side admin, not a wire-layer concern */
     });
