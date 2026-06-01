@@ -6,23 +6,37 @@
 #    these into the image at build time).
 # 2. Boots three postgres clusters, each bound to a different loopback
 #    address on port 5432.
-# 3. Sleeps forever so the container stays up until docker stops it.
+# 3. Tails all three postmaster logs so `docker logs` shows everything.
+# 4. Waits forever; container stays up until docker stops it.
 #
-# Logging style mirrors the upstream PostgresNode harness: each cluster's
-# postmaster log streams to its own file under /var/log/pg-lb/.
+# NOTE: `set -e` would kill the entrypoint as soon as one cluster's
+# `pg_ctl -w start` fails. We deliberately want all THREE start attempts
+# to run (and their logs to stream) even if one bombs, so the operator
+# has enough context in `docker logs` to diagnose. `set -u` + `pipefail`
+# stay on; `set -e` is replaced with an explicit "any node failed" exit
+# at the end of the boot phase.
 
-set -euo pipefail
+set -uo pipefail
 
 PG_LB_ROOT="${PG_LB_ROOT:-/var/lib/pg-lb}"
 LOG_ROOT=/var/log/pg-lb
 mkdir -p "$LOG_ROOT"
 chown -R postgres:postgres "$LOG_ROOT"
 
+# Surface network diagnostics up front so CI failures explain what the
+# container saw at boot. Failures here are tolerated — `iproute2` /
+# `iputils` aren't guaranteed in the postgres base image; the missing
+# binary just skips that line.
+echo '--- [entrypoint] network state ---'
+echo '/etc/hosts:'
+cat /etc/hosts || true
+echo 'ip addr (if available):'
+ip addr 2>/dev/null || ifconfig 2>/dev/null || echo '  (no ip/ifconfig available)'
+echo '----------------------------------'
+
 # /etc/hosts is owned by docker; we append rather than overwrite so the
 # container's own short-hostname entry survives. Idempotent in case the
-# entrypoint is re-run (docker exec). Note: we DO NOT use `sed -i` here
-# because /etc/hosts is a docker bind-mount on most platforms and edits
-# in place are unreliable across Docker engines.
+# entrypoint is re-run (docker exec).
 if ! grep -q 'pg-loadbalancetest' /etc/hosts; then
   {
     echo '127.0.0.1 pg-loadbalancetest'
@@ -33,7 +47,8 @@ fi
 
 # Start a cluster on a specific loopback IP. We append the listen_addresses
 # via a one-shot postgresql.auto.conf (read-after-include semantics inside
-# the cluster's data dir).
+# the cluster's data dir). Returns the pg_ctl exit code so the caller can
+# track partial-boot scenarios.
 start_cluster () {
   local nodename=$1
   local ip=$2
@@ -54,13 +69,30 @@ EOF
   chown postgres:postgres "$data_dir/postgresql.auto.conf"
 
   # Start in the background. -w waits for readiness so we don't race the
-  # readiness probe further down.
-  su postgres -c "pg_ctl -D '$data_dir' -l '$log_file' -w start"
+  # caller's readiness probe.
+  echo "[entrypoint] starting $nodename on $ip:5432"
+  if ! su postgres -c "pg_ctl -D '$data_dir' -l '$log_file' -w start"; then
+    echo "[entrypoint] $nodename FAILED to start; dumping log:"
+    cat "$log_file" 2>/dev/null | sed "s/^/  [$nodename] /" || echo "  (no log file)"
+    return 1
+  fi
+  echo "[entrypoint] $nodename ready"
 }
 
 start_cluster node1 127.0.0.1
+node1_rc=$?
 start_cluster node2 127.0.0.2
+node2_rc=$?
 start_cluster node3 127.0.0.3
+node3_rc=$?
+
+if [ "$node1_rc" -ne 0 ] || [ "$node2_rc" -ne 0 ] || [ "$node3_rc" -ne 0 ]; then
+  echo "[entrypoint] one or more clusters failed (rc=$node1_rc/$node2_rc/$node3_rc)"
+  # Keep the container alive for `docker logs` inspection even on a
+  # partial boot. The CI job's `pg_isready` poll loop will time out
+  # and surface the failure with the diagnostics above already on
+  # stdout.
+fi
 
 # Stream all three logs to stdout so `docker logs` shows what the
 # clusters are doing. tail -F follows files across rotation, although
