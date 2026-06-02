@@ -121,7 +121,7 @@ describe('applyContext', () => {
     rmSync(workspace, { recursive: true, force: true });
   });
 
-  test('writes the context file AND scaffolds .gitignore', () => {
+  test('scaffolds .gitignore only when the context file is created', () => {
     const file = join(workspace, '.neon');
     applyContext(file, {
       orgId: 'org-x',
@@ -135,6 +135,25 @@ describe('applyContext', () => {
     });
     expect(readFileSync(join(workspace, '.gitignore'), 'utf-8')).toBe(
       '.neon\n',
+    );
+  });
+
+  test('does NOT re-add .neon to .gitignore on updates to an existing file', () => {
+    const file = join(workspace, '.neon');
+    // First write creates the file and scaffolds .gitignore.
+    applyContext(file, { projectId: 'proj-y', branchId: 'br-1' });
+    // The user deliberately un-ignores .neon (e.g. to commit shared context).
+    writeFileSync(join(workspace, '.gitignore'), 'node_modules\n');
+
+    // A subsequent update must NOT re-add the entry.
+    applyContext(file, { projectId: 'proj-y', branchId: 'br-2' });
+
+    expect(JSON.parse(readFileSync(file, 'utf-8'))).toEqual({
+      projectId: 'proj-y',
+      branchId: 'br-2',
+    });
+    expect(readFileSync(join(workspace, '.gitignore'), 'utf-8')).toBe(
+      'node_modules\n',
     );
   });
 });
