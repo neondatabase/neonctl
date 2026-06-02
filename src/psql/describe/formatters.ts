@@ -374,6 +374,18 @@ export const describeOneTableDetails = async (
     serverAtLeast(conn.serverVersion, PG_14) &&
     !hideCompression &&
     (relkind === 'r' || relkind === 'p' || relkind === 'm');
+  // Stats target column (upstream `\d+`): every verbose relkind EXCEPT a
+  // plain view — views have no per-column statistics targets (describe.c
+  // ~1964: RELATION, INDEX, PARTITIONED_INDEX, MATVIEW, FOREIGN_TABLE,
+  // PARTITIONED_TABLE).
+  const includeStatsTarget =
+    verboseCols &&
+    (relkind === 'r' ||
+      relkind === 'i' ||
+      relkind === 'I' ||
+      relkind === 'm' ||
+      relkind === 'f' ||
+      relkind === 'p');
   const colSql =
     'SELECT a.attname,\n' +
     '  pg_catalog.format_type(a.atttypid, a.atttypmod),\n' +
@@ -401,7 +413,9 @@ export const describeOneTableDetails = async (
             "    ELSE '???'" +
             '  END AS attcompression'
           : '') +
-        ',\n  CASE WHEN a.attstattarget = -1 THEN NULL ELSE a.attstattarget::text END AS attstattarget' +
+        (includeStatsTarget
+          ? ',\n  CASE WHEN a.attstattarget = -1 THEN NULL ELSE a.attstattarget::text END AS attstattarget'
+          : '') +
         ',\n  pg_catalog.col_description(a.attrelid, a.attnum)'
       : '') +
     '\nFROM pg_catalog.pg_attribute a\n' +
@@ -431,7 +445,7 @@ export const describeOneTableDetails = async (
   if (verboseCols) {
     fields.push(fakeField('Storage'));
     if (includeCompression) fields.push(fakeField('Compression'));
-    fields.push(fakeField('Stats target'));
+    if (includeStatsTarget) fields.push(fakeField('Stats target'));
     fields.push(fakeField('Description'));
   }
   if (hasAnyFdwOptions) fields.push(fakeField('FDW options'));
@@ -469,9 +483,11 @@ export const describeOneTableDetails = async (
         const compression = cellToString(r[idx++] ?? '');
         row.push(compression);
       }
-      const statsTarget = r[idx] === null ? '' : cellToString(r[idx] ?? '');
-      idx++;
-      row.push(statsTarget);
+      if (includeStatsTarget) {
+        const statsTarget = r[idx] === null ? '' : cellToString(r[idx] ?? '');
+        idx++;
+        row.push(statsTarget);
+      }
       const description = r[idx] === null ? '' : cellToString(r[idx] ?? '');
       row.push(description);
     }
@@ -506,6 +522,20 @@ export const describeOneTableDetails = async (
   const push = (s: string | null): void => {
     if (s !== null) footers.push(s);
   };
+
+  // ----- View definition (views / matviews, verbose only) -----
+  //       Upstream attaches this as a table FOOTER (describe.c ~3175), so it
+  //       renders flush against the column rows with the single trailing
+  //       blank line the footer machinery adds — not as a separate block.
+  if ((relkind === 'v' || relkind === 'm') && verbose) {
+    const vrs = await conn.query(
+      `SELECT pg_catalog.pg_get_viewdef('${oid}'::pg_catalog.oid, true);`,
+      [],
+    );
+    if (vrs.rows.length > 0) {
+      push(`View definition:\n${cellToString(vrs.rows[0][0])}`);
+    }
+  }
 
   // ----- Partition-key (partitioned-table parent only) -----
   if (relkind === 'p') {
@@ -1457,18 +1487,10 @@ export const describeOneViewDetails = async (
     false,
     hideCompression,
   );
-  // The "View definition:" footer is verbose-only: upstream
-  // `describeOneTableDetails` fetches/prints it under
-  // `if ((relkind == VIEW || relkind == MATVIEW) && verbose)`
-  // (describe.c ~3151). Plain `\d <view>` shows only the column table.
-  if (!verbose) return;
-  const sql = `SELECT pg_catalog.pg_get_viewdef('${oid}'::pg_catalog.oid, true) AS def;`;
-  const rs = await conn.query(sql, []);
-  if (rs.rows.length > 0) {
-    out.write('View definition:\n');
-    out.write(cellToString(rs.rows[0][0]));
-    out.write('\n');
-  }
+  // The "View definition:" footer (verbose-only) is emitted by
+  // describeOneTableDetails as a table footer so it renders flush with the
+  // column rows and gets the single trailing blank — matching upstream
+  // `describeOneTableDetails` (describe.c ~3151/3175). Nothing more to do.
 };
 
 /**
