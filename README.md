@@ -86,28 +86,52 @@ The embedded psql can also be forced explicitly:
 - `--fallback` — opt-in flag on `connection-string`, `projects create`, and `branches create`. Useful for testing or for environments where you want a guaranteed psql experience regardless of what's on `$PATH`. The flag is currently hidden from `--help` while conformance test coverage is built out; it is safe to use today.
 - `NEONCTL_PSQL_FALLBACK=1` — environment variable with the same effect as `--fallback`. Convenient for scripts and CI.
 
-The embedded implementation covers the common psql use cases, including:
+The embedded implementation is verified against a conformance suite that
+diffs its behavior against real PostgreSQL (14–18) and the upstream psql
+regression + TAP tests.
 
-- All output formats: aligned, unaligned, wrapped, csv, json, html, asciidoc, latex, latex-longtable, troff-ms
-- All `\d*` describe commands with full upstream parity (columns, indexes, foreign keys, triggers, view definitions, sequences, RLS, replica identity, partitions, tablespaces, access methods, inheritance, FDW, stats objects, publications, subscriptions, per-column FDW options, TOAST owner)
-- `\copy` to/from file, `PROGRAM`, `STDIN`, and `STDOUT`, including the `\.` EOF marker
-- Extended query with `\bind` / `\bind_named` and pipeline mode (`\startpipeline`, `\parse`)
-- Tab completion (~88 rules including live `pg_settings` GUC lookup, deep `ALTER` sub-actions, `JOIN` clauses, and window-function `OVER` clauses)
+#### What works
+
+**REPL & scripting**
+
+- Interactive REPL with a hand-rolled VT100 line editor (no native bindings); vi and emacs edit modes (`VI_MODE` psql variable)
 - Persistent command history (`~/.psql_history`, libreadline format)
-- vi and emacs line-edit modes (controlled via the `VI_MODE` psql variable)
 - `~/.psqlrc` autoload (including `$PGSYSCONFDIR/psqlrc` and version-suffixed variants)
-- Scripted modes: `-c "SQL"` and `-f script.sql`
-- SCRAM-SHA-256 authentication with channel binding (required for Neon)
-- libpq-equivalent connection-string lookup: argv flags > URI > `PG*` env vars > `~/.pgpass` > `pg_service.conf` > libpq defaults
-- Multi-host failover with `target_session_attrs` (any / read-write / read-only / primary / standby / prefer-standby) and `load_balance_hosts`
-- Unix-domain sockets (host beginning with `/`)
-- Client SSL (PEM or DER) via `sslcert` / `sslkey` / `sslrootcert` / `sslcrl` / `sslcrldir`, default client-cert discovery (`~/.postgresql/postgresql.{crt,key}`), `sslcertmode`, `sslrootcert=system` (with `SSL_CERT_FILE` / `SSL_CERT_DIR`), `ssl_min/max_protocol_version`, `hostaddr`, `sslsni`, and direct-SSL negotiation (`sslnegotiation=direct`, PostgreSQL 17+)
+- Scripted modes: `-c "SQL"`, `-f script.sql`, and stdin; `--single-transaction`, `ON_ERROR_STOP`, `ECHO`, `--echo-all`
+- `SINGLELINE` (`-S`), `\timing`, `\watch` (named flags `c=`/`i=`/`m=`, unbounded continuous mode)
+
+**Backslash commands**
+
+- All output formats: aligned, unaligned, wrapped, csv, json, html, asciidoc, latex, latex-longtable, troff-ms (`\a \H \t \x \pset \f \C` …)
+- All `\d*` describe commands with full upstream parity (columns, indexes, foreign keys, triggers, view definitions, sequences, RLS, replica identity, partitions, tablespaces, access methods, inheritance, FDW, stats objects, publications, subscriptions, per-column FDW options, TOAST owner)
+- `\copy` to/from file, `PROGRAM`, `STDIN`, `STDOUT` (incl. the `\.` EOF marker); `\g` / `\gx` / `\gset` / `\gdesc` / `\gexec` and `\g | program` pipes
+- Extended query + pipeline mode (`\bind`, `\bind_named`, `\startpipeline`, `\parse`, `\sendpipeline`)
+- `\crosstabview`, `\lo_*` large objects, `\e`/`\edit` (external editor), `\s` (history), `\?`/`\h` help, `\if`/`\elif`/`\else`/`\endif`, `\set`/`\unset`, `\connect`, `\encoding` (live `SET client_encoding`), `\!`, `\cd`, `\prompt` (incl. no-echo `-`), `\password`
+- Tab completion (~88 rules incl. live `pg_settings` GUC lookup, deep `ALTER` sub-actions, `JOIN` clauses, window `OVER`)
+
+**Connection & authentication**
+
+- libpq-equivalent lookup precedence: argv flags > URI > `PG*` env vars > `~/.pgpass` > `pg_service.conf` > libpq defaults
+- SCRAM-SHA-256 / SCRAM-SHA-256-PLUS with `tls-server-end-point` channel binding (`channel_binding`); MD5 and cleartext; `require_auth`
+- Multi-host failover & load balancing: `target_session_attrs` (any / read-write / read-only / primary / standby / prefer-standby), `load_balance_hosts`, DNS fan-out, `hostaddr`
+- Unix-domain sockets (host beginning with `/`); TCP keepalives (`keepalives`, `keepalives_idle`)
+
+**TLS**
+
+- `sslmode` disable → verify-full; client certs in **PEM or DER** via `sslcert` / `sslkey` (+ `sslpassword` for encrypted keys, with the libpq group/world-readable-key check)
+- Trust config: `sslrootcert` (incl. `=system` with `SSL_CERT_FILE` / `SSL_CERT_DIR`), default client-cert discovery (`~/.postgresql/postgresql.{crt,key}`), `sslcertmode`
+- CRL: `sslcrl` and `sslcrldir`; `ssl_min_protocol_version` / `ssl_max_protocol_version`; `sslsni`
+- Direct-SSL negotiation (`sslnegotiation=direct`, PostgreSQL 17+, via ALPN)
+
+#### What's not supported
+
+- **GSSAPI / SSPI** (`gssencmode`, Kerberos/SSPI auth, `requirepeer`). GSS transport encryption needs a native Kerberos binding, which the embedded psql deliberately avoids (pure TypeScript, zero native dependencies — the same reason the line editor is hand-rolled). `node-postgres` doesn't support it either, and Neon doesn't use it. `gssencmode=disable` / `prefer` are accepted; `gssencmode=require` is rejected with a clear error. `requirepeer` is parsed but a Unix-socket connection that sets it is refused (Node exposes no peer-credential API — it is not silently ignored).
+- **`keepalives_interval` / `keepalives_count`** — Node's socket API exposes only keepalive enable + initial delay, so these are accepted but not applied.
+- **PKCS#1/SEC1 bare-DER private keys** — DER auto-detection assumes PKCS#8 (what modern tooling emits); PEM keys of any kind work.
 
 ### Known limitations
 
-- The `--fallback` flag is hidden in `--help` until we finish building out the conformance test suite. The behavior is safe to use today; the hide is a signal of "not yet flipped to default."
-- The conformance test suite is non-blocking in CI until coverage stabilises; deferred subtests are marked inline via `it.todo` / `it.skip` in the spec files.
-- **GSSAPI / SSPI is not supported** (`gssencmode`, Kerberos auth, `requirepeer`). GSS transport encryption (`gss_wrap`/`gss_unwrap`) requires a native Kerberos binding, which the embedded psql deliberately avoids (it is pure TypeScript with zero native dependencies — the same reason the line editor is hand-rolled). `node-postgres` does not support it either, and Neon does not use it. `gssencmode=disable` / `prefer` are accepted (neither needs GSS); `gssencmode=require` is rejected with a clear error.
+- The `--fallback` flag is hidden in `--help` until conformance coverage stabilises. The behavior is safe to use today; the hide just signals "not yet flipped to default."
 
 ## Configure autocompletion
 
