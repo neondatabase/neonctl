@@ -138,6 +138,27 @@ describe('\\a', () => {
     await run(cmdA, makeMockCtx('a', '', settings));
     expect(settings.popt.topt.format).toBe('aligned');
   });
+
+  test('prints the format status line on each toggle', async () => {
+    // Upstream `exec_command_a` prints the `printPsetInfo("format")` line
+    // after flipping: "Output format is unaligned." on the first toggle
+    // (default is aligned) and "Output format is aligned." on the second.
+    const settings = defaultSettings(createVarStore());
+    await run(cmdA, makeMockCtx('a', '', settings));
+    expect(stdout()).toBe('Output format is unaligned.\n');
+    stdoutChunks.length = 0;
+    await run(cmdA, makeMockCtx('a', '', settings));
+    expect(stdout()).toBe('Output format is aligned.\n');
+  });
+
+  test('suppresses the status line when QUIET is on', async () => {
+    // Mirrors upstream's `!pset.quiet` guard around the status print.
+    const settings = defaultSettings(createVarStore());
+    settings.quiet = true;
+    await run(cmdA, makeMockCtx('a', '', settings));
+    expect(settings.popt.topt.format).toBe('unaligned');
+    expect(stdout()).toBe('');
+  });
 });
 
 describe('\\C', () => {

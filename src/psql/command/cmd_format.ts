@@ -66,13 +66,23 @@ const formatName = (f: OutputFormat): string => f;
 const tripleLabel = (value: 'on' | 'off' | 'auto'): string =>
   value === 'auto' ? 'used automatically' : value;
 
-/** `\a` — toggle aligned/unaligned. */
+/**
+ * `\a` — toggle aligned/unaligned.
+ *
+ * Upstream `exec_command_a` flips the format via `do_pset("format", …)`
+ * and, when not quiet, prints `Output format is <aligned|unaligned>.` —
+ * the same `printPsetInfo("format")` line `\pset format` emits. We mirror
+ * that here, gating the status write on QUIET like the sibling toggles.
+ */
 export const cmdA: BackslashCmdSpec = {
   name: 'a',
   helpKey: 'a',
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
     const topt = ctx.settings.popt.topt;
     topt.format = topt.format === 'aligned' ? 'unaligned' : 'aligned';
+    if (!ctx.settings.quiet) {
+      writeOut(`Output format is ${formatName(topt.format)}.\n`);
+    }
     return Promise.resolve({ status: 'ok' });
   },
 };
