@@ -30,11 +30,6 @@ export const builder = (argv: yargs.Argv) =>
       'project-id': {
         describe: 'Project ID',
         type: 'string',
-        // Mirror how `--api-key` defaults from `NEON_API_KEY`: fall back to
-        // `NEON_PROJECT_ID` when the flag is omitted. The `.neon` context file
-        // is consulted after this (via the global `enrichFromContext`
-        // middleware) so the precedence is flag > env > context file.
-        default: process.env.NEON_PROJECT_ID ?? undefined,
       },
     })
     .example([
@@ -51,7 +46,7 @@ export const builder = (argv: yargs.Argv) =>
 export const handler = async (props: CheckoutProps) => {
   // Branch listing is project-scoped, so `projectId` is the only thing
   // `checkout` actually needs. Resolve it through the standard chain
-  // (flag > NEON_PROJECT_ID > .neon file > single-project auto-detect); when
+  // (--project-id flag > .neon file > single-project auto-detect); when
   // nothing resolves, fall back to an interactive `neonctl link`.
   const projectId = await resolveProjectId(props);
 
@@ -84,14 +79,13 @@ export const handler = async (props: CheckoutProps) => {
 /**
  * Resolve the project id `checkout` should target.
  *
- * `props.projectId` is already populated from the `--project-id` flag, the
- * `NEON_PROJECT_ID` env var, or the closest `.neon` file (via the global
- * `enrichFromContext` middleware). When it's still missing we try to
- * auto-detect a single project (same behaviour as `branches` /
- * `connection-string`). If that fails we surface a telling error and, in an
- * interactive terminal, offer to run `neonctl link` in the current folder so
- * the user can pick a project/branch without having to re-run the command by
- * hand.
+ * `props.projectId` is already populated from the `--project-id` flag or the
+ * closest `.neon` file (via the global `enrichFromContext` middleware). When
+ * it's still missing we try to auto-detect a single project (same behaviour as
+ * `branches` / `connection-string`). If that fails we surface a telling error
+ * and, in an interactive terminal, offer to run `neonctl link` in the current
+ * folder so the user can pick a project/branch without having to re-run the
+ * command by hand.
  */
 const resolveProjectId = async (props: CheckoutProps): Promise<string> => {
   if (props.projectId) {
@@ -105,7 +99,7 @@ const resolveProjectId = async (props: CheckoutProps): Promise<string> => {
 
   const missingProjectMessage =
     'Could not determine which Neon project to check out a branch from. ' +
-    'Provide one via the --project-id flag, the NEON_PROJECT_ID environment variable, ' +
+    'Provide one via the --project-id flag ' +
     'or a .neon file (created by `neonctl link` / `neonctl set-context`).';
 
   if (isCi() || !process.stdout.isTTY) {
