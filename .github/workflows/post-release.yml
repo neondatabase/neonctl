@@ -139,8 +139,10 @@ jobs:
           TAG: ${{ steps.parse.outputs.tag }}
         run: |
           # TODO(once Stage 2 is live): confirm exact workflow filename + input names
-          # in databricks/secure-public-registry-releases-eng — assumed `neonctl.yml`
-          # with inputs `ref` and `dry-run`.
+          # in databricks/secure-public-registry-releases-eng — assumed
+          # `release-neondatabase-neonctl.yml` with inputs `ref` and `dry-run`.
+          # The filename must also match the workflow npm Trusted Publishing is
+          # configured to trust (npmjs.com/package/neonctl?activeTab=code).
           {
             echo "body<<HANDOFF_EOF"
             echo ":rocket: **Tagged \`${TAG}\` on the merge commit.**"
@@ -153,14 +155,14 @@ jobs:
             echo ""
             echo "\`\`\`bash"
             echo "# Dry run (recommended first):"
-            echo "gh workflow run neonctl.yml \\"
+            echo "gh workflow run release-neondatabase-neonctl.yml \\"
             echo "  --repo databricks/secure-public-registry-releases-eng \\"
             echo "  --ref main \\"
             echo "  -f ref=${TAG} \\"
             echo "  -f dry-run=true"
             echo ""
             echo "# Real publish:"
-            echo "gh workflow run neonctl.yml \\"
+            echo "gh workflow run release-neondatabase-neonctl.yml \\"
             echo "  --repo databricks/secure-public-registry-releases-eng \\"
             echo "  --ref main \\"
             echo "  -f ref=${TAG} \\"

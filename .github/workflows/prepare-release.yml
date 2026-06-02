@@ -29,11 +29,6 @@ on:
           - patch
           - minor
           - major
-      beta:
-        description: 'Append -beta to computed version (ignored for custom `version`)'
-        required: false
-        type: boolean
-        default: false
       version:
         description: 'Full custom version string (overrides `bump` if set, e.g. 2.23.0-beta.1)'
         required: false
@@ -109,7 +104,6 @@ jobs:
         id: version
         env:
           BUMP: ${{ inputs.bump }}
-          BETA: ${{ inputs.beta }}
           VERSION_INPUT: ${{ inputs.version }}
         run: |
           current=$(jq -r '.version' package.json)
@@ -141,10 +135,7 @@ jobs:
               patch) new="${cur_major}.${cur_minor}.$((cur_patch+1))" ;;
               *) echo "::error::Unknown bump kind '$BUMP'"; exit 1 ;;
             esac
-            if [[ "$BETA" == "true" ]]; then
-              new="${new}-beta"
-            fi
-            echo "Mode: BUMP ($BUMP, beta=$BETA)"
+            echo "Mode: BUMP ($BUMP)"
           fi
 
           # Strict semver shape: MAJOR.MINOR.PATCH(-PRERELEASE)? where each
