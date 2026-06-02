@@ -41,6 +41,17 @@ jobs:
         with:
           egress-policy: audit
 
+      # GITHUB_TOKEN can't push refs in this repo; use the GitHub App token
+      # (same app the release workflow uses) so the tag push below succeeds.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Diagnostic — log event identity
         # Records actor/sender/ref/sha for post-release forensic auditing.
         env:
@@ -66,6 +77,8 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          # Persist the App token so `git push` of the tag below is authorized.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Parse release metadata
         id: parse

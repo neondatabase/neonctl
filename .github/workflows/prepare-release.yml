@@ -66,6 +66,19 @@ jobs:
         with:
           egress-policy: audit
 
+      # The default GITHUB_TOKEN cannot create branch refs in this repo, so the
+      # branch/PR is created with a GitHub App token (same app the previous
+      # release workflow used). PRs opened by this token also trigger the
+      # required-check workflows, unlike GITHUB_TOKEN-opened PRs.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Check actor has admin/maintain role
         env:
           GH_TOKEN: ${{ github.token }}
@@ -217,13 +230,12 @@ jobs:
 
       - name: Create signed commit + open PR
         id: cpr
-        # Commits via the GitHub Contents API → produces commits signed by the
-        # github-actions[bot] verified signature. Replaces a plain
-        # `git add && commit && push && gh pr create` (which produces unsigned
-        # commits). Auto-merge is NOT enabled — see PR body for why.
+        # Commits via the GitHub Contents API → produces a verified-signature
+        # commit. Uses the GitHub App token because GITHUB_TOKEN can't create
+        # the branch ref here. Auto-merge is NOT enabled — see PR body for why.
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           sign-commits: true
           commit-message: ${{ steps.meta.outputs.commit_message }}
           branch: ${{ steps.meta.outputs.branch }}
