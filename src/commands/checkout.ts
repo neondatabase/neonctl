@@ -56,24 +56,58 @@ export const handler = async (props: CheckoutProps) => {
     projectId,
   });
 
-  // `checkout` is a thin helper over `set-context`: it resolves the branch and
-  // pins `branchId` without dropping the `projectId`/`orgId` already recorded in
-  // the context file. Unlike `set-context` (which performs a destructive write),
-  // we merge so a plain `neonctl checkout <branch>` keeps the existing link.
-  const existing = readContextFile(props.contextFile);
+  const orgId = await resolveOrgId(props, projectId);
+
+  // `checkout` is a thin helper over `set-context`. It fully "heals" the
+  // context file: it always (re)writes `projectId`, `branchId`, and `orgId`
+  // (when the project has one) so a `.neon` that drifted or was missing fields
+  // ends up complete and consistent after checkout.
   applyContext(props.contextFile, {
-    ...existing,
     projectId,
-    ...(props.orgId ? { orgId: props.orgId } : {}),
+    ...(orgId ? { orgId } : {}),
     branchId,
   });
 
   log.info(
-    'Checked out branch %s on project %s. Updated %s.',
+    'Checked out branch %s on project %s%s. Updated %s.',
     branchId,
     projectId,
+    orgId ? ` (org ${orgId})` : '',
     props.contextFile,
   );
+};
+
+/**
+ * Resolve the org id to heal into the context file.
+ *
+ * Prefer an org id we already know (from `--org-id`, the `.neon` file, or a
+ * freshly-run `link`). Otherwise look it up from the project itself so the
+ * `.neon` file ends up with an accurate `orgId` even when it was previously
+ * missing. Projects on a personal account have no org; in that case (or if the
+ * lookup fails for a non-auth reason) we return `undefined` and simply omit the
+ * field rather than failing the checkout.
+ */
+const resolveOrgId = async (
+  props: CheckoutProps,
+  projectId: string,
+): Promise<string | undefined> => {
+  if (props.orgId) {
+    return props.orgId;
+  }
+  try {
+    const { data } = await props.apiClient.getProject(projectId);
+    return data.project.org_id ?? undefined;
+  } catch (err) {
+    if (isAxiosError(err) && err.response?.status === 401) {
+      throw err;
+    }
+    log.debug(
+      'checkout: could not resolve org id for project %s: %s',
+      projectId,
+      err instanceof Error ? err.message : String(err),
+    );
+    return undefined;
+  }
 };
 
 /**

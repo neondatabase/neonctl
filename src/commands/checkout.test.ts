@@ -112,6 +112,24 @@ describe('checkout', () => {
     });
   });
 
+  test('heals a missing orgId by resolving it from the project', async ({
+    testCliCommand,
+    readFile,
+    tmpContext,
+  }) => {
+    // The .neon only has projectId; checkout should look up the project's
+    // org_id and write all three fields so the context file ends up complete.
+    const ctx = tmpContext('heal_org', { projectId: 'test' });
+    await testCliCommand(['checkout', 'main', '--context-file', ctx], {
+      mockDir: 'checkout_heal_org',
+    });
+    expect(parseContext(readFile(ctx))).toEqual({
+      orgId: 'org-healed-123',
+      projectId: 'test',
+      branchId: 'br-main-branch-123456',
+    });
+  });
+
   test('resolves projectId from the .neon file when no flag is passed', async ({
     testCliCommand,
     readFile,

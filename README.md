@@ -160,7 +160,7 @@ The agent flow also handles project creation. If the agent sends `--project-name
 
 ### checkout
 
-`checkout <id|name>` pins a branch in the local context so subsequent commands target it — it's a focused helper over `set-context` for the common "switch the branch I'm working on" case. It resolves the branch (by name or id) against the project, then writes `branchId` into the `.neon` file. Unlike `set-context` (which performs a destructive write), `checkout` **merges**: it preserves the `projectId`/`orgId` already recorded in `.neon`, so `neonctl checkout my-branch` keeps the existing link intact.
+`checkout <id|name>` pins a branch in the local context so subsequent commands target it — it's a focused helper over `set-context` for the common "switch the branch I'm working on" case. It resolves the branch (by name or id) against the project, then **heals** the `.neon` file: it always (re)writes `projectId`, `branchId`, and `orgId` (when the project has one), so a `.neon` that was missing fields or drifted ends up complete and consistent. When `orgId` isn't already known (from `--org-id` or the existing `.neon`), it's looked up from the project itself.
 
 The project is resolved through the standard neonctl chain, each entry winning over the next:
 
