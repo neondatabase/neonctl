@@ -61,7 +61,7 @@
     "diff": "5.2.0",
     "neon-init": "0.14.0",
     "open": "10.1.0",
-    "openid-client": "6.8.1",
+    "openid-client": "6.8.4",
     "prompts": "2.4.2",
     "which": "3.0.1",
     "yaml": "2.4.5",
