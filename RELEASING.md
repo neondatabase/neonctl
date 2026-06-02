@@ -25,15 +25,13 @@
 gh workflow run prepare-release.yml \
   --repo neondatabase/neonctl \
   --ref main \
-  -f bump=patch \
-  -f beta=false        # set to true for X.Y.Z-beta
+  -f bump=patch
 ```
 
 Inputs:
 
 - `bump` — `patch` | `minor` | `major`. Ignored if `version` is set.
-- `beta` — append `-beta` to the computed version.
-- `version` — full custom version (e.g. `2.23.0-beta.1`); overrides `bump`.
+- `version` — full custom version (e.g. `2.23.0-beta.1`); overrides `bump`. Use this to cut a prerelease.
 - `ref` — branch to release from. Defaults to `main`. Raw SHAs are rejected.
 
 The workflow opens a **draft** PR titled `chore: release neonctl@vX.Y.Z`.
@@ -63,14 +61,14 @@ Copy the command from the PR comment, or:
 
 ```bash
 # Dry run first:
-gh workflow run neonctl.yml \
+gh workflow run release-neondatabase-neonctl.yml \
   --repo databricks/secure-public-registry-releases-eng \
   --ref main \
   -f ref=vX.Y.Z \
   -f dry-run=true
 
 # Real publish:
-gh workflow run neonctl.yml \
+gh workflow run release-neondatabase-neonctl.yml \
   --repo databricks/secure-public-registry-releases-eng \
   --ref main \
   -f ref=vX.Y.Z \
