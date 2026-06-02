@@ -87,16 +87,22 @@ export const updateContextFile = (file: string, context: Context) => {
 };
 
 /**
- * Shared primitive used by `set-context` and `link` to persist context.
- * Mirrors the destructive write semantics of `updateContextFile` —
+ * Shared primitive used by `set-context`, `link`, and `checkout` to persist
+ * context. Mirrors the destructive write semantics of `updateContextFile` —
  * any field not present in `context` is dropped from the file.
  *
- * After writing, ensures a `.gitignore` file sits alongside `.neon` and lists
- * it, so the linked context doesn't accidentally end up in source control.
+ * `.gitignore` scaffolding only happens when the context file is being
+ * *created* (it didn't exist before this write). On updates to an existing
+ * `.neon` we never touch `.gitignore`, so a user who deliberately un-ignored
+ * the file (e.g. to commit shared context) won't have the entry re-added on
+ * every subsequent command.
  */
 export const applyContext = (file: string, context: Context) => {
+  const isNewFile = !existsSync(file);
   updateContextFile(file, context);
-  ensureGitignored(file);
+  if (isNewFile) {
+    ensureGitignored(file);
+  }
 };
 
 /**
