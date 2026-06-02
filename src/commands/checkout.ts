@@ -1,3 +1,4 @@
+import { Branch } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 import prompts from 'prompts';
 import yargs from 'yargs';
@@ -12,18 +13,21 @@ import { handler as linkHandler } from './link.js';
 type CheckoutProps = CommonProps & {
   projectId?: string;
   orgId?: string;
-  id: string;
+  id?: string;
 };
 
-export const command = 'checkout <id|name>';
+// The positional is optional: omitting it in an interactive terminal opens a
+// branch picker. In non-interactive contexts a missing branch is an error.
+export const command = 'checkout [id|name]';
 export const describe =
   'Pin a branch in the local context (.neon) so subsequent commands target it';
 
 export const builder = (argv: yargs.Argv) =>
   argv
-    .usage('$0 checkout <id|name> [options]')
+    .usage('$0 checkout [id|name] [options]')
     .positional('id', {
-      describe: 'Branch name or id to check out',
+      describe:
+        'Branch name or id to check out. Omit to pick interactively from the list of branches.',
       type: 'string',
     })
     .options({
@@ -33,6 +37,10 @@ export const builder = (argv: yargs.Argv) =>
       },
     })
     .example([
+      [
+        '$0 checkout',
+        'Pick a branch interactively from the project in the closest .neon file',
+      ],
       [
         '$0 checkout main',
         'Pin the branch named "main" in the closest .neon file',
@@ -50,11 +58,7 @@ export const handler = async (props: CheckoutProps) => {
   // nothing resolves, fall back to an interactive `neonctl link`.
   const projectId = await resolveProjectId(props);
 
-  const branchId = await branchIdResolve({
-    branch: props.id,
-    apiClient: props.apiClient,
-    projectId,
-  });
+  const branchId = await resolveBranchId(props, projectId);
 
   const orgId = await resolveOrgId(props, projectId);
 
@@ -75,6 +79,60 @@ export const handler = async (props: CheckoutProps) => {
     orgId ? ` (org ${orgId})` : '',
     props.contextFile,
   );
+};
+
+/**
+ * Resolve the branch id to check out.
+ *
+ * When a branch name/id is provided, resolve it the same way every other
+ * command does (`branchIdResolve`). When it's omitted, open an interactive
+ * picker listing the project's branches (TTY only); in a non-interactive
+ * context a missing branch is a hard error so scripts fail loudly.
+ */
+const resolveBranchId = async (
+  props: CheckoutProps,
+  projectId: string,
+): Promise<string> => {
+  if (props.id) {
+    return branchIdResolve({
+      branch: props.id,
+      apiClient: props.apiClient,
+      projectId,
+    });
+  }
+
+  if (isCi() || !process.stdout.isTTY) {
+    throw new Error(
+      'No branch specified. Pass a branch name or id (e.g. `neonctl checkout main`), ' +
+        'or run interactively to pick one from a list.',
+    );
+  }
+
+  const { data } = await props.apiClient.listProjectBranches({ projectId });
+  const branches = data.branches;
+  if (branches.length === 0) {
+    throw new Error(`No branches found for project ${projectId}.`);
+  }
+
+  const defaultIndex = Math.max(
+    0,
+    branches.findIndex((b: Branch) => b.default),
+  );
+  const { branchId } = await prompts({
+    type: 'select',
+    name: 'branchId',
+    message: 'Which branch would you like to check out?',
+    choices: branches.map((b: Branch) => ({
+      title: `${b.default ? '✱ ' : ''}${b.name} (${b.id})`,
+      value: b.id,
+    })),
+    initial: defaultIndex,
+  });
+
+  if (!branchId) {
+    throw new Error('Aborted: no branch selected.');
+  }
+  return branchId;
 };
 
 /**

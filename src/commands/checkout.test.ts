@@ -201,4 +201,23 @@ describe('checkout', () => {
     );
     removeFile(ctx);
   });
+
+  test('errors when no branch is given in a non-interactive context', async ({
+    testCliCommand,
+    removeFile,
+    tmpContext,
+  }) => {
+    // Project resolves fine (from --project-id), but no branch was passed and
+    // the forked CLI has no TTY, so the interactive picker is not available.
+    const ctx = tmpContext('no_branch');
+    await testCliCommand(
+      ['checkout', '--project-id', 'test', '--context-file', ctx],
+      {
+        code: 1,
+        stderr:
+          'ERROR: No branch specified. Pass a branch name or id (e.g. `neonctl checkout main`), or run interactively to pick one from a list.',
+      },
+    );
+    removeFile(ctx);
+  });
 });
