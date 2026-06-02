@@ -164,6 +164,11 @@ The agent flow also handles project creation. If the agent sends `--project-name
 
 The branch argument is **optional**: run `neonctl checkout` with no branch in an interactive terminal to fetch the project's branches and pick one from a list. In a non-interactive context (CI or no TTY), a branch must be passed explicitly.
 
+Branch **id vs name** is detected automatically (a `br-…` value is treated as an id):
+
+- **id** — matched strictly by id. A non-existent id is a hard "not found" error (ids are server-assigned, so checkout never creates one).
+- **name** — matched by name. If the name doesn't exist, in an interactive terminal `checkout` offers to **create** it (equivalent to `neonctl branch create --name <name>`: branched from the project's default branch with a read-write compute), then checks it out. In a non-interactive context a missing name is the usual "not found" error.
+
 The project is resolved through the standard neonctl chain, each entry winning over the next:
 
 1. `--project-id <id>` flag

@@ -1,13 +1,15 @@
-import { Branch } from '@neondatabase/api-client';
+import { Branch, EndpointType } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 import prompts from 'prompts';
 import yargs from 'yargs';
 
+import { retryOnLock } from '../api.js';
 import { applyContext, readContextFile } from '../context.js';
 import { isCi } from '../env.js';
 import { log } from '../log.js';
 import { CommonProps } from '../types.js';
-import { branchIdResolve, fillSingleProject } from '../utils/enrichers.js';
+import { fillSingleProject } from '../utils/enrichers.js';
+import { looksLikeBranchId } from '../utils/formats.js';
 import { handler as linkHandler } from './link.js';
 
 type CheckoutProps = CommonProps & {
@@ -84,36 +86,77 @@ export const handler = async (props: CheckoutProps) => {
 /**
  * Resolve the branch id to check out.
  *
- * When a branch name/id is provided, resolve it the same way every other
- * command does (`branchIdResolve`). When it's omitted, open an interactive
- * picker listing the project's branches (TTY only); in a non-interactive
- * context a missing branch is a hard error so scripts fail loudly.
+ * - Branch **id** (`br-…`): looked up by id. A non-existent id is a hard "not
+ *   found" error — we never offer to create one, since ids are server-assigned.
+ * - Branch **name**: looked up by name. If it doesn't exist, in an interactive
+ *   terminal we offer to create it (like `neonctl branch create --name <name>`);
+ *   in a non-interactive context it's the usual "not found" error.
+ * - **Omitted**: open an interactive picker listing the project's branches (TTY
+ *   only); in a non-interactive context a missing branch is a hard error.
  */
 const resolveBranchId = async (
   props: CheckoutProps,
   projectId: string,
 ): Promise<string> => {
-  if (props.id) {
-    return branchIdResolve({
-      branch: props.id,
-      apiClient: props.apiClient,
-      projectId,
-    });
+  const branches = (await props.apiClient.listProjectBranches({ projectId }))
+    .data.branches;
+
+  if (!props.id) {
+    return pickBranchInteractively(branches, projectId);
   }
 
+  const ref = props.id;
+
+  // A `br-…` value is an id; match strictly by id and never offer to create.
+  if (looksLikeBranchId(ref)) {
+    const byId = branches.find((b: Branch) => b.id === ref);
+    if (byId) {
+      return byId.id;
+    }
+    throw new Error(notFoundMessage(ref, branches));
+  }
+
+  const byName = branches.find((b: Branch) => b.name === ref);
+  if (byName) {
+    return byName.id;
+  }
+
+  // Name not found: offer to create it interactively, mirroring `branch create`.
+  if (isCi() || !process.stdout.isTTY) {
+    throw new Error(notFoundMessage(ref, branches));
+  }
+
+  log.error(notFoundMessage(ref, branches));
+  const { create } = await prompts({
+    type: 'confirm',
+    name: 'create',
+    message: `Branch "${ref}" does not exist. Create it now?`,
+    initial: true,
+  });
+  if (!create) {
+    throw new Error(`Aborted: branch "${ref}" was not found and not created.`);
+  }
+  return createBranch(props, projectId, ref, branches);
+};
+
+const notFoundMessage = (ref: string, branches: Branch[]): string =>
+  `Branch ${ref} not found.\nAvailable branches: ${branches
+    .map((b: Branch) => b.name)
+    .join(', ')}`;
+
+const pickBranchInteractively = async (
+  branches: Branch[],
+  projectId: string,
+): Promise<string> => {
   if (isCi() || !process.stdout.isTTY) {
     throw new Error(
       'No branch specified. Pass a branch name or id (e.g. `neonctl checkout main`), ' +
         'or run interactively to pick one from a list.',
     );
   }
-
-  const { data } = await props.apiClient.listProjectBranches({ projectId });
-  const branches = data.branches;
   if (branches.length === 0) {
     throw new Error(`No branches found for project ${projectId}.`);
   }
-
   const defaultIndex = Math.max(
     0,
     branches.findIndex((b: Branch) => b.default),
@@ -128,11 +171,39 @@ const resolveBranchId = async (
     })),
     initial: defaultIndex,
   });
-
   if (!branchId) {
     throw new Error('Aborted: no branch selected.');
   }
   return branchId;
+};
+
+/**
+ * Create a branch with the same defaults as `neonctl branch create --name <name>`:
+ * branched from the project's default branch with a read-write compute endpoint.
+ */
+const createBranch = async (
+  props: CheckoutProps,
+  projectId: string,
+  name: string,
+  branches: Branch[],
+): Promise<string> => {
+  const defaultBranch = branches.find((b: Branch) => b.default);
+  if (!defaultBranch) {
+    throw new Error('No default branch found');
+  }
+  const { data } = await retryOnLock(() =>
+    props.apiClient.createProjectBranch(projectId, {
+      branch: { name, parent_id: defaultBranch.id },
+      endpoints: [{ type: EndpointType.ReadWrite }],
+    }),
+  );
+  if (defaultBranch.protected) {
+    log.warning(
+      'The parent branch is protected; a unique role password has been generated for the new branch.',
+    );
+  }
+  log.info('Created branch %s (%s).', data.branch.name, data.branch.id);
+  return data.branch.id;
 };
 
 /**

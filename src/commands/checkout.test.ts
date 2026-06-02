@@ -202,6 +202,32 @@ describe('checkout', () => {
     removeFile(ctx);
   });
 
+  test('errors when a branch id is not found (ids are never auto-created)', async ({
+    testCliCommand,
+    removeFile,
+    tmpContext,
+  }) => {
+    // A `br-…` value is treated as an id and matched strictly; a non-existent
+    // id is a hard not-found error (no create offer, even interactively).
+    const ctx = tmpContext('id_not_found');
+    await testCliCommand(
+      [
+        'checkout',
+        'br-does-not-exist-123456',
+        '--project-id',
+        'test',
+        '--context-file',
+        ctx,
+      ],
+      {
+        code: 1,
+        stderr:
+          'ERROR: Branch br-does-not-exist-123456 not found. Available branches: main, test_branch, 123, test_branch_with_fixed_cu, test_branch_with_autoscaling, protected_branch',
+      },
+    );
+    removeFile(ctx);
+  });
+
   test('errors when no branch is given in a non-interactive context', async ({
     testCliCommand,
     removeFile,
