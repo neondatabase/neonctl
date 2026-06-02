@@ -1,9 +1,4 @@
-import {
-  BranchScopeProps,
-  CommonProps,
-  ProjectScopeProps,
-  OrgScopeProps,
-} from '../types.js';
+import { BranchScopeProps, CommonProps, OrgScopeProps } from '../types.js';
 import { looksLikeBranchId } from './formats.js';
 import { Branch, Database } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
@@ -100,10 +95,10 @@ export const resolveSingleDatabase = async (props: {
 };
 
 export const fillSingleProject = async (
-  props: ProjectScopeProps & { orgId?: string },
+  props: CommonProps & { projectId?: string; orgId?: string },
 ) => {
   if (props.projectId) {
-    return props;
+    return { ...props, projectId: props.projectId };
   }
 
   // If no orgId is provided, try to auto-fill it if there's only one org
