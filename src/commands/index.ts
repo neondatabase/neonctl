@@ -11,6 +11,7 @@ import * as operations from './operations.js';
 import * as cs from './connection_string.js';
 import * as psql from './psql.js';
 import * as setContext from './set_context.js';
+import * as link from './link.js';
 import * as init from './init.js';
 import * as dataApi from './data_api.js';
 
@@ -28,6 +29,7 @@ export default [
   cs,
   psql,
   setContext,
+  link,
   init,
   dataApi,
 ];

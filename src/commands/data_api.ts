@@ -265,7 +265,9 @@ const get = async (props: DataApiProps): Promise<void> => {
   };
 
   if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(publicData, { fields: GET_FIELDS });
+    writer(props).end(publicData, {
+      fields: ['url', 'status', 'settings'] as const,
+    });
     return;
   }
   writer(props).end(tableRow, { fields: GET_FIELDS });
