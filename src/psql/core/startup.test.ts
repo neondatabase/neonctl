@@ -345,6 +345,22 @@ describe('applyStartupArgs', () => {
     expect(connect.database).toBe('maindb');
   });
 
+  test('seeds the constant client VERSION vars', () => {
+    const parsed = ok(parseStartupArgs([]));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.vars.get('VERSION')).toMatch(/^psql-ts \(neonctl\) /);
+    expect(settings.vars.get('VERSION_NAME')).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(settings.vars.get('VERSION_NUM')).toMatch(/^\d+$/);
+  });
+
+  test('a user -v VERSION override wins over the startup default', () => {
+    const parsed = ok(parseStartupArgs(['-v', 'VERSION=custom']));
+    const settings = buildBaseSettings();
+    applyStartupArgs(parsed, settings, baseConn);
+    expect(settings.vars.get('VERSION')).toBe('custom');
+  });
+
   test('variables flow into vars store', () => {
     const parsed = ok(parseStartupArgs(['-v', 'X=hi', '-v', 'PROMPT1=mine ']));
     const settings = buildBaseSettings();

@@ -57,6 +57,7 @@ import {
   serviceEntryToConnectOptions,
 } from '../index.js';
 import { lookupPgPass } from '../io/pgpass.js';
+import { setStartupVars } from './syncVars.js';
 
 import { helpVariables, slashUsage, usage } from './help.js';
 
@@ -303,7 +304,18 @@ const renderHelp = (topic: string | undefined): string => {
   return '';
 };
 
-const VERSION_STRING = 'psql (PostgreSQL) embedded-ts';
+/**
+ * Version label for the embedded TypeScript psql. This is the "client"
+ * identifier — the analogue of upstream psql's compiled-in `PG_VERSION`.
+ * The embedded psql is not a real PostgreSQL build, so we track our own
+ * implementation version here. It seeds the `VERSION_NAME` psql var (and,
+ * via {@link setStartupVars}, the numeric `VERSION_NUM`); keep it as a
+ * `MAJOR.MINOR.PATCH` string so the numeric mapping stays meaningful. Bump
+ * alongside meaningful behaviour changes to the embedded psql.
+ */
+export const CLIENT_VERSION = '1.0.0';
+
+const VERSION_STRING = `psql-ts (neonctl) ${CLIENT_VERSION}`;
 
 const pushAction = (acts: StartupAction[], a: StartupAction): void => {
   acts.push(a);
@@ -761,6 +773,12 @@ export const applyStartupArgs = (
   baseConnectOpts?: ConnectOptions,
   resolution?: ConnectResolution,
 ): { connect: ConnectOptions; preActions: readonly StartupAction[] } => {
+  // -------- 0) Constant client-version vars. -----------------------------
+  // Seed VERSION / VERSION_NAME / VERSION_NUM once (upstream seeds these from
+  // its compiled-in PG_VERSION before reading psqlrc / CLI vars). Done before
+  // the `-v` loop so a user-supplied `-v VERSION=…` still wins.
+  setStartupVars(settings.vars, CLIENT_VERSION);
+
   // -------- 1) Variable assignments. -------------------------------------
   for (const v of args.variables) {
     if (v.value === '') {

@@ -5,6 +5,7 @@ import type { StartupAction } from './core/startup.js';
 import { PgConnection } from './wire/connection.js';
 import { applyEnvOverrides, defaultSettings } from './core/settings.js';
 import { createVarStore } from './core/variables.js';
+import { syncConnectionVars } from './core/syncVars.js';
 import { defaultRegistry } from './command/dispatch.js';
 import { createCondStack } from './command/cmd_cond.js';
 import {
@@ -155,6 +156,11 @@ export const runPsql = async (
   }
 
   settings.db = connection;
+
+  // Mirror upstream psql's SyncVariables(): populate the connection-driven
+  // psql vars (DBNAME/USER/HOST/PORT/ENCODING/SERVER_VERSION_*) so scripts
+  // can interpolate `:DBNAME`, `:USER`, etc. from the first prompt onward.
+  syncConnectionVars(settings.vars, connection);
 
   const registry = defaultRegistry();
   const cond = createCondStack();

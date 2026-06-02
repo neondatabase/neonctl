@@ -94,6 +94,20 @@ type FakeConnectionOpts = {
   };
   /** Map of ParameterStatus name → value (e.g. is_superuser / in_hot_standby). */
   paramStatus?: Record<string, string>;
+  /**
+   * Connection-target fields exposed via the `database`/`user`/`host`/`port`
+   * getters, mirroring how `PgConnection` surfaces `this.opts.*`. Consumed by
+   * `syncConnectionVars` (the SyncVariables() port) to populate DBNAME/USER/
+   * HOST/PORT after a connect.
+   */
+  target?: {
+    database?: string;
+    user?: string;
+    host?: string;
+    port?: number;
+  };
+  /** Override the integer `serverVersion` getter (default 160000). */
+  serverVersion?: number;
 };
 
 const makeFakeConnection = (
@@ -109,11 +123,21 @@ const makeFakeConnection = (
     closeCalls: number;
     lastExecSql: string | null;
     password: string | null;
+    database?: string;
+    user?: string;
+    host?: string;
+    port?: number;
   } = {
     closeCalls: 0,
     lastExecSql: null,
     password: opts.password ?? null,
-    serverVersion: 160000,
+    ...(opts.target?.database !== undefined
+      ? { database: opts.target.database }
+      : {}),
+    ...(opts.target?.user !== undefined ? { user: opts.target.user } : {}),
+    ...(opts.target?.host !== undefined ? { host: opts.target.host } : {}),
+    ...(opts.target?.port !== undefined ? { port: opts.target.port } : {}),
+    serverVersion: opts.serverVersion ?? 160000,
     parameterStatus: (name: string) => opts.paramStatus?.[name],
     query: (sql: string) => {
       const rs = responses[sql.trim()];
@@ -354,7 +378,12 @@ describe('\\c (cmdConnect)', () => {
     const oldConn = makeFakeConnection({ password: 's3cret' });
     s.db = oldConn;
 
-    const newConn = makeFakeConnection();
+    // The new connection reports its target the way `PgConnection` does
+    // (getters backed by the merged connect opts), so SyncVariables() reads
+    // DBNAME=otherdb / HOST=h1 / etc. straight off the live connection.
+    const newConn = makeFakeConnection({
+      target: { database: 'otherdb', user: 'alice', host: 'h1', port: 5432 },
+    });
     const calls: ConnectOptions[] = [];
     const connect = (opts: ConnectOptions): Promise<Connection> => {
       calls.push(opts);
@@ -485,6 +514,46 @@ describe('\\c (cmdConnect)', () => {
       password: 'secret',
       database: 'mydb',
     });
+  });
+
+  test('re-syncs connection vars from the new connection (SyncVariables)', async () => {
+    const s = defaultSettings(createVarStore());
+    // Stale values from the previous connection — must be overwritten.
+    s.vars.set('HOST', 'old-host');
+    s.vars.set('PORT', '5432');
+    s.vars.set('USER', 'old-user');
+    s.vars.set('DBNAME', 'old-db');
+    s.vars.set('ENCODING', 'LATIN1');
+    s.vars.set('SERVER_VERSION_NAME', '14.0');
+    s.vars.set('SERVER_VERSION_NUM', '140000');
+    s.db = makeFakeConnection({ password: 's3cret' });
+
+    const newConn = makeFakeConnection({
+      target: {
+        database: 'newdb',
+        user: 'bob',
+        host: 'newhost',
+        port: 6000,
+      },
+      serverVersion: 180004,
+      paramStatus: { client_encoding: 'UTF8', server_version: '18.4' },
+    });
+    restore = setCmdConnectDeps({
+      connect: () => Promise.resolve(newConn),
+    });
+
+    const r = await run(
+      cmdConnect,
+      makeMockCtx('c', 'newdb bob newhost 6000', s),
+    );
+    expect(r.status).toBe('ok');
+    expect(s.vars.get('DBNAME')).toBe('newdb');
+    expect(s.vars.get('USER')).toBe('bob');
+    expect(s.vars.get('HOST')).toBe('newhost');
+    expect(s.vars.get('PORT')).toBe('6000');
+    expect(s.vars.get('ENCODING')).toBe('UTF8');
+    expect(s.vars.get('SERVER_VERSION_NAME')).toBe('18.4');
+    expect(s.vars.get('SERVER_VERSION_NUM')).toBe('180004');
   });
 
   test('failure keeps the old connection alive', async () => {

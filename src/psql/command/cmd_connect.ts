@@ -79,6 +79,7 @@ import type { Printer, PrintQueryOpts } from '../types/printer.js';
 import type { PsqlSettings } from '../types/settings.js';
 
 import { readLine as readInputLine } from '../io/input.js';
+import { syncConnectionVars } from '../core/syncVars.js';
 import { PgConnection } from '../wire/connection.js';
 
 import { alignedPrinter } from '../print/aligned.js';
@@ -431,17 +432,6 @@ export const mergeConnectOpts = (
   };
 };
 
-/** Apply the post-connect housekeeping psql does: update HOST/PORT/etc. */
-const writeConnectVars = (
-  settings: PsqlSettings,
-  opts: ConnectOptions,
-): void => {
-  settings.vars.set('HOST', opts.host);
-  settings.vars.set('PORT', String(opts.port));
-  settings.vars.set('USER', opts.user);
-  settings.vars.set('DBNAME', opts.database);
-};
-
 /** `\c` / `\connect` — reconnect, possibly to a different database/user/host. */
 export const cmdConnect: BackslashCmdSpec = {
   name: 'c',
@@ -485,7 +475,11 @@ export const cmdConnect: BackslashCmdSpec = {
 
     const old = ctx.settings.db;
     ctx.settings.db = next;
-    writeConnectVars(ctx.settings, newOpts);
+    // Mirror upstream do_connect → SyncVariables(): refresh the
+    // connection-driven psql vars (DBNAME/USER/HOST/PORT/ENCODING/
+    // SERVER_VERSION_*) from the new live connection so subsequent
+    // `:DBNAME`/`:USER`/etc. interpolations reflect the reconnect target.
+    syncConnectionVars(ctx.settings.vars, next);
 
     if (old && !old.isClosed()) {
       try {
