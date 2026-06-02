@@ -716,11 +716,16 @@ export class PgConnection implements Connection {
         // this so a future-proof TLS proxy can route on ALPN instead of
         // probing the wire. Always offer it — older servers ignore.
         ALPNProtocols: ['postgresql'],
-        // Cipher preference is left to Node/OpenSSL defaults. Vanilla psql
-        // may negotiate AES_256_GCM where we land on AES_128_GCM under TLS
-        // 1.3; both are secure (TLS 1.3 only ships these three suites) and
-        // Node's `ciphers` option only accepts TLS-1.2 spec syntax, not the
-        // TLS_AES_* TLS-1.3 names.
+        // Cipher preference is left to the runtime's TLS library. Our
+        // ClientHello offers the byte-identical TLS-1.3 ciphersuite list and
+        // order as libpq (AES-256-GCM, ChaCha20, AES-128-GCM), so the suite
+        // is the server's choice from an identical offer. Under Node
+        // (OpenSSL) that lands on AES-256-GCM, matching vanilla psql; under
+        // Bun (BoringSSL) it lands on AES-128-GCM. Both are TLS-1.3 AEAD
+        // suites with no practical security difference, and neither runtime
+        // exposes a client-side knob to steer TLS-1.3 selection (`ciphers`
+        // is TLS-1.2-only; `ciphersuites`/secureContext are ignored for the
+        // client offer), so this is left as-is.
       };
       if (opts.ssl !== 'verify-full') {
         tlsConnectionOptions.checkServerIdentity = (): undefined => undefined;

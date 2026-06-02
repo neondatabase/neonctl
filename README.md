@@ -132,6 +132,7 @@ regression + TAP tests.
 ### Known limitations
 
 - The `--fallback` flag is hidden in `--help` until conformance coverage stabilises. The behavior is safe to use today; the hide just signals "not yet flipped to default."
+- **TLS cipher is runtime-dependent.** The negotiated TLS 1.3 ciphersuite is chosen by the host runtime's TLS library from an offer byte-identical to libpq's. Under Node (OpenSSL) that is `TLS_AES_256_GCM_SHA384`, matching vanilla psql; under Bun (BoringSSL) it is `TLS_AES_128_GCM_SHA256`. Both are TLS 1.3 AEAD suites with no practical security difference, and neither runtime exposes a client-side knob to steer the selection.
 
 ## Configure autocompletion
 
