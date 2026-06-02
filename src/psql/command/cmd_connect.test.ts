@@ -73,6 +73,13 @@ type FakeConnectionOpts = {
   onExecSimple?: (sql: string) => void;
   /** Password to expose via the structural `password` getter (PgConnection parity). */
   password?: string | null;
+  /** TLS attributes returned by `getTlsInfo()` (null = plaintext). */
+  tlsInfo?: {
+    protocol: string;
+    cipher: string;
+    compression: string;
+    alpn: string | null;
+  } | null;
 };
 
 const makeFakeConnection = (
@@ -131,6 +138,7 @@ const makeFakeConnection = (
     escapeLiteral: (v) => "'" + v.replace(/'/g, "''") + "'",
     onNotice: () => () => undefined,
     onNotification: () => () => undefined,
+    getTlsInfo: () => opts.tlsInfo ?? null,
     close: () => {
       fake.closeCalls++;
       isClosed = true;
@@ -498,6 +506,39 @@ describe('\\conninfo', () => {
     expect(stdout()).toMatch(
       /You are connected to database "mydb" as user "alice" on host "host.example.com" at port "5433"\./,
     );
+  });
+
+  test('prints the SSL line for a TLS connection', async () => {
+    const s = defaultSettings(createVarStore());
+    s.vars.set('DBNAME', 'mydb');
+    s.vars.set('USER', 'alice');
+    s.vars.set('HOST', 'host.example.com');
+    s.vars.set('PORT', '5432');
+    s.db = makeFakeConnection({
+      tlsInfo: {
+        protocol: 'TLSv1.3',
+        cipher: 'TLS_AES_256_GCM_SHA384',
+        compression: 'off',
+        alpn: 'postgresql',
+      },
+    });
+
+    await run(cmdConninfo, makeMockCtx('conninfo', '', s));
+    expect(stdout()).toMatch(
+      /SSL connection \(protocol: TLSv1\.3, cipher: TLS_AES_256_GCM_SHA384, compression: off, ALPN: postgresql\)/,
+    );
+  });
+
+  test('omits the SSL line for a plaintext connection', async () => {
+    const s = defaultSettings(createVarStore());
+    s.vars.set('DBNAME', 'mydb');
+    s.vars.set('USER', 'alice');
+    s.vars.set('HOST', 'host.example.com');
+    s.vars.set('PORT', '5432');
+    s.db = makeFakeConnection({ tlsInfo: null });
+
+    await run(cmdConninfo, makeMockCtx('conninfo', '', s));
+    expect(stdout()).not.toMatch(/SSL connection/);
   });
 
   test('runs SQL when psql vars are unset', async () => {

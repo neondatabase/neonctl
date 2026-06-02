@@ -156,6 +156,19 @@ export type Connection = {
    * it whenever a connection is present.
    */
   setClientEncoding?(name: string): Promise<void>;
+  /**
+   * Negotiated TLS attributes for the live connection, or `null` for a
+   * plaintext connection. Mirrors the per-connection `PQsslAttribute(conn,
+   * …)` values psql's `\conninfo` prints. Optional on the interface for the
+   * same reason as {@link closePreparedStatement}: mocks implement the
+   * surface as object literals. `PgConnection` always supplies it.
+   */
+  getTlsInfo?(): {
+    protocol: string;
+    cipher: string;
+    compression: string;
+    alpn: string | null;
+  } | null;
   onNotice(handler: (notice: Notice) => void): () => void;
   onNotification(
     handler: (channel: string, payload: string, pid: number) => void,

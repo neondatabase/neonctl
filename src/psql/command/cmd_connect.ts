@@ -531,6 +531,18 @@ const runConninfo = async (ctx: BackslashContext): Promise<BackslashResult> => {
       `You are connected to database "${dbStr}" as user "${userStr}" on host "${hostStr}" at port "${portStr}".\n`,
     );
   }
+
+  // SSL line — mirrors upstream psql's `printSSLInfo()` (command.c), which
+  // reads the per-connection `PQsslAttribute(conn, …)` values. Printed only
+  // when the connection is TLS-wrapped.
+  const tls = db.getTlsInfo?.();
+  if (tls) {
+    writeOut(
+      `SSL connection (protocol: ${tls.protocol}, cipher: ${tls.cipher}, ` +
+        `compression: ${tls.compression !== 'off' ? 'on' : 'off'}, ` +
+        `ALPN: ${tls.alpn && tls.alpn.length > 0 ? tls.alpn : 'none'})\n`,
+    );
+  }
   return { status: 'ok' };
 };
 
