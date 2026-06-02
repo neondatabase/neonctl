@@ -165,9 +165,8 @@ The agent flow also handles project creation. If the agent sends `--project-name
 The project is resolved through the standard neonctl chain, each entry winning over the next:
 
 1. `--project-id <id>` flag
-2. `NEON_PROJECT_ID` environment variable (the flag's default)
-3. `projectId` from the closest `.neon` file (found by walking up from the current directory — see "Where `.neon` lives" below)
-4. If still unresolved and the API key maps to exactly one project, that project is auto-detected (same behaviour as `branches` and `connection-string`)
+2. `projectId` from the closest `.neon` file (found by walking up from the current directory — see "Where `.neon` lives" below)
+3. If still unresolved and the API key maps to exactly one project, that project is auto-detected (same behaviour as `branches` and `connection-string`)
 
 If none of those resolve a project, `checkout` prints a telling error explaining the chain above. In an interactive terminal it then offers to run `neonctl link` in the current folder so you can pick (or create) a project on the spot; once linked, it continues and pins the requested branch. In non-interactive contexts (CI or no TTY) it exits with a non-zero code and the same guidance instead of prompting.
 

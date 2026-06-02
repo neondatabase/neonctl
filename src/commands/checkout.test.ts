@@ -130,7 +130,7 @@ describe('checkout', () => {
     readFile,
     tmpContext,
   }) => {
-    // No --project-id / NEON_PROJECT_ID and a fresh .neon: checkout should fall
+    // No --project-id and a fresh .neon: checkout should fall
     // back to single-project auto-detection (same behaviour as branches / cs).
     const ctx = tmpContext('autodetect_single');
     await testCliCommand(['checkout', 'main', '--context-file', ctx], {
@@ -147,15 +147,15 @@ describe('checkout', () => {
     removeFile,
     tmpContext,
   }) => {
-    // Fresh .neon, no --project-id / NEON_PROJECT_ID, and the mock account has
-    // no projects so single-project auto-detection can't pick one. The forked
-    // CLI has no TTY, so we expect the telling error instead of a prompt.
+    // Fresh .neon, no --project-id, and the mock account has no projects so
+    // single-project auto-detection can't pick one. The forked CLI has no TTY,
+    // so we expect the telling error instead of a prompt.
     const ctx = tmpContext('no_project');
     await testCliCommand(['checkout', 'main', '--context-file', ctx], {
       mockDir: 'checkout_no_project',
       code: 1,
       stderr:
-        'ERROR: Could not determine which Neon project to check out a branch from. Provide one via the --project-id flag, the NEON_PROJECT_ID environment variable, or a .neon file (created by `neonctl link` / `neonctl set-context`).',
+        'ERROR: Could not determine which Neon project to check out a branch from. Provide one via the --project-id flag or a .neon file (created by `neonctl link` / `neonctl set-context`).',
     });
     removeFile(ctx);
   });
