@@ -28,10 +28,12 @@ import {
   isUnixSocketHost,
   keepAliveArgs,
   PgConnection,
+  sslKeyBitsFromCipher,
   tlsServername,
   unixSocketPath,
 } from './connection.js';
 import { CancelRequest } from './protocol.js';
+import type { ConnectOptions } from '../types/connection.js';
 
 // ---------------------------------------------------------------------------
 // Fake server harness
@@ -2533,5 +2535,93 @@ describe('keepAliveArgs (keepalives / keepalives_idle)', () => {
       enable: false,
       initialDelayMs: 10_000,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sslKeyBitsFromCipher — derive SSL Key Bits for the PG18 \conninfo table.
+// ---------------------------------------------------------------------------
+
+describe('sslKeyBitsFromCipher', () => {
+  test('TLS 1.3 standard names', () => {
+    expect(sslKeyBitsFromCipher('TLS_AES_256_GCM_SHA384')).toBe(256);
+    expect(sslKeyBitsFromCipher('TLS_AES_128_GCM_SHA256')).toBe(128);
+    expect(sslKeyBitsFromCipher('TLS_CHACHA20_POLY1305_SHA256')).toBe(256);
+  });
+
+  test('OpenSSL TLS 1.2 cipher names', () => {
+    expect(sslKeyBitsFromCipher('ECDHE-RSA-AES256-GCM-SHA384')).toBe(256);
+    expect(sslKeyBitsFromCipher('ECDHE-RSA-AES128-GCM-SHA256')).toBe(128);
+  });
+
+  test('falls back to the first digit run when no AES/CHACHA keyword matches', () => {
+    // Contrived name whose only length signal is the trailing digits.
+    expect(sslKeyBitsFromCipher('SOME-CIPHER-512')).toBe(512);
+  });
+
+  test('returns null when nothing is derivable', () => {
+    expect(sslKeyBitsFromCipher('NO-DIGITS-HERE')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getConnectionInfo — static facts for the PG18 \conninfo table (no SQL).
+//
+// Exercised via a prototype-only stub (same pattern as the escaping tests):
+// we don't need a live socket, only the private fields the method reads.
+// ---------------------------------------------------------------------------
+
+describe('getConnectionInfo', () => {
+  const makeStub = (
+    opts: Partial<ConnectOptions> & { host: string; port: number },
+    overrides: {
+      remoteAddress?: string;
+      processId?: number;
+      passwordUsed?: boolean;
+    } = {},
+  ): PgConnection => {
+    const conn = Object.create(PgConnection.prototype) as PgConnection;
+    const mut = conn as unknown as {
+      opts: Partial<ConnectOptions>;
+      socket: { remoteAddress?: string };
+      processId: number;
+      passwordUsed: boolean;
+    };
+    mut.opts = opts;
+    mut.socket = { remoteAddress: overrides.remoteAddress };
+    mut.processId = overrides.processId ?? 0;
+    mut.passwordUsed = overrides.passwordUsed ?? false;
+    return conn;
+  };
+
+  test('reports the TCP socket remoteAddress as hostaddr', () => {
+    const conn = makeStub(
+      { host: 'db.example.com', port: 5432, options: 'app=x' },
+      { remoteAddress: '3.131.64.200', processId: 4242, passwordUsed: true },
+    );
+    expect(conn.getConnectionInfo()).toEqual({
+      host: 'db.example.com',
+      hostaddr: '3.131.64.200',
+      port: 5432,
+      options: 'app=x',
+      backendPid: 4242,
+      passwordUsed: true,
+      gssapiUsed: false,
+    });
+  });
+
+  test('prefers an explicit hostaddr over the socket remoteAddress', () => {
+    const conn = makeStub(
+      { host: 'db.example.com', hostaddr: '10.0.0.9', port: 5432 },
+      { remoteAddress: '3.131.64.200' },
+    );
+    expect(conn.getConnectionInfo().hostaddr).toBe('10.0.0.9');
+  });
+
+  test('hostaddr is null for a Unix-domain socket (no remoteAddress)', () => {
+    const conn = makeStub({ host: '/var/run/postgresql', port: 5432 });
+    const info = conn.getConnectionInfo();
+    expect(info.hostaddr).toBeNull();
+    expect(info.options).toBeNull();
   });
 });

@@ -440,6 +440,15 @@ export class PgConnection implements Connection {
    */
   private readonly _password: string | null;
 
+  /**
+   * Set to `true` once we actually respond to a server password challenge
+   * (cleartext, MD5, or the SASL/SCRAM exchange). Mirrors libpq's
+   * `conn->password_needed`, which `\conninfo` reports as "Password Used".
+   * A trust/cert/peer login leaves this `false` — the password may have been
+   * supplied but was never sent.
+   */
+  private passwordUsed = false;
+
   // -- Async messages
   private readonly notify: NoticeMultiplexer = new NoticeMultiplexer();
 
@@ -817,7 +826,8 @@ export class PgConnection implements Connection {
    * If the connection was upgraded to TLS during negotiation, return the
    * cipher info for the active session. Returns `null` for plain-text
    * connections. Used by the startup banner to render an `SSL connection
-   * (protocol: …, cipher: …)` line that mirrors upstream psql.
+   * (protocol: …, cipher: …)` line that mirrors upstream psql, and by
+   * `\conninfo` (PG18 connection-information table) to fill the SSL rows.
    */
   public getTlsInfo(): {
     protocol: string;
@@ -827,6 +837,18 @@ export class PgConnection implements Connection {
     compression: string;
     /** ALPN protocol negotiated, or null if none. */
     alpn: string | null;
+    /**
+     * The TLS implementation backing the connection. Node's TLS is always
+     * OpenSSL-backed (cross-check via `process.versions.openssl`), so we
+     * report 'OpenSSL' whenever a session is active — matching what libpq's
+     * `PQsslAttribute(conn, "library")` returns for an OpenSSL build.
+     */
+    library: string;
+    /**
+     * Symmetric key length in bits, derived from the negotiated cipher name
+     * (e.g. `TLS_AES_256_GCM_SHA384` → 256). `null` when undetectable.
+     */
+    keyBits: number | null;
   } | null {
     const s = this.socket as tls.TLSSocket;
     if (typeof s.getCipher !== 'function') return null;
@@ -851,10 +873,48 @@ export class PgConnection implements Connection {
         standardName: cipher.standardName,
         compression,
         alpn,
+        library: 'OpenSSL',
+        keyBits: sslKeyBitsFromCipher(cipher.standardName ?? cipher.name),
       };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Static connection facts for the PG18 `\conninfo` table, sourced from the
+   * connect opts and the live socket (no SQL is issued):
+   *
+   *   - `host` / `port` / `options`: from the connect opts.
+   *   - `hostaddr`: the resolved peer IP — `opts.hostaddr` if the caller
+   *     fixed one, else the TCP socket's `remoteAddress` (undefined for a
+   *     Unix-domain socket → `null`).
+   *   - `backendPid`: the backend process id from BackendKeyData.
+   *   - `passwordUsed`: whether a password was actually sent during auth.
+   *   - `gssapiUsed`: always `false` — we have no GSSAPI support.
+   */
+  public getConnectionInfo(): {
+    host: string;
+    hostaddr: string | null;
+    port: number;
+    options: string | null;
+    backendPid: number;
+    passwordUsed: boolean;
+    gssapiUsed: boolean;
+  } {
+    const remote =
+      this.opts.hostaddr !== undefined && this.opts.hostaddr !== ''
+        ? this.opts.hostaddr
+        : ((this.socket as net.Socket).remoteAddress ?? null);
+    return {
+      host: this.opts.host,
+      hostaddr: remote,
+      port: this.opts.port,
+      options: this.opts.options ?? null,
+      backendPid: this.processId,
+      passwordUsed: this.passwordUsed,
+      gssapiUsed: false,
+    };
   }
 
   public async query(sql: string, params?: unknown[]): Promise<ResultSet> {
@@ -1452,6 +1512,7 @@ export class PgConnection implements Connection {
           );
           return;
         }
+        this.passwordUsed = true;
         this.socket.write(PasswordMessage(this.opts.password));
         return;
       }
@@ -1479,6 +1540,7 @@ export class PgConnection implements Connection {
           this.opts.password,
           msg.salt,
         );
+        this.passwordUsed = true;
         this.socket.write(PasswordMessage(payload));
         return;
       }
@@ -1534,6 +1596,7 @@ export class PgConnection implements Connection {
                 : undefined,
           });
           const { mechanism, clientFirstMessage } = this.scram.start();
+          this.passwordUsed = true;
           this.socket.write(SASLInitialResponse(mechanism, clientFirstMessage));
         } catch (err) {
           this.failStartup(err);
@@ -2954,6 +3017,35 @@ export function keepAliveArgs(
         ? opts.keepalivesIdle * 1000
         : undefined,
   };
+}
+
+/**
+ * Derive the symmetric key length (in bits) from a negotiated TLS cipher
+ * name, for the PG18 `\conninfo` "SSL Key Bits" row. Node's TLS API doesn't
+ * expose the key length directly, so we parse it out of the cipher name the
+ * way upstream's `SSL_CIPHER_get_bits` effectively reports it:
+ *
+ *   - `AES_256` / `CHACHA20` → 256
+ *   - `AES_128`              → 128
+ *   - otherwise, the first run of digits in the standard name (`…128…` etc.)
+ *   - `null` when no length can be determined.
+ *
+ * Both the OpenSSL standard name (`TLS_AES_256_GCM_SHA384`,
+ * `ECDHE-RSA-AES128-GCM-SHA256`) and Node's IANA-style name are handled by
+ * uppercasing and matching the keyword forms first. Exported for unit tests.
+ */
+export function sslKeyBitsFromCipher(name: string): number | null {
+  const upper = name.toUpperCase();
+  if (upper.includes('CHACHA20')) return 256;
+  if (upper.includes('AES_256') || upper.includes('AES256')) return 256;
+  if (upper.includes('AES_128') || upper.includes('AES128')) return 128;
+  if (upper.includes('AES_192') || upper.includes('AES192')) return 192;
+  const digits = /(\d{2,4})/.exec(upper);
+  if (digits) {
+    const n = parseInt(digits[1], 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
 }
 
 function openSocket(

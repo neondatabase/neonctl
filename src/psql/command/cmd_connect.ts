@@ -17,11 +17,16 @@
  *   - Building a fresh {@link ConnectOptions} by merging the override with
  *     the previous connection's opts and dispatching `PgConnection.connect`
  *     via an injectable seam so tests can stub the wire layer.
- *   - `\conninfo` — runs `SELECT current_database(), current_user,
- *     inet_server_addr(), inet_server_port()` and renders the upstream-style
- *     "You are connected to …" line. This diverges from modern psql which
- *     prints a full key/value table; the simpler line form is what the WP
- *     contract specifies and matches pre-17 psql.
+ *   - `\conninfo` — renders the PostgreSQL 18 "Connection Information"
+ *     two-column table (Parameter / Value), mirroring upstream
+ *     `exec_command_conninfo` in `src/bin/psql/command.c`. PG 18 rewrote
+ *     `\conninfo` from the old one-line "You are connected to …" message
+ *     into this table. Every value comes from the live connection's
+ *     accessors (`getConnectionInfo()`, `getTlsInfo()`,
+ *     `parameterStatus()`) — we issue NO SQL (the old form's
+ *     `inet_server_addr()` returned a bogus internal IP behind a proxy like
+ *     Neon). The ResultSet is handed to the active `\pset format` printer
+ *     so `\conninfo` honours `-A`, `-H`, etc. just like a query result.
  *   - `\encoding` — like cmd_format.ts but additionally issues
  *     `SET client_encoding TO …` on the live connection so the backend
  *     ParameterStatus stays in sync with `settings.popt.topt.encoding`.
@@ -36,11 +41,11 @@
  *
  * What this module does NOT own:
  *
- *   - Cataloguing the current host/port/user/database. These are populated
- *     by the startup WP into psql vars HOST/PORT/USER/DBNAME (and so are
- *     read out of `settings.vars` here). When those vars are missing we
- *     query SQL or fall back to opt defaults, accepting that `\conninfo`
- *     will then report whatever the server reports.
+ *   - Cataloguing the current database/user. These are populated by the
+ *     startup WP into psql vars DBNAME/USER (and kept in sync by `\c`), so
+ *     `\conninfo` reads them out of `settings.vars`, falling back to the
+ *     connect-opts surfaced on the live connection. Host/port/hostaddr and
+ *     the SSL facts come straight from the connection accessors.
  *
  * Password retention: `PgConnection` exposes the password captured at
  * connect time via a read-only `password` getter (mirroring libpq's
@@ -64,11 +69,26 @@ import type {
   BackslashRegistry,
   BackslashResult,
 } from '../types/backslash.js';
-import type { Connection, ConnectOptions } from '../types/connection.js';
+import type {
+  Connection,
+  ConnectOptions,
+  FieldDescription,
+  ResultSet,
+} from '../types/connection.js';
+import type { Printer, PrintQueryOpts } from '../types/printer.js';
 import type { PsqlSettings } from '../types/settings.js';
 
 import { readLine as readInputLine } from '../io/input.js';
 import { PgConnection } from '../wire/connection.js';
+
+import { alignedPrinter } from '../print/aligned.js';
+import { asciidocPrinter } from '../print/asciidoc.js';
+import { csvPrinter } from '../print/csv.js';
+import { htmlPrinter } from '../print/html.js';
+import { jsonPrinter } from '../print/json.js';
+import { latexLongtablePrinter, latexPrinter } from '../print/latex.js';
+import { troffMsPrinter } from '../print/troff.js';
+import { unalignedPrinter } from '../print/unaligned.js';
 
 import { writeErr, writeOut } from './shared.js';
 
@@ -486,6 +506,137 @@ export const cmdConnect: BackslashCmdSpec = {
 // \conninfo
 // ---------------------------------------------------------------------------
 
+/**
+ * Pick the printer for the active output format. Mirrors the private
+ * `pickPrinter` in `core/common.ts` / `pickActivePrinter` in `cmd_io.ts`
+ * — replicated here (those are module-private) to avoid an import cycle,
+ * the same established pattern this codebase already uses for the two
+ * other copies.
+ */
+const pickActivePrinter = (settings: PsqlSettings): Printer => {
+  switch (settings.popt.topt.format) {
+    case 'aligned':
+    case 'wrapped':
+      return alignedPrinter;
+    case 'unaligned':
+      return unalignedPrinter;
+    case 'csv':
+      return csvPrinter;
+    case 'json':
+      return jsonPrinter;
+    case 'html':
+      return htmlPrinter;
+    case 'asciidoc':
+      return asciidocPrinter;
+    case 'latex':
+      return latexPrinter;
+    case 'latex-longtable':
+      return latexLongtablePrinter;
+    case 'troff-ms':
+      return troffMsPrinter;
+    default:
+      return alignedPrinter;
+  }
+};
+
+/** A text-typed field descriptor for the synthetic conninfo ResultSet. */
+const textField = (name: string): FieldDescription => ({
+  name,
+  tableID: 0,
+  columnID: 0,
+  // OID 25 = `text`: left-aligned, like both columns of upstream's output.
+  dataTypeID: 25,
+  dataTypeSize: -1,
+  dataTypeModifier: -1,
+  format: 0,
+});
+
+/**
+ * Build the (Parameter, Value) rows for the PG18 connection-information
+ * table. Mirrors the row order and gating of upstream
+ * `exec_command_conninfo` (`src/bin/psql/command.c`).
+ */
+const buildConninfoRows = (
+  ctx: BackslashContext,
+  db: Connection,
+): [string, string][] => {
+  const info = db.getConnectionInfo?.() ?? null;
+  const tls = db.getTlsInfo?.() ?? null;
+
+  // Database / user come from the psql vars the startup WP populates (and
+  // that `\c` keeps in sync); fall back to the connect-opts surfaced on the
+  // connection when a var is missing.
+  const database =
+    ctx.settings.vars.get('DBNAME') ??
+    (db as unknown as { database?: string }).database ??
+    '';
+  const user =
+    ctx.settings.vars.get('USER') ??
+    (db as unknown as { user?: string }).user ??
+    '';
+
+  const host = info?.host ?? ctx.settings.vars.get('HOST') ?? '';
+  const hostaddr = info?.hostaddr ?? null;
+  const port =
+    info?.port ?? Number(ctx.settings.vars.get('PORT') ?? Number.NaN);
+  const portStr = Number.isFinite(port) ? String(port) : '';
+
+  const rows: [string, string][] = [];
+  rows.push(['Database', database]);
+  rows.push(['Client User', user]);
+
+  // Host rows. A Unix-domain socket path (starts with '/') prints a
+  // "Socket Directory" (or "Host Address" when a hostaddr was fixed);
+  // otherwise "Host", plus a separate "Host Address" only when a distinct
+  // hostaddr is present.
+  if (host.startsWith('/')) {
+    if (hostaddr !== null && hostaddr.length > 0) {
+      rows.push(['Host Address', hostaddr]);
+    } else {
+      rows.push(['Socket Directory', host]);
+    }
+  } else {
+    rows.push(['Host', host]);
+    if (hostaddr !== null && hostaddr.length > 0 && hostaddr !== host) {
+      rows.push(['Host Address', hostaddr]);
+    }
+  }
+
+  rows.push(['Server Port', portStr]);
+  rows.push(['Options', info?.options ?? '']);
+  rows.push(['Protocol Version', '3.0']);
+  rows.push(['Password Used', info?.passwordUsed ? 'true' : 'false']);
+  rows.push(['GSSAPI Authenticated', info?.gssapiUsed ? 'true' : 'false']);
+  rows.push(['Backend PID', String(info?.backendPid ?? 0)]);
+  rows.push(['SSL Connection', tls ? 'true' : 'false']);
+
+  if (tls) {
+    rows.push(['SSL Library', tls.library]);
+    rows.push(['SSL Protocol', tls.protocol]);
+    rows.push([
+      'SSL Key Bits',
+      tls.keyBits !== null ? String(tls.keyBits) : '',
+    ]);
+    rows.push(['SSL Cipher', tls.cipher]);
+    rows.push([
+      'SSL Compression',
+      tls.compression !== 'off' ? 'true' : 'false',
+    ]);
+    rows.push(['ALPN', tls.alpn && tls.alpn.length > 0 ? tls.alpn : 'none']);
+  }
+
+  rows.push([
+    'Superuser',
+    ctx.settings.db?.parameterStatus('is_superuser') ?? 'unknown',
+  ]);
+  rows.push([
+    'Hot Standby',
+    ctx.settings.db?.parameterStatus('in_hot_standby') ?? 'unknown',
+  ]);
+
+  return rows;
+};
+
 const runConninfo = async (ctx: BackslashContext): Promise<BackslashResult> => {
   const db = ctx.settings.db;
   if (!db) {
@@ -493,56 +644,30 @@ const runConninfo = async (ctx: BackslashContext): Promise<BackslashResult> => {
     return { status: 'ok' };
   }
 
-  // Pull what we can from psql vars (set by \c or by startup). For the rest
-  // we run a one-shot SQL query.
-  let database = ctx.settings.vars.get('DBNAME');
-  let user = ctx.settings.vars.get('USER');
-  let host = ctx.settings.vars.get('HOST');
-  let port = ctx.settings.vars.get('PORT');
+  const rows = buildConninfoRows(ctx, db);
+  const rs: ResultSet = {
+    command: 'SELECT',
+    rowCount: rows.length,
+    oid: null,
+    fields: [textField('Parameter'), textField('Value')],
+    rows: rows.map(([p, v]) => [p, v]),
+    notices: [],
+  };
 
-  if (!database || !user) {
-    try {
-      const rs = await db.query(
-        'SELECT current_database(), current_user, inet_server_addr()::text, inet_server_port()::text',
-      );
-      const row = rs.rows[0] ?? [];
-      database = database ?? (typeof row[0] === 'string' ? row[0] : undefined);
-      user = user ?? (typeof row[1] === 'string' ? row[1] : undefined);
-      host = host ?? (typeof row[2] === 'string' ? row[2] : undefined);
-      port = port ?? (typeof row[3] === 'string' ? row[3] : undefined);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      writeErr(`\\${ctx.cmdName}: ${msg}\n`);
-      return { status: 'error' };
-    }
-  }
-
-  const dbStr = database ?? '?';
-  const userStr = user ?? '?';
-  const portStr = port ?? '?';
-
-  if (host !== undefined && host.length > 0 && host.startsWith('/')) {
-    writeOut(
-      `You are connected to database "${dbStr}" as user "${userStr}" via socket in "${host}" at port "${portStr}".\n`,
-    );
-  } else {
-    const hostStr = host ?? '?';
-    writeOut(
-      `You are connected to database "${dbStr}" as user "${userStr}" on host "${hostStr}" at port "${portStr}".\n`,
-    );
-  }
-
-  // SSL line — mirrors upstream psql's `printSSLInfo()` (command.c), which
-  // reads the per-connection `PQsslAttribute(conn, …)` values. Printed only
-  // when the connection is TLS-wrapped.
-  const tls = db.getTlsInfo?.();
-  if (tls) {
-    writeOut(
-      `SSL connection (protocol: ${tls.protocol}, cipher: ${tls.cipher}, ` +
-        `compression: ${tls.compression !== 'off' ? 'on' : 'off'}, ` +
-        `ALPN: ${tls.alpn && tls.alpn.length > 0 ? tls.alpn : 'none'})\n`,
-    );
-  }
+  // Render with the active printer (honours `\pset format`), titled
+  // "Connection Information" with the default `(N rows)` footer left on,
+  // matching PG18's `printQuery(... title = "Connection Information")`.
+  const popt: PrintQueryOpts = {
+    ...ctx.settings.popt,
+    title: 'Connection Information',
+    topt: {
+      ...ctx.settings.popt.topt,
+      title: 'Connection Information',
+      defaultFooter: true,
+    },
+  };
+  const out = process.stdout;
+  await pickActivePrinter(ctx.settings).printQuery(rs, popt, out);
   return { status: 'ok' };
 };
 

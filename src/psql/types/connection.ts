@@ -168,7 +168,40 @@ export type Connection = {
     cipher: string;
     compression: string;
     alpn: string | null;
+    /**
+     * The TLS implementation backing the connection — always `'OpenSSL'` for
+     * Node's TLS stack. Mirrors libpq's `PQsslAttribute(conn, "library")`,
+     * surfaced as the "SSL Library" row of the PG18 `\conninfo` table.
+     */
+    library: string;
+    /**
+     * Symmetric key length in bits derived from the negotiated cipher (e.g.
+     * 256 for `TLS_AES_256_GCM_SHA384`), or `null` when undetectable. Shown
+     * as the "SSL Key Bits" row of the PG18 `\conninfo` table.
+     */
+    keyBits: number | null;
   } | null;
+  /**
+   * Static connection facts for the PG18 `\conninfo` "Connection
+   * Information" table — sourced from the connect opts and the live socket,
+   * never from SQL. `hostaddr` is the resolved peer IP (or `null` for a
+   * Unix-domain socket); `passwordUsed` reflects whether a password was
+   * actually sent during authentication; `gssapiUsed` is always `false`
+   * (no GSSAPI support).
+   *
+   * Optional on the interface for the same reason as
+   * {@link closePreparedStatement}: existing mocks implement the surface as
+   * object literals. `PgConnection` always supplies the real method.
+   */
+  getConnectionInfo?(): {
+    host: string;
+    hostaddr: string | null;
+    port: number;
+    options: string | null;
+    backendPid: number;
+    passwordUsed: boolean;
+    gssapiUsed: boolean;
+  };
   onNotice(handler: (notice: Notice) => void): () => void;
   onNotification(
     handler: (channel: string, payload: string, pid: number) => void,

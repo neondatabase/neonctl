@@ -79,7 +79,21 @@ type FakeConnectionOpts = {
     cipher: string;
     compression: string;
     alpn: string | null;
+    library: string;
+    keyBits: number | null;
   } | null;
+  /** Static connection facts returned by `getConnectionInfo()`. */
+  connInfo?: {
+    host: string;
+    hostaddr: string | null;
+    port: number;
+    options: string | null;
+    backendPid: number;
+    passwordUsed: boolean;
+    gssapiUsed: boolean;
+  };
+  /** Map of ParameterStatus name → value (e.g. is_superuser / in_hot_standby). */
+  paramStatus?: Record<string, string>;
 };
 
 const makeFakeConnection = (
@@ -100,7 +114,7 @@ const makeFakeConnection = (
     lastExecSql: null,
     password: opts.password ?? null,
     serverVersion: 160000,
-    parameterStatus: () => undefined,
+    parameterStatus: (name: string) => opts.paramStatus?.[name],
     query: (sql: string) => {
       const rs = responses[sql.trim()];
       if (rs) return Promise.resolve(rs);
@@ -139,6 +153,16 @@ const makeFakeConnection = (
     onNotice: () => () => undefined,
     onNotification: () => () => undefined,
     getTlsInfo: () => opts.tlsInfo ?? null,
+    getConnectionInfo: () =>
+      opts.connInfo ?? {
+        host: '',
+        hostaddr: null,
+        port: 5432,
+        options: null,
+        backendPid: 0,
+        passwordUsed: false,
+        gssapiUsed: false,
+      },
     close: () => {
       fake.closeCalls++;
       isClosed = true;
@@ -486,6 +510,18 @@ describe('\\c (cmdConnect)', () => {
 // ---------------------------------------------------------------------------
 
 describe('\\conninfo', () => {
+  // A TCP connection's static facts, as PgConnection.getConnectionInfo()
+  // would report them (resolved peer IP, backend PID, etc.).
+  const tcpConnInfo = {
+    host: 'host.example.com',
+    hostaddr: '3.131.64.200',
+    port: 5432,
+    options: null,
+    backendPid: -2141034612,
+    passwordUsed: true,
+    gssapiUsed: false,
+  };
+
   test('reports "not connected" when settings.db is null', async () => {
     const s = defaultSettings(createVarStore());
     s.db = null;
@@ -494,88 +530,102 @@ describe('\\conninfo', () => {
     expect(stdout()).toMatch(/not connected/);
   });
 
-  test('uses psql vars when set', async () => {
+  test('renders the PG18 Connection Information table (plaintext)', async () => {
     const s = defaultSettings(createVarStore());
-    s.vars.set('DBNAME', 'mydb');
-    s.vars.set('USER', 'alice');
-    s.vars.set('HOST', 'host.example.com');
-    s.vars.set('PORT', '5433');
-    s.db = makeFakeConnection();
+    s.vars.set('DBNAME', 'neondb');
+    s.vars.set('USER', 'vadim');
+    s.db = makeFakeConnection({
+      tlsInfo: null,
+      connInfo: { ...tcpConnInfo, hostaddr: null, passwordUsed: false },
+      paramStatus: { is_superuser: 'off', in_hot_standby: 'off' },
+    });
 
     await run(cmdConninfo, makeMockCtx('conninfo', '', s));
-    expect(stdout()).toMatch(
-      /You are connected to database "mydb" as user "alice" on host "host.example.com" at port "5433"\./,
-    );
+    const out = stdout();
+    // Title + the (left-aligned) Parameter/Value header.
+    expect(out).toMatch(/Connection Information/);
+    expect(out).toMatch(/Parameter\s+\|\s+Value/);
+    // Representative rows.
+    expect(out).toMatch(/Database\s+\| neondb/);
+    expect(out).toMatch(/Client User\s+\| vadim/);
+    expect(out).toMatch(/Host\s+\| host\.example\.com/);
+    expect(out).toMatch(/Protocol Version\s+\| 3\.0/);
+    expect(out).toMatch(/Password Used\s+\| false/);
+    expect(out).toMatch(/GSSAPI Authenticated\s+\| false/);
+    expect(out).toMatch(/SSL Connection\s+\| false/);
+    expect(out).toMatch(/Superuser\s+\| off/);
+    expect(out).toMatch(/Hot Standby\s+\| off/);
+    // No SSL rows on a plaintext connection.
+    expect(out).not.toMatch(/SSL Library/);
+    expect(out).not.toMatch(/SSL Cipher/);
+    // Default footer is on → "(N rows)". Plaintext = the 12 non-SSL rows.
+    expect(out).toMatch(/\(12 rows\)/);
   });
 
-  test('prints the SSL line for a TLS connection', async () => {
+  test('includes all SSL rows for a TLS connection', async () => {
     const s = defaultSettings(createVarStore());
-    s.vars.set('DBNAME', 'mydb');
-    s.vars.set('USER', 'alice');
-    s.vars.set('HOST', 'host.example.com');
-    s.vars.set('PORT', '5432');
+    s.vars.set('DBNAME', 'neondb');
+    s.vars.set('USER', 'vadim');
     s.db = makeFakeConnection({
       tlsInfo: {
         protocol: 'TLSv1.3',
         cipher: 'TLS_AES_256_GCM_SHA384',
         compression: 'off',
         alpn: 'postgresql',
+        library: 'OpenSSL',
+        keyBits: 256,
       },
+      connInfo: tcpConnInfo,
+      paramStatus: { is_superuser: 'off', in_hot_standby: 'off' },
     });
 
     await run(cmdConninfo, makeMockCtx('conninfo', '', s));
-    expect(stdout()).toMatch(
-      /SSL connection \(protocol: TLSv1\.3, cipher: TLS_AES_256_GCM_SHA384, compression: off, ALPN: postgresql\)/,
-    );
+    const out = stdout();
+    expect(out).toMatch(/SSL Connection\s+\| true/);
+    expect(out).toMatch(/SSL Library\s+\| OpenSSL/);
+    expect(out).toMatch(/SSL Protocol\s+\| TLSv1\.3/);
+    expect(out).toMatch(/SSL Key Bits\s+\| 256/);
+    expect(out).toMatch(/SSL Cipher\s+\| TLS_AES_256_GCM_SHA384/);
+    expect(out).toMatch(/SSL Compression\s+\| false/);
+    expect(out).toMatch(/ALPN\s+\| postgresql/);
+    // Password Used reflects an authenticated password connection.
+    expect(out).toMatch(/Password Used\s+\| true/);
+    // A distinct hostaddr surfaces as its own row.
+    expect(out).toMatch(/Host Address\s+\| 3\.131\.64\.200/);
   });
 
-  test('omits the SSL line for a plaintext connection', async () => {
+  test('omits the separate Host Address row when hostaddr equals host', async () => {
     const s = defaultSettings(createVarStore());
-    s.vars.set('DBNAME', 'mydb');
-    s.vars.set('USER', 'alice');
-    s.vars.set('HOST', 'host.example.com');
-    s.vars.set('PORT', '5432');
-    s.db = makeFakeConnection({ tlsInfo: null });
-
-    await run(cmdConninfo, makeMockCtx('conninfo', '', s));
-    expect(stdout()).not.toMatch(/SSL connection/);
-  });
-
-  test('runs SQL when psql vars are unset', async () => {
-    const s = defaultSettings(createVarStore());
-    const fake = makeFakeConnection({
-      queryResponses: {
-        'SELECT current_database(), current_user, inet_server_addr()::text, inet_server_port()::text':
-          {
-            command: 'SELECT',
-            rowCount: 1,
-            oid: null,
-            fields: [],
-            rows: [['mydb', 'alice', '10.0.0.1', '5432']],
-            notices: [],
-          },
+    s.vars.set('DBNAME', 'neondb');
+    s.vars.set('USER', 'vadim');
+    s.db = makeFakeConnection({
+      tlsInfo: null,
+      // host literal == resolved peer IP (a bare-IP connection).
+      connInfo: {
+        ...tcpConnInfo,
+        host: '3.131.64.200',
+        hostaddr: '3.131.64.200',
       },
+      paramStatus: { is_superuser: 'off', in_hot_standby: 'off' },
     });
-    s.db = fake;
 
     await run(cmdConninfo, makeMockCtx('conninfo', '', s));
-    expect(stdout()).toMatch(
-      /You are connected to database "mydb" as user "alice" on host "10.0.0.1" at port "5432"\./,
-    );
+    const out = stdout();
+    expect(out).toMatch(/Host\s+\| 3\.131\.64\.200/);
+    // No redundant Host Address row.
+    expect(out).not.toMatch(/Host Address/);
   });
 
-  test('renders the socket form when host starts with /', async () => {
+  test('reports Superuser/Hot Standby as "unknown" when the status is absent', async () => {
     const s = defaultSettings(createVarStore());
-    s.vars.set('DBNAME', 'mydb');
-    s.vars.set('USER', 'alice');
-    s.vars.set('HOST', '/var/run/postgresql');
-    s.vars.set('PORT', '5432');
-    s.db = makeFakeConnection();
+    s.vars.set('DBNAME', 'neondb');
+    s.vars.set('USER', 'vadim');
+    s.db = makeFakeConnection({ tlsInfo: null, connInfo: tcpConnInfo });
 
     await run(cmdConninfo, makeMockCtx('conninfo', '', s));
-    expect(stdout()).toMatch(
-      /via socket in "\/var\/run\/postgresql" at port "5432"/,
-    );
+    const out = stdout();
+    expect(out).toMatch(/Superuser\s+\| unknown/);
+    expect(out).toMatch(/Hot Standby\s+\| unknown/);
   });
 });
 
