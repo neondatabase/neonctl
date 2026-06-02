@@ -160,7 +160,9 @@ The agent flow also handles project creation. If the agent sends `--project-name
 
 ### checkout
 
-`checkout <id|name>` pins a branch in the local context so subsequent commands target it — it's a focused helper over `set-context` for the common "switch the branch I'm working on" case. It resolves the branch (by name or id) against the project, then **heals** the `.neon` file: it always (re)writes `projectId`, `branchId`, and `orgId` (when the project has one), so a `.neon` that was missing fields or drifted ends up complete and consistent. When `orgId` isn't already known (from `--org-id` or the existing `.neon`), it's looked up from the project itself.
+`checkout [id|name]` pins a branch in the local context so subsequent commands target it — it's a focused helper over `set-context` for the common "switch the branch I'm working on" case. It resolves the branch (by name or id) against the project, then **heals** the `.neon` file: it always (re)writes `projectId`, `branchId`, and `orgId` (when the project has one), so a `.neon` that was missing fields or drifted ends up complete and consistent. When `orgId` isn't already known (from `--org-id` or the existing `.neon`), it's looked up from the project itself.
+
+The branch argument is **optional**: run `neonctl checkout` with no branch in an interactive terminal to fetch the project's branches and pick one from a list. In a non-interactive context (CI or no TTY), a branch must be passed explicitly.
 
 The project is resolved through the standard neonctl chain, each entry winning over the next:
 
