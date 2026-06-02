@@ -6,6 +6,7 @@ import type { PrintQueryOpts } from '../types/printer.js';
 
 import {
   describeOneTableDetails,
+  describeOneViewDetails,
   lookupOneRelation,
   runListQuery,
 } from './formatters.js';
@@ -79,6 +80,21 @@ const mkConnection = (
     isClosed: () => false,
   };
 };
+
+// Non-verbose single-column result set shared by the PG18-parity blocks.
+const boringCols2 = (): ResultSet =>
+  mkResultSet(
+    [
+      'attname',
+      'type',
+      'default',
+      'attnotnull',
+      'collation',
+      'identity',
+      'generated',
+    ],
+    [['id', 'integer', null, 't', null, '', '']],
+  );
 
 const defaultPopt = (): PrintQueryOpts => ({
   topt: {
@@ -1458,5 +1474,284 @@ describe('runListQuery', () => {
     await runListQuery(conn, query, result, cap.out, defaultPopt());
     expect(recorded[0].sql).toContain('OPERATOR(pg_catalog.~)');
     expect(recorded[0].params).toEqual(['^(foo)$']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// \d / \d+ PG18 parity: view-definition gating, Compression column,
+// view verbose columns, Not-null constraints footer.
+// ---------------------------------------------------------------------------
+
+describe('describeOneTableDetails — verbose Compression column', () => {
+  // Verbose column result set: attname, type, default, attnotnull,
+  // collation, identity, generated, storage, compression, stattarget,
+  // description. The formatter reads storage at r[7], compression at
+  // r[8] (when present), stats at the next slot, description last.
+  const verboseColsWithCompression = (): ResultSet =>
+    mkResultSet(
+      [
+        'attname',
+        'type',
+        'default',
+        'attnotnull',
+        'collation',
+        'identity',
+        'generated',
+        'attstorage',
+        'attcompression',
+        'attstattarget',
+        'description',
+      ],
+      [['id', 'integer', null, 't', null, '', '', 'plain', 'pglz', null, null]],
+    );
+
+  it('includes Compression column in verbose mode for a regular table (PG14+, HIDE off)', async () => {
+    const conn = mkConnection([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_attribute'),
+        rs: verboseColsWithCompression(),
+      },
+      tableInfoMatch(),
+      { match: () => true, rs: mkResultSet([], []) },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'acct',
+      'r',
+      true,
+      cap.out,
+      defaultPopt(),
+      false, // hideTableam
+      false, // hideCompression
+    );
+    const text = cap.text();
+    expect(text).toContain('Storage');
+    expect(text).toContain('Compression');
+    expect(text).toContain('pglz');
+  });
+
+  it('suppresses Compression column when HIDE_TOAST_COMPRESSION is on', async () => {
+    // With hideCompression=true the column SQL omits attcompression, so
+    // the result set has no compression slot; storage at r[7], stats at
+    // r[8], description at r[9].
+    const colsNoCompression = mkResultSet(
+      [
+        'attname',
+        'type',
+        'default',
+        'attnotnull',
+        'collation',
+        'identity',
+        'generated',
+        'attstorage',
+        'attstattarget',
+        'description',
+      ],
+      [['id', 'integer', null, 't', null, '', '', 'plain', null, null]],
+    );
+    const conn = mkConnection([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_attribute'),
+        rs: colsNoCompression,
+      },
+      tableInfoMatch(),
+      { match: () => true, rs: mkResultSet([], []) },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'acct',
+      'r',
+      true,
+      cap.out,
+      defaultPopt(),
+      false, // hideTableam
+      true, // hideCompression
+    );
+    const text = cap.text();
+    expect(text).toContain('Storage');
+    expect(text).not.toContain('Compression');
+  });
+
+  it('omits Compression column in non-verbose mode', async () => {
+    const conn = mkConnection([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_attribute'),
+        rs: boringCols2(),
+      },
+      tableInfoMatch(),
+      { match: () => true, rs: mkResultSet([], []) },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'acct',
+      'r',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).not.toContain('Compression');
+    expect(text).not.toContain('Storage');
+  });
+});
+
+describe('describeOneTableDetails — Not-null constraints footer (PG18)', () => {
+  const pg18Conn = (
+    responses: { match: (sql: string) => boolean; rs: ResultSet }[],
+  ): Connection => ({ ...mkConnection(responses), serverVersion: 180000 });
+
+  it('renders Not-null constraints footer in verbose mode (PG18)', async () => {
+    const notnull = mkResultSet(
+      ['conname', 'attname', 'connoinherit', 'conislocal'],
+      [
+        ['acct_id_not_null', 'id', 'f', 't'],
+        ['acct_name_not_null', 'name', 'f', 't'],
+      ],
+    );
+    const conn = pg18Conn([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_attribute'),
+        rs: boringCols2(),
+      },
+      tableInfoMatch(),
+      { match: (s) => s.includes("co.contype = 'n'"), rs: notnull },
+      { match: () => true, rs: mkResultSet([], []) },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'acct',
+      'r',
+      true,
+      cap.out,
+      defaultPopt(),
+    );
+    const text = cap.text();
+    expect(text).toContain('Not-null constraints:');
+    expect(text).toContain('"acct_id_not_null" NOT NULL "id"');
+    expect(text).toContain('"acct_name_not_null" NOT NULL "name"');
+  });
+
+  it('omits Not-null constraints footer in non-verbose mode', async () => {
+    const conn = pg18Conn([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_attribute'),
+        rs: boringCols2(),
+      },
+      tableInfoMatch(),
+      { match: () => true, rs: mkResultSet([], []) },
+    ]);
+    const cap = captureStream();
+    await describeOneTableDetails(
+      conn,
+      1,
+      'public',
+      'acct',
+      'r',
+      false,
+      cap.out,
+      defaultPopt(),
+    );
+    expect(cap.text()).not.toContain('Not-null constraints:');
+  });
+});
+
+describe('describeOneViewDetails — view definition gating + verbose columns', () => {
+  const viewCols = (verbose: boolean): ResultSet =>
+    verbose
+      ? mkResultSet(
+          [
+            'attname',
+            'type',
+            'default',
+            'attnotnull',
+            'collation',
+            'identity',
+            'generated',
+            'attstorage',
+            'attstattarget',
+            'description',
+          ],
+          [['id', 'integer', null, 'f', null, '', '', 'plain', null, 'a col']],
+        )
+      : mkResultSet(
+          [
+            'attname',
+            'type',
+            'default',
+            'attnotnull',
+            'collation',
+            'identity',
+            'generated',
+          ],
+          [['id', 'integer', null, 'f', null, '', '']],
+        );
+
+  it('does NOT print View definition in plain (non-verbose) \\d <view>', async () => {
+    const conn = mkConnection([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_attribute'),
+        rs: viewCols(false),
+      },
+      tableInfoMatch(),
+      { match: () => true, rs: mkResultSet([], []) },
+    ]);
+    const cap = captureStream();
+    await describeOneViewDetails(
+      conn,
+      1,
+      'public',
+      'acct_v',
+      cap.out,
+      defaultPopt(),
+      false,
+    );
+    const text = cap.text();
+    expect(text).toContain('View "public.acct_v"');
+    expect(text).not.toContain('View definition:');
+    // No verbose-only Storage/Description columns either.
+    expect(text).not.toContain('Storage');
+  });
+
+  it('prints View definition AND Storage/Description columns in verbose \\d+ <view>', async () => {
+    const viewdef = mkResultSet(['def'], [['SELECT acct.id FROM acct;']]);
+    const conn = mkConnection([
+      {
+        match: (s) => s.includes('FROM pg_catalog.pg_attribute'),
+        rs: viewCols(true),
+      },
+      tableInfoMatch(),
+      { match: (s) => s.includes('pg_get_viewdef'), rs: viewdef },
+      { match: () => true, rs: mkResultSet([], []) },
+    ]);
+    const cap = captureStream();
+    await describeOneViewDetails(
+      conn,
+      1,
+      'public',
+      'acct_v',
+      cap.out,
+      defaultPopt(),
+      true,
+    );
+    const text = cap.text();
+    expect(text).toContain('View "public.acct_v"');
+    expect(text).toContain('Storage');
+    expect(text).toContain('Description');
+    expect(text).toContain('View definition:');
+    expect(text).toContain('SELECT acct.id FROM acct;');
+    // Views never carry the Compression column even in verbose mode.
+    expect(text).not.toContain('Compression');
   });
 });

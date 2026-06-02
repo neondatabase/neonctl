@@ -2282,6 +2282,40 @@ export const fetchTableInfo = (opts: {
 };
 
 /**
+ * Named NOT NULL constraints (`pg_constraint.contype = 'n'`), introduced
+ * in PG 18. Output columns mirror upstream `describeOneTableDetails`
+ * (describe.c ~3104):
+ *   conname, attname, connoinherit, conislocal.
+ *
+ * The constraint references a single column via `conkey[1]`; we join
+ * `pg_attribute` on that attnum and order by it so the footer lists the
+ * constraints in column order. On pre-PG-18 servers the catalog never
+ * carries `contype = 'n'` rows, so the query returns empty and the
+ * caller suppresses the footer — no version branch is needed in the SQL.
+ */
+export const fetchNotNullConstraints = (opts: {
+  oid: number;
+  serverVersion: ServerVersion;
+}): DescribeQuery => {
+  const { oid, serverVersion } = opts;
+  if (serverLess(serverVersion, PG_18)) {
+    return {
+      sql: 'SELECT NULL::pg_catalog.text, NULL::pg_catalog.text, false, false WHERE false;',
+      params: [],
+      description: 'Not-null constraints',
+    };
+  }
+  const sql =
+    'SELECT co.conname, at.attname, co.connoinherit, co.conislocal\n' +
+    'FROM pg_catalog.pg_constraint co\n' +
+    '  JOIN pg_catalog.pg_attribute at\n' +
+    '    ON (at.attrelid = co.conrelid AND at.attnum = co.conkey[1])\n' +
+    `WHERE co.contype = 'n' AND co.conrelid = '${oid}'\n` +
+    'ORDER BY at.attnum;';
+  return { sql, params: [], description: 'Not-null constraints' };
+};
+
+/**
  * RLS policies for a relation. Output columns mirror upstream:
  *   polname, polpermissive, roles (CSV or NULL), polqual, polwithcheck,
  *   polcmd (mapped to text).

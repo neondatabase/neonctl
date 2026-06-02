@@ -324,4 +324,28 @@ describe('describe/queries — pg18 snapshots (PG-18-only branches)', () => {
   it('listPublications / pg18 (Generated columns)', () => {
     expect(q.listPublications({ serverVersion: PG_18 })).toMatchSnapshot();
   });
+
+  it('fetchNotNullConstraints / pg18 queries contype = n', () => {
+    const { sql } = q.fetchNotNullConstraints({
+      oid: 42,
+      serverVersion: PG_18,
+    });
+    expect(sql).toContain("co.contype = 'n'");
+    expect(sql).toContain("co.conrelid = '42'");
+    expect(sql).toContain(
+      'co.conname, at.attname, co.connoinherit, co.conislocal',
+    );
+    expect(sql).toContain('ORDER BY at.attnum');
+  });
+
+  it('fetchNotNullConstraints / pre-pg18 returns an empty stub', () => {
+    const { sql } = q.fetchNotNullConstraints({
+      oid: 42,
+      serverVersion: PG_17,
+    });
+    // Pre-PG-18 servers have no named NOT NULL constraints; the builder
+    // emits a zero-row stub rather than querying pg_constraint.
+    expect(sql).toContain('WHERE false');
+    expect(sql).not.toContain("contype = 'n'");
+  });
 });

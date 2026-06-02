@@ -64,6 +64,8 @@ import {
   fetchTableSubscriptions,
 } from './queries.js';
 import { applyPattern, type NamePatternResult } from './processNamePattern.js';
+import { fetchNotNullConstraints } from './queries.js';
+import { serverAtLeast, PG_14 } from './versionGate.js';
 
 /**
  * Pick the printer for the active output format. Mirrors `pickPrinter`
@@ -317,6 +319,7 @@ export const describeOneTableDetails = async (
   out: NodeJS.WritableStream,
   popt: PrintQueryOpts,
   hideTableam = false,
+  hideCompression = false,
 ): Promise<void> => {
   // ----- One-shot relation info (RLS flags, replica identity,
   //       partition flag, tablespace, access method). Fetched before
@@ -346,12 +349,10 @@ export const describeOneTableDetails = async (
 
   // ----- Columns -----
   // Verbose mode adds Storage / Stats target / Description columns to
-  // mirror upstream's `\d+`. Compression (PG 14+) is intentionally
-  // *omitted*: upstream's PG-18 regress expected output drops the
-  // column header when no row carries a non-default compression value,
-  // so emitting it unconditionally would diverge from the conformance
-  // baseline. A follow-up can add a `HAS_COMPRESSION_FOOTER` style
-  // detection if real-world workflows need it.
+  // mirror upstream's `\d+`. These apply to every relkind that carries
+  // a column listing, including views and materialized views (upstream
+  // `describeOneTableDetails` gates the verbose column block on `verbose`
+  // alone, not on relkind).
   const verboseCols =
     verbose &&
     (relkind === 'r' ||
@@ -361,7 +362,18 @@ export const describeOneTableDetails = async (
       relkind === 'v' ||
       relkind === 'I' ||
       relkind === 'i');
-  const includeCompression = false;
+  // Compression column (upstream `\d+`): present when the server is
+  // PG 14+, the `HIDE_TOAST_COMPRESSION` var is off, and the relkind is
+  // a regular table / partitioned table / materialized view (describe.c
+  // ~1953: `sversion >= 140000 && !hide_compression && relkind in
+  // (RELATION, PARTITIONED_TABLE, MATVIEW)`). When suppressed the column
+  // is dropped entirely — matching the conformance regress which runs
+  // with HIDE_TOAST_COMPRESSION=on.
+  const includeCompression =
+    verboseCols &&
+    serverAtLeast(conn.serverVersion, PG_14) &&
+    !hideCompression &&
+    (relkind === 'r' || relkind === 'p' || relkind === 'm');
   const colSql =
     'SELECT a.attname,\n' +
     '  pg_catalog.format_type(a.atttypid, a.atttypmod),\n' +
@@ -532,6 +544,19 @@ export const describeOneTableDetails = async (
   if (relkind === 'r' || relkind === 'p' || relkind === 'f') {
     push(
       await captureSection((b) => renderCheckConstraintsSection(conn, oid, b)),
+    );
+  }
+
+  // ----- Not-null constraints (PG 18+ named NOT NULL constraints) -----
+  //       Upstream renders this footer in verbose mode between Check
+  //       constraints and Foreign-key constraints (describe.c ~3104).
+  //       The query returns empty on pre-PG-18 servers (no contype = 'n'
+  //       rows), so the section is naturally absent there.
+  if (verbose && (relkind === 'r' || relkind === 'p' || relkind === 'f')) {
+    push(
+      await captureSection((b) =>
+        renderNotNullConstraintsSection(conn, oid, b),
+      ),
     );
   }
 
@@ -1085,6 +1110,37 @@ const renderCheckConstraintsSection = async (
 };
 
 /**
+ * Render `Not-null constraints:\n    "name" NOT NULL "col"[ NO INHERIT]`
+ * list (PG 18+ named NOT NULL constraints, `pg_constraint.contype = 'n'`).
+ *
+ * Upstream `describeOneTableDetails` (describe.c ~3104) emits one line per
+ * constraint in `attnum` order. `connoinherit` adds a trailing
+ * ` NO INHERIT`; inherited-only constraints (`conislocal = false`) are
+ * tagged ` (inherited)` to match vanilla `\d+`. On pre-PG-18 servers the
+ * query returns no rows, so the whole section is suppressed.
+ */
+const renderNotNullConstraintsSection = async (
+  conn: Connection,
+  oid: number,
+  out: NodeJS.WritableStream,
+): Promise<void> => {
+  const q = fetchNotNullConstraints({ oid, serverVersion: conn.serverVersion });
+  const rs = await conn.query(q.sql, q.params);
+  if (rs.rows.length === 0) return;
+  out.write('Not-null constraints:\n');
+  for (const r of rs.rows) {
+    const conname = cellToString(r[0]);
+    const attname = cellToString(r[1]);
+    const noInherit = parseBool(r[2]);
+    const isLocal = parseBool(r[3]);
+    let line = `    "${conname}" NOT NULL "${attname}"`;
+    if (noInherit) line += ' NO INHERIT';
+    else if (!isLocal) line += ' (inherited)';
+    out.write(`${line}\n`);
+  }
+};
+
+/**
  * Render `Foreign-key constraints:\n    "name" FOREIGN KEY ...` list.
  */
 const renderForeignKeyConstraintsSection = async (
@@ -1383,10 +1439,29 @@ export const describeOneViewDetails = async (
   name: string,
   out: NodeJS.WritableStream,
   popt: PrintQueryOpts,
+  verbose = false,
+  hideCompression = false,
 ): Promise<void> => {
-  // Use the table renderer for columns first (views have columns).
-  await describeOneTableDetails(conn, oid, schema, name, 'v', false, out, popt);
-  // Then append the view definition.
+  // Use the table renderer for columns first (views have columns). In
+  // verbose mode this also adds the Storage / Stats target / Description
+  // columns, matching upstream `\d+ <view>`.
+  await describeOneTableDetails(
+    conn,
+    oid,
+    schema,
+    name,
+    'v',
+    verbose,
+    out,
+    popt,
+    false,
+    hideCompression,
+  );
+  // The "View definition:" footer is verbose-only: upstream
+  // `describeOneTableDetails` fetches/prints it under
+  // `if ((relkind == VIEW || relkind == MATVIEW) && verbose)`
+  // (describe.c ~3151). Plain `\d <view>` shows only the column table.
+  if (!verbose) return;
   const sql = `SELECT pg_catalog.pg_get_viewdef('${oid}'::pg_catalog.oid, true) AS def;`;
   const rs = await conn.query(sql, []);
   if (rs.rows.length > 0) {

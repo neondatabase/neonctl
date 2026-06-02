@@ -580,6 +580,8 @@ const dispatchDetail = async (
         rel.relname,
         process.stdout,
         popt,
+        verbose,
+        ctx.settings.hideCompression,
       );
       return;
     default:
@@ -593,6 +595,7 @@ const dispatchDetail = async (
         process.stdout,
         popt,
         ctx.settings.hideTableam,
+        ctx.settings.hideCompression,
       );
   }
 };
