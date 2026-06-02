@@ -158,6 +158,33 @@ The agent flow also handles project creation. If the agent sends `--project-name
 
 `link` is a thin wrapper around `set-context`: both write to the same `.neon` file via a shared `applyContext` helper, so anything `link` can write, `set-context` can write too (including the newly-supported `--branch-id` flag).
 
+### checkout
+
+`checkout <id|name>` pins a branch in the local context so subsequent commands target it — it's a focused helper over `set-context` for the common "switch the branch I'm working on" case. It resolves the branch (by name or id) against the project, then writes `branchId` into the `.neon` file. Unlike `set-context` (which performs a destructive write), `checkout` **merges**: it preserves the `projectId`/`orgId` already recorded in `.neon`, so `neonctl checkout my-branch` keeps the existing link intact.
+
+The project is resolved through the standard neonctl chain, each entry winning over the next:
+
+1. `--project-id <id>` flag
+2. `NEON_PROJECT_ID` environment variable (the flag's default)
+3. `projectId` from the closest `.neon` file (found by walking up from the current directory — see "Where `.neon` lives" below)
+4. If still unresolved and the API key maps to exactly one project, that project is auto-detected (same behaviour as `branches` and `connection-string`)
+
+If none of those resolve a project, `checkout` prints a telling error explaining the chain above. In an interactive terminal it then offers to run `neonctl link` in the current folder so you can pick (or create) a project on the spot; once linked, it continues and pins the requested branch. In non-interactive contexts (CI or no TTY) it exits with a non-zero code and the same guidance instead of prompting.
+
+The resolved branch id is then written to the same `.neon` file that `link` and `set-context` use:
+
+```bash
+$ neonctl checkout main --project-id polished-snowflake-12345678
+INFO: Checked out branch br-main-branch-87654321 on project polished-snowflake-12345678. Updated /path/to/cwd/.neon.
+
+$ cat .neon
+{
+  "orgId": "org-abc123",
+  "projectId": "polished-snowflake-12345678",
+  "branchId": "br-main-branch-87654321"
+}
+```
+
 **Where `.neon` lives**: `link` (and `set-context`) write `.neon` into the **current working directory** by default. If an existing `.neon` is found in any parent directory, that file is reused — so commands run from a sub-directory of a linked project still pick up the project's context. To pin the location explicitly, pass `--context-file <path>`.
 
 **`.gitignore` scaffolding**: whenever `.neon` is written, the CLI also makes sure a `.gitignore` sits alongside it listing `.neon`. If `.gitignore` doesn't exist it's created with a single `.neon` line; if it does exist, `.neon` is appended only when missing (no duplicates, your other entries are left alone).
@@ -177,6 +204,7 @@ The agent flow also handles project creation. If the agent sends `--project-name
 | [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                             | Get connection string          |
 | psql                                                                       |                                                                                             | Connect to a database via psql |
 | [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                             | Set context for session        |
+| checkout                                                                   |                                                                                             | Pin a branch in `.neon`        |
 | [link](https://neon.com/docs/reference/cli-link)                           |                                                                                             | Link a directory to a project  |
 | [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                             | Generate a completion script   |
 
