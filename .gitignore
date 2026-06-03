@@ -7,6 +7,10 @@ bundle/
 .vscode
 .idea
 .neon
+.env
+.env.local
+.env.*.local
 coverage
 tmp/
 .history
+.env

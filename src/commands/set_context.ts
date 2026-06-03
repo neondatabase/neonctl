@@ -1,10 +1,11 @@
 import yargs from 'yargs';
-import { Context, updateContextFile } from '../context.js';
+import { applyContext, Context } from '../context.js';
 import { CommonProps } from '../types.js';
 
 type SetContextProps = {
   projectId?: string;
   orgId?: string;
+  branchId?: string;
 };
 
 export const command = 'set-context';
@@ -23,6 +24,10 @@ export const builder = (argv: yargs.Argv) =>
         describe: 'Default organization ID for subsequent commands',
         type: 'string',
       },
+      'branch-id': {
+        describe: 'Default branch ID for subsequent commands',
+        type: 'string',
+      },
     })
     .example([
       [
@@ -39,6 +44,7 @@ export const handler = (props: CommonProps & SetContextProps) => {
   const context: Context = {
     projectId: props.projectId,
     orgId: props.orgId,
+    branchId: props.branchId,
   };
-  updateContextFile(props.contextFile, context);
+  applyContext(props.contextFile, context);
 };
