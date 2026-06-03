@@ -1,5 +1,43 @@
 import { spawn, type ChildProcess } from 'child_process';
-import { basename } from 'path';
+import { accessSync, constants as fsConstants } from 'node:fs';
+import { basename, delimiter, isAbsolute, join } from 'path';
+
+/**
+ * Can `command` be spawned with `shell:false`? A bare name is searched on
+ * `$PATH`; a path is checked directly. Used to avoid `spawn(missingBinary,
+ * { shell:false })`, which does NOT throw synchronously (our try/catch never
+ * fires) but emits an async ENOENT — leaving writes to the dead child's stdin
+ * to vanish into a blank terminal (review item #19).
+ */
+const pagerCommandResolvable = (command: string): boolean => {
+  const ok = (p: string): boolean => {
+    try {
+      accessSync(p, fsConstants.X_OK);
+      return true;
+    } catch {
+      // On Windows X_OK is not meaningful and a bare name omits `.exe`; fall
+      // back to a plain existence probe with common executable extensions.
+      if (process.platform === 'win32') {
+        for (const ext of ['', '.exe', '.cmd', '.bat']) {
+          try {
+            accessSync(p + ext, fsConstants.F_OK);
+            return true;
+          } catch {
+            /* keep trying */
+          }
+        }
+      }
+      return false;
+    }
+  };
+  if (command.includes('/') || command.includes('\\') || isAbsolute(command)) {
+    return ok(command);
+  }
+  return (process.env.PATH ?? '')
+    .split(delimiter)
+    .filter((d) => d.length > 0)
+    .some((dir) => ok(join(dir, command)));
+};
 
 /**
  * Pager spawning, modeled on psql's PageOutput / ClosePager / IsPagerNeeded
@@ -280,6 +318,13 @@ export const openPager = (opts: OpenPagerOpts): PagerHandle => {
   }
 
   const { command, shell } = parsePagerCmd(cmd);
+  // A missing pager binary with shell:false emits an async ENOENT that the
+  // try/catch below cannot catch, and the result would be silently-discarded
+  // output. Pre-check and fall back to stdout instead (review item #19).
+  // shell:true goes through `sh -c`, which always exists.
+  if (!shell && !pagerCommandResolvable(command)) {
+    return noOpHandle(stdout);
+  }
   const baseEnv = opts.env ?? process.env;
   const childEnv = buildPagerEnv(cmd, baseEnv);
 

@@ -511,11 +511,29 @@ const openWriter = (target: string): QueryFoutEntry => {
     fd,
     autoClose: false,
   });
+  // openSync catches OPEN failures synchronously, but a WRITE-time failure
+  // (ENOSPC / EDQUOT after a clean open, e.g. a multi-MB result to a
+  // quota-limited fs) emits an asynchronous 'error'. Without a listener Node
+  // re-raises it as an uncaught exception and kills the whole neonctl process
+  // (review item #17). Capture it; close() surfaces it to the caller.
+  let writeError: Error | null = null;
+  stream.on('error', (err: Error) => {
+    writeError = writeError ?? err;
+  });
   return {
     stream,
     isPipe: false,
     close: () =>
       new Promise<Record<string, never>>((resolve, reject) => {
+        if (writeError !== null) {
+          try {
+            closeSync(fd);
+          } catch {
+            // swallow — the write error takes precedence
+          }
+          reject(writeError);
+          return;
+        }
         // `stream.end(cb)` fires after the internal buffer drains to the
         // underlying fd. Once that returns, the fd still holds dirty data
         // in the kernel buffer cache; on macOS + Docker bind mounts the
@@ -2077,6 +2095,14 @@ const openWatchPager = (): WatchPagerHandle | null => {
     stream: child.stdin,
     close: () =>
       new Promise<void>((resolve) => {
+        // If the pager already exited (e.g. PSQL_WATCH_PAGER=false, or the
+        // user quit it) the 'close'/'error' events have ALREADY fired, so a
+        // freshly-registered `once()` listener would never run and close()
+        // would hang forever — taking `\watch` with it (review item #18).
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve();
+          return;
+        }
         let settled = false;
         const finish = (): void => {
           if (settled) return;

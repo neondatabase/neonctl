@@ -915,9 +915,15 @@ export const doCopy = async (
         return failWith('no input stream for COPY FROM');
       }
       const copyIn = await conn.startCopyIn(sql);
-      // STDIN + text format honours the `\.` EOF marker; everything else
-      // (file, PROGRAM, csv/binary STDIN) streams the bytes verbatim.
-      if (fromStdin && isCopyTextFormat(opts.afterToFrom)) {
+      // STDIN honours the `\.` EOF marker for BOTH text and CSV (psql treats
+      // `\.` on its own line as end-of-data in either) — only binary STDIN and
+      // file/PROGRAM sources stream bytes verbatim. Gating on text-only made a
+      // CSV `\copy … FROM STDIN` swallow the `\.` line as a data row and the
+      // following SQL into the copy stream (review item #16).
+      if (
+        fromStdin &&
+        !isCopyBinaryFormat(opts.beforeToFrom, opts.afterToFrom)
+      ) {
         await pumpStdinWithEofMarker(readable, copyIn);
       } else {
         await pumpReadable(conn, readable, copyIn);

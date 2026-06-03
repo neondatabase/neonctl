@@ -1045,7 +1045,7 @@ describe('doCopy STDIN with `\\.` marker', () => {
     });
   });
 
-  test('csv format passes `\\.` through as data', async () => {
+  test('csv format also honours `\\.` and stops before the marker (review #16)', async () => {
     const { conn, recorded } = makeMockConn({ copyTag: 'COPY 3' });
     const stdin = stringReadable('1,a\n\\.\n2,b\n');
     await withStdin(stdin, async () => {
@@ -1059,8 +1059,9 @@ describe('doCopy STDIN with `\\.` marker', () => {
       });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      // CSV mode → all bytes forwarded verbatim, marker is NOT honoured.
-      expect(recorded.copyInBytes.toString('utf8')).toBe('1,a\n\\.\n2,b\n');
+      // CSV STDIN honours `\.` just like text — only the pre-marker rows are
+      // copied; the `2,b` after it is left for the next command, not data.
+      expect(recorded.copyInBytes.toString('utf8')).toBe('1,a\n');
     });
   });
 
