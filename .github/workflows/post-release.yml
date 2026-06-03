@@ -1,11 +1,13 @@
 name: Post-release (tag + handoff)
 
 # Fires when a prepare-release PR merges. Steps:
-#   1. Parse the squash commit subject for `neonctl@v<ver>`
-#   2. Create the `v<ver>` tag on the merge commit
-#   3. Push the tag
-#   4. Comment on the merged PR with Stage 2 (npm publish) dispatch instructions
-#   5. Write the same instructions to the workflow run summary
+#   1. Parse the version from package.json (cross-checked against the subject)
+#   2. Create + push the `v<ver>` tag on the merge commit
+#   3. Comment on the merged PR with Stage 2 dispatch instructions
+#   4. Write the same instructions to the workflow run summary
+#
+# Artifacts (npm package + GitHub release with CLI binaries) are produced by
+# Stage 2, not here — we don't build/publish artifacts from the public repo.
 #
 # No cross-repo dispatch. Stage 2 is triggered by a human from the PR comment
 # or summary. See prepare-release.yml header for why.
@@ -159,11 +161,11 @@ jobs:
             echo "body<<HANDOFF_EOF"
             echo ":rocket: **Tagged \`${TAG}\` on the merge commit.**"
             echo ""
-            echo "### Stage 2 — publish to npm"
+            echo "### Stage 2 — publish (npm + GitHub release)"
             echo ""
             echo "> :warning: **Provisional:** the workflow filename and input names below are assumed to match the central repo's setup. If Stage 2 uses different names, the dispatch commands need updating in \`.github/workflows/post-release.yml\`."
             echo ""
-            echo "Trigger the publish workflow in \`databricks/secure-public-registry-releases-eng\`:"
+            echo "Stage 2 builds + scans the artifacts and publishes the npm package and the GitHub release (with the CLI binaries). Trigger it in \`databricks/secure-public-registry-releases-eng\`:"
             echo ""
             echo "\`\`\`bash"
             echo "# Dry run (recommended first):"
@@ -181,7 +183,7 @@ jobs:
             echo "  -f dry-run=false"
             echo "\`\`\`"
             echo ""
-            echo "After publish, verify on [npm](https://www.npmjs.com/package/neonctl)."
+            echo "After publish, verify on [npm](https://www.npmjs.com/package/neonctl) and the [GitHub release](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG})."
             echo "HANDOFF_EOF"
           } >> "$GITHUB_OUTPUT"
 

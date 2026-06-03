@@ -2,10 +2,10 @@
 
 `neonctl` ships to npm via a two-stage pipeline:
 
-- **Stage 1 (this repo)** — `prepare-release.yml` bumps the version and opens a release PR; on merge, `post-release.yml` tags the commit and comments the Stage 2 command.
-- **Stage 2 (`databricks/secure-public-registry-releases-eng`)** — checks out the tag, builds, scans the tarball, and publishes to npm via OIDC trusted publishing.
+- **Stage 1 (this repo)** — `prepare-release.yml` bumps the version and opens a release PR; on merge, `post-release.yml` tags the commit and hands off to Stage 2.
+- **Stage 2 (`databricks/secure-public-registry-releases-eng`)** — checks out the tag, builds + scans, publishes the npm package via OIDC trusted publishing, and publishes the GitHub release with the CLI binaries attached.
 
-Stage 2 lives in the central repo because only its runners have the npm publish trust relationship. (External contributors: that repo is internal — open an issue and a maintainer will cut the release.)
+All artifacts are built and published from the central repo — we don't build or publish artifacts from this public repo. (External contributors: that repo is internal — open an issue and a maintainer will cut the release.)
 
 ## Prerequisites
 
@@ -34,7 +34,7 @@ gh workflow run release-neondatabase-neonctl.yml \
   --ref main -f ref=vX.Y.Z -f dry-run=true   # set dry-run=false to publish for real
 ```
 
-**5. Verify** at <https://www.npmjs.com/package/neonctl>.
+**5. Verify** on [npm](https://www.npmjs.com/package/neonctl) and the [GitHub release](https://github.com/neondatabase/neonctl/releases).
 
 ## Recovery
 
