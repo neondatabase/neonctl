@@ -115,6 +115,55 @@ describe('functions', () => {
     );
   });
 
+  test('deploy --wait until completed', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--path',
+        fnDir,
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: { NEON_FUNCTIONS_POLL_INTERVAL_MS: '1' },
+        stderr:
+          'INFO: Deployment 1 created for my-func (status: pending) ' +
+          'INFO: Deployment 1 completed.',
+      },
+    );
+  });
+
+  test('deploy --wait exits 1 when the deployment fails', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'failing-func',
+        '--path',
+        fnDir,
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        env: { NEON_FUNCTIONS_POLL_INTERVAL_MS: '1' },
+        stderr:
+          'INFO: Deployment 1 created for failing-func (status: pending) ' +
+          'ERROR: Deployment 1 failed.',
+      },
+    );
+  });
+
   test('deploy rejects out-of-range --concurrency', async ({
     testCliCommand,
   }) => {

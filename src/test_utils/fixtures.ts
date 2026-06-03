@@ -18,6 +18,7 @@ type Fixtures = {
       stderr?: string;
       code?: number;
       outputTable?: boolean;
+      env?: Record<string, string>;
     },
   ) => Promise<void>;
 };
@@ -80,6 +81,7 @@ export const test = originalTest.extend<Fixtures>({
           stdio: 'pipe',
           env: {
             PATH: `mocks/bin:${process.env.PATH}`,
+            ...(options.env ?? {}),
           },
         },
       );

@@ -11,8 +11,10 @@ import { buildZip } from '../utils/zip.js';
 import { writer } from '../writer.js';
 import {
   createDeployment,
+  getDeployment,
   getFunction,
   listFunctions,
+  NeonFunctionDeployment,
 } from '../functions_api.js';
 
 const FUNCTION_FIELDS = [
@@ -36,6 +38,10 @@ const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
 const SLUG_HELP =
   'Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.';
 const MEMORY_CHOICES = [256, 512, 1024, 2048, 4096, 8192];
+
+// Overridable so tests can poll fast; defaults to 2s in real use.
+const POLL_INTERVAL_MS =
+  Number(process.env.NEON_FUNCTIONS_POLL_INTERVAL_MS) || 2000;
 
 export const command = 'functions';
 export const describe = 'Manage Neon Functions';
@@ -192,8 +198,51 @@ const deploy = async (props: DeployProps) => {
     return;
   }
 
-  // Polling is implemented in the next task. For now, print the deployment.
-  writer(props).end(deployment, { fields: DEPLOYMENT_FIELDS });
+  // Best-effort interrupt: a Ctrl-C lands at the next poll boundary, after
+  // which we print the status hint and exit cleanly. (No automated test; the
+  // path mirrors the --no-wait branch and is verified manually.)
+  let interrupted = false;
+  const onSignal = () => {
+    interrupted = true;
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+
+  let current: NeonFunctionDeployment = deployment;
+  try {
+    while (
+      current.status !== 'completed' &&
+      current.status !== 'failed' &&
+      !interrupted
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      if (interrupted) break;
+      current = await getDeployment(
+        props.apiClient,
+        props.projectId,
+        branchId,
+        props.slug,
+        deployment.id,
+      );
+    }
+  } finally {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  }
+
+  if (interrupted) {
+    log.info(statusHint(props.slug, props.projectId, branchId));
+    writer(props).end(current, { fields: DEPLOYMENT_FIELDS });
+    return;
+  }
+
+  // Print the final deployment to stdout, then signal failure by throwing.
+  // The global handler prints `ERROR: <msg>`, flushes analytics, and exits 1.
+  writer(props).end(current, { fields: DEPLOYMENT_FIELDS });
+  if (current.status === 'failed') {
+    throw new Error(`Deployment ${current.id} failed.`);
+  }
+  log.info(`Deployment ${current.id} completed.`);
 };
 
 const get = async (props: BranchScopeProps & { slug: string }) => {
