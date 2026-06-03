@@ -218,7 +218,7 @@ const peekKeywords = (sql: string, count = 3): string[] => {
 
 /** Mirror of `command_no_begin()` in psql/common.c. */
 const commandNoBegin = (sql: string): boolean => {
-  const [w0, w1, w2] = peekKeywords(sql, 3);
+  const [w0, w1, w2, w3] = peekKeywords(sql, 4);
   if (!w0) return false;
   switch (w0) {
     case 'ABORT':
@@ -239,12 +239,20 @@ const commandNoBegin = (sql: string): boolean => {
       // cannot be transactional.
       return w1 === undefined || w1 === '';
     case 'CREATE':
-      return w1 === 'DATABASE' || w1 === 'TABLESPACE';
+      if (w1 === 'DATABASE' || w1 === 'TABLESPACE') return true;
+      // CREATE INDEX CONCURRENTLY / CREATE UNIQUE INDEX CONCURRENTLY cannot
+      // run inside a transaction block — psql must send them bare even with
+      // AUTOCOMMIT=off (review item #24).
+      if (w1 === 'INDEX' && w2 === 'CONCURRENTLY') return true;
+      if (w1 === 'UNIQUE' && w2 === 'INDEX' && w3 === 'CONCURRENTLY') {
+        return true;
+      }
+      return false;
     case 'DROP':
-      // DROP DATABASE / TABLESPACE / INDEX CONCURRENTLY / TABLE … CONCURRENTLY.
+      // DROP DATABASE / TABLESPACE / INDEX CONCURRENTLY. (There is no
+      // `DROP TABLE … CONCURRENTLY` in PostgreSQL — removed that bogus case.)
       if (w1 === 'DATABASE' || w1 === 'TABLESPACE') return true;
       if (w1 === 'INDEX' && w2 === 'CONCURRENTLY') return true;
-      if (w1 === 'TABLE' && w2 === 'CONCURRENTLY') return true;
       return false;
     case 'REINDEX':
       // REINDEX DATABASE / SYSTEM / INDEX CONCURRENTLY / TABLE CONCURRENTLY.
