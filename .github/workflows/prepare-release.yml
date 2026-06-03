@@ -13,9 +13,8 @@ name: Prepare Release
 #
 # Stage 2 lives in databricks/secure-public-registry-releases-eng and is
 # triggered manually pointing at the tag created by post-release.yml. It
-# checks out the source, installs, builds, packs the npm tarball, builds the
-# native binaries, scans, and publishes via npm OIDC Trusted Publishing +
-# attaches binaries to a GitHub release.
+# checks out the source, installs, builds, packs the npm tarball, scans it,
+# and publishes to npm via OIDC Trusted Publishing.
 
 on:
   workflow_dispatch:
@@ -210,7 +209,7 @@ jobs:
             echo "- Bump kind: \`${BUMP}\`"
             echo ""
             echo "### Next steps"
-            echo "1. Click **Ready for review** to take this PR out of draft (required before merge; also attaches the required checks under your identity)."
+            echo "1. Click **Ready for review** to take this PR out of draft (GitHub won't merge a draft)."
             echo "2. An approver reviews + approves this PR."
             echo "3. Required checks run."
             echo "4. On green, the approver **manually clicks \"Squash and merge\"** in the UI. **Do NOT use auto-merge.**"
