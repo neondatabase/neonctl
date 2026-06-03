@@ -53,7 +53,7 @@ import {
   looksLikeConnectionString,
   mergeConnectOptions,
   parseConninfo,
-  parseConnectionUri,
+  parseConnectionUriPartial,
   serviceEntryToConnectOptions,
 } from '../index.js';
 import { lookupPgPass } from '../io/pgpass.js';
@@ -80,9 +80,16 @@ export type ParsedArgs = {
   promptPassword?: boolean;
   database?: string;
   /**
+   * The FULL connection partial parsed from a `-d <URI|conninfo>` value
+   * (host/port/user/db PLUS sslmode, sslrootcert/cert/key/crl,
+   * sslnegotiation, channelBinding, hostaddr, requireAuth, …). Spread into
+   * the argv layer so `-d` doesn't silently drop TLS/cert params (review #6);
+   * explicit `-h`/`-p`/`-U`/`-W` flags still override it.
+   */
+  dashD?: Partial<ConnectOptions>;
+  /**
    * Walsender (replication) mode, derived from a conninfo-style `-d` value
-   * (e.g. `dbname=postgres replication=database`). The URI path threads
-   * `?replication=…` straight through `parseConnectionUri` instead.
+   * (e.g. `dbname=postgres replication=database`).
    */
   replication?: 'true' | 'database';
 
@@ -359,10 +366,21 @@ const applyDashD = (args: ParsedArgs, value: string): void => {
     args.database = value;
     return;
   }
+  // Use the *partial* URI parser, NOT parseConnectionUri: the latter applies
+  // libpq's lowest-priority OS-user fallback (`user = $USER`, `database =
+  // user`) eagerly, and those non-undefined defaults would then land in the
+  // top-priority argv layer and override `PGUSER` / `PGDATABASE` (review #7).
+  // The partial parser returns only the keys the URI actually specified.
   const parsed: Partial<ConnectOptions> =
     value.startsWith('postgresql://') || value.startsWith('postgres://')
-      ? parseConnectionUri(value)
+      ? parseConnectionUriPartial(value)
       : parseConninfo(value);
+  // Keep the whole partial (incl. ssl*/channelBinding/hostaddr/requireAuth)
+  // so the connection layer carries it (review #6).
+  args.dashD = { ...(args.dashD ?? {}), ...parsed };
+  // Continue to mirror the core target fields onto the flag slots so the
+  // positional-arg / dbname-username precedence logic below sees them. Only
+  // when not already set by an explicit flag (flags win over -d).
   if (parsed.host !== undefined && args.host === undefined) {
     args.host = parsed.host;
   }
@@ -884,7 +902,10 @@ export const applyStartupArgs = (
   // The argv flag layer mirrors the highest-priority CLI inputs (`-h`/`-p`
   // / positional DBNAME / etc). Only populated entries end up in the layer
   // so they don't accidentally clobber URI/env values.
-  const argvLayer: Partial<ConnectOptions> = {};
+  // Seed with the full `-d` partial (carries ssl*/channelBinding/hostaddr/
+  // requireAuth — review #6), then overlay the explicit flag/positional
+  // values so `-h`/`-p`/`-U`/`-W`/positional still take precedence over `-d`.
+  const argvLayer: Partial<ConnectOptions> = { ...(args.dashD ?? {}) };
   if (args.host !== undefined) argvLayer.host = args.host;
   if (args.port !== undefined) argvLayer.port = args.port;
   if (username !== undefined) argvLayer.user = username;

@@ -345,6 +345,43 @@ describe('applyStartupArgs', () => {
     expect(connect.database).toBe('maindb');
   });
 
+  test('-d URI carries sslmode + cert params (review #6)', () => {
+    const parsed = ok(
+      parseStartupArgs([
+        '-d',
+        'postgresql://h/db?sslmode=verify-full&sslrootcert=/ca.pem',
+      ]),
+    );
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, baseConn);
+    expect(connect).toMatchObject({
+      host: 'h',
+      database: 'db',
+      ssl: 'verify-full',
+      sslrootcert: '/ca.pem',
+    });
+  });
+
+  test('-d host-only URI does not force user/database to $USER (review #7)', () => {
+    const parsed = ok(parseStartupArgs(['-d', 'postgresql://db.example.com/']));
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, baseConn);
+    expect(connect.host).toBe('db.example.com');
+    // user/database are NOT pinned to the OS-user default — they fall through
+    // to the lower-priority layer (base here; PGUSER/PGDATABASE in the CLI).
+    expect(connect.user).toBe('pg');
+    expect(connect.database).toBe('postgres');
+  });
+
+  test('explicit -U overrides a user in -d (review #7 precedence)', () => {
+    const parsed = ok(
+      parseStartupArgs(['-d', 'postgresql://alice@h/db', '-U', 'bob']),
+    );
+    const settings = buildBaseSettings();
+    const { connect } = applyStartupArgs(parsed, settings, baseConn);
+    expect(connect.user).toBe('bob');
+  });
+
   test('seeds the constant client VERSION vars', () => {
     const parsed = ok(parseStartupArgs([]));
     const settings = buildBaseSettings();
