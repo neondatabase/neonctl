@@ -635,7 +635,7 @@ const pumpStdinWithEofMarker = async (
   copyIn: CopyInStream,
 ): Promise<boolean> => {
   return new Promise<boolean>((resolve, reject) => {
-    let tail = '';
+    let tail: Buffer = Buffer.alloc(0);
     let markerHit = false;
     let settled = false;
     /** In-flight `copyIn.write` chain; we serialize writes for backpressure. */
@@ -657,29 +657,43 @@ const pumpStdinWithEofMarker = async (
       );
     };
 
-    const writeLine = (line: string): void => {
-      if (line.length === 0) return;
-      writeChain = writeChain.then(() =>
-        copyIn.write(Buffer.from(line, 'utf8')),
-      );
+    const writeBytes = (bytes: Buffer): void => {
+      if (bytes.length === 0) return;
+      // Copy the slice: `subarray` views share memory with `tail`, which is
+      // reassigned (and replaced by Buffer.concat) as more chunks arrive. A
+      // copy keeps the queued write independent of that churn.
+      const owned = Buffer.from(bytes);
+      writeChain = writeChain.then(() => copyIn.write(owned));
     };
 
     const handleChunk = (chunk: Buffer | string): void => {
       if (settled) return;
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      tail += text;
-      let nl = tail.indexOf('\n');
+      // Operate in the BYTE domain — never decode to a JS string. A
+      // Buffer -> string -> Buffer round-trip mangles a multibyte char split
+      // across chunk boundaries and any non-UTF-8 client_encoding byte
+      // (LATIN1/SJIS) into U+FFFD (review item #3). stdin yields Buffers;
+      // guard the rare string case without assuming a lossy re-encode.
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
+      tail = tail.length === 0 ? buf : Buffer.concat([tail, buf]);
+      let nl = tail.indexOf(0x0a); // '\n'
       while (nl !== -1) {
-        const line = tail.slice(0, nl + 1);
-        // Match exactly `\.\n` or `\.\r\n` — strip the trailing newline /
-        // CRLF to compare. Upstream rejects trailing whitespace.
-        const stripped = line.endsWith('\r\n')
-          ? line.slice(0, -2)
-          : line.slice(0, -1);
-        if (stripped === '\\.') {
+        const line = tail.subarray(0, nl + 1); // includes the trailing \n
+        // Match exactly `\.\n` or `\.\r\n` (0x5c 0x2e [0x0d] 0x0a). Upstream
+        // rejects trailing whitespace, so the line length must be exact.
+        const isMarker =
+          (line.length === 3 &&
+            line[0] === 0x5c &&
+            line[1] === 0x2e &&
+            line[2] === 0x0a) ||
+          (line.length === 4 &&
+            line[0] === 0x5c &&
+            line[1] === 0x2e &&
+            line[2] === 0x0d &&
+            line[3] === 0x0a);
+        if (isMarker) {
           markerHit = true;
-          const leftover = tail.slice(nl + 1);
-          tail = '';
+          const leftover = Buffer.from(tail.subarray(nl + 1)); // copy out
+          tail = Buffer.alloc(0);
           // Pause + remove listeners BEFORE unshifting so the post-marker
           // bytes aren't re-emitted into our own data handler.
           readable.pause();
@@ -687,7 +701,7 @@ const pumpStdinWithEofMarker = async (
           readable.removeListener('end', onEnd);
           readable.removeListener('error', onError);
           if (leftover.length > 0) {
-            readable.unshift(Buffer.from(leftover, 'utf8'));
+            readable.unshift(leftover);
           }
           settled = true;
           writeChain
@@ -702,9 +716,9 @@ const pumpStdinWithEofMarker = async (
             );
           return;
         }
-        writeLine(line);
-        tail = tail.slice(nl + 1);
-        nl = tail.indexOf('\n');
+        writeBytes(line);
+        tail = tail.subarray(nl + 1);
+        nl = tail.indexOf(0x0a);
       }
     };
 
@@ -726,10 +740,10 @@ const pumpStdinWithEofMarker = async (
     const onEnd = (): void => {
       if (settled) return;
       const trailing = tail;
-      tail = '';
+      tail = Buffer.alloc(0);
       settle(async () => {
         if (trailing.length > 0) {
-          writeLine(trailing);
+          writeBytes(trailing);
         }
         await writeChain;
         await copyIn.end();

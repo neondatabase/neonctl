@@ -927,6 +927,28 @@ describe('pumpStdinWithEofMarker', () => {
     expect(capture.bytes.toString('utf8')).toBe('foo\r\n');
   });
 
+  test('preserves a multibyte char split across chunk boundaries (review #3)', async () => {
+    // 😀 (U+1F600) = F0 9F 98 80, split after byte 2, then a newline. The old
+    // Buffer->string->Buffer round-trip turned the split halves into U+FFFD.
+    const readable = Readable.from([
+      Buffer.from([0xf0, 0x9f]),
+      Buffer.from([0x98, 0x80, 0x0a]),
+    ]);
+    const { stream, capture } = captureCopyIn();
+    const hit = await pumpStdinWithEofMarker(readable, stream);
+    expect(hit).toBe(false);
+    expect([...capture.bytes]).toEqual([0xf0, 0x9f, 0x98, 0x80, 0x0a]);
+    expect(capture.bytes.toString('utf8')).toBe('😀\n');
+  });
+
+  test('forwards non-UTF-8 (LATIN1) bytes verbatim (review #3)', async () => {
+    // 0xE9 is LATIN1 'é' — invalid UTF-8 on its own; must NOT become U+FFFD.
+    const readable = Readable.from([Buffer.from([0x31, 0xe9, 0x0a])]); // 1<é>\n
+    const { stream, capture } = captureCopyIn();
+    await pumpStdinWithEofMarker(readable, stream);
+    expect([...capture.bytes]).toEqual([0x31, 0xe9, 0x0a]);
+  });
+
   test('post-marker bytes are unshifted back onto the readable', async () => {
     const readable = stringReadable('row1\n\\.\nSELECT 42;\n');
     const { stream, capture } = captureCopyIn();
