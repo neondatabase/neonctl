@@ -197,6 +197,14 @@ const corpus: CorpusCase[] = [
     input: 'SELECT $1; SELECT 2;',
     expectedSplits: ['SELECT $1;', ' SELECT 2;'],
   },
+  {
+    // review item #15: `|` (and ` { } ~) are NOT identifier chars, so `$|$`
+    // must NOT open a dollar quote (which would swallow the `;` and hang the
+    // REPL at a continuation prompt). It's `$ | $` operators + `;`.
+    name: 'lone $ then non-ident punctuation is not a dollar-quote tag',
+    input: 'SELECT $|$;',
+    expectedSplits: ['SELECT $|$;'],
+  },
 
   // --- BEGIN ATOMIC / BEGIN .. END inside CREATE FUNCTION / PROCEDURE ---
   // Upstream `psqlscan.l` keeps a `begin_depth` counter and gates it on a

@@ -136,8 +136,8 @@ export type ScanResult =
 // non-ASCII identifier characters in 8-bit encodings.
 // ---------------------------------------------------------------------------
 
-const IDENT_START_RE = /[A-Za-z_-￿]/;
-const IDENT_CONT_RE = /[A-Za-z0-9_-￿]/;
+const IDENT_START_RE = /[A-Za-z_\u0080-\uffff]/;
+const IDENT_CONT_RE = /[A-Za-z0-9_\u0080-\uffff]/;
 
 const isIdentStart = (c: string | undefined): boolean =>
   c !== undefined && IDENT_START_RE.test(c);
