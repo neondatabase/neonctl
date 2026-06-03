@@ -1,0 +1,6 @@
+{
+  "domains": [
+    { "domain": "https://example.com" },
+    { "domain": "https://app.example.com" }
+  ]
+}
