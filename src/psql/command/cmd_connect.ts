@@ -149,6 +149,28 @@ const readConnectionPassword = (conn: Connection | null): string | null => {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 };
 
+type ConnWithOpts = { opts?: ConnectOptions };
+
+/**
+ * Read the live connection's EFFECTIVE {@link ConnectOptions} (the full set
+ * it was dialled with — sslmode, sslrootcert/cert/key/crl, sslnegotiation,
+ * channelBinding, requireAuth, hostaddr, …). The {@link Connection} interface
+ * deliberately hides these, but {@link PgConnection} keeps them on a (TS-)
+ * private `opts` field; we read it structurally, the same pattern as
+ * {@link readConnectionPassword}. Used to SEED a `\c` reconnect so it doesn't
+ * silently drop TLS/cert options or downgrade sslmode (review item #5).
+ * Returns `null` for a mock/absent connection.
+ */
+const readConnectionOptions = (
+  conn: Connection | null,
+): ConnectOptions | null => {
+  if (!conn) return null;
+  const raw = (conn as unknown as ConnWithOpts).opts;
+  return raw !== undefined && raw !== null && typeof raw === 'object'
+    ? raw
+    : null;
+};
+
 // ---------------------------------------------------------------------------
 // \c / \connect
 // ---------------------------------------------------------------------------
@@ -285,8 +307,12 @@ const parseConninfo = (
     const value = pair.slice(eq + 1);
     switch (key) {
       case 'host':
-      case 'hostaddr':
         out.host = value;
+        break;
+      case 'hostaddr':
+        // Distinct from `host`: hostaddr is the literal IP to dial, while the
+        // cert/SNI is still verified against `host` (review item #10).
+        out.hostaddr = value;
         break;
       case 'port': {
         const port = parseInt(value, 10);
@@ -387,18 +413,49 @@ const parseConninfo = (
 export const mergeConnectOpts = (
   settings: PsqlSettings,
   override: Partial<ConnectOptions>,
-  previousPassword: string | null = null,
+  prior: Partial<ConnectOptions> | null = null,
 ): ConnectOptions | { error: string } => {
   const vars = settings.vars;
-  const host = override.host ?? vars.get('HOST') ?? 'localhost';
+
+  // Overlay only the keys the user actually supplied (drop `undefined`s so a
+  // spread doesn't clobber a seeded value with `undefined`).
+  const ov: Partial<ConnectOptions> = {};
+  for (const [k, v] of Object.entries(override)) {
+    if (v !== undefined) (ov as Record<string, unknown>)[k] = v;
+  }
+
+  // libpq's do_connect clones the prior connection's full conninfo and
+  // overrides only user-specified keys — so a reconnect keeps sslmode,
+  // sslrootcert/cert/key/crl, sslnegotiation, channelBinding, requireAuth,
+  // hostaddr, etc. (review item #5). Seed from the live connection's
+  // effective options; fall back to {} when there is none.
+  const seed: Partial<ConnectOptions> = prior ? { ...prior } : {};
+
+  // libpq clears keep_password when user, host, OR port changes, so a stored
+  // credential isn't transmitted to a different principal/server (review
+  // item #4). Compare the override against the prior live target.
+  const hostChanged = ov.host !== undefined && ov.host !== prior?.host;
+  const targetChanged =
+    hostChanged ||
+    (ov.port !== undefined && ov.port !== prior?.port) ||
+    (ov.user !== undefined && ov.user !== prior?.user);
+  if (targetChanged) delete seed.password;
+  // A new host invalidates the prior hostaddr (it was the old host's IP).
+  if (hostChanged) delete seed.hostaddr;
+
+  const merged: Partial<ConnectOptions> = { ...seed, ...ov };
+
+  // Fill the required fields from vars / env / defaults when neither the
+  // override nor the prior connection supplied them.
+  const host = merged.host ?? vars.get('HOST') ?? 'localhost';
   const portStr = vars.get('PORT');
   const port =
-    override.port ?? (portStr !== undefined ? parseInt(portStr, 10) : 5432);
+    merged.port ?? (portStr !== undefined ? parseInt(portStr, 10) : 5432);
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     return { error: `invalid port number` };
   }
   const user =
-    override.user ??
+    merged.user ??
     vars.get('USER') ??
     process.env.USER ??
     process.env.USERNAME ??
@@ -406,29 +463,20 @@ export const mergeConnectOpts = (
   if (user.length === 0) {
     return { error: 'no user name specified' };
   }
-  const database = override.database ?? vars.get('DBNAME') ?? user;
-  // Password precedence: explicit override (URI / conninfo) > the previous
-  // connection's retained credential > psql `PASSWORD` var > undefined. This
-  // matches libpq's behaviour of holding the password on the `PGconn` so
-  // `\c <newdb>` doesn't have to re-prompt the user.
-  const password =
-    override.password ?? previousPassword ?? vars.get('PASSWORD');
-  const ssl =
-    override.ssl ??
-    (vars.get('SSLMODE') as ConnectOptions['ssl'] | undefined) ??
-    'prefer';
+  const database = merged.database ?? vars.get('DBNAME') ?? user;
+  const password = merged.password ?? vars.get('PASSWORD');
+  const ssl = merged.ssl ?? 'prefer';
+
   return {
+    ...merged,
     host,
     port,
     user,
     password: password ?? undefined,
     database,
     ssl,
-    applicationName: override.applicationName ?? vars.get('APPLICATION_NAME'),
-    channelBinding: override.channelBinding,
-    connectTimeoutMs: override.connectTimeoutMs,
-    clientEncoding: override.clientEncoding ?? settings.popt.topt.encoding,
-    options: override.options,
+    applicationName: merged.applicationName ?? vars.get('APPLICATION_NAME'),
+    clientEncoding: merged.clientEncoding ?? settings.popt.topt.encoding,
   };
 };
 
@@ -452,12 +500,17 @@ export const cmdConnect: BackslashCmdSpec = {
       return { status: 'error' };
     }
 
-    // Pull the live connection's password through a structural cast — the
-    // {@link Connection} interface is frozen (WP-00) and deliberately doesn't
-    // expose credentials, but {@link PgConnection} keeps the password on a
-    // public read-only field for exactly this case.
-    const previousPassword = readConnectionPassword(ctx.settings.db);
-    const newOpts = mergeConnectOpts(ctx.settings, parsed, previousPassword);
+    // Seed the reconnect from the live connection's EFFECTIVE options so TLS /
+    // cert / auth settings survive (review #5) and the prior password is only
+    // reused when the principal/server is unchanged (review #4). Both are read
+    // structurally from PgConnection (the frozen Connection interface hides
+    // them). readConnectionPassword stays as the fallback for mocks/drivers
+    // that expose `password` but not `opts`.
+    const priorOpts = readConnectionOptions(ctx.settings.db);
+    const priorPw = readConnectionPassword(ctx.settings.db);
+    const prior: Partial<ConnectOptions> | null =
+      priorOpts ?? (priorPw !== null ? { password: priorPw } : null);
+    const newOpts = mergeConnectOpts(ctx.settings, parsed, prior);
     if ('error' in newOpts) {
       writeErr(`\\${ctx.cmdName}: ${newOpts.error}\n`);
       return { status: 'error' };

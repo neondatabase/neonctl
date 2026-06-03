@@ -288,6 +288,11 @@ describe('parseConnectArgs', () => {
     expect(r).toEqual({ host: 'h', ssl: 'require' });
   });
 
+  test('conninfo: hostaddr is kept distinct from host (review #10)', () => {
+    const r = parseConnectArgs('host=db.example.com hostaddr=1.2.3.4');
+    expect(r).toEqual({ host: 'db.example.com', hostaddr: '1.2.3.4' });
+  });
+
   test('conninfo: rejects invalid sslmode', () => {
     const r = parseConnectArgs('sslmode=garbage');
     expect(r).toEqual({ error: expect.stringMatching(/invalid sslmode/) });
@@ -348,6 +353,63 @@ describe('mergeConnectOpts', () => {
       if (prevUsername !== undefined) process.env.USERNAME = prevUsername;
     }
   });
+
+  test('carries TLS/cert options from the prior connection (review #5)', () => {
+    const s = defaultSettings(createVarStore());
+    const prior: Partial<ConnectOptions> = {
+      host: 'h1',
+      port: 5432,
+      user: 'alice',
+      database: 'orig',
+      ssl: 'verify-full',
+      sslrootcert: '/ca.pem',
+      sslcert: '/client.crt',
+      sslkey: '/client.key',
+      sslnegotiation: 'direct',
+      channelBinding: 'require',
+    };
+    const opts = mergeConnectOpts(s, { database: 'otherdb' }, prior);
+    expect(opts).toMatchObject({
+      database: 'otherdb',
+      ssl: 'verify-full',
+      sslrootcert: '/ca.pem',
+      sslcert: '/client.crt',
+      sslkey: '/client.key',
+      sslnegotiation: 'direct',
+      channelBinding: 'require',
+    });
+  });
+
+  test('keeps the prior password when the target is unchanged (review #4)', () => {
+    const s = defaultSettings(createVarStore());
+    const prior: Partial<ConnectOptions> = {
+      host: 'h1',
+      port: 5432,
+      user: 'alice',
+      password: 's3cret',
+    };
+    const opts = mergeConnectOpts(s, { database: 'otherdb' }, prior);
+    expect(opts).toMatchObject({ user: 'alice', password: 's3cret' });
+  });
+
+  test.each([
+    ['host', { host: 'attacker.example.com' }],
+    ['user', { user: 'bob' }],
+    ['port', { port: 5544 }],
+  ])(
+    'drops the prior password when %s changes (review #4)',
+    (_label, override) => {
+      const s = defaultSettings(createVarStore());
+      const prior: Partial<ConnectOptions> = {
+        host: 'h1',
+        port: 5432,
+        user: 'alice',
+        password: 's3cret',
+      };
+      const opts = mergeConnectOpts(s, override, prior);
+      expect('error' in opts ? undefined : opts.password).toBeUndefined();
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
