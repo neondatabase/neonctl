@@ -94,7 +94,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "pnpm typecheck && eslint src && prettier --check .",
     "lint:fix": "pnpm typecheck && eslint src --fix && prettier --w .",
-    "build": "pnpm generateParams && pnpm clean && tsc && cp src/*.html package*.json README.md ./dist",
+    "build": "pnpm generateParams && pnpm clean && tsc -p tsconfig.build.json && cp src/*.html package*.json README.md ./dist",
     "clean": "rm -rf dist",
     "generateParams": "tsx generateOptionsFromSpec.ts",
     "start": "node dist/index.js",

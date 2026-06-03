@@ -1,0 +1,9 @@
+{
+  // Build-only config: same compiler options + include as tsconfig.json, but
+  // excludes test sources from EMIT so `*.test.js` never lands in dist/ (and
+  // thus never ships in the published package). Typecheck (`tsc --noEmit` on
+  // tsconfig.json) still covers test files. `exclude` is not inherited via
+  // `extends`, so it is declared here.
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
+}
