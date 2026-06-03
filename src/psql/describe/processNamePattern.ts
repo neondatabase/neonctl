@@ -123,7 +123,13 @@ const patternToSQLRegex = (
   wantSchema: boolean,
   wantDb: boolean,
 ): PatternParts => {
-  const maxComponents = wantDb ? 3 : wantSchema ? 2 : 1;
+  // Whenever a schema column exists, accept up to 3 dotted components
+  // (`db.schema.name`) — NOT 2. Capping at 2 made `\d mydb.public.users`
+  // shift: it searched schema=`mydb`, relation=`public.users` and returned
+  // nothing. The 3rd (db) slot is the cross-db literal even without a
+  // dbnamevar column; the dispatcher validates it against the current DB
+  // (review item #23).
+  const maxComponents = wantSchema || wantDb ? 3 : 1;
   const buffers: string[] = ['^('];
   let leftLiteral = '';
   // Upstream's `want_literal_dbname`: track the first component's

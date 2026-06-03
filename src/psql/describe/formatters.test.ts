@@ -1388,7 +1388,7 @@ describe('lookupOneRelation', () => {
         rs: mkResultSet(['oid', 'nspname', 'relname', 'relkind'], []),
       },
     ]);
-    const r = await lookupOneRelation(conn, null, 'nope');
+    const r = await lookupOneRelation(conn, 'nope');
     expect(r).toBeNull();
   });
 
@@ -1402,7 +1402,7 @@ describe('lookupOneRelation', () => {
         ),
       },
     ]);
-    const r = await lookupOneRelation(conn, null, 'users');
+    const r = await lookupOneRelation(conn, 'users');
     expect(r).toEqual({
       oid: 42,
       nspname: 'public',
@@ -1425,8 +1425,8 @@ describe('lookupOneRelation', () => {
         ),
       },
     ]);
-    await lookupOneRelation(wrappedConn, 'pg_catalog', 'pg_class');
-    expect(queryCalls[0]).toContain('n.nspname OPERATOR(pg_catalog.~) $2');
+    await lookupOneRelation(wrappedConn, 'pg_catalog.pg_class');
+    expect(queryCalls[0]).toMatch(/n\.nspname OPERATOR\(pg_catalog\.~\)/);
     expect(queryCalls[0]).not.toContain('pg_table_is_visible');
   });
 
@@ -1441,7 +1441,7 @@ describe('lookupOneRelation', () => {
         rs: mkResultSet(['oid', 'nspname', 'relname', 'relkind'], []),
       },
     ]);
-    await lookupOneRelation(wrappedConn, null, 'foo');
+    await lookupOneRelation(wrappedConn, 'foo');
     expect(queryCalls[0]).toContain('pg_table_is_visible');
   });
 });

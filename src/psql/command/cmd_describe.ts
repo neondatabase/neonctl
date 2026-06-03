@@ -510,16 +510,10 @@ const makeDescribeCmd = (baseName: string): BackslashCmdSpec => ({
     // If pattern looks like a single concrete name (no wildcards),
     // try a per-relation detail; otherwise list.
     if (pattern && !/[*?]/.test(pattern)) {
-      // Split schema.name if dotted.
-      let schemaPattern: string | null = null;
-      let namePattern = pattern;
-      const dot = pattern.indexOf('.');
-      if (dot >= 0) {
-        schemaPattern = pattern.slice(0, dot);
-        namePattern = pattern.slice(dot + 1);
-      }
+      // Pass the raw pattern straight through — lookupOneRelation folds /
+      // dequotes / splits schema.name via processSQLNamePattern (review #22).
       try {
-        const rel = await lookupOneRelation(c, schemaPattern, namePattern);
+        const rel = await lookupOneRelation(c, pattern);
         if (rel) {
           await dispatchDetail(ctx, c, rel, verbose);
           return { status: 'ok' };

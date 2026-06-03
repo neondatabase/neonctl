@@ -234,16 +234,20 @@ describe('processSQLNamePattern', () => {
     expect(r.params).toEqual(['^(a.b.c)$']);
   });
 
-  it('three-part regex placement when only schemavar set (no db)', () => {
-    // `db.schema.name` with schemavar but not dbnamevar: extra `.`
-    // collapses, name regex contains `.` for the extra.
+  it('three-part `db.schema.name` splits into 3 components even without a db column (review #23)', () => {
+    // With a schema column, up to 3 dotted parts are honoured: name=`users`,
+    // schema=`public`, and the leading `mydb` is the cross-db LITERAL (no
+    // $param, since no dbnamevar) — surfaced via dbLiteral for the dispatcher
+    // to validate against the current DB. The old code capped at 2 and
+    // mis-mapped this as schema=`mydb`, name=`public.users`.
     const r = processSQLNamePattern({
       pattern: 'mydb.public.users',
       namevar: 'c.relname',
       schemavar: 'n.nspname',
     });
-    // 2 buffers — first gets `mydb`, second gets `public.users` (with `.` literal-as-regex).
-    expect(r.params).toEqual(['^(public.users)$', '^(mydb)$']);
+    expect(r.params).toEqual(['^(users)$', '^(public)$']);
+    expect(r.dotCount).toBe(2);
+    expect(r.dbLiteral).toBe('mydb');
   });
 
   it('empty pattern (single empty string) yields ^()$ which is NOT the all-match optimization', () => {

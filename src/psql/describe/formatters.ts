@@ -40,6 +40,8 @@
 import type { Connection, ResultSet } from '../types/connection.js';
 import type { PrintQueryOpts, Printer } from '../types/printer.js';
 
+import { processSQLNamePattern } from './processNamePattern.js';
+
 import { alignedPrinter } from '../print/aligned.js';
 import { asciidocPrinter } from '../print/asciidoc.js';
 import { csvPrinter } from '../print/csv.js';
@@ -267,26 +269,39 @@ export const lookupRelations = async (
  */
 export const lookupOneRelation = async (
   conn: Connection,
-  schemaPattern: string | null,
-  namePattern: string,
+  pattern: string,
 ): Promise<RelationRow | null> => {
-  // Build a name-only or schema-qualified lookup against pg_class.
-  // We do this with a single direct query (avoiding the placeholder
-  // dance because describeTableDetails doesn't actually return relkind).
+  // Route the bare-name lookup through processSQLNamePattern so the name is
+  // case-folded (unquoted → lower) and dequoted exactly like the list views:
+  // `\d Foo` matches catalog relation `foo`, `\d "MyTable"` matches the
+  // mixed-case `MyTable`, and `schema.name` splits correctly. The old raw
+  // `^(name)$` interpolation matched neither (review item #22).
+  const np = processSQLNamePattern({
+    pattern,
+    namevar: 'c.relname',
+    schemavar: 'n.nspname',
+    visibilityrule: 'pg_catalog.pg_table_is_visible(c.oid)',
+  });
+  // A db-qualified pattern (3+ dotted components → dotCount > 1) is a
+  // cross-database reference that this single-DB detail short-circuit cannot
+  // honour. Return null so the caller falls through to the LIST path, which
+  // emits upstream's "cross-database references are not implemented" /
+  // "improper qualified name (too many dotted names)" diagnostic. Without
+  // this, the detail lookup ignored the db literal and wrongly matched
+  // (e.g. `\d nonesuch.pg_catalog.pg_class` rendered the table).
+  if (np.dotCount > 1) return null;
+  const conds = [
+    ...np.schemaConditions,
+    ...np.nameConditions,
+    ...np.visibilityConditions,
+  ];
   let sql =
     'SELECT c.oid, n.nspname, c.relname, c.relkind\n' +
     'FROM pg_catalog.pg_class c\n' +
-    '     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n' +
-    'WHERE c.relname OPERATOR(pg_catalog.~) $1\n';
-  const params: unknown[] = [`^(${namePattern})$`];
-  if (schemaPattern !== null) {
-    sql += '  AND n.nspname OPERATOR(pg_catalog.~) $2\n';
-    params.push(`^(${schemaPattern})$`);
-  } else {
-    sql += '  AND pg_catalog.pg_table_is_visible(c.oid)\n';
-  }
+    '     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n';
+  if (conds.length > 0) sql += `WHERE ${conds.join('\n  AND ')}\n`;
   sql += 'ORDER BY 2, 3 LIMIT 1;';
-  const rs = await conn.query(sql, params);
+  const rs = await conn.query(sql, np.params);
   if (rs.rows.length === 0) return null;
   const row = rs.rows[0];
   return {
