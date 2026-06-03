@@ -15,6 +15,7 @@ import * as checkout from './checkout.js';
 import * as link from './link.js';
 import * as init from './init.js';
 import * as dataApi from './data_api.js';
+import * as neonAuth from './neon_auth.js';
 
 export default [
   auth,
@@ -23,6 +24,7 @@ export default [
   projects,
   ipAllow,
   vpcEndpoints,
+  neonAuth,
   branches,
   databases,
   roles,
