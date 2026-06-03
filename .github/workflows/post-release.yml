@@ -41,8 +41,7 @@ jobs:
         with:
           egress-policy: audit
 
-      # GITHUB_TOKEN can't push refs in this repo; use the GitHub App token
-      # (same app the release workflow uses) so the tag push below succeeds.
+      # Push the tag under the release App identity (same token as Stage 1).
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
@@ -77,7 +76,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-          # Persist the App token so `git push` of the tag below is authorized.
+          # Persist the App token so the tag push uses the release identity.
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Parse release metadata
