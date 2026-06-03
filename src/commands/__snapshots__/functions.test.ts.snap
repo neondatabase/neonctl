@@ -11,6 +11,8 @@ created_at: 2026-06-03T00:00:00Z
 "
 `;
 
+exports[`functions > deploy rejects out-of-range --concurrency 1`] = `""`;
+
 exports[`functions > get (table) 1`] = `
 "function
 ┌─────────┬─────────┬─────────────────────────────────────┬──────────────────────┐

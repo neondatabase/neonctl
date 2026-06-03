@@ -114,4 +114,31 @@ describe('functions', () => {
       { mockDir: 'single_org', outputTable: true },
     );
   });
+
+  test('deploy rejects out-of-range --concurrency', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--path',
+        fnDir,
+        '--no-wait',
+        '--concurrency',
+        '5000',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Invalid --concurrency 5000. It must be an integer between 1 and 1000.',
+      },
+    );
+  });
 });

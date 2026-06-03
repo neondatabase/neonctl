@@ -153,6 +153,15 @@ const deploy = async (props: DeployProps) => {
   if (!SLUG_PATTERN.test(props.slug)) {
     throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
   }
+  if (
+    !Number.isInteger(props.concurrency) ||
+    props.concurrency < 1 ||
+    props.concurrency > 1000
+  ) {
+    throw new Error(
+      `Invalid --concurrency ${props.concurrency}. It must be an integer between 1 and 1000.`,
+    );
+  }
   const environment = parseEnv(props.env);
   const indexPath = join(props.path, 'index.ts');
   if (!existsSync(indexPath)) {
