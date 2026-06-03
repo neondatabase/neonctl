@@ -108,7 +108,6 @@ import { troffMsPrinter } from '../print/troff.js';
 import { unalignedPrinter } from '../print/unaligned.js';
 
 import { writeErr, writeOut } from './shared.js';
-import { enqueue as enqueueInput } from './inputQueue.js';
 import { formatErrorReport, psqlErrorPrefix } from './cmd_meta.js';
 import { applyPset } from './cmd_format.js';
 import {
@@ -835,11 +834,12 @@ const runInclude = async (
     return errResult(ctx, msg);
   }
 
-  // Stash for a future mainloop integration (the queue is the "real" hook;
-  // execSimple below is the WP-15 stop-gap that lets tests demonstrate
-  // end-to-end execution).
-  enqueueInput(contents);
-
+  // Execute the included file's SQL directly here. This is the single
+  // execution path for BOTH the interactive REPL and the non-interactive
+  // -c/-f/stdin path: the latter (`executeInputString`) does not drain the
+  // `\i` input queue, so an `enqueueInput()` here would (a) never run under
+  // -f/-c and (b) double-run interactively (the mainloop drains the queue
+  // AND we run execSimple). See review item #2.
   if (!ctx.settings.db) {
     return errResult(ctx, 'no connection to the server');
   }

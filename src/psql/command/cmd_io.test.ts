@@ -1545,8 +1545,10 @@ describe('\\i / \\include', () => {
     const r = await run(cmdInclude, ctx);
     expect(r.status).toBe('ok');
     expect(conn.history).toEqual(['select 1;']);
-    // Also stashed on the input queue for future mainloop wiring.
-    expect(inputQueueSize()).toBe(1);
+    // `\i` executes the file exactly once, via execSimple here. It must NOT
+    // also enqueue: under the interactive mainloop the queue is drained too,
+    // which would double-run the file (review item #2).
+    expect(inputQueueSize()).toBe(0);
   });
 
   test('missing FILE arg errors', async () => {
