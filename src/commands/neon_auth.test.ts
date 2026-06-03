@@ -370,6 +370,33 @@ describe('neon-auth', () => {
     ]);
   });
 
+  // --- Plugins ---
+
+  test('plugins list', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'plugins',
+      'list',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
+  test('plugins get', async ({ testCliCommand }) => {
+    await testCliCommand([
+      'neon-auth',
+      'plugins',
+      'get',
+      'organization',
+      '--project-id',
+      'test',
+      '--branch',
+      'test_branch',
+    ]);
+  });
+
   // --- User ---
 
   test('user create', async ({ testCliCommand }) => {
