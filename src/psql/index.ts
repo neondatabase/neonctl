@@ -768,6 +768,7 @@ export const parseConnectionUri = (uri: string): ConnectOptions => {
     'ssl_max_protocol_version',
   );
   assertTlsProtocolRange(sslMinProtocolVersion, sslMaxProtocolVersion);
+  assertTlsMaxProtocolSupported(sslMaxProtocolVersion);
   // libpq rejects `sslnegotiation=direct` paired with a weak sslmode. The URI
   // surface always resolves a concrete `ssl` (defaulting to 'prefer'), so the
   // check is authoritative here.
@@ -1061,6 +1062,7 @@ export const parseConninfo = (input: string): Partial<ConnectOptions> => {
   delete out._hostList;
   delete out._portList;
   assertTlsProtocolRange(out.sslMinProtocolVersion, out.sslMaxProtocolVersion);
+  assertTlsMaxProtocolSupported(out.sslMaxProtocolVersion);
   return out;
 };
 
@@ -1301,6 +1303,28 @@ const normalizeTlsProtocolVersion = (
     throw new Error(`invalid ${key} value: "${raw}"`);
   }
   return match;
+};
+
+/**
+ * Reject a `ssl_max_protocol_version` ceiling below TLSv1.2. TLS 1.0/1.1 are
+ * disabled in Node's bundled OpenSSL, so capping the ceiling there leaves no
+ * negotiable protocol and the handshake otherwise fails with an opaque
+ * `ERR_SSL_NO_PROTOCOLS_AVAILABLE` — surface an actionable message at parse
+ * time instead. Only the MAX is gated: a low *min*
+ * (`ssl_min_protocol_version=TLSv1.1`) is harmless because Node still
+ * negotiates the highest mutually-supported version (1.2/1.3), exactly as
+ * libpq does on a modern OpenSSL. Called AFTER {@link assertTlsProtocolRange}
+ * so an inverted range (min > max) reports the range error first, matching
+ * libpq's ordering.
+ */
+const assertTlsMaxProtocolSupported = (max: string | undefined): void => {
+  if (max === 'TLSv1' || max === 'TLSv1.1') {
+    throw new Error(
+      `ssl_max_protocol_version "${max}" is not supported by this ` +
+        `runtime's TLS library — TLS 1.0/1.1 are disabled in Node's OpenSSL; ` +
+        `the minimum negotiable version is TLSv1.2`,
+    );
+  }
 };
 
 /**
@@ -1734,6 +1758,7 @@ export const parseConnectionUriPartial = (
   );
   if (sslMax !== undefined) out.sslMaxProtocolVersion = sslMax;
   assertTlsProtocolRange(out.sslMinProtocolVersion, out.sslMaxProtocolVersion);
+  assertTlsMaxProtocolSupported(out.sslMaxProtocolVersion);
 
   const connectTimeoutSec = raw.query.get('connect_timeout');
   if (connectTimeoutSec !== undefined && connectTimeoutSec !== '') {
@@ -2092,6 +2117,7 @@ export const serviceEntryToConnectOptions = (
     }
   }
   assertTlsProtocolRange(out.sslMinProtocolVersion, out.sslMaxProtocolVersion);
+  assertTlsMaxProtocolSupported(out.sslMaxProtocolVersion);
   return out;
 };
 

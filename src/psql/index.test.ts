@@ -341,6 +341,42 @@ describe('parseConnectionUri — upstream 001_uri.pl conformance', () => {
 });
 
 // ---------------------------------------------------------------------------
+// ssl_min/max_protocol_version. TLS 1.0/1.1 are disabled in Node's OpenSSL,
+// so a *ceiling* below TLSv1.2 can never negotiate and otherwise fails with
+// an opaque `ERR_SSL_NO_PROTOCOLS_AVAILABLE` at handshake time. We reject
+// that at parse time with an actionable message. A low *floor* is fine
+// (Node still negotiates 1.2/1.3, like libpq on a modern OpenSSL).
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — ssl_{min,max}_protocol_version', () => {
+  it.each(['TLSv1', 'TLSv1.1'])(
+    'rejects ssl_max_protocol_version=%s with an actionable message',
+    (v) => {
+      expect(() =>
+        parseConnectionUri(`postgresql://h/db?ssl_max_protocol_version=${v}`),
+      ).toThrow(/not supported by this runtime's TLS library/);
+    },
+  );
+
+  it.each(['TLSv1', 'TLSv1.1', 'TLSv1.2', 'TLSv1.3'])(
+    'permits ssl_min_protocol_version=%s (negotiates up to 1.2/1.3)',
+    (v) => {
+      expect(() =>
+        parseConnectionUri(`postgresql://h/db?ssl_min_protocol_version=${v}`),
+      ).not.toThrow();
+    },
+  );
+
+  it.each(['TLSv1.2', 'TLSv1.3'])(
+    'accepts ssl_max_protocol_version=%s',
+    (v) => {
+      expect(() =>
+        parseConnectionUri(`postgresql://h/db?ssl_max_protocol_version=${v}`),
+      ).not.toThrow();
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Multi-host authority + ?host=/?port= list. libpq 10+ accepts comma-
 // separated host[:port] tuples in the authority and comma-separated host=/
 // port= lists in the query string. Single-host callers continue to see
