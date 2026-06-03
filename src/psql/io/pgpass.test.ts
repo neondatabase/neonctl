@@ -251,6 +251,36 @@ describe('lookupPgPass', () => {
     ).toBe('specific-pw');
   });
 
+  it('treats an escaped \\* field as a literal, not a wildcard (review #21)', () => {
+    const escaped: PgPassEntry[] = [
+      {
+        host: '\\*', // raw `\*` — a literal asterisk, NOT the wildcard
+        port: '5432',
+        database: 'db',
+        user: 'alice',
+        password: 'secret',
+      },
+    ];
+    // Must NOT match an arbitrary host (the bug returned `secret` here).
+    expect(
+      lookupPgPass(escaped, {
+        host: 'evil.example.com',
+        port: 5432,
+        database: 'db',
+        user: 'alice',
+      }),
+    ).toBeUndefined();
+    // Still matches a host literally named `*`.
+    expect(
+      lookupPgPass(escaped, {
+        host: '*',
+        port: 5432,
+        database: 'db',
+        user: 'alice',
+      }),
+    ).toBe('secret');
+  });
+
   it('honors wildcard fields when specifics do not match', () => {
     expect(
       lookupPgPass(entries, {

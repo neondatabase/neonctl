@@ -92,13 +92,34 @@ export const defaultPgPassPath = (
  *     (literal backslash), but libpq's decoder is lenient.
  *   - A trailing backslash at end-of-line is dropped.
  */
+/** Un-escape `\X` → `X` (a trailing lone backslash is kept). */
+const decodeBackslashes = (s: string): string => {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      out += s[i + 1];
+      i += 1;
+      continue;
+    }
+    out += s[i];
+  }
+  return out;
+};
+
 const splitLine = (line: string): PgPassEntry | null => {
+  // Split on UN-escaped `:` only, PRESERVING backslashes inside each field.
+  // The match fields (host/port/database/user) are kept RAW so the wildcard
+  // test can distinguish a bare `*` (wildcard) from `\*` (literal `*`) — see
+  // fieldMatches / review item #21. libpq does the same: its wildcard check
+  // is `strcmp(rawtoken, "*")`, and unescaping happens only during the
+  // char-by-char comparison. The password is the returned secret, so it is
+  // fully decoded here.
   const fields: string[] = [];
   let current = '';
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (ch === '\\' && i + 1 < line.length) {
-      current += line[i + 1];
+      current += '\\' + line[i + 1];
       i += 1;
       continue;
     }
@@ -116,7 +137,7 @@ const splitLine = (line: string): PgPassEntry | null => {
     port: fields[1],
     database: fields[2],
     user: fields[3],
-    password: fields[4],
+    password: decodeBackslashes(fields[4]),
   };
 };
 
@@ -184,7 +205,8 @@ export const loadPgPass = async (
  * Match a single field. `*` matches anything; otherwise an exact comparison.
  */
 const fieldMatches = (pattern: string, value: string): boolean =>
-  pattern === '*' || pattern === value;
+  // A bare `*` is the wildcard; `\*` decodes to a LITERAL `*` (review #21).
+  pattern === '*' || decodeBackslashes(pattern) === value;
 
 /**
  * Look up a password entry for the given `target`. Returns the first matching
