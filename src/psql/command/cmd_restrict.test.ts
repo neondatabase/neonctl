@@ -12,7 +12,6 @@ import {
   isRestricted,
   registerRestrictCommands,
   RESTRICTED_COMMANDS,
-  RESTRICTED_VAR,
   restrictedName,
   wrapRestrictedCommands,
 } from './cmd_restrict.js';
@@ -81,12 +80,12 @@ const run = (spec: BackslashCmdSpec, ctx: BackslashContext) => spec.run(ctx);
 // ---------------------------------------------------------------------------
 
 describe('\\restrict', () => {
-  test('sets RESTRICTED psql variable on success', async () => {
+  test('enters restricted mode on success', async () => {
     const settings = defaultSettings(createVarStore());
     const ctx = makeMockCtx('restrict', 'mykey', settings);
     const r = await run(cmdRestrict, ctx);
     expect(r.status).toBe('ok');
-    expect(settings.vars.get(RESTRICTED_VAR)).toBe('mykey');
+    expect(restrictedName(settings)).toBe('mykey');
     expect(isRestricted(settings)).toBe(true);
     expect(restrictedName(settings)).toBe('mykey');
   });
@@ -97,18 +96,18 @@ describe('\\restrict', () => {
     const r = await run(cmdRestrict, ctx);
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/missing required argument/);
-    expect(settings.vars.get(RESTRICTED_VAR)).toBeUndefined();
+    expect(restrictedName(settings)).toBeNull();
   });
 
   test('errors when already restricted', async () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'first');
+    settings.restrictedKey = 'first';
     const ctx = makeMockCtx('restrict', 'second', settings);
     const r = await run(cmdRestrict, ctx);
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/already in restricted mode/);
     // Original key is preserved.
-    expect(settings.vars.get(RESTRICTED_VAR)).toBe('first');
+    expect(restrictedName(settings)).toBe('first');
   });
 });
 
@@ -119,11 +118,11 @@ describe('\\restrict', () => {
 describe('\\unrestrict', () => {
   test('clears RESTRICTED when key matches', async () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'mykey');
+    settings.restrictedKey = 'mykey';
     const ctx = makeMockCtx('unrestrict', 'mykey', settings);
     const r = await run(cmdUnrestrict, ctx);
     expect(r.status).toBe('ok');
-    expect(settings.vars.get(RESTRICTED_VAR)).toBeUndefined();
+    expect(restrictedName(settings)).toBeNull();
     expect(isRestricted(settings)).toBe(false);
   });
 
@@ -137,18 +136,18 @@ describe('\\unrestrict', () => {
 
   test('errors on mismatched key and stays restricted', async () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'realkey');
+    settings.restrictedKey = 'realkey';
     const ctx = makeMockCtx('unrestrict', 'wrongkey', settings);
     const r = await run(cmdUnrestrict, ctx);
     expect(r.status).toBe('error');
     expect(stderr()).toMatch(/wrong key/);
-    expect(settings.vars.get(RESTRICTED_VAR)).toBe('realkey');
+    expect(restrictedName(settings)).toBe('realkey');
     expect(isRestricted(settings)).toBe(true);
   });
 
   test('errors when no key is provided', async () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'mykey');
+    settings.restrictedKey = 'mykey';
     const ctx = makeMockCtx('unrestrict', '', settings);
     const r = await run(cmdUnrestrict, ctx);
     expect(r.status).toBe('error');
@@ -171,23 +170,37 @@ describe('isRestricted / restrictedName / isCommandRestricted', () => {
     expect(isCommandRestricted(settings, 'cd')).toBe(false);
   });
 
-  test('empty-string variable means not restricted', () => {
+  test('null restrictedKey (default) means not restricted', () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, '');
+    expect(settings.restrictedKey).toBeNull();
     expect(isRestricted(settings)).toBe(false);
     expect(restrictedName(settings)).toBeNull();
   });
 
+  test('a RESTRICTED psql var does NOT activate restricted mode (review #12)', () => {
+    const settings = defaultSettings(createVarStore());
+    // Setting/unsetting a var literally named RESTRICTED must have no effect
+    // on the (separately-held) restriction state — otherwise \set/\getenv/
+    // \gset of that name would escape restricted mode without the key.
+    settings.vars.set('RESTRICTED', 'sneaky');
+    expect(isRestricted(settings)).toBe(false);
+    settings.restrictedKey = 'realkey';
+    settings.vars.set('RESTRICTED', '');
+    settings.vars.unset('RESTRICTED');
+    expect(isRestricted(settings)).toBe(true);
+    expect(restrictedName(settings)).toBe('realkey');
+  });
+
   test('non-empty variable means restricted', () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     expect(isRestricted(settings)).toBe(true);
     expect(restrictedName(settings)).toBe('k');
   });
 
   test('isCommandRestricted gates the documented set', () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     for (const name of RESTRICTED_COMMANDS) {
       expect(isCommandRestricted(settings, name)).toBe(true);
     }
@@ -215,7 +228,7 @@ describe('isRestricted / restrictedName / isCommandRestricted', () => {
 describe('dispatchBackslash restriction gate', () => {
   test('forbidden command refused while restricted', async () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     const r = createBackslashRegistry();
     registerRestrictCommands(r);
     // Stub `\!` so we can prove it's not invoked.
@@ -237,7 +250,7 @@ describe('dispatchBackslash restriction gate', () => {
 
   test('alias for forbidden command (\\write → \\w) is refused', async () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     const r = createBackslashRegistry();
     registerRestrictCommands(r);
     let ran = false;
@@ -257,7 +270,7 @@ describe('dispatchBackslash restriction gate', () => {
 
   test('neutral command runs while restricted', async () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     const r = createBackslashRegistry();
     registerRestrictCommands(r);
     r.register(cmdQuit);
@@ -268,7 +281,7 @@ describe('dispatchBackslash restriction gate', () => {
 
   test('\\unrestrict runs while restricted', async () => {
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     const r = defaultRegistry();
     const ctx = makeMockCtx('unrestrict', 'k', settings);
     const result = await dispatchBackslash(r, 'unrestrict', ctx);
@@ -380,7 +393,7 @@ describe('wrapRestrictedCommands (spec-level gate)', () => {
     wrapRestrictedCommands(r);
 
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
 
     // Call spec.run directly — this is what the REPL mainloop does.
     const spec = r.lookup('!');
@@ -429,7 +442,7 @@ describe('wrapRestrictedCommands (spec-level gate)', () => {
     wrapRestrictedCommands(r);
 
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     const spec = r.lookup('!');
     const result = await (spec as BackslashCmdSpec).run(
       makeMockCtx('!', '', settings),
@@ -444,7 +457,7 @@ describe('wrapRestrictedCommands (spec-level gate)', () => {
   test('defaultRegistry wires up the wrap by default', async () => {
     const r = defaultRegistry();
     const settings = defaultSettings(createVarStore());
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     const spec = r.lookup('!');
     expect(spec).toBeDefined();
     const ctx = makeMockCtx('!', '', settings);
@@ -458,7 +471,7 @@ describe('wrapRestrictedCommands (spec-level gate)', () => {
     const settings = defaultSettings(createVarStore());
 
     // Restricted blocks \!.
-    settings.vars.set(RESTRICTED_VAR, 'k');
+    settings.restrictedKey = 'k';
     let result = await (r.lookup('!') as BackslashCmdSpec).run(
       makeMockCtx('!', 'echo hi', settings),
     );

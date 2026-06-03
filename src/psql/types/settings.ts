@@ -20,6 +20,15 @@ export type PsqlSettings = {
   inputfile: string | null;
   curCmdSource: 'stdin' | 'file' | 'option' | 'rcfile';
 
+  /**
+   * `\restrict` key, or `null` when not in restricted mode. Held here —
+   * NOT in the user-writable `vars` store — so that `\set`/`\unset`/
+   * `\getenv`/`\gset` of a variable named `RESTRICTED` cannot escape
+   * restricted mode (review item #12). Only `\restrict` / `\unrestrict`
+   * mutate it.
+   */
+  restrictedKey: string | null;
+
   prompt1: string;
   prompt2: string;
   prompt3: string;

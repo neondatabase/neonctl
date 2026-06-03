@@ -144,6 +144,7 @@ export const defaultSettings = (varStore: VarStore): PsqlSettings => {
     mainfile: null,
     inputfile: null,
     curCmdSource: 'stdin',
+    restrictedKey: null,
 
     prompt1: DEFAULT_PROMPT1,
     prompt2: DEFAULT_PROMPT2,

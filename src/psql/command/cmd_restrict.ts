@@ -15,13 +15,12 @@
  *    than upstream. Documented here and surfaced to the user via the
  *    error message.
  *
- *  - The restriction state is persisted as a psql variable named
- *    `RESTRICTED`. Setting it from `\set RESTRICTED foo` would also
- *    activate the policy — we treat the psql var as the source of
- *    truth. The trade-off: `\set` can also leave restricted mode.
- *    To prevent that, the dispatcher gate would need to reject the
- *    name `RESTRICTED` itself; we leave that to a follow-up because
- *    the brief asks for a single-line dispatch change.
+ *  - The restriction state lives in `settings.restrictedKey`, NOT in the
+ *    user-writable `vars` store. An earlier design kept it in a psql
+ *    variable named `RESTRICTED`, which let `\set RESTRICTED ''` (or
+ *    `\unset` / `\getenv` / `\gset` of that name) silently leave restricted
+ *    mode without knowing the `\restrict` key — fully defeating the control
+ *    (review item #12). Only `\restrict` / `\unrestrict` touch the field.
  *
  *  - `\copy` is restricted in full, not only `\copy ... FROM PROGRAM`.
  *    The brief explicitly asks for registry-level interception
@@ -51,15 +50,6 @@ export const RESTRICTED_REFUSAL_MESSAGE = (cmdName: string): string =>
   `use \\unrestrict to leave restricted mode\n`;
 
 /**
- * psql variable holding the active restriction name. When set to a
- * non-empty string the session is in restricted mode. Unset / empty
- * means unrestricted.
- *
- * Public so tests + dispatch.ts can reuse it without re-stringifying.
- */
-export const RESTRICTED_VAR = 'RESTRICTED';
-
-/**
  * Backslash command names blocked while restricted. Lookup is by
  * **primary** name — aliases (e.g. `write` → `w`, `quit` → `q`)
  * resolve to the primary spec before the gate runs, so the gate sees
@@ -75,25 +65,30 @@ export const RESTRICTED_COMMANDS: ReadonlySet<string> = new Set([
   'copy', // \copy — including \copy FROM PROGRAM
   'setenv', // mutate process env
   'w', // \w / \write — file write of query buffer
+  // `\o`/`\g`/`\gx` route through openWriter(), which spawns `sh -c <cmd>`
+  // for a `|command` target (arbitrary shell exec) and writes the filesystem
+  // for a FILE target; `\s FILE` writes history to disk. Block them by name
+  // (review item #13). Plain query execution still works via `;`.
+  'o', // \o [FILE | |cmd]
+  'g', // \g [FILE | |cmd]
+  'gx', // \gx [FILE | |cmd]
+  's', // \s [FILE] — write command history
 ]);
 
 /**
- * True iff the session is currently in restricted mode. Reads from
- * the `RESTRICTED` psql variable.
+ * True iff the session is currently in restricted mode. Reads the
+ * protected {@link PsqlSettings.restrictedKey} field (NOT a psql var, so
+ * `\set`/`\unset`/`\getenv`/`\gset` cannot flip it — review item #12).
  */
-export const isRestricted = (settings: PsqlSettings): boolean => {
-  const v = settings.vars.get(RESTRICTED_VAR);
-  return v !== undefined && v.length > 0;
-};
+export const isRestricted = (settings: PsqlSettings): boolean =>
+  settings.restrictedKey !== null;
 
 /**
  * Return the active restriction name (the value supplied to
  * `\restrict NAME`), or `null` if not restricted.
  */
-export const restrictedName = (settings: PsqlSettings): string | null => {
-  const v = settings.vars.get(RESTRICTED_VAR);
-  return v !== undefined && v.length > 0 ? v : null;
-};
+export const restrictedName = (settings: PsqlSettings): string | null =>
+  settings.restrictedKey;
 
 /**
  * Predicate used by the dispatcher: should the given primary command
@@ -124,12 +119,7 @@ export const cmdRestrict: BackslashCmdSpec = {
       writeErr(`\\${ctx.cmdName}: already in restricted mode\n`);
       return Promise.resolve({ status: 'error' });
     }
-    if (!ctx.settings.vars.set(RESTRICTED_VAR, arg)) {
-      writeErr(
-        `\\${ctx.cmdName}: could not set "${RESTRICTED_VAR}" variable\n`,
-      );
-      return Promise.resolve({ status: 'error' });
-    }
+    ctx.settings.restrictedKey = arg;
     return Promise.resolve({ status: 'ok' });
   },
 };
@@ -156,7 +146,7 @@ export const cmdUnrestrict: BackslashCmdSpec = {
       writeErr(`\\${ctx.cmdName}: wrong key\n`);
       return Promise.resolve({ status: 'error' });
     }
-    ctx.settings.vars.unset(RESTRICTED_VAR);
+    ctx.settings.restrictedKey = null;
     return Promise.resolve({ status: 'ok' });
   },
 };
