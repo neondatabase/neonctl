@@ -20,6 +20,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -274,6 +275,22 @@ async function bootTestcontainer(): Promise<PgConn> {
   mkdirSync(resultsDir, { recursive: true });
   chmodSync(absBuilddir, 0o777);
   chmodSync(resultsDir, 0o777);
+  // psql.sql round-trips output files through results/: the CLIENT writes
+  // them (`SELECT … \g :g_out_file`, as the host/runner UID) and then the
+  // SERVER overwrites the SAME file (`COPY (…) TO :'g_out_file'`, as the
+  // container postgres UID 999). On Linux a client-created file inherits the
+  // runner's umask (0644, owner = runner) and the server then can't overwrite
+  // it → `could not open file … for writing: Permission denied`. (macOS Docker
+  // Desktop masks bind-mount UID perms, so this only bit the Linux CI runner.)
+  // Pre-create the known output files world-writable (0o666): our `\g`
+  // truncates in place via `openSync(path, 'w')`, preserving the 0o666 mode,
+  // so BOTH the client and the server UID can write them. chmod (not the
+  // create mode) is used because mkdir/open modes are umask-masked.
+  for (const name of ['psql-output1', 'psql-output2']) {
+    const f = join(resultsDir, name);
+    writeFileSync(f, '');
+    chmodSync(f, 0o666);
+  }
   ownedAbsBuilddir = absBuilddir;
 
   const image = process.env.PGCONFORMANCE_PG_IMAGE ?? PG_IMAGE_DEFAULT;
