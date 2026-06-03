@@ -200,6 +200,7 @@ export async function negotiateTls(
       mergedOpts,
       fileOpts.sslkeylogfile,
       fileOpts.sslkey,
+      /* requireAlpn */ true,
     );
   }
 
@@ -687,6 +688,11 @@ function upgradeToTls(
   tlsOpts: tls.ConnectionOptions,
   sslkeylogfile?: string,
   keyPath?: string,
+  // Direct SSL (sslnegotiation=direct, PG17+) REQUIRES the server to select
+  // ALPN `postgresql` — a protocol-confusion defense, since there is no
+  // SSLRequest probe to confirm a postgres endpoint. libpq aborts when the
+  // negotiated ALPN isn't `postgresql`; we mirror that (review item #9).
+  requireAlpn = false,
 ): Promise<TlsResult> {
   return new Promise((resolve, reject) => {
     let tlsSocket: tls.TLSSocket | undefined;
@@ -714,6 +720,20 @@ function upgradeToTls(
           // guard simply narrows the `| undefined` for the type checker.
           const established = tlsSocket;
           if (established === undefined) return;
+          // Enforce the mandatory `postgresql` ALPN for direct SSL. Without
+          // it a TLS terminator / HTTPS proxy with a valid host cert would be
+          // accepted and the startup packet sent in the blind (review #9).
+          if (requireAlpn && established.alpnProtocol !== 'postgresql') {
+            cleanup();
+            established.destroy();
+            reject(
+              new Error(
+                'direct SSL connection requires ALPN, but the server did ' +
+                  'not negotiate the "postgresql" protocol',
+              ),
+            );
+            return;
+          }
           let channelBindingData: Buffer | null = null;
           try {
             // Prefer the modern X509Certificate API (Node 15.6+): it returns a

@@ -25,6 +25,9 @@ import type * as tls from 'node:tls';
 
 // Records every options object passed to the mocked `tls.connect`.
 const connectCalls: tls.ConnectionOptions[] = [];
+// ALPN the mocked handshake reports back; tests override per case. Direct SSL
+// requires it to be exactly 'postgresql' (review item #9).
+let mockAlpnProtocol: string | false = 'postgresql';
 
 vi.mock('node:tls', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:tls')>();
@@ -33,9 +36,14 @@ vi.mock('node:tls', async (importOriginal) => {
     connect: (opts: tls.ConnectionOptions, cb?: () => void): unknown => {
       connectCalls.push(opts);
       // Minimal TLSSocket stand-in: a real EventEmitter (so `.on` /
-      // `.removeListener` work), reporting no peer cert (channel binding null)
-      // and resolving the handshake callback on the next tick.
+      // `.removeListener` work), reporting no peer cert (channel binding null),
+      // a configurable negotiated ALPN, and a destroy() spy.
       const sock = Object.assign(new EventEmitter(), {
+        alpnProtocol: mockAlpnProtocol,
+        destroyed: false,
+        destroy(): void {
+          (this as { destroyed: boolean }).destroyed = true;
+        },
         getPeerX509Certificate: (): undefined => undefined,
         getPeerCertificate: (): Record<string, never> => ({}),
       });
@@ -69,6 +77,7 @@ function asSocket(s: FakeRawSocket): net.Socket {
 describe('negotiateTls — sslnegotiation=direct', () => {
   test('does NOT send SSLRequest and advertises ALPN postgresql', async () => {
     connectCalls.length = 0;
+    mockAlpnProtocol = 'postgresql';
     const fake = new FakeRawSocket();
     const result = await negotiateTls(
       asSocket(fake),
@@ -88,6 +97,22 @@ describe('negotiateTls — sslnegotiation=direct', () => {
     expect(
       (connectCalls[0] as tls.ConnectionOptions & { socket?: unknown }).socket,
     ).toBe(fake);
+  });
+
+  test('direct SSL rejects when the server does not negotiate "postgresql" ALPN (review #9)', async () => {
+    connectCalls.length = 0;
+    mockAlpnProtocol = false; // server selected no ALPN (e.g. an HTTPS proxy)
+    const fake = new FakeRawSocket();
+    await expect(
+      negotiateTls(
+        asSocket(fake),
+        'verify-full',
+        { ALPNProtocols: ['postgresql'], servername: 'db.example.com' },
+        {},
+        'direct',
+      ),
+    ).rejects.toThrow(/ALPN|postgresql/);
+    mockAlpnProtocol = 'postgresql'; // restore for subsequent tests
   });
 
   test('classic (postgres) negotiation still sends SSLRequest first', async () => {
