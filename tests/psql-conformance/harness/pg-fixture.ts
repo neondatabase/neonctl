@@ -262,8 +262,18 @@ async function bootTestcontainer(): Promise<PgConn> {
   // mkdtemp creates 0o700; widen so the bind-mount is reachable by the
   // `postgres` user (UID 999) inside the container. The dir lives under
   // tmpdir() so the wider perms don't expose anything sensitive.
-  chmodSync(absBuilddir, 0o755);
-  mkdirSync(join(absBuilddir, 'results'), { recursive: true, mode: 0o777 });
+  //
+  // The container postgres user WRITES into results/ (server-side `\g`/COPY
+  // output), so it must be world-writable. mkdirSync's `mode` is masked by
+  // the process umask (0o022 on the GHA runner → 0o755, which blocks the
+  // non-owner container UID and surfaces as `could not open file ... for
+  // writing: Permission denied`). chmod is NOT umask-masked, so set both
+  // perms explicitly. (macOS Docker Desktop ignores bind-mount UID perms,
+  // which is why this only bit on the Linux CI runner.)
+  const resultsDir = join(absBuilddir, 'results');
+  mkdirSync(resultsDir, { recursive: true });
+  chmodSync(absBuilddir, 0o777);
+  chmodSync(resultsDir, 0o777);
   ownedAbsBuilddir = absBuilddir;
 
   const image = process.env.PGCONFORMANCE_PG_IMAGE ?? PG_IMAGE_DEFAULT;
