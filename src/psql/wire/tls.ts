@@ -30,7 +30,7 @@
 
 import type * as net from 'node:net';
 import * as tls from 'node:tls';
-import { createHash } from 'node:crypto';
+import { createHash, createPrivateKey } from 'node:crypto';
 import { promises as fs, appendFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { SSLRequest } from './protocol.js';
@@ -380,12 +380,14 @@ async function assertKeyLogFileWritable(filePath: string): Promise<void> {
  * and sniffs the format; Node's `tls.connect` only understands PEM, so we
  * wrap a raw DER blob ourselves:
  *   - `'CERTIFICATE'` for certs and CA roots (`sslcert` / `sslrootcert`).
- *   - `'PRIVATE KEY'` for client keys (`sslkey`). A DER key is assumed to be
- *     PKCS#8 (`-----BEGIN PRIVATE KEY-----`), which is what `openssl pkcs8`
- *     and every modern key-export tool emits. Legacy bare PKCS#1 / SEC1 DER
- *     keys (rare) would need a different armor; libpq leans on OpenSSL's
- *     auto-detection there, which Node does not expose, so we document the
- *     PKCS#8 assumption rather than silently mislabel.
+ *   - `'PRIVATE KEY'` for client keys (`sslkey`). Keys are NOT blindly wrapped
+ *     in PKCS#8 armor — see {@link derPrivateKeyToPem}, which decodes the DER
+ *     with `crypto.createPrivateKey` (trying PKCS#8, PKCS#1, then SEC1) and
+ *     re-exports canonical PKCS#8 PEM. Blind PKCS#8 armor breaks on any DER
+ *     that is actually PKCS#1/SEC1 — including what OpenSSL 3.0.x's
+ *     `openssl pkey -outform der` emits for RSA keys — with
+ *     `DECODER routines::unsupported`. Decode-and-re-export matches libpq's
+ *     OpenSSL auto-detection across key formats and OpenSSL versions.
  */
 type DerArmor = 'CERTIFICATE' | 'PRIVATE KEY';
 
@@ -411,6 +413,33 @@ function derToPem(der: Buffer, armor: DerArmor): Buffer {
 }
 
 /**
+ * Convert a DER-encoded private key to canonical PKCS#8 PEM, the way libpq
+ * relies on OpenSSL to sniff `sslkey` format. A DER key may be PKCS#8
+ * (`PrivateKeyInfo`), PKCS#1 (bare RSA `RSAPrivateKey`), or SEC1 (bare EC
+ * `ECPrivateKey`) — and the encoding `openssl pkey -outform der` produces for
+ * RSA differs across OpenSSL versions (3.0.x emits a form that blind PKCS#8
+ * armor cannot load: `DECODER routines::unsupported`). Rather than guess the
+ * armor, let `crypto.createPrivateKey` decode each candidate type and
+ * re-export a single canonical PKCS#8 PEM that `tls.connect` always accepts.
+ */
+function derPrivateKeyToPem(der: Buffer): Buffer {
+  let lastErr: unknown;
+  for (const type of ['pkcs8', 'pkcs1', 'sec1'] as const) {
+    try {
+      const key = createPrivateKey({ key: der, format: 'der', type });
+      const pem = key.export({ format: 'pem', type: 'pkcs8' });
+      return typeof pem === 'string' ? Buffer.from(pem, 'ascii') : pem;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  const reason = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(
+    `sslkey is DER but could not be decoded as PKCS#8, PKCS#1, or SEC1: ${reason}`,
+  );
+}
+
+/**
  * Read a libpq SSL file, returning PEM bytes ready for `tls.connect`. If the
  * file is already PEM-armored it's returned verbatim; otherwise it's treated
  * as DER and converted in-memory using {@link derToPem} with `derArmor`
@@ -431,7 +460,11 @@ async function readPem(
     throw new Error(`could not read ${label} "${filePath}": ${reason}`);
   }
   if (derArmor !== undefined && !isPemArmored(bytes)) {
-    return derToPem(bytes, derArmor);
+    // Private keys need format-aware decoding (PKCS#8 / PKCS#1 / SEC1);
+    // certs are a single ASN.1 shape and wrap directly.
+    return derArmor === 'PRIVATE KEY'
+      ? derPrivateKeyToPem(bytes)
+      : derToPem(bytes, derArmor);
   }
   return bytes;
 }

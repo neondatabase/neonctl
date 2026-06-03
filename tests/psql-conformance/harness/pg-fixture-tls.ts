@@ -1027,7 +1027,14 @@ export async function setupTlsPg(): Promise<TlsPgConn> {
         'export PostgreSqlContainer — your version is incompatible.',
     );
   }
-  const image = process.env.PGCONFORMANCE_PG_IMAGE ?? PG_IMAGE_DEFAULT;
+  // The TLS specs exercise CLIENT TLS behaviour (channel binding, direct-SSL
+  // ALPN, sslinfo) against PG 17+/18-only server features, so this fixture is
+  // pinned to PG 18 independent of the matrix `PGCONFORMANCE_PG_IMAGE` that
+  // versions the shared regress/describe fixture. (Following the matrix here
+  // would boot e.g. PG 14, where `sslnegotiation=direct` does not exist and
+  // the direct-SSL subtests fail.) A dedicated override is kept for the rare
+  // case of deliberately testing the TLS path against another major.
+  const image = process.env.PGCONFORMANCE_TLS_PG_IMAGE ?? PG_IMAGE_DEFAULT;
   log(`pg-fixture-tls: booting ${image} with TLS enabled...`);
 
   // Bind-mount the full minted cert tree. Every leaf server cert + key,

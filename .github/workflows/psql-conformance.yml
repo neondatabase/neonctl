@@ -9,11 +9,12 @@
 # MATRIX: Neon supports PG 14-18, so we exercise the harness against
 # every supported major version.
 #
-# NON-BLOCKING: each matrix job's conformance step has
-# `continue-on-error: true` so unexpected failures appear in the PR
-# check list as warnings but do NOT gate merge. TS-psql is still being
-# burned in; once coverage stabilises this flag can be dropped and the
-# job hoisted into the required-checks set in branch protection.
+# BLOCKING: the conformance suite is green across the matrix (PG 14-18,
+# 277/277 on 14-17, 278/278 on 18) so the steps now gate merge — the
+# earlier `continue-on-error: true` is removed. The harness boots its
+# own postgres via @testcontainers/postgresql (matching the validated
+# local path) rather than a bare GHA `services:` container, which had
+# silently diverged on regress/psql (missing seed + bind-mount).
 
 name: psql conformance
 
@@ -59,21 +60,14 @@ jobs:
       matrix:
         pg: ['14', '15', '16', '17', '18']
 
-    services:
-      postgres:
-        image: postgres:${{ matrix.pg }}
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: regression
-        ports:
-          - 5432:5432
-        # `pg_isready` lives in the image; GitHub re-runs this until the
-        # service reports healthy or `--health-retries` is exceeded.
-        options: >-
-          --health-cmd "pg_isready -U postgres -d regression"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+    # No `services:` block — the harness boots its OWN postgres via
+    # @testcontainers/postgresql (Docker is preinstalled on ubuntu-24.04).
+    # The testcontainers path is the one validated locally: it creates the
+    # `regression` DB, BIND-MOUNTS abs_builddir into the container (so the
+    # regress scripts' `\g :'g_out_file'` host-write / `COPY FROM` server-read
+    # round-trip works), and SEEDS test_setup_minimal.sql (which installs the
+    # `heap2` access method `\dA` expects). A bare GHA `services:` container
+    # skips all of that, so regress/psql diverged in CI while passing locally.
 
     steps:
       - name: Checkout
@@ -99,8 +93,6 @@ jobs:
         run: pnpm run build
 
       - name: Run conformance suite
-        # Non-blocking until coverage stabilises — see top-of-file note.
-        continue-on-error: true
         env:
           # `dist/psql/cli.js` is the standalone psql shim — neonctl's
           # `dist/cli.js` is the yargs CLI which intercepts libpq flags
@@ -117,17 +109,11 @@ jobs:
           # The real-DNS variant of 004 is run by the separate
           # `loadbalance-dns` job below, not from this matrix.
           RUN_INTEGRATION: '1'
-          # Point the harness's pg-fixture at the GHA service container
-          # instead of booting a testcontainer in CI.
-          PGCONFORMANCE_PG_HOST: 127.0.0.1
-          PGCONFORMANCE_PG_PORT: '5432'
-          PGCONFORMANCE_PG_USER: postgres
-          PGCONFORMANCE_PG_PASSWORD: postgres
-          PGCONFORMANCE_PG_DB: regression
-          # Surface the matrix PG major so the harness can apply
-          # version-conditional normalize rules without a server-side
-          # probe (the GHA-service path skips bootTestcontainer).
-          PGCONFORMANCE_PG_MAJOR: ${{ matrix.pg }}
+          # Pin the testcontainers image to this matrix row's PG major.
+          # pg-fixture.ts reads PGCONFORMANCE_PG_IMAGE and boots it with
+          # the full seed + bind-mount; the server major is probed from
+          # the running container (no need to pass PGCONFORMANCE_PG_MAJOR).
+          PGCONFORMANCE_PG_IMAGE: postgres:${{ matrix.pg }}
         run: |
           set -o pipefail
           pnpm run test:conformance 2>&1 | tee psql-conformance.log
@@ -158,8 +144,7 @@ jobs:
   # Linux-only because user-space binding to 127.0.0.2 / 127.0.0.3 is
   # a Linux-only convenience (other OSes need `ifconfig alias` setup).
   #
-  # The job is gated by the same `continue-on-error: true` as the
-  # matrix — non-blocking until coverage stabilises.
+  # Blocking, like the matrix job — this spec is green in CI.
   # ---------------------------------------------------------------------------
   loadbalance-dns:
     name: psql-conformance loadbalance-dns (real)
@@ -240,7 +225,6 @@ jobs:
           done
 
       - name: Run real-DNS load-balance spec
-        continue-on-error: true
         env:
           PSQL_BINARY: ${{ github.workspace }}/dist/psql/cli.js
           RUN_INTEGRATION: '1'

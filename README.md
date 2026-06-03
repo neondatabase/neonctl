@@ -127,7 +127,6 @@ regression + TAP tests.
 
 - **GSSAPI / SSPI** (`gssencmode`, Kerberos/SSPI auth, `requirepeer`). GSS transport encryption needs a native Kerberos binding, which the embedded psql deliberately avoids (pure TypeScript, zero native dependencies — the same reason the line editor is hand-rolled). `node-postgres` doesn't support it either, and Neon doesn't use it. `gssencmode=disable` / `prefer` are accepted; `gssencmode=require` is rejected with a clear error. `requirepeer` is parsed but a Unix-socket connection that sets it is refused (Node exposes no peer-credential API — it is not silently ignored).
 - **`keepalives_interval` / `keepalives_count`** — Node's socket API exposes only keepalive enable + initial delay, so these are accepted but not applied.
-- **PKCS#1/SEC1 bare-DER private keys** — DER auto-detection assumes PKCS#8 (what modern tooling emits); PEM keys of any kind work.
 
 ### Known limitations
 
