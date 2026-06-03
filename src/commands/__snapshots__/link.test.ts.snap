@@ -1,0 +1,318 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`link > --agent mode > with full project details creates project and emits linked JSON 1`] = `
+"{
+  "status": "linked",
+  "context_file": "<TMP>/agent_linked_create/.neon",
+  "context": {
+    "orgId": "org-2",
+    "projectId": "new-project-789012",
+    "branchId": "br-test-branch-789012"
+  },
+  "project": {
+    "id": "new-project-789012",
+    "name": "test_project"
+  },
+  "message": "Created project new-project-789012 (\\"test_project\\") in aws-us-east-2 and linked <TMP>/agent_linked_create/.neon."
+}
+"
+`;
+
+exports[`link > --agent mode > with full project details creates project and emits linked JSON 2`] = `
+"{
+  "orgId": "org-2",
+  "projectId": "new-project-789012",
+  "branchId": "br-test-branch-789012"
+}"
+`;
+
+exports[`link > --agent mode > with no flags emits needs_org JSON 1`] = `
+"{
+  "status": "needs_org",
+  "instruction": "Ask the user which of these 3 organizations they want to link the current directory to. After they pick one, re-run the next_command_template with the chosen --org-id value.",
+  "options": [
+    {
+      "id": 1,
+      "name": "Organization 1"
+    },
+    {
+      "id": 2,
+      "name": "Organization 2"
+    },
+    {
+      "id": 3,
+      "name": "Organization 3"
+    }
+  ],
+  "next_command_template": "neonctl link --agent --org-id <org_id>"
+}
+"
+`;
+
+exports[`link > --agent mode > with only --org-id emits needs_project JSON 1`] = `
+"{
+  "status": "needs_project",
+  "instruction": "Ask the user whether to link to one of these 3 existing projects (use next_command_template with --project-id) or create a new project (use create_option.next_command_template).",
+  "options": [
+    {
+      "id": 4,
+      "name": "Project_4"
+    },
+    {
+      "id": 5,
+      "name": "Project_5"
+    },
+    {
+      "id": 6,
+      "name": "Project_6"
+    }
+  ],
+  "create_option": {
+    "instruction": "To create a new project, ask the user for a project name. The region can be omitted to receive a follow-up needs_project_details response that lists available regions.",
+    "next_command_template": "neonctl link --agent --org-id org-2 --project-name <name> --region-id <region_id>"
+  },
+  "next_command_template": "neonctl link --agent --org-id org-2 --project-id <project_id>"
+}
+"
+`;
+
+exports[`link > --agent mode > with org+project emits linked JSON and writes .neon 1`] = `
+"{
+  "status": "linked",
+  "context_file": "<TMP>/agent_linked_existing/.neon",
+  "context": {
+    "orgId": "org-2",
+    "projectId": "test",
+    "branchId": "br-main-branch-123456"
+  },
+  "project": {
+    "id": "test"
+  },
+  "message": "Linked <TMP>/agent_linked_existing/.neon to project test (org org-2) on branch br-main-branch-123456."
+}
+"
+`;
+
+exports[`link > --agent mode > with org+project emits linked JSON and writes .neon 2`] = `
+"{
+  "orgId": "org-2",
+  "projectId": "test",
+  "branchId": "br-main-branch-123456"
+}"
+`;
+
+exports[`link > --agent mode > with org+projectName but no region emits needs_project_details JSON 1`] = `
+"{
+  "status": "needs_project_details",
+  "instruction": "Ask the user which region to create project \\"demo\\" in. After they pick one, re-run the next_command_template with the chosen --region-id value.",
+  "regions": [
+    {
+      "id": "aws-us-east-2",
+      "name": "AWS US East (Ohio)",
+      "default": true
+    },
+    {
+      "id": "aws-us-east-1",
+      "name": "AWS US East (N. Virginia)",
+      "default": false
+    },
+    {
+      "id": "aws-us-west-2",
+      "name": "AWS US West (Oregon)",
+      "default": false
+    },
+    {
+      "id": "aws-eu-central-1",
+      "name": "AWS Europe (Frankfurt)",
+      "default": false
+    }
+  ],
+  "next_command_template": "neonctl link --agent --org-id org-2 --project-name demo --region-id <region_id>"
+}
+"
+`;
+
+exports[`link > gitignore scaffolding > appends .neon to an existing .gitignore without duplicating 1`] = `
+"Linked <TMP>/gi_appends/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > gitignore scaffolding > appends .neon to an existing .gitignore without duplicating 2`] = `
+"Linked <TMP>/gi_appends/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > gitignore scaffolding > creates a .gitignore listing .neon next to the context file 1`] = `
+"Linked <TMP>/gi_creates/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > gitignore scaffolding > set-context also scaffolds .gitignore via the shared applyContext 1`] = `""`;
+
+exports[`link > non-interactive flag mode > conflicting inputs (--project-id with --project-name) fails 1`] = `""`;
+
+exports[`link > non-interactive flag mode > link creates a new project and writes .neon 1`] = `
+"Created project new-project-789012 ("test_project").
+Linked <TMP>/flag_create/.neon:
+  orgId:    org-2
+  projectId: new-project-789012
+  branchId:  br-test-branch-789012
+
+"
+`;
+
+exports[`link > non-interactive flag mode > link creates a new project and writes .neon 2`] = `
+"{
+  "orgId": "org-2",
+  "projectId": "new-project-789012",
+  "branchId": "br-test-branch-789012"
+}"
+`;
+
+exports[`link > non-interactive flag mode > link to existing project writes .neon with default branch id 1`] = `
+"Linked <TMP>/flag_existing/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > non-interactive flag mode > link to existing project writes .neon with default branch id 2`] = `
+"{
+  "orgId": "org-2",
+  "projectId": "test",
+  "branchId": "br-main-branch-123456"
+}"
+`;
+
+exports[`link > non-interactive flag mode > link with --params JSON behaves like flags 1`] = `
+"Linked <TMP>/flag_params/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > non-interactive flag mode > link with --params JSON behaves like flags 2`] = `
+"{
+  "orgId": "org-2",
+  "projectId": "test",
+  "branchId": "br-main-branch-123456"
+}"
+`;
+
+exports[`link > org-scoped API key behavior > agent mode auto-detects org from existing projects when org listing is forbidden 1`] = `
+"{
+  "status": "needs_project",
+  "instruction": "Ask the user whether to link to one of these 1 existing projects (use next_command_template with --project-id) or create a new project (use create_option.next_command_template).",
+  "options": [
+    {
+      "id": "detected-project-12345",
+      "name": "detected_project",
+      "region_id": "aws-us-east-2"
+    }
+  ],
+  "create_option": {
+    "instruction": "To create a new project, ask the user for a project name. The region can be omitted to receive a follow-up needs_project_details response that lists available regions.",
+    "next_command_template": "neonctl link --agent --org-id org-detected-99887766 --project-name <name> --region-id <region_id>"
+  },
+  "next_command_template": "neonctl link --agent --org-id org-detected-99887766 --project-id <project_id>"
+}
+"
+`;
+
+exports[`link > org-scoped API key behavior > agent mode falls back to static regions when getActiveRegions is forbidden 1`] = `
+"{
+  "status": "needs_project_details",
+  "instruction": "Ask the user which region to create project \\"whatever\\" in. After they pick one, re-run the next_command_template with the chosen --region-id value.",
+  "regions": [
+    {
+      "id": "aws-us-west-2",
+      "name": "aws-us-west-2",
+      "default": false
+    },
+    {
+      "id": "aws-ap-southeast-1",
+      "name": "aws-ap-southeast-1",
+      "default": false
+    },
+    {
+      "id": "aws-ap-southeast-2",
+      "name": "aws-ap-southeast-2",
+      "default": false
+    },
+    {
+      "id": "aws-eu-central-1",
+      "name": "aws-eu-central-1",
+      "default": false
+    },
+    {
+      "id": "aws-us-east-2",
+      "name": "aws-us-east-2",
+      "default": true
+    },
+    {
+      "id": "aws-us-east-1",
+      "name": "aws-us-east-1",
+      "default": false
+    },
+    {
+      "id": "azure-eastus2",
+      "name": "azure-eastus2",
+      "default": false
+    }
+  ],
+  "next_command_template": "neonctl link --agent --org-id org-detected-99887766 --project-name whatever --region-id <region_id>"
+}
+"
+`;
+
+exports[`link > org-scoped API key behavior > agent mode with no orgs available and no projects emits orgKeyLimited needs_org 1`] = `
+"{
+  "status": "needs_org",
+  "instruction": "This Neon API key is organization-scoped, so the CLI cannot list the user's organizations and no existing project was found to auto-detect the org ID. Ask the user for their Neon organization ID (visible in the Neon Console under the org's Settings page, formatted like \`org-bitter-breeze-12345678\`) and re-run the next_command_template with that --org-id.",
+  "options": [],
+  "next_command_template": "neonctl link --agent --org-id <org_id>"
+}
+"
+`;
+
+exports[`link > overwrites an existing .neon when re-linking non-interactively 1`] = `
+"Linked <TMP>/overwrite/.neon:
+  orgId:    org-2
+  projectId: test
+  branchId:  br-main-branch-123456
+
+"
+`;
+
+exports[`link > overwrites an existing .neon when re-linking non-interactively 2`] = `
+"{
+  "orgId": "org-2",
+  "projectId": "test",
+  "branchId": "br-main-branch-123456"
+}"
+`;
+
+exports[`link > set-context regression > set-context --branch-id writes branchId to .neon 1`] = `""`;
+
+exports[`link > set-context regression > set-context --branch-id writes branchId to .neon 2`] = `
+"{
+  "projectId": "test_project",
+  "branchId": "br-main-branch-123456"
+}"
+`;

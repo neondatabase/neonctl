@@ -49,6 +49,10 @@ const NO_SUBCOMMANDS_VERBS = [
 
   'set-context',
 
+  'checkout',
+
+  'link',
+
   'init',
 
   // aliases
