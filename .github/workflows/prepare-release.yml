@@ -13,8 +13,9 @@ name: Prepare Release
 #
 # Stage 2 lives in databricks/secure-public-registry-releases-eng and is
 # triggered manually pointing at the tag created by post-release.yml. It
-# checks out the source, installs, builds, packs the npm tarball, scans it,
-# and publishes to npm via OIDC Trusted Publishing.
+# builds + scans the artifacts and publishes them (npm package via OIDC
+# Trusted Publishing, plus the GitHub release with the CLI binaries) — we
+# don't build or publish artifacts from this public repo.
 
 on:
   workflow_dispatch:
@@ -209,11 +210,11 @@ jobs:
             echo "2. An approver reviews + approves this PR."
             echo "3. Required checks run."
             echo "4. On green, the approver **manually clicks \"Squash and merge\"** in the UI. **Do NOT use auto-merge.**"
-            echo "5. \`post-release.yml\` fires on the push to \`main\`, tags the squash commit \`${TAG}\`, and comments here with Stage 2 (npm publish) dispatch instructions."
+            echo "5. \`post-release.yml\` fires on the push to \`main\`, tags the squash commit \`${TAG}\`, and comments here with Stage 2 (npm + GitHub release) dispatch instructions."
             echo ""
             echo "> :warning: **Why manual merge?** GitHub Actions suppresses downstream \`on: push\` workflows for pushes caused by \`GITHUB_TOKEN\` (including auto-merge enabled from a workflow). A human clicking merge attributes the push to that user, so \`post-release.yml\` fires."
             echo ""
-            echo "> :warning: **Do not edit this PR's title** and do not add \`[skip ci]\` / \`[ci skip]\` markers — they'd break the commit-subject parser in \`post-release.yml\` or suppress the workflow entirely."
+            echo "> :warning: **Do not edit this PR's title** — \`post-release.yml\` parses the version from the squash commit subject. (This body becomes the squash commit message, so it must not contain CI-skip markers, which would suppress \`post-release.yml\`.)"
             echo ""
             echo "### Recovery"
             echo "- **Before Stage 2 runs:** delete the bad tag with \`git push origin :refs/tags/${TAG}\` and re-run the original \`post-release.yml\` via \"Re-run all jobs\" in the Actions tab."
