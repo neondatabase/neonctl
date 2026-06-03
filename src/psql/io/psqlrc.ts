@@ -315,18 +315,22 @@ export const executeInputString = async (
         // `-c` / `-f`: route through the full SendQuery pipeline so SELECT
         // tuples, NOTICE messages and `\timing` land on the output streams.
         const stats = await sendQuery(ctx, sqlText);
-        hadError = stats.hadError;
+        // LATCH: a multi-statement input must report an error if ANY statement
+        // failed, not just the last one — otherwise `-c "SELECT 1; SELECT 1/0;
+        // SELECT 2"` exits 0 and silently passes CI (review item #14). The
+        // -f/psqlrc callers ignore this aggregate (they only act on
+        // stoppedOnError), so latching is safe across all callers.
+        if (stats.hadError) hadError = true;
         if (noteConnectionLost()) {
           return { hadError, stoppedOnError, connectionLost };
         }
-        if (hadError && ctx.settings.onErrorStop) {
+        if (stats.hadError && ctx.settings.onErrorStop) {
           stoppedOnError = true;
           return { hadError, stoppedOnError, connectionLost };
         }
       } else {
         try {
           await ctx.settings.db.execSimple(sqlText);
-          hadError = false;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           ctx.stderr.write(`psql: ERROR:  ${msg}\n`);
@@ -386,7 +390,7 @@ export const executeInputString = async (
         queryBuf = '';
         scanState = initialScanState();
       }
-      hadError = res.status === 'error';
+      if (res.status === 'error') hadError = true; // latch (review item #14)
       if (noteConnectionLost()) {
         return { hadError, stoppedOnError, connectionLost };
       }
@@ -472,7 +476,15 @@ export const loadPsqlrc = async (
   const serverVersion = ctx.settings.db?.serverVersion;
   const candidates = psqlrcCandidates(env, serverVersion);
 
+  // Upstream `process_psqlrc()` is first-match-wins PER LOCATION: it reads at
+  // most ONE system file (versioned preferred over unversioned) and then at
+  // most ONE user file. Running both the versioned AND unversioned file in a
+  // location double-executes side effects and lets the unversioned file
+  // clobber the versioned one (review item #20).
+  let systemDone = false;
   for (const c of candidates) {
+    const isSystem = c.description.startsWith('system');
+    if (isSystem && systemDone) continue; // first system file already ran
     const content = await readIfExists(c.path);
     if (content === null) continue;
     const prevSource = ctx.settings.curCmdSource;
@@ -482,13 +494,12 @@ export const loadPsqlrc = async (
     } finally {
       ctx.settings.curCmdSource = prevSource;
     }
-    // Upstream reads the first matched user-level file (versioned wins over
-    // unversioned). We stop after the first non-system match to match.
-    // System files are read in addition; we cheat slightly and stop after
-    // the first match overall. Tests verify this is the intended path.
-    if (c.description.startsWith('user') || c.description === '$PSQLRC') {
-      return;
+    if (isSystem) {
+      systemDone = true; // consumed the system location; move to the user one
+      continue;
     }
+    // First user / $PSQLRC match wins; nothing further to read.
+    return;
   }
 };
 

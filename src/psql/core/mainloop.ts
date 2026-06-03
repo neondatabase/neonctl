@@ -1503,7 +1503,12 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       //
       // The buffer may carry whitespace from a prior line's tail, so we
       // trim before checking.
-      if (isQuitKeyword(line)) {
+      // Bare `quit`/`exit` (and `help` below) are an INTERACTIVE-only
+      // convenience — upstream gates them on `cur_cmd_interactive`. In a
+      // non-interactive script (`printf 'quit;\n' | psql`) they must fall
+      // through and be sent to the server as SQL (syntax error → exit 3),
+      // not silently exit 0 (review item #25).
+      if (!ctx.settings.notty && isQuitKeyword(line)) {
         if (queryBuf.trim().length === 0) {
           reader.pushHistory(line);
           exitRequested = true;
@@ -1517,7 +1522,7 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       //
       //   - Empty buffer  → print the help text, continue.
       //   - Non-empty buf → print "Use \\? for help." hint, continue.
-      if (isHelpKeyword(line)) {
+      if (!ctx.settings.notty && isHelpKeyword(line)) {
         if (queryBuf.trim().length === 0) {
           reader.pushHistory(line);
           ctx.stdout.write(HELP_TEXT);
