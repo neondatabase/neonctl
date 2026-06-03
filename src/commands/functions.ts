@@ -1,9 +1,19 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import yargs from 'yargs';
 
+import { retryOnLock } from '../api.js';
+import { log } from '../log.js';
 import { BranchScopeProps } from '../types.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
+import { buildZip } from '../utils/zip.js';
 import { writer } from '../writer.js';
-import { getFunction, listFunctions } from '../functions_api.js';
+import {
+  createDeployment,
+  getFunction,
+  listFunctions,
+} from '../functions_api.js';
 
 const FUNCTION_FIELDS = [
   'slug',
@@ -22,6 +32,11 @@ const DEPLOYMENT_FIELDS = [
   'created_at',
 ] as const;
 
+const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
+const SLUG_HELP =
+  'Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.';
+const MEMORY_CHOICES = [256, 512, 1024, 2048, 4096, 8192];
+
 export const command = 'functions';
 export const describe = 'Manage Neon Functions';
 export const aliases = ['function'];
@@ -39,6 +54,52 @@ export const builder = (argv: yargs.Argv) =>
       },
     })
     .middleware(fillSingleProject as any)
+    .command(
+      'deploy <slug>',
+      'Deploy a function from a local directory',
+      (yargs) =>
+        yargs
+          .positional('slug', {
+            describe: 'Function slug (lowercase DNS label)',
+            type: 'string',
+            demandOption: true,
+          })
+          .options({
+            path: {
+              describe: 'Directory to deploy (must contain index.ts)',
+              type: 'string',
+              default: '.',
+            },
+            'memory-mib': {
+              describe: 'Memory in MiB',
+              type: 'number',
+              choices: MEMORY_CHOICES,
+              default: 256,
+            },
+            concurrency: {
+              describe: 'Maximum concurrent invocations (1-1000)',
+              type: 'number',
+              default: 1,
+            },
+            runtime: {
+              describe: 'Function runtime',
+              type: 'string',
+              choices: ['nodejs24'],
+              default: 'nodejs24',
+            },
+            env: {
+              describe: 'Environment variable as KEY=VALUE (repeatable)',
+              type: 'string',
+              array: true,
+            },
+            wait: {
+              describe: 'Wait for the deployment to finish building',
+              type: 'boolean',
+              default: true,
+            },
+          }),
+      (args) => deploy(args as any),
+    )
     .command(
       'list',
       'List functions on the branch',
@@ -59,6 +120,71 @@ export const builder = (argv: yargs.Argv) =>
 
 export const handler = (args: yargs.Argv) => {
   return args;
+};
+
+type DeployProps = BranchScopeProps & {
+  slug: string;
+  path: string;
+  memoryMib: number;
+  concurrency: number;
+  runtime: string;
+  env?: string[];
+  wait: boolean;
+};
+
+const parseEnv = (entries: string[] | undefined): string | undefined => {
+  if (!entries || entries.length === 0) return undefined;
+  const map: Record<string, string> = {};
+  for (const entry of entries) {
+    const eq = entry.indexOf('=');
+    if (eq <= 0) {
+      throw new Error(`Invalid --env value "${entry}". Expected KEY=VALUE.`);
+    }
+    map[entry.slice(0, eq)] = entry.slice(eq + 1);
+  }
+  return JSON.stringify(map);
+};
+
+const statusHint = (slug: string, projectId: string, branchId: string) =>
+  `Check status with: neonctl functions get ${slug} --project-id ${projectId} --branch ${branchId}`;
+
+const deploy = async (props: DeployProps) => {
+  // Cheap, offline validation first — fail before any network round-trip.
+  if (!SLUG_PATTERN.test(props.slug)) {
+    throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
+  }
+  const environment = parseEnv(props.env);
+  const indexPath = join(props.path, 'index.ts');
+  if (!existsSync(indexPath)) {
+    throw new Error(
+      `No index.ts found in ${props.path}. A function must have an index.ts at the root of --path.`,
+    );
+  }
+
+  const branchId = await branchIdFromProps(props);
+  const zip = buildZip(props.path);
+
+  const deployment = await retryOnLock(() =>
+    createDeployment(props.apiClient, props.projectId, branchId, props.slug, {
+      zip,
+      memoryMib: props.memoryMib,
+      concurrency: props.concurrency,
+      runtime: props.runtime,
+      environment,
+    }),
+  );
+  log.info(
+    `Deployment ${deployment.id} created for ${props.slug} (status: ${deployment.status})`,
+  );
+
+  if (!props.wait) {
+    log.info(statusHint(props.slug, props.projectId, branchId));
+    writer(props).end(deployment, { fields: DEPLOYMENT_FIELDS });
+    return;
+  }
+
+  // Polling is implemented in the next task. For now, print the deployment.
+  writer(props).end(deployment, { fields: DEPLOYMENT_FIELDS });
 };
 
 const get = async (props: BranchScopeProps & { slug: string }) => {

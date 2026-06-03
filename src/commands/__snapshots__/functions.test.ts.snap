@@ -1,5 +1,16 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`functions > deploy --no-wait 1`] = `
+"id: 1
+status: pending
+bundle_sha256: abc123
+memory_mib: 256
+concurrency: 1
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
 exports[`functions > get (table) 1`] = `
 "function
 ┌─────────┬─────────┬─────────────────────────────────────┬──────────────────────┐
