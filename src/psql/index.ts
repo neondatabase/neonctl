@@ -1263,7 +1263,13 @@ export const looksLikeConnectionString = (s: string): boolean => {
 };
 
 const normalizeSslMode = (raw: string | null): ConnectOptions['ssl'] => {
-  const value = (raw ?? 'prefer').toLowerCase();
+  // Only null/unset defaults to 'prefer'. An explicit but unrecognized value
+  // (e.g. a `verify-ful` typo) MUST be rejected — silently falling back to
+  // 'prefer' would proceed with no cert-chain / hostname verification, a TLS
+  // downgrade. Mirrors libpq's `invalid sslmode value: "..."` and every
+  // sibling validator (normalizeChannelBinding, normalizeSslCertMode, …).
+  if (raw === null) return 'prefer';
+  const value = raw.toLowerCase();
   switch (value) {
     case 'disable':
     case 'allow':
@@ -1273,7 +1279,7 @@ const normalizeSslMode = (raw: string | null): ConnectOptions['ssl'] => {
     case 'verify-full':
       return value;
     default:
-      return 'prefer';
+      throw new Error(`invalid sslmode value: "${raw}"`);
   }
 };
 

@@ -377,6 +377,39 @@ describe('parseConnectionUri — ssl_{min,max}_protocol_version', () => {
 });
 
 // ---------------------------------------------------------------------------
+// sslmode validation. An explicit but unrecognized value must be REJECTED,
+// not silently downgraded to 'prefer' — falling back would proceed with no
+// cert-chain / hostname verification (TLS downgrade). Review item #1.
+// ---------------------------------------------------------------------------
+describe('parseConnectionUri — sslmode validation', () => {
+  it.each(['verify-ful', 'verifyfull', 'bogus', 'on', 'true'])(
+    'rejects invalid sslmode=%s',
+    (v) => {
+      expect(() =>
+        parseConnectionUri(`postgresql://h/db?sslmode=${v}`),
+      ).toThrow(/invalid sslmode value/);
+    },
+  );
+
+  it.each([
+    'disable',
+    'allow',
+    'prefer',
+    'require',
+    'verify-ca',
+    'verify-full',
+  ])('accepts valid sslmode=%s', (v) => {
+    expect(() =>
+      parseConnectionUri(`postgresql://h/db?sslmode=${v}`),
+    ).not.toThrow();
+  });
+
+  it('defaults to prefer when sslmode is unset', () => {
+    expect(parseConnectionUri('postgresql://h/db').ssl).toBe('prefer');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Multi-host authority + ?host=/?port= list. libpq 10+ accepts comma-
 // separated host[:port] tuples in the authority and comma-separated host=/
 // port= lists in the query string. Single-host callers continue to see
