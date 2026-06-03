@@ -193,7 +193,11 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           BUMP: ${{ inputs.bump }}
         run: |
-          echo "branch=release/neonctl-${RUN_ID}" >> "$GITHUB_OUTPUT"
+          # NOT `release/...`: a protected `release` branch (left over from the
+          # old semantic-release flow) occupies that ref namespace, so git can't
+          # create `release/<x>` under it — the push fails with a directory/file
+          # conflict surfaced as "Reference update failed".
+          echo "branch=release-pr/neonctl-${RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "pr_title=chore: release neonctl@v${VERSION}" >> "$GITHUB_OUTPUT"
           echo "commit_message=chore: release neonctl@v${VERSION}" >> "$GITHUB_OUTPUT"
 
