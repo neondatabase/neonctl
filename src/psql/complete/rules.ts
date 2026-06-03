@@ -1737,8 +1737,10 @@ const sqlRules = async (
     return { candidates: completeFilenames(currentWord, 'sql') };
   }
 
-  // FROM <prefix>: tables/views/matviews.
-  if (TailMatches(prevWords, ['FROM'])) {
+  // FROM <prefix>: tables/views/matviews. EXCLUDE `REVOKE … FROM <role>`,
+  // which must complete role names — otherwise this generic rule shadows the
+  // REVOKE-roles arm below, making it dead code (review item #26).
+  if (TailMatches(prevWords, ['FROM']) && !HeadMatches(prevWords, ['REVOKE'])) {
     return completeTables(Query_for_list_of_tables_views);
   }
   // After FROM x, suggest JOIN/WHERE/etc — handled below.
