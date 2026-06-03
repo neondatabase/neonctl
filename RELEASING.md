@@ -29,7 +29,7 @@ gh workflow run prepare-release.yml --repo neondatabase/neonctl --ref main -f bu
 **4. Dispatch Stage 2** (copy from the PR comment, or):
 
 ```bash
-gh workflow run release-neondatabase-neonctl.yml \
+gh workflow run neonctl.yml \
   --repo databricks/secure-public-registry-releases-eng \
   --ref main -f ref=vX.Y.Z -f dry-run=true   # set dry-run=false to publish for real
 ```
