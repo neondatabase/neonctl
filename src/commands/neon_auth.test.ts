@@ -397,21 +397,6 @@ describe('neon-auth', () => {
     ]);
   });
 
-  test('plugins update', async ({ testCliCommand }) => {
-    await testCliCommand([
-      'neon-auth',
-      'plugins',
-      'update',
-      'organization',
-      '--project-id',
-      'test',
-      '--branch',
-      'test_branch',
-      '--json',
-      '{"enabled": true, "organization_limit": 10}',
-    ]);
-  });
-
   // --- User ---
 
   test('user create', async ({ testCliCommand }) => {

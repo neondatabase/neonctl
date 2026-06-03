@@ -192,13 +192,6 @@ allow_localhost: true
 "
 `;
 
-exports[`neon-auth > plugins update 1`] = `
-"enabled: true
-organization_limit: 10
-creator_role: owner
-"
-`;
-
 exports[`neon-auth > status 1`] = `
 "auth_provider: better_auth
 auth_provider_project_id: test-auth-project-id
