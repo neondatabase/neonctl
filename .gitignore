@@ -14,3 +14,4 @@ coverage
 tmp/
 .history
 .npmrc
+.env

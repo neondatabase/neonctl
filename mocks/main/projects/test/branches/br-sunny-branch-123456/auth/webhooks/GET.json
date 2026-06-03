@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "webhook_url": "",
+  "enabled_events": [],
+  "timeout_seconds": 5
+}

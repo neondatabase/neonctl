@@ -1,0 +1,9 @@
+{
+  "auth_provider": "better_auth",
+  "auth_provider_project_id": "test-auth-project-id",
+  "branch_id": "br-sunny-branch-123456",
+  "db_name": "neondb",
+  "base_url": "https://auth.test.neon.tech",
+  "created_at": "2024-01-01T00:00:00Z",
+  "jwks_url": "https://auth.test.neon.tech/.well-known/jwks.json"
+}

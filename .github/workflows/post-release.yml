@@ -1,11 +1,13 @@
 name: Post-release (tag + handoff)
 
 # Fires when a prepare-release PR merges. Steps:
-#   1. Parse the squash commit subject for `neonctl@v<ver>`
-#   2. Create the `v<ver>` tag on the merge commit
-#   3. Push the tag
-#   4. Comment on the merged PR with Stage 2 (npm publish) dispatch instructions
-#   5. Write the same instructions to the workflow run summary
+#   1. Parse the version from package.json (cross-checked against the subject)
+#   2. Create + push the `v<ver>` tag on the merge commit
+#   3. Comment on the merged PR with Stage 2 dispatch instructions
+#   4. Write the same instructions to the workflow run summary
+#
+# Artifacts (npm package + GitHub release with CLI binaries) are produced by
+# Stage 2, not here — we don't build/publish artifacts from the public repo.
 #
 # No cross-repo dispatch. Stage 2 is triggered by a human from the PR comment
 # or summary. See prepare-release.yml header for why.
@@ -41,8 +43,7 @@ jobs:
         with:
           egress-policy: audit
 
-      # GITHUB_TOKEN can't push refs in this repo; use the GitHub App token
-      # (same app the release workflow uses) so the tag push below succeeds.
+      # Push the tag under the release App identity (same token as Stage 1).
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
@@ -77,7 +78,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-          # Persist the App token so `git push` of the tag below is authorized.
+          # Persist the App token so the tag push uses the release identity.
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Parse release metadata
@@ -160,11 +161,11 @@ jobs:
             echo "body<<HANDOFF_EOF"
             echo ":rocket: **Tagged \`${TAG}\` on the merge commit.**"
             echo ""
-            echo "### Stage 2 — publish to npm"
+            echo "### Stage 2 — publish (npm + GitHub release)"
             echo ""
             echo "> :warning: **Provisional:** the workflow filename and input names below are assumed to match the central repo's setup. If Stage 2 uses different names, the dispatch commands need updating in \`.github/workflows/post-release.yml\`."
             echo ""
-            echo "Trigger the publish workflow in \`databricks/secure-public-registry-releases-eng\`:"
+            echo "Stage 2 builds + scans the artifacts and publishes the npm package and the GitHub release (with the CLI binaries). Trigger it in \`databricks/secure-public-registry-releases-eng\`:"
             echo ""
             echo "\`\`\`bash"
             echo "# Dry run (recommended first):"
