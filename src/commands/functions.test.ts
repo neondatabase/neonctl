@@ -190,4 +190,105 @@ describe('functions', () => {
       },
     );
   });
+
+  test('deploy --env encodes environment as JSON', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--path',
+        fnDir,
+        '--no-wait',
+        '--env',
+        'KEY=VALUE',
+        '--env',
+        'A=B',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        stderr:
+          'INFO: Deployment 1 created for my-func (status: pending) ' +
+          'INFO: Check status with: neonctl functions get my-func ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+  });
+
+  test('deploy rejects malformed --env', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--path',
+        fnDir,
+        '--no-wait',
+        '--env',
+        'NOEQUALS',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr: 'ERROR: Invalid --env value "NOEQUALS". Expected KEY=VALUE.',
+      },
+    );
+  });
+
+  test('deploy rejects an invalid slug', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'Bad_Slug',
+        '--path',
+        fnDir,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Invalid function slug "Bad_Slug". Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.',
+      },
+    );
+  });
+
+  test('deploy errors when index.ts is missing', async ({ testCliCommand }) => {
+    const emptyDir = mkdtempSync(join(tmpdir(), 'neonctl-empty-'));
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--path',
+        emptyDir,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr: `ERROR: No index.ts found in ${emptyDir}. A function must have an index.ts at the root of --path.`,
+      },
+    );
+    rmSync(emptyDir, { recursive: true, force: true });
+  });
 });
