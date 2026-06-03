@@ -477,13 +477,14 @@ describe('alignedPrinter wrapped mode', () => {
     expect(dataLines.length).toBeGreaterThan(4);
   });
 
-  test('right-aligns xid8 and pg_lsn by OID', async () => {
-    // xid8 = OID 5069, pg_lsn = OID 3220. Both should be right-aligned
-    // even though they're contrib/extension-y "numeric-ish" types.
+  test('right-aligns xid/cid by OID; left-aligns pg_lsn (matches upstream)', async () => {
+    // psql's column_type_alignment() right-aligns xid (28) and cid (29) but
+    // NOT pg_lsn (3220) — which we previously got backwards (review: minor
+    // divergences). xid8 (5069) is likewise left-aligned now.
     const rs = makeResultSet({
       columns: [
-        { name: 'xmin', oid: 5069 },
-        { name: 'lsn', oid: 3220 },
+        { name: 'x', oid: 28 }, // xid → right-aligned
+        { name: 'lsn', oid: 3220 }, // pg_lsn → left-aligned
         { name: 'label' },
       ],
       rows: [
@@ -494,15 +495,13 @@ describe('alignedPrinter wrapped mode', () => {
     const out = await capture((s) =>
       alignedPrinter.printQuery(rs, defaultOpts(), s),
     );
-    // xid8 value '7' should be right-aligned within its column.
-    // The shorter value '7' should have padding on the LEFT (right-align).
     const lines = out.split('\n');
-    const row7 = lines.find((l) => l.includes(' 7 ') && l.includes('0/0'));
+    const row7 = lines.find((l) => l.includes('7') && l.includes('0/0'));
     expect(row7).toBeDefined();
-    // Verify "7" follows whitespace (right-aligned), not "7 " (left-aligned).
+    // xid '7' right-aligned: left-padded within its column.
     expect(row7).toMatch(/ {2,}7 \|/);
-    // Verify pg_lsn '0/0' is right-aligned vs '0/1A2B3C4D'.
-    expect(row7).toMatch(/\| {2,}0\/0 \|/);
+    // pg_lsn '0/0' left-aligned: the value is followed by padding spaces.
+    expect(row7).toMatch(/\| 0\/0 {2,}\|/);
   });
 });
 

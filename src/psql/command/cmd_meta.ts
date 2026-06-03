@@ -740,8 +740,9 @@ export const cmdErrverbose: BackslashCmdSpec = {
 };
 
 /**
- * `\timing [on|off|toggle]` — toggle `settings.timing`. With no arg the
- * value is flipped. Prints the new state to stdout.
+ * `\timing [on|off]` — set `settings.timing`. With no arg the value is
+ * flipped. Prints the new state to stdout. `toggle` is NOT a valid value —
+ * upstream errors "Boolean expected" (review: minor divergences).
  */
 export const cmdTiming: BackslashCmdSpec = {
   name: 'timing',
@@ -749,7 +750,7 @@ export const cmdTiming: BackslashCmdSpec = {
   run: (ctx: BackslashContext): Promise<BackslashResult> => {
     const arg = ctx.nextArg('normal');
     let next: boolean;
-    if (arg === null || arg.toLowerCase() === 'toggle') {
+    if (arg === null) {
       next = !ctx.settings.timing;
     } else {
       const parsed = parseBool(arg);

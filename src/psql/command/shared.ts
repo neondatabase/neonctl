@@ -55,10 +55,13 @@ export type Triple = 'on' | 'off' | 'auto' | 'toggle';
 export const parseTriple = (raw: string): Triple | null => {
   const lower = raw.toLowerCase();
   if (lower.length === 0) return null;
-  if ('auto'.startsWith(lower) && lower.length >= 1) return 'auto';
-  if ('toggle'.startsWith(lower) && lower.length >= 1) return 'toggle';
+  // Resolve booleans FIRST. Otherwise `t` matched the `toggle` prefix before
+  // parseBool, so `\x t` toggled rather than turning expanded ON, and `\pset`
+  // bool prefixes were inverted (review: minor divergences).
   const b = parseBool(raw);
   if (b === true) return 'on';
   if (b === false) return 'off';
+  if ('auto'.startsWith(lower)) return 'auto';
+  if ('toggle'.startsWith(lower)) return 'toggle';
   return null;
 };

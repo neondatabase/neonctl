@@ -89,13 +89,20 @@ export const unalignedPrinter: Printer = {
         outBuf += row.join(fieldSep) + recordSep;
       });
 
-      if (!tuplesOnly && topt.defaultFooter) {
+      // Default `(N rows)` footer is suppressed when the caller supplied its
+      // own footers — upstream (and aligned.ts) print user footers INSTEAD of
+      // the row count, not in addition (review: unaligned footer duplication).
+      const hasUserFooters =
+        opts.footers !== undefined &&
+        opts.footers !== null &&
+        opts.footers.length > 0;
+      if (!tuplesOnly && topt.defaultFooter && !hasUserFooters) {
         const n = rs.rows.length;
         outBuf += `(${String(n)} ${n === 1 ? 'row' : 'rows'})` + recordSep;
       }
 
-      if (!tuplesOnly && opts.footers) {
-        for (const footer of opts.footers) {
+      if (!tuplesOnly && hasUserFooters) {
+        for (const footer of opts.footers ?? []) {
           outBuf += footer + recordSep;
         }
       }

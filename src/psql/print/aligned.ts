@@ -352,18 +352,22 @@ export const padToWidth = (
 // curated set of well-known numeric/identifier OIDs that ship with stock PG.
 // Custom domains over numeric types and contrib types not listed here will
 // fall back to left-alignment — documented limitation.
+// Exactly mirrors upstream psql's `column_type_alignment()` (common.c): the
+// fixed set int2/int4/int8, float4/float8, numeric, oid, xid, cid, money.
+// NOT interval / pg_lsn / xid8 — psql left-aligns those (review: minor
+// divergences — we previously right-aligned interval & pg_lsn and omitted
+// xid & cid).
 const RIGHT_ALIGNED_OIDS = new Set<number>([
   20, // int8
   21, // int2
   23, // int4
   26, // oid
+  28, // xid
+  29, // cid
   700, // float4
   701, // float8
-  790, // money
+  790, // money (cash)
   1700, // numeric
-  1186, // interval
-  3220, // pg_lsn  (PG 9.4+ — log sequence numbers, render right-aligned)
-  5069, // xid8    (PG 13+ — 64-bit transaction IDs)
 ]);
 
 const isRightAlignedField = (oid: number): boolean =>

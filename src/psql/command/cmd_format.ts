@@ -125,6 +125,11 @@ export const cmdF: BackslashCmdSpec = {
       return Promise.resolve({ status: 'ok' });
     }
     ctx.settings.popt.topt.fieldSep = arg;
+    // Upstream confirms the change (quiet-gated), like the other \pset-style
+    // setters (review: `\f SEP` is silent).
+    if (!ctx.settings.quiet) {
+      writeOut(`Field separator is "${arg}".\n`);
+    }
     return Promise.resolve({ status: 'ok' });
   },
 };

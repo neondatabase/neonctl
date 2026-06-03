@@ -784,17 +784,19 @@ export const cmdEndPipeline: BackslashCmdSpec = {
           // SQL-shaped failure (libpq's PQsetSingleRowMode rejection
           // inside a pipeline). Mirror that for any rejection that
           // surfaces at `\endpipeline` time while FETCH_COUNT was set.
+          // The chunked-mode prefix is gated on FETCH_COUNT, but the REAL
+          // ERROR must still be surfaced — the old code printed the prefix +
+          // "Pipeline aborted" for ANY rejection under FETCH_COUNT, swallowing
+          // the actual ERROR: text (review: minor divergences). "Pipeline
+          // aborted, command did not run" is shown ONLY for the synthetic
+          // queue-skip marker (no real error behind it).
           if (fetchCountActive) {
             writeErr('fetching results in chunked mode failed\n');
-            // For the FETCH_COUNT path, vanilla follows up with the
-            // bare "Pipeline aborted" line REGARDLESS of whether the
-            // underlying rejection was the real ERROR or the synthetic
-            // marker — the chunked-mode failure already names the
-            // SQL-layer cause, so the second line is just the queue-
-            // skip marker.
-            writeErr('Pipeline aborted, command did not run\n');
-          } else if (isAborted && realLastError !== null) {
+          }
+          if (isAborted && realLastError !== null) {
             renderPipelineError(realLastError);
+          } else if (isAborted) {
+            writeErr('Pipeline aborted, command did not run\n');
           } else {
             renderPipelineError(reason);
           }
@@ -808,12 +810,13 @@ export const cmdEndPipeline: BackslashCmdSpec = {
       if (!errorRendered) {
         const lastErr = session.lastError;
         if (lastErr !== null && lastErr !== undefined) {
+          // A real trailing-Sync error: name the chunked-mode failure when
+          // FETCH_COUNT was active, but still render the actual ERROR rather
+          // than the synthetic "Pipeline aborted" line (review: minor).
           if (fetchCountActive) {
             writeErr('fetching results in chunked mode failed\n');
-            writeErr('Pipeline aborted, command did not run\n');
-          } else {
-            renderPipelineError(lastErr);
           }
+          renderPipelineError(lastErr);
         }
       }
       return { status: 'ok' };
