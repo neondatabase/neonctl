@@ -1,0 +1,27 @@
+{
+  "functions": [
+    {
+      "id": "fn-1",
+      "slug": "my-func",
+      "name": "My Func",
+      "invocation_url": "https://my-func.functions.neon.tech",
+      "created_at": "2026-06-03T00:00:00Z",
+      "active_deployment": {
+        "id": 1,
+        "status": "completed",
+        "bundle_sha256": "abc123",
+        "memory_mib": 256,
+        "concurrency": 1,
+        "runtime": "nodejs24",
+        "created_at": "2026-06-03T00:00:00Z"
+      }
+    },
+    {
+      "id": "fn-2",
+      "slug": "other-func",
+      "name": "Other Func",
+      "invocation_url": "https://other-func.functions.neon.tech",
+      "created_at": "2026-06-02T00:00:00Z"
+    }
+  ]
+}
