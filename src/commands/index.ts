@@ -21,6 +21,7 @@ import * as dev from './dev.js';
 import * as config from './config.js';
 import * as deploy from './deploy.js';
 import * as env from './env.js';
+import * as buckets from './buckets.js';
 
 export default [
   auth,
@@ -46,4 +47,5 @@ export default [
   config,
   deploy,
   env,
+  buckets,
 ];

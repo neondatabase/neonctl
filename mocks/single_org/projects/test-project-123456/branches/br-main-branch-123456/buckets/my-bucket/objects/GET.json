@@ -1,0 +1,20 @@
+{
+  "folders": ["images/", "logs/"],
+  "objects": [
+    {
+      "key": "hello.txt",
+      "size": 12,
+      "last_modified": "2021-01-01T00:00:00.000Z",
+      "etag": "\"abc123\""
+    },
+    {
+      "key": "readme.md",
+      "size": 2048,
+      "last_modified": "2021-02-02T00:00:00.000Z",
+      "etag": "\"def456\""
+    }
+  ],
+  "prefix": "",
+  "next_cursor": "",
+  "is_truncated": false
+}
