@@ -71,48 +71,74 @@ const formatHelp = (help: string) => {
     result.push('');
   }
 
-  // positional args block
-  // example command to see: neonctl branches rename
-  const positionalsBlock = consumeBlockIfMatches(lines, /Positionals:/);
-  if (positionalsBlock.length > 0) {
-    const header = positionalsBlock.shift() as string;
-    result.push(header);
-    const ui = cliui({
-      width: 0,
-    });
-    positionalsBlock.forEach((line) => {
-      const [positional, description] = splitColumns(line);
-      ui.div(
-        {
-          text: positional,
-          width: SPACE_WIDTH,
-          padding: [0, 2, 0, 0],
-        },
-        {
-          text: description,
-          padding: [0, 0, 0, 0],
-        },
-      );
-    });
-    result.push(ui.toString());
-    result.push('');
-  }
-
   // command description
   // example command to see: neonctl projects list
-  const descriptionBlock = consumeBlockIfMatches(lines, /^(?!.*options:)/i);
+  // Regex excludes known section headers so they aren't consumed as description text.
+  const descriptionBlock = consumeBlockIfMatches(
+    lines,
+    /^(?!.*(options:|Positionals:|Examples:|Commands:))/i,
+  );
   if (descriptionBlock.length > 0) {
     result.push(...descriptionBlock);
     result.push('');
   }
 
-  while (true) {
-    // there are two options blocks: global and specific
-    // example to see both: neonctl projects create
-    const optionsBlock = consumeBlockIfMatches(lines, /.*options:/i);
-    if (optionsBlock.length === 0) {
-      break;
+  // positional args block — must come AFTER description consumption because yargs
+  // emits description before Positionals: in the raw help string.
+  // NOTE: sub-command builders that call .positional() MUST also call .usage(),
+  // otherwise yargs bypasses our showHelp middleware and renders its own plain
+  // text help. This is a yargs quirk, not intentional design. The .usage() call
+  // is the only known fix short of adding .help(false) to every sub-command builder.
+  const positionalsBlock = consumeBlockIfMatches(lines, /Positionals:/);
+  if (positionalsBlock.length > 0) {
+    // extract required positional names from usage line (angle-bracket syntax)
+    const requiredPositionals = new Set<string>();
+    for (const m of (topLevelCommand ?? '').matchAll(/<([^>]+)>/g)) {
+      requiredPositionals.add(m[1]);
     }
+
+    positionalsBlock.shift(); // discard yargs' "Positionals:" header
+    result.push(chalk.gray('Arguments:'));
+    positionalsBlock.forEach((line) => {
+      const [positional, description] = splitColumns(line);
+      const desc =
+        requiredPositionals.has(positional.trim()) &&
+        !(description ?? '').includes('[required]')
+          ? `${description ?? ''} [required]`
+          : (description ?? '');
+      const ui = cliui({ width: 0 });
+      ui.div({
+        text: chalk.cyan(positional),
+        padding: [0, 0, 0, 0],
+      });
+      ui.div(
+        {
+          text: chalk.gray(drawPointer(SPACE_WIDTH)),
+          width: SPACE_WIDTH,
+          padding: [0, 2, 0, 0],
+        },
+        {
+          text: chalk.rgb(210, 210, 210)(desc),
+          padding: [0, 0, 0, 0],
+        },
+      );
+      result.push(ui.toString());
+    });
+    result.push('');
+  }
+
+  // collect all options blocks then sort: command-specific before global
+  const allOptionsBlocks: string[][] = [];
+  while (true) {
+    const optionsBlock = consumeBlockIfMatches(lines, /.*options:/i);
+    if (optionsBlock.length === 0) break;
+    allOptionsBlocks.push(optionsBlock);
+  }
+  allOptionsBlocks.sort(
+    (a, b) => Number(/^global/i.test(a[0])) - Number(/^global/i.test(b[0])),
+  );
+
+  for (const optionsBlock of allOptionsBlocks) {
     result.push(optionsBlock.shift() as string);
     optionsBlock.forEach((line) => {
       const [option, description] = splitColumns(line);
@@ -157,21 +183,26 @@ const formatHelp = (help: string) => {
   const exampleBlock = consumeBlockIfMatches(lines, /Examples:/);
   if (exampleBlock.length > 0) {
     result.push(exampleBlock.shift() as string);
-    const ui = cliui({
-      width: 0,
-    });
     for (const line of exampleBlock) {
       const [command, description] = splitColumns(line);
+      const ui = cliui({ width: 0 });
       ui.div({
-        text: chalk.bold(command),
+        text: chalk.green(command),
         padding: [0, 0, 0, 0],
       });
-      ui.div({
-        text: chalk.reset(description),
-        padding: [0, 0, 0, 2],
-      });
+      ui.div(
+        {
+          text: chalk.gray(drawPointer(SPACE_WIDTH)),
+          width: SPACE_WIDTH,
+          padding: [0, 2, 0, 0],
+        },
+        {
+          text: chalk.rgb(210, 210, 210)(description ?? ''),
+          padding: [0, 0, 0, 0],
+        },
+      );
+      result.push(ui.toString());
     }
-    result.push(ui.toString());
   }
 
   return [...result, ...lines];

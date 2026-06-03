@@ -1280,7 +1280,7 @@ const organizationGet = async (props: AuthBranchProps) => {
     return;
   }
   if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(org as any, { fields: ORGANIZATION_FIELDS as any });
+    writer(props).end(org, { fields: ORGANIZATION_FIELDS as any });
     return;
   }
   printKvBlock('Organization configuration', printOrganizationEntries(org));

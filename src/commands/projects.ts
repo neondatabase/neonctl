@@ -55,7 +55,8 @@ export const builder = (argv: yargs.Argv) => {
       (yargs) =>
         yargs.options({
           'org-id': {
-            describe: 'List projects of a given organization',
+            describe:
+              "Organization ID. Filters to that org's projects. Without this, shows your migrated-personal org's projects plus shared projects (if applicable).",
             type: 'string',
           },
           'recoverable-only': {
@@ -72,62 +73,69 @@ export const builder = (argv: yargs.Argv) => {
       'create',
       'Create a project',
       (yargs) =>
-        yargs.options({
-          'block-public-connections': {
-            describe:
-              projectCreateRequest['project.settings.block_public_connections']
-                .description,
-            type: 'boolean',
-          },
-          'block-vpc-connections': {
-            describe:
-              projectCreateRequest['project.settings.block_vpc_connections']
-                .description,
-            type: 'boolean',
-          },
-          hipaa: {
-            describe:
-              projectCreateRequest['project.settings.hipaa'].description,
-            type: 'boolean',
-          },
-          name: {
-            describe: projectCreateRequest['project.name'].description,
-            type: 'string',
-          },
-          'region-id': {
-            describe: `The region ID. Possible values: ${REGIONS.join(', ')}`,
-            type: 'string',
-          },
-          'org-id': {
-            describe: "The project's organization ID",
-            type: 'string',
-          },
-          psql: {
-            type: 'boolean',
-            describe: 'Connect to a new project via psql',
-            default: false,
-          },
-          database: {
-            describe:
-              projectCreateRequest['project.branch.database_name'].description,
-            type: 'string',
-          },
-          role: {
-            describe:
-              projectCreateRequest['project.branch.role_name'].description,
-            type: 'string',
-          },
-          'set-context': {
-            type: 'boolean',
-            describe: 'Set the current context to the new project',
-            default: false,
-          },
-          cu: {
-            describe:
-              'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
-            type: 'string',
-          },
-        }),
+        yargs
+          .options({
+            'block-public-connections': {
+              describe: 'Block connections from the public internet.',
+              type: 'boolean',
+            },
+            'block-vpc-connections': {
+              describe: 'Block connections via VPC endpoints.',
+              type: 'boolean',
+            },
+            hipaa: {
+              describe: 'Enable HIPAA compliance mode for the project.',
+              type: 'boolean',
+            },
+            name: {
+              describe: projectCreateRequest['project.name'].description,
+              type: 'string',
+            },
+            'region-id': {
+              describe: `The region ID. Possible values: ${REGIONS.join(', ')}`,
+              type: 'string',
+            },
+            'org-id': {
+              describe: "The project's organization ID",
+              type: 'string',
+            },
+            psql: {
+              type: 'boolean',
+              describe: 'Connect to a new project via psql',
+              default: false,
+            },
+            database: {
+              describe:
+                projectCreateRequest['project.branch.database_name']
+                  .description,
+              type: 'string',
+            },
+            role: {
+              describe:
+                projectCreateRequest['project.branch.role_name'].description,
+              type: 'string',
+            },
+            'set-context': {
+              type: 'boolean',
+              describe: 'Save the new project ID to the .neon context file.',
+              default: false,
+            },
+            cu: {
+              describe:
+                'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
+              type: 'string',
+            },
+          })
+          .example([
+            [
+              '$0 projects create --name my-project',
+              'Create a project named my-project',
+            ],
+            [
+              '$0 projects create --name my-project --region-id aws-us-east-1 --set-context',
+              'Create a project in us-east-1 and save it as the active context',
+            ],
+          ]),
       async (args) => {
         await handleMissingOrgId(args as any, create);
       },
@@ -136,36 +144,39 @@ export const builder = (argv: yargs.Argv) => {
       'update <id>',
       'Update a project',
       (yargs) =>
-        yargs.options({
-          'block-vpc-connections': {
-            describe:
-              projectUpdateRequest['project.settings.block_vpc_connections']
-                .description +
-              ' Use --block-vpc-connections=false to set the value to false.',
-            type: 'boolean',
-          },
-          'block-public-connections': {
-            describe:
-              projectUpdateRequest['project.settings.block_public_connections']
-                .description +
-              ' Use --block-public-connections=false to set the value to false.',
-            type: 'boolean',
-          },
-          hipaa: {
-            describe:
-              projectUpdateRequest['project.settings.hipaa'].description,
-            type: 'boolean',
-          },
-          cu: {
-            describe:
-              'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
+        yargs
+          // .usage() required alongside .positional() — see comment in src/help.ts
+          .usage('$0 projects update <id>')
+          .positional('id', {
+            describe: 'Project ID or name',
             type: 'string',
-          },
-          name: {
-            describe: projectUpdateRequest['project.name'].description,
-            type: 'string',
-          },
-        }),
+          })
+          .options({
+            'block-vpc-connections': {
+              describe:
+                'Block connections via VPC endpoints. Use --block-vpc-connections=false to disable.',
+              type: 'boolean',
+            },
+            'block-public-connections': {
+              describe:
+                'Block connections from the public internet. Use --block-public-connections=false to disable.',
+              type: 'boolean',
+            },
+            hipaa: {
+              describe:
+                'Enable or disable HIPAA compliance mode for the project.',
+              type: 'boolean',
+            },
+            cu: {
+              describe:
+                'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
+              type: 'string',
+            },
+            name: {
+              describe: projectUpdateRequest['project.name'].description,
+              type: 'string',
+            },
+          }),
       async (args) => {
         await update(args as any);
       },
@@ -173,15 +184,23 @@ export const builder = (argv: yargs.Argv) => {
     .command(
       'delete <id>',
       'Delete a project',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.usage('$0 projects delete <id>').positional('id', {
+          describe: 'Project ID or name',
+          type: 'string',
+        }),
       async (args) => {
         await deleteProject(args as any);
       },
     )
     .command(
       'recover <id>',
-      'Recovers a deleted project during the deletion grace period',
-      (yargs) => yargs,
+      'Recover a deleted project within the deletion grace period',
+      (yargs) =>
+        yargs.usage('$0 projects recover <id>').positional('id', {
+          describe: 'Project ID or name',
+          type: 'string',
+        }),
       async (args) => {
         await recover(args as any);
       },
@@ -189,7 +208,11 @@ export const builder = (argv: yargs.Argv) => {
     .command(
       'get <id>',
       'Get a project',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.usage('$0 projects get <id>').positional('id', {
+          describe: 'Project ID or name',
+          type: 'string',
+        }),
       async (args) => {
         await get(args as any);
       },

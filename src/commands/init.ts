@@ -29,8 +29,7 @@ function parseAgentToEditor(value: string): Editor | null {
 }
 
 export const command = 'init';
-export const describe =
-  'Initialize a project with Neon using your AI coding assistant';
+export const describe = 'Configure AI assistant integration for Neon';
 export const builder = (yargs: yargs.Argv) =>
   yargs
     .option('context-file', {
@@ -39,7 +38,7 @@ export const builder = (yargs: yargs.Argv) =>
     .option('agent', {
       alias: 'a',
       type: 'string',
-      describe: 'Agent to configure (cursor, copilot, code).',
+      describe: 'AI assistant to configure (cursor, copilot, claude).',
     })
     .strict(false);
 

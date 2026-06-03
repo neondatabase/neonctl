@@ -10,6 +10,7 @@ import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
 import { parsePITBranch } from '../utils/point_in_time.js';
+import { PROJECT_ID_DESC } from '../utils/help_text.js';
 
 export const SSL_MODES = [
   'require',
@@ -23,7 +24,9 @@ export const aliases = ['cs'];
 export const describe = 'Get connection string';
 export const builder = (argv: yargs.Argv) => {
   return argv
-    .usage('$0 connection-string [branch] [options]')
+    .usage(
+      '$0 connection-string [branch] [options]\n\nGet a connection string for a branch.',
+    )
     .example('$0 cs main', 'Get connection string for the main branch')
     .example(
       '$0 cs main@2024-01-01T00:00:00Z',
@@ -40,7 +43,7 @@ export const builder = (argv: yargs.Argv) => {
     .options({
       'project-id': {
         type: 'string',
-        describe: 'Project ID',
+        describe: PROJECT_ID_DESC,
       },
       'role-name': {
         type: 'string',

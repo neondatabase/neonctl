@@ -5,6 +5,7 @@ import { fillSingleProject } from '../utils/enrichers.js';
 import { Project, ProjectUpdateRequest } from '@neondatabase/api-client';
 import { projectUpdateRequest } from '../parameters.gen.js';
 import { log } from '../log.js';
+import { PROJECT_ID_DESC } from '../utils/help_text.js';
 
 const IP_ALLOW_FIELDS = [
   'id',
@@ -14,13 +15,13 @@ const IP_ALLOW_FIELDS = [
 ] as const;
 
 export const command = 'ip-allow';
-export const describe = 'Manage IP Allow';
+export const describe = 'Restrict project access by IP address';
 export const builder = (argv: yargs.Argv) => {
   return argv
     .usage('$0 ip-allow <sub-command> [options]')
     .options({
       'project-id': {
-        describe: 'Project ID',
+        describe: PROJECT_ID_DESC,
         type: 'string',
       },
     })
@@ -40,7 +41,8 @@ export const builder = (argv: yargs.Argv) => {
         yargs
           .usage('$0 ip-allow add [ips...]')
           .positional('ips', {
-            describe: 'The list of IP addresses to add',
+            describe:
+              'IP addresses to add. Accepts individual IPs, CIDR ranges (e.g. 192.168.1.0/24), and dash-separated ranges (e.g. 192.168.1.20-192.168.1.50).',
             type: 'string',
             default: [],
             array: true,
@@ -53,7 +55,17 @@ export const builder = (argv: yargs.Argv) => {
                 ].description,
               type: 'boolean',
             },
-          }),
+          })
+          .example([
+            [
+              '$0 ip-allow add 192.168.1.1 --project-id my-project',
+              'Allow a single IP',
+            ],
+            [
+              '$0 ip-allow add 192.168.1.0/24 10.0.0.0/8',
+              'Allow two CIDR ranges',
+            ],
+          ]),
       async (args) => {
         await add(args as any);
       },
@@ -63,7 +75,7 @@ export const builder = (argv: yargs.Argv) => {
       'Remove IP addresses from the IP allowlist',
       (yargs) =>
         yargs.usage('$0 ip-allow remove [ips...]').positional('ips', {
-          describe: 'The list of IP addresses to remove',
+          describe: 'IP addresses to remove. At least one required.',
           type: 'string',
           default: [],
           array: true,
@@ -76,12 +88,25 @@ export const builder = (argv: yargs.Argv) => {
       'reset [ips...]',
       'Reset the IP allowlist',
       (yargs) =>
-        yargs.usage('$0 ip-allow reset [ips...]').positional('ips', {
-          describe: 'The list of IP addresses to reset',
-          type: 'string',
-          default: [],
-          array: true,
-        }),
+        yargs
+          .usage('$0 ip-allow reset [ips...]')
+          .positional('ips', {
+            describe:
+              'No args: clear the entire allowlist (exposes project to the internet). With IPs: replace the allowlist with exactly these addresses.',
+            type: 'string',
+            default: [],
+            array: true,
+          })
+          .example([
+            [
+              '$0 ip-allow reset',
+              'Clear the allowlist — allow connections from anywhere',
+            ],
+            [
+              '$0 ip-allow reset 192.168.1.1 10.0.0.0/8',
+              'Replace the allowlist with exactly these two addresses',
+            ],
+          ]),
       async (args) => {
         await reset(args as any);
       },

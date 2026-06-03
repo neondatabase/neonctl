@@ -118,7 +118,8 @@ builder = builder
       default: null as unknown as Api<unknown>,
     },
     'context-file': {
-      describe: 'Context file',
+      describe:
+        'Path to .neon context file (default: .neon in cwd or nearest ancestor)',
       type: 'string',
       default: currentContextFile,
     },
@@ -164,7 +165,10 @@ builder = builder
   .version(pkg.version)
   .group('version', 'Global options:')
   .alias('version', 'v')
-  .completion()
+  .completion(
+    'completion',
+    'Generate a shell tab-completion script (bash, zsh)',
+  )
   .scriptName(basename(process.argv[1]) === 'neon' ? 'neon' : 'neonctl')
   .epilog(
     'For more information, visit https://neon.com/docs/reference/neon-cli',

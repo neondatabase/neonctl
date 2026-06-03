@@ -4,6 +4,7 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 
 import { BranchScopeProps } from '../types.js';
 import { writer } from '../writer.js';
+import { PROJECT_ID_DESC } from '../utils/help_text.js';
 
 const ROLES_FIELDS = ['name', 'created_at'] as const;
 
@@ -15,7 +16,7 @@ export const builder = (argv: yargs.Argv) =>
     .usage('$0 roles <sub-command> [options]')
     .options({
       'project-id': {
-        describe: 'Project ID',
+        describe: PROJECT_ID_DESC,
         type: 'string',
       },
       branch: {
@@ -50,7 +51,11 @@ export const builder = (argv: yargs.Argv) =>
     .command(
       'delete <role>',
       'Delete a role',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.usage('$0 roles delete <role>').positional('role', {
+          describe: 'Role name',
+          type: 'string',
+        }),
       (args) => deleteRole(args as any),
     );
 

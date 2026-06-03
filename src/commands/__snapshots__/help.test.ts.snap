@@ -1,3 +1,17 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`help > branches create --help shows examples 1`] = `""`;
+
+exports[`help > branches create --parent describes fork semantics 1`] = `""`;
+
+exports[`help > branches restore --help shows describe 1`] = `""`;
+
+exports[`help > init --help lists claude as valid agent 1`] = `""`;
+
+exports[`help > ip-allow reset --help explains clear vs replace 1`] = `""`;
+
+exports[`help > operations list --help shows --limit 1`] = `""`;
+
+exports[`help > projects create --help shows hipaa description 1`] = `""`;
+
 exports[`help > without args 1`] = `""`;

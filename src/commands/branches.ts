@@ -20,6 +20,7 @@ import { parsePointInTime } from '../utils/point_in_time.js';
 import { log } from '../log.js';
 import { parseSchemaDiffParams, schemaDiff } from './schema_diff.js';
 import { getComputeUnits } from '../utils/compute_units.js';
+import { PROJECT_ID_DESC } from '../utils/help_text.js';
 
 export const BRANCH_FIELDS: readonly (keyof Branch)[] = [
   'name',
@@ -46,7 +47,7 @@ export const builder = (argv: yargs.Argv) =>
     .usage('$0 branches <sub-command> [options]')
     .options({
       'project-id': {
-        describe: 'Project ID',
+        describe: PROJECT_ID_DESC,
         type: 'string',
       },
     })
@@ -65,84 +66,116 @@ export const builder = (argv: yargs.Argv) =>
       'create',
       'Create a branch',
       (yargs) =>
-        yargs.options({
-          name: branchCreateRequest['branch.name'],
-          parent: {
-            describe:
-              'Parent branch name or id or timestamp or LSN. Defaults to the default branch',
-            type: 'string',
-          },
-          compute: {
-            describe:
-              'Create a branch with or without a compute. By default branch is created with a read-write compute. To create a branch without compute use --no-compute',
-            type: 'boolean',
-            default: true,
-          },
-          type: {
-            describe: 'Type of compute to add',
-            type: 'string',
-            implies: 'compute',
-            default: EndpointType.ReadWrite,
-            choices: Object.values(EndpointType),
-          },
-          'suspend-timeout': {
-            describe:
-              'Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week).',
-            type: 'number',
-            implies: 'compute',
-            default: 0,
-          },
-          cu: {
-            describe:
-              'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
-            type: 'string',
-            implies: 'compute',
-          },
-          psql: {
-            type: 'boolean',
-            describe: 'Connect to a new branch via psql',
-            default: false,
-          },
-          annotation: {
-            type: 'string',
-            hidden: true,
-            default: '{}',
-          },
-          'schema-only': {
-            describe:
-              'Create a schema-only branch. Requires exactly one read-write compute.',
-            type: 'boolean',
-            default: false,
-          },
+        yargs
+          .options({
+            name: branchCreateRequest['branch.name'],
+            parent: {
+              describe:
+                'Branch to create from. Pass a branch name or ID to fork at its head. Pass an ISO 8601 timestamp or LSN to fork the default branch at that point in time. Omit to fork the default branch at head.',
+              type: 'string',
+            },
+            compute: {
+              describe:
+                'Create a branch with or without a compute. By default branch is created with a read-write compute. To create a branch without compute use --no-compute',
+              type: 'boolean',
+              default: true,
+            },
+            type: {
+              describe: 'Type of compute to add',
+              type: 'string',
+              implies: 'compute',
+              default: EndpointType.ReadWrite,
+              choices: Object.values(EndpointType),
+            },
+            'suspend-timeout': {
+              describe:
+                'Duration of inactivity in seconds after which the compute endpoint is\nautomatically suspended. The value `0` means use the global default.\nThe value `-1` means never suspend. The default value is `300` seconds (5 minutes).\nThe maximum value is `604800` seconds (1 week).',
+              type: 'number',
+              implies: 'compute',
+              default: 0,
+            },
+            cu: {
+              describe:
+                'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
+              type: 'string',
+              implies: 'compute',
+            },
+            psql: {
+              type: 'boolean',
+              describe: 'Connect to a new branch via psql',
+              default: false,
+            },
+            annotation: {
+              type: 'string',
+              hidden: true,
+              default: '{}',
+            },
+            'schema-only': {
+              describe:
+                'Create a schema-only branch. Requires exactly one read-write compute.',
+              type: 'boolean',
+              default: false,
+            },
 
-          'expires-at': {
-            describe:
-              'Set an expiration date for the branch. Accepts a date string (e.g., 2024-12-31T23:59:59Z).',
-            type: 'string',
-            requiresArg: true,
-          },
-        }),
+            'expires-at': {
+              describe:
+                'Set an expiration date for the branch. Accepts a date string (e.g., 2024-12-31T23:59:59Z).',
+              type: 'string',
+              requiresArg: true,
+            },
+          })
+          .example([
+            [
+              '$0 branches create --name dev --parent main',
+              'Fork main at its current head',
+            ],
+            [
+              '$0 branches create --name dev --parent 2021-01-01T00:00:00.000Z',
+              'Fork the default branch at a timestamp',
+            ],
+            [
+              '$0 branches create --name dev --parent 0/123ABC',
+              'Fork the default branch at an LSN',
+            ],
+          ]),
       (args) => create(args as any),
     )
     .command(
       'reset <id|name>',
       'Reset a branch',
       (yargs) =>
-        yargs.options({
-          parent: {
-            describe: 'Reset to a parent branch',
-            type: 'boolean',
-            default: false,
-          },
-          'preserve-under-name': {
-            describe: 'Name under which to preserve the old branch',
-          },
-        }),
+        yargs
+          .usage('$0 branches reset <id|name>')
+          .positional('id|name', {
+            describe: 'Branch ID or name',
+            type: 'string',
+          })
+          .options({
+            parent: {
+              describe:
+                "Reset to the head of this branch's parent. Required — omitting this flag throws an error.",
+              type: 'boolean',
+              default: false,
+            },
+            'preserve-under-name': {
+              describe: 'Name under which to preserve the old branch',
+            },
+          })
+          .example([
+            [
+              '$0 branches reset my-branch --parent',
+              'Reset my-branch to the head of its parent branch',
+            ],
+            [
+              '$0 branches reset my-branch --parent --preserve-under-name my-branch-backup',
+              'Reset and save the current state under a new name',
+            ],
+          ]),
       (args) => reset(args as any),
     )
     .command(
       'restore <target-id|name> <source>[@(timestamp|lsn)]',
-      'Restores a branch to a specific point in time\n<source> can be: ^self, ^parent, or <source-branch-id|name>',
+      'Restore a branch to a point in time. Source: branch name/ID, ^self, or ^parent; append @timestamp or @lsn.',
       (yargs) =>
         yargs
           // we want to show meaningful help for the command
@@ -154,7 +187,7 @@ export const builder = (argv: yargs.Argv) =>
             args.branchId = args.id; // for analytics
           })
           .usage(
-            '$0 branches restore <target-id|name> <source>[@(timestamp|lsn)]',
+            '$0 branches restore <target-id|name> <source>[@(timestamp|lsn)]\n\nRestore a branch to a point in time. Source: branch name/ID, ^self, or ^parent; append @timestamp or @lsn.',
           )
           .options({
             'preserve-under-name': {
@@ -184,62 +217,96 @@ export const builder = (argv: yargs.Argv) =>
     .command(
       'rename <id|name> <new-name>',
       'Rename a branch',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs
+          .usage('$0 branches rename <id|name> <new-name>')
+          .positional('id|name', {
+            describe: 'Branch ID or name',
+            type: 'string',
+          })
+          .positional('new-name', {
+            describe: 'New branch name',
+            type: 'string',
+          }),
       (args) => rename(args as any),
     )
     .command(
       'set-default <id|name>',
       'Set a branch as default',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.usage('$0 branches set-default <id|name>').positional('id|name', {
+          describe: 'Branch ID or name',
+          type: 'string',
+        }),
       (args) => setDefault(args as any),
     )
     .command({
       command: 'set-expiration <id|name>',
       describe: 'Set an expiration date for the branch',
       builder: (yargs: yargs.Argv) =>
-        yargs.options({
-          'expires-at': {
-            describe:
-              'Set a expiration date for the branch. If omitted, expiration will be removed. Format [RFC3339]: 2024-12-31T23:59:59Z',
+        yargs
+          .usage('$0 branches set-expiration <id|name>')
+          .positional('id|name', {
+            describe: 'Branch ID or name',
             type: 'string',
-            requiresArg: false,
-          },
-        }),
+          })
+          .options({
+            'expires-at': {
+              describe:
+                'Set a expiration date for the branch. If omitted, expiration will be removed. Format [RFC3339]: 2024-12-31T23:59:59Z',
+              type: 'string',
+              requiresArg: false,
+            },
+          }),
       handler: (args) => setExpiration(args as any),
     })
     .command(
       'add-compute <id|name>',
       'Add a compute to a branch',
       (yargs) =>
-        yargs.options({
-          type: {
+        yargs
+          .usage('$0 branches add-compute <id|name>')
+          .positional('id|name', {
+            describe: 'Branch ID or name',
             type: 'string',
-            choices: Object.values(EndpointType),
-            describe: 'Type of compute to add',
-            default: EndpointType.ReadOnly,
-          },
-          cu: {
-            describe:
-              'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
-            type: 'string',
-          },
-          name: {
-            type: 'string',
-            describe: 'Optional name of the compute',
-          },
-        }),
+          })
+          .options({
+            type: {
+              type: 'string',
+              choices: Object.values(EndpointType),
+              describe: 'Type of compute to add',
+              default: EndpointType.ReadOnly,
+            },
+            cu: {
+              describe:
+                'The number of Compute Units. Could be a fixed size (e.g. "2") or a range delimited by a dash (e.g. "0.5-3").',
+              type: 'string',
+            },
+            name: {
+              type: 'string',
+              describe: 'Optional name of the compute',
+            },
+          }),
       (args) => addCompute(args as any),
     )
     .command(
       'delete <id|name>',
       'Delete a branch',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.usage('$0 branches delete <id|name>').positional('id|name', {
+          describe: 'Branch ID or name',
+          type: 'string',
+        }),
       (args) => deleteBranch(args as any),
     )
     .command(
       'get <id|name>',
       'Get a branch',
-      (yargs) => yargs,
+      (yargs) =>
+        yargs.usage('$0 branches get <id|name>').positional('id|name', {
+          describe: 'Branch ID or name',
+          type: 'string',
+        }),
       (args) => get(args as any),
     )
     .command({
@@ -249,11 +316,24 @@ export const builder = (argv: yargs.Argv) =>
         "Compare the latest schemas of any two branches, or compare a branch to its own or another branch's history.",
       builder: (yargs) => {
         return yargs
+          .usage(
+            '$0 branches schema-diff [base-branch] [compare-source[@(timestamp|lsn)]]',
+          )
           .middleware(
             (args: any) =>
               (args.compareSource = args['compare-source@(timestamp']),
           )
           .middleware(parseSchemaDiffParams as any)
+          .positional('base-branch', {
+            describe:
+              'Branch to use as the base. Defaults to the branch in context, or the default branch.',
+            type: 'string',
+          })
+          .positional('compare-source[@(timestamp|lsn)]', {
+            describe:
+              'Branch (or point-in-time) to compare against. Supports ^self and ^parent magic values.',
+            type: 'string',
+          })
           .options({
             database: {
               alias: 'db',
