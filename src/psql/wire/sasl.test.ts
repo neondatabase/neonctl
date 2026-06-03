@@ -305,6 +305,23 @@ describe('createScramClient', () => {
     ).toThrow(SaslProtocolError);
   });
 
+  test('throws SaslProtocolError on a duplicate attribute in server-first', () => {
+    const client = createScramClient({
+      user: 'user',
+      password: 'p',
+      mechanisms: ['SCRAM-SHA-256'],
+      randomBytes: fixedRandom(NONCE_18),
+    });
+    client.start();
+    // Duplicate `i=` — a non-conformant/hostile server. Reject rather than
+    // silently last-wins.
+    expect(() =>
+      client.continue(
+        Buffer.from(`r=${NONCE_18.toString('base64')}xyz,s=AAAA,i=1000,i=2000`),
+      ),
+    ).toThrow(SaslProtocolError);
+  });
+
   test('throws SaslProtocolError when server nonce does not start with client nonce', () => {
     const client = createScramClient({
       user: 'user',

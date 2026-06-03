@@ -340,7 +340,17 @@ function parseAttributePairs(text: string): Map<string, string> {
         `SASL: malformed attribute pair: ${JSON.stringify(pair)}`,
       );
     }
-    out.set(pair[0], pair.substring(2));
+    const key = pair[0];
+    // RFC 5802 attribute lists never repeat an attribute; a duplicate is
+    // malformed server input. Reject it rather than silently last-wins,
+    // so a non-conformant/hostile server can't smuggle a shadow value
+    // (e.g. `v=<good>,v=<evil>`) past the parse.
+    if (out.has(key)) {
+      throw new SaslProtocolError(
+        `SASL: duplicate attribute ${JSON.stringify(key)} in message`,
+      );
+    }
+    out.set(key, pair.substring(2));
   }
   return out;
 }
