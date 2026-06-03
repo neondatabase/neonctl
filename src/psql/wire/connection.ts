@@ -335,15 +335,33 @@ type CopyInDriver = {
 type CopyOutDriver = {
   /** Buffered CopyData payloads waiting for consumer. */
   queue: Buffer[];
+  /** Total bytes currently buffered in {@link queue} — drives backpressure. */
+  queuedBytes: number;
   /** Pending consumer waker; set when the queue is empty. */
   waker: (() => void) | null;
   /** Set once CopyDone + CommandComplete + ReadyForQuery have arrived. */
   done: boolean;
+  /**
+   * Set when the consumer broke early (AsyncIterator.return()). Once true we
+   * keep reading the wire to drain to ReadyForQuery but DROP CopyData instead
+   * of buffering it, so an abandoned COPY-OUT can't grow RSS without bound
+   * (review item #11).
+   */
+  abandoned: boolean;
   /** First ErrorResponse during the COPY — surfaced when ReadyForQuery hits. */
   error: ConnectError | null;
   /** Last CommandComplete tag (e.g. "COPY 17"). */
   commandTag: string | null;
 };
+
+/**
+ * COPY-OUT backpressure thresholds (bytes). When buffered data exceeds the
+ * high-water mark we pause the socket; the consumer's `next()` resumes it once
+ * it drains below the low-water mark. Bounds RSS for a server that produces
+ * rows faster than the sink consumes them (review item #11).
+ */
+const COPY_OUT_HWM = 8 * 1024 * 1024;
+const COPY_OUT_LWM = 1 * 1024 * 1024;
 
 export class PgConnection implements Connection {
   // -- Socket + framing
@@ -463,6 +481,15 @@ export class PgConnection implements Connection {
    * already validated when the challenge arrived).
    */
   private authChallengeSeen = false;
+
+  /**
+   * True once `AuthenticationSASLFinal` arrived AND `scram.finish()` verified
+   * the server signature (RFC 5802 §3 mutual auth). Used to reject an
+   * `AuthenticationOk` that skips SASLFinal — a rogue/MITM server that doesn't
+   * know the password could otherwise send SASLContinue then jump straight to
+   * AuthenticationOk and never have its signature checked (review item #8).
+   */
+  private saslFinalSeen = false;
 
   // -- Error-after-close guard
   private socketError: Error | null = null;
@@ -1210,8 +1237,10 @@ export class PgConnection implements Connection {
     return new Promise<CopyOutStream>((resolve, reject) => {
       this.copyOut = {
         queue: [],
+        queuedBytes: 0,
         waker: null,
         done: false,
+        abandoned: false,
         error: null,
         commandTag: null,
       };
@@ -1489,6 +1518,19 @@ export class PgConnection implements Connection {
           );
           return;
         }
+        // Mutual-auth integrity: if a SCRAM exchange was started it MUST have
+        // completed via AuthenticationSASLFinal (where the server signature is
+        // verified). A server that sends SASLContinue then jumps to
+        // AuthenticationOk never proves it knows the password (review #8).
+        if (this.scram !== null && !this.saslFinalSeen) {
+          this.failStartup(
+            new Error(
+              'server sent AuthenticationOk without completing SCRAM ' +
+                'authentication (server signature not verified)',
+            ),
+          );
+          return;
+        }
         // require_auth=none allows trust auth; anything else is rejected
         // here. If a prior challenge was sent and validated, skip — that
         // method was already accepted by the check at its own branch.
@@ -1636,6 +1678,7 @@ export class PgConnection implements Connection {
         }
         try {
           this.scram.finish(msg.data);
+          this.saslFinalSeen = true;
         } catch (err) {
           this.failStartup(err);
         }
@@ -1783,6 +1826,11 @@ export class PgConnection implements Connection {
     // Capture the state-getter as a closure so the iterator can observe
     // connection close without holding a `this` alias (no-this-alias rule).
     const isClosed = (): boolean => this.state === 'closed';
+    // Resume reading once the buffered data drains — paired with the
+    // pause() the CopyData handler applies at the high-water mark (#11).
+    const resumeSocket = (): void => {
+      (this.socket as { resume?: () => void }).resume?.();
+    };
     return {
       [Symbol.asyncIterator](): AsyncIterator<Buffer> {
         return {
@@ -1791,6 +1839,8 @@ export class PgConnection implements Connection {
               if (driver.queue.length > 0) {
                 const next = driver.queue.shift();
                 if (next === undefined) continue;
+                driver.queuedBytes -= next.length;
+                if (driver.queuedBytes <= COPY_OUT_LWM) resumeSocket();
                 return { value: next, done: false };
               }
               if (driver.error) {
@@ -1813,8 +1863,16 @@ export class PgConnection implements Connection {
             }
           },
           return(): Promise<IteratorResult<Buffer>> {
-            // Consumer broke early — drain on our side will continue in the
-            // background until ReadyForQuery. We just stop yielding.
+            // Consumer broke early. We must keep reading the wire until
+            // ReadyForQuery to clear the protocol state, but we mark the
+            // stream abandoned (so the handler DROPS further CopyData rather
+            // than buffering it) and free what's queued — otherwise RSS grows
+            // to the full result size (review item #11). Resume in case the
+            // socket was paused at the high-water mark.
+            driver.abandoned = true;
+            driver.queue.length = 0;
+            driver.queuedBytes = 0;
+            resumeSocket();
             return Promise.resolve({ value: undefined, done: true });
           },
         };
@@ -1947,7 +2005,16 @@ export class PgConnection implements Connection {
     if (!driver) return;
     switch (msg.type) {
       case 'CopyData': {
+        // Consumer broke early: drop instead of buffering (review item #11).
+        if (driver.abandoned) return;
         driver.queue.push(msg.data);
+        driver.queuedBytes += msg.data.length;
+        // Apply backpressure when the sink falls behind: pause the socket so
+        // the server stops flooding us. `next()` resumes at the low-water
+        // mark. (No-op if the socket doesn't expose pause(), e.g. a mock.)
+        if (driver.queuedBytes >= COPY_OUT_HWM) {
+          (this.socket as { pause?: () => void }).pause?.();
+        }
         if (driver.waker) {
           const w = driver.waker;
           driver.waker = null;
