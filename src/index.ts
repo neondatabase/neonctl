@@ -45,7 +45,13 @@ const NO_SUBCOMMANDS_VERBS = [
   'cs',
   'connection-string',
 
+  'psql',
+
   'set-context',
+
+  'checkout',
+
+  'link',
 
   'init',
 

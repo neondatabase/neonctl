@@ -1,0 +1,257 @@
+name: Prepare Release
+
+# Stage 1 of the two-stage secure publishing pipeline.
+#
+# Triggered manually via workflow_dispatch. It:
+#   1. Checks the actor has admin/maintain on the repo
+#   2. Bumps the version in package.json (pure bash + jq)
+#   3. Verifies the planned git tag doesn't already exist
+#   4. Opens a signed release PR via peter-evans/create-pull-request
+#
+# What this does NOT do:
+#   - Install deps / build / pack / scan / publish — those are Stage 2.
+#
+# Stage 2 lives in databricks/secure-public-registry-releases-eng and is
+# triggered manually pointing at the tag created by post-release.yml. It
+# builds + scans the artifacts and publishes them (npm package via OIDC
+# Trusted Publishing, plus the GitHub release with the CLI binaries) — we
+# don't build or publish artifacts from this public repo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Semver bump kind (ignored if `version` is set)'
+        required: false
+        type: choice
+        default: minor
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: 'Full custom version string (overrides `bump` if set, e.g. 2.23.0-beta.1)'
+        required: false
+        type: string
+        default: ''
+      ref:
+        description: 'Branch to release from (default: main). Raw SHAs not supported.'
+        required: false
+        type: string
+        default: 'main'
+
+permissions: {}
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  prepare:
+    runs-on:
+      group: neondatabase-protected-runner-group
+      labels: linux-ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # push release branch
+      pull-requests: write # open PR
+
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@4d991eb9b905ef189e4c376166672c3f2f230481 # v2.11.0
+        with:
+          egress-policy: audit
+
+      # Open the PR with a GitHub App token: PRs opened by an App token trigger
+      # the required-check workflows, which GITHUB_TOKEN-opened PRs do not.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check actor has admin/maintain role
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          role=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" --jq '.role_name')
+          if [[ "$role" != "admin" && "$role" != "maintain" ]]; then
+            echo "ERROR: Actor '${GITHUB_ACTOR}' has role '${role}', but 'admin' or 'maintain' is required to dispatch a release."
+            exit 1
+          fi
+          echo "Actor ${GITHUB_ACTOR} passes gate (role: ${role})."
+
+      - name: Validate ref input
+        env:
+          REF_INPUT: ${{ inputs.ref }}
+        run: |
+          REF="${REF_INPUT:-main}"
+          sha_pat='^[0-9a-fA-F]{7,40}$'
+          if [[ "$REF" =~ $sha_pat ]]; then
+            echo "::error::Raw SHA refs are not supported. Use a branch name (e.g., 'main')."
+            exit 1
+          fi
+
+      - name: Checkout code
+        id: checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          fetch-depth: 0 # full history so we can check existing tags
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          current=$(jq -r '.version' package.json)
+          echo "Current version: $current"
+
+          if [[ -n "$VERSION_INPUT" ]]; then
+            new="$VERSION_INPUT"
+            echo "Mode: CUSTOM_VERSION"
+          else
+            # Parse MAJOR.MINOR.PATCH from `current`. The bump only needs the
+            # numeric prefix — any prerelease (`-...`) is discarded for the
+            # new version anyway, so accept any trailing prerelease shape
+            # rather than duplicating the strict validator that runs on `new`
+            # below. Keeping the parser narrower than `semver_pat` would crash
+            # the next bump after we cut a release with a multi-segment
+            # prerelease like `2.23.0-rc.1.2`.
+            cur_pat='^([0-9]+)\.([0-9]+)\.([0-9]+)(-.*)?$'
+            if [[ "$current" =~ $cur_pat ]]; then
+              cur_major="${BASH_REMATCH[1]}"
+              cur_minor="${BASH_REMATCH[2]}"
+              cur_patch="${BASH_REMATCH[3]}"
+            else
+              echo "::error::Could not parse current version '$current' (expected MAJOR.MINOR.PATCH[-PRERELEASE])"
+              exit 1
+            fi
+            case "$BUMP" in
+              major) new="$((cur_major+1)).0.0" ;;
+              minor) new="${cur_major}.$((cur_minor+1)).0" ;;
+              patch) new="${cur_major}.${cur_minor}.$((cur_patch+1))" ;;
+              *) echo "::error::Unknown bump kind '$BUMP'"; exit 1 ;;
+            esac
+            echo "Mode: BUMP ($BUMP)"
+          fi
+
+          # Strict semver shape: MAJOR.MINOR.PATCH(-PRERELEASE)? where each
+          # prerelease identifier is alphanumeric (no leading hyphens, no
+          # empty segments). Rejects junk like `garbage`, `2.23.0-`,
+          # `2.23.0-.foo`. Pattern stored in a variable because inline
+          # `[[ =~ ]]` regexes hit bash quoting quirks with `*` / `?`.
+          semver_pat='^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?$'
+          if ! [[ "$new" =~ $semver_pat ]]; then
+            echo "::error::Version '$new' is not a valid semver. Expected MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE (alphanumeric, dot-separated)."
+            exit 1
+          fi
+
+          echo "New version: $new"
+          jq --arg v "$new" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "tag=v$new" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Version"
+            echo "- Current: \`$current\`"
+            echo "- New: \`$new\`"
+            echo "- Tag (created post-merge): \`v$new\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check planned tag does not already exist
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || \
+             git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists. Choose a newer version and re-run."
+            exit 1
+          fi
+
+      - name: Compute PR metadata
+        id: meta
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          RUN_ID: ${{ github.run_id }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          # `release-pr/` (not `release/`): a ref can't nest under a same-named
+          # leaf ref, so a `release` branch would block creating `release/<x>`.
+          echo "branch=release-pr/neonctl-${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "pr_title=chore: release neonctl@v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit_message=chore: release neonctl@v${VERSION}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "body<<PR_EOF"
+            echo "Automated release cut by \`prepare-release.yml\` (run [${RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}))."
+            echo ""
+            echo "- Version: \`${VERSION}\`"
+            echo "- Tag (created post-merge): \`${TAG}\`"
+            echo "- Bump kind: \`${BUMP}\`"
+            echo ""
+            echo "### Next steps"
+            echo "1. Click **Ready for review** to take this PR out of draft (GitHub won't merge a draft)."
+            echo "2. An approver reviews + approves this PR."
+            echo "3. Required checks run."
+            echo "4. On green, the approver **manually clicks \"Squash and merge\"** in the UI. **Do NOT use auto-merge.**"
+            echo "5. \`post-release.yml\` fires on the push to \`main\`, tags the squash commit \`${TAG}\`, and comments here with Stage 2 (npm + GitHub release) dispatch instructions."
+            echo ""
+            echo "> :warning: **Why manual merge?** GitHub Actions suppresses downstream \`on: push\` workflows for pushes caused by \`GITHUB_TOKEN\` (including auto-merge enabled from a workflow). A human clicking merge attributes the push to that user, so \`post-release.yml\` fires."
+            echo ""
+            echo "> :warning: **Do not edit this PR's title** — \`post-release.yml\` parses the version from the squash commit subject. (This body becomes the squash commit message, so it must not contain CI-skip markers, which would suppress \`post-release.yml\`.)"
+            echo ""
+            echo "### Recovery"
+            echo "- **Before Stage 2 runs:** delete the bad tag with \`git push origin :refs/tags/${TAG}\` and re-run the original \`post-release.yml\` via \"Re-run all jobs\" in the Actions tab."
+            echo "- **After Stage 2 publishes:** npm versions are immutable — cut a new patch release with the fix rather than reverting."
+            echo "PR_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure `release` label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create release --color "0E8A16" --description "Automated release PR" --force || true
+
+      - name: Create signed commit + open PR
+        id: cpr
+        # Commits via the GitHub Contents API → produces a verified-signature
+        # commit. Uses the App token (above) so the PR triggers required checks.
+        # Auto-merge is NOT enabled — see PR body for why.
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          sign-commits: true
+          commit-message: ${{ steps.meta.outputs.commit_message }}
+          branch: ${{ steps.meta.outputs.branch }}
+          base: main
+          title: ${{ steps.meta.outputs.pr_title }}
+          body: ${{ steps.meta.outputs.body }}
+          labels: release
+          draft: always-true
+          delete-branch: false
+
+      - name: Summarize PR
+        if: steps.cpr.outputs.pull-request-url != ''
+        env:
+          PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+          PR_OP: ${{ steps.cpr.outputs.pull-request-operation }}
+        run: |
+          echo "Opened/updated: $PR_URL ($PR_OP)"
+          echo "### PR" >> "$GITHUB_STEP_SUMMARY"
+          echo "$PR_URL ($PR_OP)" >> "$GITHUB_STEP_SUMMARY"

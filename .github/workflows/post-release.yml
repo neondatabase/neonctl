@@ -1,0 +1,203 @@
+name: Post-release (tag + handoff)
+
+# Fires when a prepare-release PR merges. Steps:
+#   1. Parse the version from package.json (cross-checked against the subject)
+#   2. Create + push the `v<ver>` tag on the merge commit
+#   3. Comment on the merged PR with Stage 2 dispatch instructions
+#   4. Write the same instructions to the workflow run summary
+#
+# Artifacts (npm package + GitHub release with CLI binaries) are produced by
+# Stage 2, not here — we don't build/publish artifacts from the public repo.
+#
+# No cross-repo dispatch. Stage 2 is triggered by a human from the PR comment
+# or summary. See prepare-release.yml header for why.
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: post-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  tag-and-handoff:
+    if: "startsWith(github.event.head_commit.message, 'chore: release neonctl@')"
+    runs-on:
+      group: neondatabase-protected-runner-group
+      labels: linux-ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # push tags
+      pull-requests: write # comment on PR
+
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@4d991eb9b905ef189e4c376166672c3f2f230481 # v2.11.0
+        with:
+          egress-policy: audit
+
+      # Push the tag under the release App identity (same token as Stage 1).
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Diagnostic — log event identity
+        # Records actor/sender/ref/sha for post-release forensic auditing.
+        env:
+          ACTOR: ${{ github.actor }}
+          SENDER: ${{ github.event.sender.login }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          echo "actor:  $ACTOR"
+          echo "sender: $SENDER"
+          echo "ref:    $REF"
+          echo "sha:    $SHA"
+          {
+            echo "### Event identity"
+            echo "- **actor:** \`$ACTOR\`"
+            echo "- **sender:** \`$SENDER\`"
+            echo "- **ref:** \`$REF\`"
+            echo "- **sha:** \`$SHA\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          # Persist the App token so the tag push uses the release identity.
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Parse release metadata
+        id: parse
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          # Source of truth: the package.json on the merge commit (written by
+          # Stage 1's `Bump version` step and validated there against strict
+          # semver). The commit subject is checked for agreement but is not
+          # itself the source — that avoids silent drift if a future regex
+          # change here disagrees with the producer's validation.
+          VERSION=$(jq -r '.version' package.json)
+          if [[ -z "$VERSION" || "$VERSION" == "null" ]]; then
+            echo "::error::Could not read .version from package.json on ${GITHUB_SHA}."
+            exit 1
+          fi
+          # Re-validate the shape (same pattern Stage 1 enforces on write). Guards
+          # against a malformed/multiline .version corrupting later steps or the
+          # $GITHUB_OUTPUT lines below.
+          semver_pat='^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?$'
+          if ! [[ "$VERSION" =~ $semver_pat ]]; then
+            echo "::error::package.json .version '$VERSION' is not valid semver."
+            exit 1
+          fi
+
+          # Parse SUBJECT LINE ONLY — squash bodies may concatenate other
+          # commit subjects that contain version-like tokens.
+          SUBJECT=$(echo "$MSG" | head -n 1)
+
+          # Cross-check: the commit subject must reference the same version.
+          # Use a literal substring match so we don't have to keep a semver
+          # regex in sync with the producer.
+          if ! grep -qF "neonctl@v$VERSION" <<<"$SUBJECT"; then
+            echo "::error::Commit subject does not reference package.json version v$VERSION. Subject: $SUBJECT"
+            exit 1
+          fi
+
+          # PR number is the last `(#NNN)` in the subject (squash merges add this).
+          # `|| true` so we still tag + summarize even if PR comment is impossible.
+          PR_NUM=$(echo "$SUBJECT" | grep -oE '\(#[0-9]+\)' | tail -1 | grep -oE '[0-9]+' || true)
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "pr_number=${PR_NUM:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Create + push tag on merge commit
+        env:
+          TAG: ${{ steps.parse.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            existing=$(git rev-parse "refs/tags/$TAG^{commit}" 2>/dev/null || git rev-parse "refs/tags/$TAG")
+            if [[ "$existing" == "$SHA" ]]; then
+              echo "Tag $TAG already exists and points at $SHA — nothing to do."
+            else
+              echo "::error::Tag $TAG already exists but points at $existing (expected $SHA). Delete the stale tag and re-run."
+              exit 1
+            fi
+          else
+            git tag -a "$TAG" -m "Release $TAG" "$SHA"
+            git push origin "$TAG"
+            echo "Created and pushed tag $TAG → $SHA"
+          fi
+
+      - name: Build Stage 2 handoff message
+        id: handoff
+        env:
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          # TODO(once Stage 2 is live): confirm exact workflow filename + input names
+          # in databricks/secure-public-registry-releases-eng — assumed
+          # `release-neondatabase-neonctl.yml` with inputs `ref` and `dry-run`.
+          # The filename must also match the workflow npm Trusted Publishing is
+          # configured to trust (npmjs.com/package/neonctl?activeTab=code).
+          {
+            echo "body<<HANDOFF_EOF"
+            echo ":rocket: **Tagged \`${TAG}\` on the merge commit.**"
+            echo ""
+            echo "### Stage 2 — publish (npm + GitHub release)"
+            echo ""
+            echo "> :warning: **Provisional:** the workflow filename and input names below are assumed to match the central repo's setup. If Stage 2 uses different names, the dispatch commands need updating in \`.github/workflows/post-release.yml\`."
+            echo ""
+            echo "Stage 2 builds + scans the artifacts and publishes the npm package and the GitHub release (with the CLI binaries). Trigger it in \`databricks/secure-public-registry-releases-eng\`:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "# Dry run (recommended first):"
+            echo "gh workflow run release-neondatabase-neonctl.yml \\"
+            echo "  --repo databricks/secure-public-registry-releases-eng \\"
+            echo "  --ref main \\"
+            echo "  -f ref=${TAG} \\"
+            echo "  -f dry-run=true"
+            echo ""
+            echo "# Real publish:"
+            echo "gh workflow run release-neondatabase-neonctl.yml \\"
+            echo "  --repo databricks/secure-public-registry-releases-eng \\"
+            echo "  --ref main \\"
+            echo "  -f ref=${TAG} \\"
+            echo "  -f dry-run=false"
+            echo "\`\`\`"
+            echo ""
+            echo "After publish, verify on [npm](https://www.npmjs.com/package/neonctl) and the [GitHub release](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG})."
+            echo "HANDOFF_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write summary
+        env:
+          BODY: ${{ steps.handoff.outputs.body }}
+        run: |
+          echo "$BODY" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on merged PR
+        if: steps.parse.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.parse.outputs.pr_number }}
+          BODY: ${{ steps.handoff.outputs.body }}
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$BODY"

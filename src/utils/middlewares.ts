@@ -9,7 +9,7 @@ export const fillInArgs = (
   acc: string[] = [],
 ) => {
   Object.entries(currentArgs).forEach(([k, v]) => {
-    if (k === '_') {
+    if (k === '_' || k === '--') {
       return;
     }
     // check if the value is an Object
