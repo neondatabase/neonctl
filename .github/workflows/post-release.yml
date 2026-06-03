@@ -182,7 +182,7 @@ jobs:
             echo "  -f dry-run=false"
             echo "\`\`\`"
             echo ""
-            echo "After publish, verify on [npm](https://www.npmjs.com/package/neonctl) and the [GitHub release](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG})."
+            echo "After publish, verify on [npm](https://www.npmjs.com/package/neonctl)."
             echo "HANDOFF_EOF"
           } >> "$GITHUB_OUTPUT"
 
