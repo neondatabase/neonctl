@@ -65,10 +65,8 @@ jobs:
         with:
           egress-policy: audit
 
-      # The default GITHUB_TOKEN cannot create branch refs in this repo, so the
-      # branch/PR is created with a GitHub App token (same app the previous
-      # release workflow used). PRs opened by this token also trigger the
-      # required-check workflows, unlike GITHUB_TOKEN-opened PRs.
+      # Open the PR with a GitHub App token: PRs opened by an App token trigger
+      # the required-check workflows, which GITHUB_TOKEN-opened PRs do not.
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
@@ -192,10 +190,8 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           BUMP: ${{ inputs.bump }}
         run: |
-          # NOT `release/...`: a protected `release` branch (left over from the
-          # old semantic-release flow) occupies that ref namespace, so git can't
-          # create `release/<x>` under it — the push fails with a directory/file
-          # conflict surfaced as "Reference update failed".
+          # `release-pr/` (not `release/`): a ref can't nest under a same-named
+          # leaf ref, so a `release` branch would block creating `release/<x>`.
           echo "branch=release-pr/neonctl-${RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "pr_title=chore: release neonctl@v${VERSION}" >> "$GITHUB_OUTPUT"
           echo "commit_message=chore: release neonctl@v${VERSION}" >> "$GITHUB_OUTPUT"
@@ -234,8 +230,8 @@ jobs:
       - name: Create signed commit + open PR
         id: cpr
         # Commits via the GitHub Contents API → produces a verified-signature
-        # commit. Uses the GitHub App token because GITHUB_TOKEN can't create
-        # the branch ref here. Auto-merge is NOT enabled — see PR body for why.
+        # commit. Uses the App token (above) so the PR triggers required checks.
+        # Auto-merge is NOT enabled — see PR body for why.
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ steps.app-token.outputs.token }}
