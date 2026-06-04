@@ -1,5 +1,9 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`functions > delete 1`] = `""`;
+
+exports[`functions > delete reports a friendly error when the function is missing 1`] = `""`;
+
 exports[`functions > deploy --env encodes environment as JSON 1`] = `
 "id: 1
 status: pending

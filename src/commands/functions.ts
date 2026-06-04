@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import yargs from 'yargs';
+import { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../api.js';
 import { log } from '../log.js';
@@ -11,6 +12,7 @@ import { buildZip } from '../utils/zip.js';
 import { writer } from '../writer.js';
 import {
   createDeployment,
+  deleteFunction,
   getDeployment,
   getFunction,
   listFunctions,
@@ -122,6 +124,17 @@ export const builder = (argv: yargs.Argv) =>
           demandOption: true,
         }),
       (args) => get(args as any),
+    )
+    .command(
+      'delete <slug>',
+      'Delete a function on the branch',
+      (yargs) =>
+        yargs.positional('slug', {
+          describe: 'Function slug',
+          type: 'string',
+          demandOption: true,
+        }),
+      (args) => deleteFn(args as any),
     );
 
 export const handler = (args: yargs.Argv) => {
@@ -270,6 +283,23 @@ const get = async (props: BranchScopeProps & { slug: string }) => {
     });
   }
   out.end();
+};
+
+const deleteFn = async (props: BranchScopeProps & { slug: string }) => {
+  const branchId = await branchIdFromProps(props);
+  try {
+    await retryOnLock(() =>
+      deleteFunction(props.apiClient, props.projectId, branchId, props.slug),
+    );
+  } catch (err: unknown) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      throw new Error(
+        `Function "${props.slug}" not found on branch ${branchId}.`,
+      );
+    }
+    throw err;
+  }
+  log.info(`Function ${props.slug} deleted from branch ${branchId}`);
 };
 
 const list = async (props: BranchScopeProps) => {

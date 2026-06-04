@@ -279,7 +279,7 @@ $ cat .neon
 | [me](https://neon.com/docs/reference/cli-me)                               |                                                                                             | Show current user              |
 | [branches](https://neon.com/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-default`, `set-expiration`, `delete`, `get` | Manage branches                |
 | [databases](https://neon.com/docs/reference/cli-databases)                 | `list`, `create`, `delete`                                                                  | Manage databases               |
-| functions                                                                  | `deploy`, `list`, `get`                                                                     | Manage Neon Functions          |
+| functions                                                                  | `deploy`, `list`, `get`, `delete`                                                           | Manage Neon Functions          |
 | [roles](https://neon.com/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                                  | Manage roles                   |
 | [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                      | Manage operations              |
 | [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                             | Get connection string          |

@@ -268,6 +268,47 @@ describe('functions', () => {
     );
   });
 
+  test('delete', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'delete',
+        'my-func',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        stderr:
+          'INFO: Function my-func deleted from branch br-main-branch-123456',
+      },
+    );
+  });
+
+  test('delete reports a friendly error when the function is missing', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'delete',
+        'ghost-func',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Function "ghost-func" not found on branch br-main-branch-123456.',
+      },
+    );
+  });
+
   test('deploy errors when index.ts is missing', async ({ testCliCommand }) => {
     const emptyDir = mkdtempSync(join(tmpdir(), 'neonctl-empty-'));
     await testCliCommand(

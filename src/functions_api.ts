@@ -59,6 +59,19 @@ export const getFunction = async (
   return data.function;
 };
 
+export const deleteFunction = async (
+  apiClient: ApiClient,
+  projectId: string,
+  branchId: string,
+  slug: string,
+): Promise<void> => {
+  await apiClient.request<unknown>({
+    path: `${functionsPath(projectId, branchId)}/${encodeURIComponent(slug)}`,
+    method: 'DELETE',
+    secure: true,
+  });
+};
+
 export const getDeployment = async (
   apiClient: ApiClient,
   projectId: string,
