@@ -7,8 +7,8 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { log } from '../log.js';
 import { writer } from '../writer.js';
 import {
-  listProjectBranchObjects,
-  deleteProjectBranchObject,
+  listProjectBranchBucketObjects,
+  deleteProjectBranchBucketObject,
 } from '../storage_api.js';
 
 type BucketProps = BranchScopeProps & {
@@ -112,7 +112,7 @@ const list = async (
   },
 ): Promise<void> => {
   const branchId = await branchIdFromProps(props);
-  const { data } = await listProjectBranchObjects(props.apiClient, {
+  const { data } = await listProjectBranchBucketObjects(props.apiClient, {
     projectId: props.projectId,
     branchId,
     bucketName: props.bucket,
@@ -156,7 +156,7 @@ const deleteObject = async (
   const branchId = await branchIdFromProps(props);
   try {
     await retryOnLock(() =>
-      deleteProjectBranchObject(props.apiClient, {
+      deleteProjectBranchBucketObject(props.apiClient, {
         projectId: props.projectId,
         branchId,
         bucketName: props.bucket,

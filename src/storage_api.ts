@@ -20,8 +20,8 @@ export type ApiClient = Api<unknown>;
 // client's native promise unchanged.
 type ApiResponse<T> = { data: T };
 
-/** A single object stored in a bucket. Mirrors the `Object` schema. */
-export type StorageObject = {
+/** A single object stored in a bucket. Mirrors the `BucketObject` schema. */
+export type BucketObject = {
   /** The full object key. */
   key: string;
   /** The object size in bytes. */
@@ -32,15 +32,18 @@ export type StorageObject = {
   etag: string;
 };
 
-/** Response body of the list-objects endpoint. Mirrors `ObjectsListResponse`. */
-export type ObjectsListResponse = {
+/**
+ * Response body of the list-objects endpoint. Mirrors
+ * `BucketObjectsListResponse`.
+ */
+export type BucketObjectsListResponse = {
   /**
    * Common prefixes (folder names) collapsed under the requested delimiter.
    * Empty when no delimiter was supplied.
    */
   folders: string[];
   /** Objects whose keys did not collapse into a folder. */
-  objects: StorageObject[];
+  objects: BucketObject[];
   /** The prefix that was applied to this listing (echoed back). */
   prefix: string;
   /**
@@ -76,11 +79,11 @@ const bucketPath = (projectId: string, branchId: string, bucketName: string) =>
  *
  * @request GET /projects/{project_id}/branches/{branch_id}/buckets/{bucket_name}/objects
  */
-export const listProjectBranchObjects = (
+export const listProjectBranchBucketObjects = (
   apiClient: ApiClient,
   { projectId, branchId, bucketName, ...query }: ListObjectsParams,
-): Promise<ApiResponse<ObjectsListResponse>> =>
-  apiClient.request<ObjectsListResponse>({
+): Promise<ApiResponse<BucketObjectsListResponse>> =>
+  apiClient.request<BucketObjectsListResponse>({
     path: `${bucketPath(projectId, branchId, bucketName)}/objects`,
     method: 'GET',
     query,
@@ -96,7 +99,7 @@ export const listProjectBranchObjects = (
  *
  * @request DELETE /projects/{project_id}/branches/{branch_id}/buckets/{bucket_name}/objects/{object_key}
  */
-export const deleteProjectBranchObject = (
+export const deleteProjectBranchBucketObject = (
   apiClient: ApiClient,
   {
     projectId,
