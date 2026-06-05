@@ -22,7 +22,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'my-func',
+        'nowaitfunc',
         '--path',
         fnDir,
         '--no-wait',
@@ -33,10 +33,13 @@ describe('functions', () => {
       ],
       {
         mockDir: 'single_org',
-        env: { NEON_ESBUILD_PATH: esbuildBin },
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
         stderr:
-          'INFO: Deployment 1 created for my-func (status: pending) ' +
-          'INFO: Check status with: neonctl functions get my-func ' +
+          'INFO: Deployment triggered for nowaitfunc. ' +
+          'INFO: Check status with: neonctl functions get nowaitfunc ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );
@@ -124,7 +127,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'my-func',
+        'redeploy',
         '--path',
         fnDir,
         '--project-id',
@@ -139,7 +142,35 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment 1 created for my-func (status: pending) ' +
+          'INFO: Deployment triggered for redeploy. ' +
+          'INFO: Deployment 2 completed.',
+      },
+    );
+  });
+
+  test('deploy --wait on first deploy (no prior active version)', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'newfunc',
+        '--path',
+        fnDir,
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Deployment triggered for newfunc. ' +
           'INFO: Deployment 1 completed.',
       },
     );
@@ -152,7 +183,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'failing-func',
+        'failfunc',
         '--path',
         fnDir,
         '--project-id',
@@ -168,7 +199,7 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment 1 created for failing-func (status: pending) ' +
+          'INFO: Deployment triggered for failfunc. ' +
           'ERROR: Deployment 1 failed.',
       },
     );
@@ -181,7 +212,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'stuck-func',
+        'stuckstart',
         '--path',
         fnDir,
         '--project-id',
@@ -198,10 +229,44 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment 1 created for stuck-func (status: pending) ' +
-          'INFO: Check status with: neonctl functions get stuck-func ' +
+          'INFO: Deployment triggered for stuckstart. ' +
+          'INFO: Check status with: neonctl functions get stuckstart ' +
           '--project-id test-project-123456 --branch br-main-branch-123456 ' +
-          'ERROR: Timed out waiting for deployment 1 to finish. It may still be building.',
+          'ERROR: Timed out waiting for the deployment of stuckstart to start. ' +
+          'It may still be in progress.',
+      },
+    );
+  });
+
+  test('deploy --wait times out while the new version is still building', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'stuckbuild',
+        '--path',
+        fnDir,
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_FUNCTIONS_POLL_TIMEOUT_MS: '10',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Deployment triggered for stuckbuild. ' +
+          'INFO: Check status with: neonctl functions get stuckbuild ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456 ' +
+          'ERROR: Timed out waiting for deployment 1 to finish. ' +
+          'It may still be building.',
       },
     );
   });
@@ -213,7 +278,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'my-func',
+        'envfunc',
         '--path',
         fnDir,
         '--no-wait',
@@ -228,10 +293,13 @@ describe('functions', () => {
       ],
       {
         mockDir: 'single_org',
-        env: { NEON_ESBUILD_PATH: esbuildBin },
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
         stderr:
-          'INFO: Deployment 1 created for my-func (status: pending) ' +
-          'INFO: Check status with: neonctl functions get my-func ' +
+          'INFO: Deployment triggered for envfunc. ' +
+          'INFO: Check status with: neonctl functions get envfunc ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );
@@ -382,7 +450,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'my-func',
+        'entryfunc',
         '--path',
         fnDir,
         '--entry',
@@ -395,10 +463,13 @@ describe('functions', () => {
       ],
       {
         mockDir: 'single_org',
-        env: { NEON_ESBUILD_PATH: esbuildBin },
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
         stderr:
-          'INFO: Deployment 1 created for my-func (status: pending) ' +
-          'INFO: Check status with: neonctl functions get my-func ' +
+          'INFO: Deployment triggered for entryfunc. ' +
+          'INFO: Check status with: neonctl functions get entryfunc ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );

@@ -202,12 +202,26 @@ const deploy = async (props: DeployProps) => {
     );
   }
 
-  // Bundle before resolving the branch: a bundling failure then fails fast
-  // offline, with no network round-trip.
+  // Bundle before any network round-trip so a bundling failure fails fast.
   const zip = zipBundle(await bundleEntry(source));
   const branchId = await branchIdFromProps(props);
 
-  const deployment = await retryOnLock(() =>
+  // Snapshot the active version before deploy so we can detect the new one
+  // afterward. A missing function (404) or no active version → undefined.
+  let before: number | undefined;
+  try {
+    const fn = await getFunction(
+      props.apiClient,
+      props.projectId,
+      branchId,
+      props.slug,
+    );
+    before = fn.active_deployment?.id;
+  } catch (err: unknown) {
+    if (!(isAxiosError(err) && err.response?.status === 404)) throw err;
+  }
+
+  await retryOnLock(() =>
     createDeployment(props.apiClient, props.projectId, branchId, props.slug, {
       zip,
       memoryMib,
@@ -215,19 +229,10 @@ const deploy = async (props: DeployProps) => {
       environment,
     }),
   );
-  log.info(
-    `Deployment ${deployment.id} created for ${props.slug} (status: ${deployment.status})`,
-  );
+  log.info(`Deployment triggered for ${props.slug}.`);
 
-  if (!props.wait) {
-    log.info(statusHint(props.slug, props.projectId, branchId));
-    writer(props).end(deployment, { fields: DEPLOYMENT_FIELDS });
-    return;
-  }
-
-  // Best-effort interrupt: a Ctrl-C lands at the next poll boundary, after
-  // which we print the status hint and exit cleanly. (No automated test; the
-  // path mirrors the --no-wait branch and is verified manually.)
+  // Best-effort interrupt: a Ctrl-C lands at the next poll boundary. (No
+  // automated test; mirrors the resolution branches below, verified manually.)
   let interrupted = false;
   const onSignal = () => {
     interrupted = true;
@@ -235,30 +240,29 @@ const deploy = async (props: DeployProps) => {
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
 
-  let current: NeonFunctionDeployment = deployment;
-  let timedOut = false;
+  // Poll until a NEW active version appears (id greater than the snapshot, or
+  // any version if there was none). --no-wait stops there; --wait stops at a
+  // terminal status. Bounded by POLL_TIMEOUT_MS so it never hangs.
+  let resolved: NeonFunctionDeployment | undefined;
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   try {
-    while (
-      current.status !== 'completed' &&
-      current.status !== 'failed' &&
-      !interrupted
-    ) {
-      if (Date.now() >= deadline) {
-        timedOut = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    while (!interrupted && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       if (interrupted) break;
-      const fn = await getFunction(
-        props.apiClient,
-        props.projectId,
-        branchId,
-        props.slug,
-      );
-      // Adopt status only from the deployment this command created.
-      if (fn.active_deployment?.id === deployment.id) {
-        current = fn.active_deployment;
+      const dep = (
+        await getFunction(
+          props.apiClient,
+          props.projectId,
+          branchId,
+          props.slug,
+        )
+      ).active_deployment;
+      const isNew =
+        dep !== undefined && (before === undefined || dep.id > before);
+      if (isNew && dep) {
+        resolved = dep;
+        if (!props.wait) break;
+        if (dep.status === 'completed' || dep.status === 'failed') break;
       }
     }
   } finally {
@@ -268,25 +272,36 @@ const deploy = async (props: DeployProps) => {
 
   if (interrupted) {
     log.info(statusHint(props.slug, props.projectId, branchId));
-    writer(props).end(current, { fields: DEPLOYMENT_FIELDS });
+    if (resolved) writer(props).end(resolved, { fields: DEPLOYMENT_FIELDS });
     return;
   }
 
-  if (timedOut) {
+  if (resolved === undefined) {
     log.info(statusHint(props.slug, props.projectId, branchId));
-    writer(props).end(current, { fields: DEPLOYMENT_FIELDS });
     throw new Error(
-      `Timed out waiting for deployment ${deployment.id} to finish. It may still be building.`,
+      `Timed out waiting for the deployment of ${props.slug} to start. It may still be in progress.`,
     );
   }
 
-  // Print the final deployment to stdout, then signal failure by throwing.
-  // The global handler prints `ERROR: <msg>`, flushes analytics, and exits 1.
-  writer(props).end(current, { fields: DEPLOYMENT_FIELDS });
-  if (current.status === 'failed') {
-    throw new Error(`Deployment ${current.id} failed.`);
+  writer(props).end(resolved, { fields: DEPLOYMENT_FIELDS });
+
+  if (!props.wait) {
+    log.info(statusHint(props.slug, props.projectId, branchId));
+    return;
   }
-  log.info(`Deployment ${current.id} completed.`);
+  if (resolved.status === 'completed') {
+    log.info(`Deployment ${resolved.id} completed.`);
+    return;
+  }
+  if (resolved.status === 'failed') {
+    throw new Error(`Deployment ${resolved.id} failed.`);
+  }
+
+  // --wait, new version appeared but the deadline hit before it finished.
+  log.info(statusHint(props.slug, props.projectId, branchId));
+  throw new Error(
+    `Timed out waiting for deployment ${resolved.id} to finish. It may still be building.`,
+  );
 };
 
 const get = async (props: BranchScopeProps & { slug: string }) => {

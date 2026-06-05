@@ -6,8 +6,8 @@ exports[`functions > delete reports a friendly error when the function is missin
 
 exports[`functions > deploy --entry selects a custom entry file 1`] = `
 "id: 1
-status: pending
-bundle_sha256: abc123
+status: building
+bundle_sha256: sha-1
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
@@ -16,8 +16,8 @@ created_at: 2026-06-03T00:00:00Z
 
 exports[`functions > deploy --env encodes environment as JSON 1`] = `
 "id: 1
-status: pending
-bundle_sha256: abc123
+status: building
+bundle_sha256: sha-1
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
@@ -26,8 +26,8 @@ created_at: 2026-06-03T00:00:00Z
 
 exports[`functions > deploy --no-wait 1`] = `
 "id: 1
-status: pending
-bundle_sha256: abc123
+status: building
+bundle_sha256: sha-1
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
@@ -37,17 +37,29 @@ created_at: 2026-06-03T00:00:00Z
 exports[`functions > deploy --wait exits 1 when the deployment fails 1`] = `
 "id: 1
 status: failed
-bundle_sha256: def456
+bundle_sha256: sha-1
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
 "
 `;
 
-exports[`functions > deploy --wait times out when the deployment never becomes active 1`] = `
+exports[`functions > deploy --wait on first deploy (no prior active version) 1`] = `
 "id: 1
-status: pending
-bundle_sha256: stuck123
+status: completed
+bundle_sha256: sha-1
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --wait times out when the deployment never becomes active 1`] = `""`;
+
+exports[`functions > deploy --wait times out while the new version is still building 1`] = `
+"id: 1
+status: building
+bundle_sha256: sha-1
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
@@ -55,9 +67,9 @@ created_at: 2026-06-03T00:00:00Z
 `;
 
 exports[`functions > deploy --wait until completed 1`] = `
-"id: 1
+"id: 2
 status: completed
-bundle_sha256: abc123
+bundle_sha256: sha-2
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z

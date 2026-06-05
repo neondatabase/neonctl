@@ -84,16 +84,16 @@ export const createDeployment = async (
   branchId: string,
   slug: string,
   params: DeployParams,
-): Promise<NeonFunctionDeployment> => {
+): Promise<void> => {
   const form = new FormData();
   form.append('zip', new Blob([params.zip]), 'bundle.zip');
   form.append('memory_mib', String(params.memoryMib));
   form.append('runtime', params.runtime);
   if (params.environment) form.append('environment', params.environment);
 
-  const { data } = await apiClient.request<{
-    deployment: NeonFunctionDeployment;
-  }>({
+  // The deploy POST returns an operation the CLI cannot poll; the body is
+  // ignored. We only need the request to succeed.
+  await apiClient.request<unknown>({
     path: `${functionsPath(projectId, branchId)}/${encodeURIComponent(
       slug,
     )}/deployments`,
@@ -101,7 +101,5 @@ export const createDeployment = async (
     type: ContentType.FormData,
     body: form,
     secure: true,
-    format: 'json',
   });
-  return data.deployment;
 };
