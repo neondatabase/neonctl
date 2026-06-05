@@ -659,6 +659,28 @@ describe('functions', () => {
     );
   });
 
+  test('env rm rejects an invalid slug', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'env',
+        'rm',
+        'Bad_Slug',
+        'KEY',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Invalid function slug "Bad_Slug". Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.',
+      },
+    );
+  });
+
   // esbuild's diagnostic text is environment-specific, so assert the exit code
   // and the empty stdout snapshot only - not the stderr string.
   test('deploy fails cleanly when bundling fails', async ({

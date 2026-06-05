@@ -32,6 +32,13 @@ const SLUG_HELP =
   'Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.';
 const MEMORY_CHOICES = [256, 512, 1024, 2048, 4096, 8192];
 
+// Cheap, offline slug validation - fail before any network round-trip.
+const assertValidSlug = (slug: string) => {
+  if (!SLUG_PATTERN.test(slug)) {
+    throw new Error(`Invalid function slug "${slug}". ${SLUG_HELP}`);
+  }
+};
+
 export const command = 'functions';
 export const describe = 'Manage Neon Functions';
 export const aliases = ['function'];
@@ -229,10 +236,7 @@ const deploy = async (props: DeployProps) => {
     );
   }
 
-  // Cheap, offline validation first - fail before any network round-trip.
-  if (!SLUG_PATTERN.test(props.slug)) {
-    throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
-  }
+  assertValidSlug(props.slug);
 
   const path = props.path ?? '.';
   const entry = props.entry ?? 'index.ts';
@@ -271,9 +275,7 @@ type EnvAddProps = BranchScopeProps & {
 };
 
 const envAdd = async (props: EnvAddProps) => {
-  if (!SLUG_PATTERN.test(props.slug)) {
-    throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
-  }
+  assertValidSlug(props.slug);
   // An empty value is the server's delete signal; route that through `rm`
   // explicitly rather than silently dropping the key on an `add`.
   if (props.value === '') {
@@ -304,9 +306,7 @@ type EnvRmProps = BranchScopeProps & {
 };
 
 const envRm = async (props: EnvRmProps) => {
-  if (!SLUG_PATTERN.test(props.slug)) {
-    throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
-  }
+  assertValidSlug(props.slug);
   const branchId = await branchIdFromProps(props);
   await deployFunction(props, branchId, props.slug, props.wait, () =>
     retryOnLock(() =>
