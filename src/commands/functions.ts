@@ -13,6 +13,7 @@ import { bundleEntry } from '../utils/esbuild.js';
 import { writer } from '../writer.js';
 import {
   createDeployment,
+  createEnvDeployment,
   deleteFunction,
   getFunction,
   listFunctions,
@@ -117,6 +118,47 @@ export const builder = (argv: yargs.Argv) =>
           demandOption: true,
         }),
       (args) => deleteFn(args as any),
+    )
+    .command(
+      ['env', 'environment'],
+      "Manage a function's environment variables",
+      (yargs) =>
+        yargs
+          .usage('$0 functions env <sub-command> [options]')
+          .command(
+            'add <slug> <key> <value>',
+            'Set an environment variable. Changing environment variables triggers a redeployment of the function.',
+            (yargs) =>
+              yargs
+                .positional('slug', {
+                  describe: 'Function slug',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .positional('key', {
+                  describe: 'Environment variable name',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .positional('value', {
+                  describe: 'Environment variable value',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .options({
+                  wait: {
+                    describe: 'Wait for the redeployment to finish building',
+                    type: 'boolean',
+                    default: true,
+                  },
+                }),
+            (args) => envAdd(args as any),
+          )
+          .demandCommand(1),
+      // demandCommand(1) makes yargs require a sub-command, so this group
+      // handler is never reached.
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
+      () => {},
     );
 
 export const handler = (args: yargs.Argv) => {
@@ -192,6 +234,40 @@ const deploy = async (props: DeployProps) => {
         runtime,
         environment,
       }),
+    ),
+  );
+};
+
+type EnvAddProps = BranchScopeProps & {
+  slug: string;
+  key: string;
+  value: string;
+  wait: boolean;
+};
+
+const envAdd = async (props: EnvAddProps) => {
+  if (!SLUG_PATTERN.test(props.slug)) {
+    throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
+  }
+  // An empty value is the server's delete signal; route that through `rm`
+  // explicitly rather than silently dropping the key on an `add`.
+  if (props.value === '') {
+    throw new Error(
+      'Refusing to set an empty value. To remove a variable, use: neonctl functions env rm <slug> <key>.',
+    );
+  }
+  const branchId = await branchIdFromProps(props);
+  await deployFunction(props, branchId, props.slug, props.wait, () =>
+    retryOnLock(() =>
+      createEnvDeployment(
+        props.apiClient,
+        props.projectId,
+        branchId,
+        props.slug,
+        {
+          [props.key]: props.value,
+        },
+      ),
     ),
   );
 };

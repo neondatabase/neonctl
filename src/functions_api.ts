@@ -102,3 +102,27 @@ export const createDeployment = async (
     secure: true,
   });
 };
+
+// Trigger a redeployment that only changes environment variables. The server
+// inherits the previous deployment's bundle, memory, and runtime, and merges
+// this map into its environment; an empty-string value deletes that key.
+export const createEnvDeployment = async (
+  apiClient: ApiClient,
+  projectId: string,
+  branchId: string,
+  slug: string,
+  environment: Record<string, string>,
+): Promise<void> => {
+  const form = new FormData();
+  form.append('environment', JSON.stringify(environment));
+
+  await apiClient.request<unknown>({
+    path: `${functionsPath(projectId, branchId)}/${encodeURIComponent(
+      slug,
+    )}/deployments`,
+    method: 'POST',
+    type: ContentType.FormData,
+    body: form,
+    secure: true,
+  });
+};

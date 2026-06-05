@@ -532,6 +532,108 @@ describe('functions', () => {
     );
   });
 
+  test('env add triggers an env-only redeploy and waits', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'env',
+        'add',
+        'envadd',
+        'KEY',
+        'VALUE',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: { NEON_FUNCTIONS_POLL_INTERVAL_MS: '1' },
+        stderr:
+          'INFO: Function deployment triggered for function envadd. ' +
+          'INFO: Function deployment envadd/2 completed.',
+      },
+    );
+  });
+
+  test('env add rejects an invalid slug', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'env',
+        'add',
+        'Bad_Slug',
+        'KEY',
+        'VALUE',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Invalid function slug "Bad_Slug". Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.',
+      },
+    );
+  });
+
+  test('env add rejects an empty value (use rm to delete)', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'env',
+        'add',
+        'envadd',
+        'KEY',
+        '',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Refusing to set an empty value. To remove a variable, use: neonctl functions env rm <slug> <key>.',
+      },
+    );
+  });
+
+  test('env add --no-wait stops after triggering', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'env',
+        'add',
+        'envadd',
+        'KEY',
+        'VALUE',
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: { NEON_FUNCTIONS_POLL_INTERVAL_MS: '1' },
+        stderr:
+          'INFO: Function deployment triggered for function envadd. ' +
+          'INFO: Check status with: neonctl functions get envadd ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+  });
+
   // esbuild's diagnostic text is environment-specific, so assert the exit code
   // and the empty stdout snapshot only - not the stderr string.
   test('deploy fails cleanly when bundling fails', async ({
