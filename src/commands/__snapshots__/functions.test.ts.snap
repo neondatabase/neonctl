@@ -114,6 +114,8 @@ created_at: 2026-06-03T00:00:00Z
 "
 `;
 
+exports[`functions > env rm rejects an invalid slug 1`] = `""`;
+
 exports[`functions > env rm sends an empty value to drop the key 1`] = `
 "id: 2
 status: completed
