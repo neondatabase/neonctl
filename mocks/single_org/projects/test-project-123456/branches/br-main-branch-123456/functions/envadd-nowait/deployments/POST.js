@@ -12,7 +12,6 @@ export default function (req, res) {
   req.on('end', () => {
     expect(raw).toContain('name="environment"');
     expect(raw).toContain('{"KEY":"VALUE"}');
-    // env-only redeploy: no bundle/memory/runtime parts.
     expect(raw).not.toContain('name="zip"');
     expect(raw).not.toContain('name="memory_mib"');
     expect(raw).not.toContain('name="runtime"');

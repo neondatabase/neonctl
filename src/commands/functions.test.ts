@@ -614,7 +614,7 @@ describe('functions', () => {
         'functions',
         'env',
         'add',
-        'envadd',
+        'envadd-nowait',
         'KEY',
         'VALUE',
         '--no-wait',
@@ -627,8 +627,8 @@ describe('functions', () => {
         mockDir: 'single_org',
         env: { NEON_FUNCTIONS_POLL_INTERVAL_MS: '1' },
         stderr:
-          'INFO: Function deployment triggered for function envadd. ' +
-          'INFO: Check status with: neonctl functions get envadd ' +
+          'INFO: Function deployment triggered for function envadd-nowait. ' +
+          'INFO: Check status with: neonctl functions get envadd-nowait ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );

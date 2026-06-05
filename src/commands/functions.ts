@@ -155,10 +155,7 @@ export const builder = (argv: yargs.Argv) =>
             (args) => envAdd(args as any),
           )
           .demandCommand(1),
-      // demandCommand(1) makes yargs require a sub-command, so this group
-      // handler is never reached.
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
-      () => {},
+      (args) => args as any,
     );
 
 export const handler = (args: yargs.Argv) => {
