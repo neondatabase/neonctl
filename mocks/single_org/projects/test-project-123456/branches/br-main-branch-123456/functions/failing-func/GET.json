@@ -1,0 +1,17 @@
+{
+  "function": {
+    "id": "fn-failing",
+    "slug": "failing-func",
+    "name": "Failing Func",
+    "invocation_url": "https://failing-func.functions.neon.tech",
+    "created_at": "2026-06-03T00:00:00Z",
+    "active_deployment": {
+      "id": 1,
+      "status": "failed",
+      "bundle_sha256": "def456",
+      "memory_mib": 256,
+      "runtime": "nodejs24",
+      "created_at": "2026-06-03T00:00:00Z"
+    }
+  }
+}

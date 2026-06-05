@@ -14,7 +14,6 @@ import { writer } from '../writer.js';
 import {
   createDeployment,
   deleteFunction,
-  getDeployment,
   getFunction,
   listFunctions,
   NeonFunctionDeployment,
@@ -239,13 +238,16 @@ const deploy = async (props: DeployProps) => {
     ) {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       if (interrupted) break;
-      current = await getDeployment(
+      const fn = await getFunction(
         props.apiClient,
         props.projectId,
         branchId,
         props.slug,
-        deployment.id,
       );
+      // Adopt status only from the deployment this command created.
+      if (fn.active_deployment?.id === deployment.id) {
+        current = fn.active_deployment;
+      }
     }
   } finally {
     process.removeListener('SIGINT', onSignal);

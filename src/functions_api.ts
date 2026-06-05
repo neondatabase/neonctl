@@ -71,26 +71,6 @@ export const deleteFunction = async (
   });
 };
 
-export const getDeployment = async (
-  apiClient: ApiClient,
-  projectId: string,
-  branchId: string,
-  slug: string,
-  deploymentId: number,
-): Promise<NeonFunctionDeployment> => {
-  const { data } = await apiClient.request<{
-    deployment: NeonFunctionDeployment;
-  }>({
-    path: `${functionsPath(projectId, branchId)}/${encodeURIComponent(
-      slug,
-    )}/deployments/${deploymentId}`,
-    method: 'GET',
-    secure: true,
-    format: 'json',
-  });
-  return data.deployment;
-};
-
 export type DeployParams = {
   zip: Uint8Array;
   memoryMib: number;
