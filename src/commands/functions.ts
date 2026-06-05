@@ -16,8 +16,8 @@ import {
   deleteFunction,
   getFunction,
   listFunctions,
-  NeonFunctionDeployment,
 } from '../functions_api.js';
+import { deployFunction, DEPLOYMENT_FIELDS } from '../functions_deploy.js';
 
 const FUNCTION_FIELDS = [
   'slug',
@@ -26,28 +26,10 @@ const FUNCTION_FIELDS = [
   'created_at',
 ] as const;
 
-const DEPLOYMENT_FIELDS = [
-  'id',
-  'status',
-  'runtime',
-  'memory_mib',
-  'created_at',
-] as const;
-
 const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
 const SLUG_HELP =
   'Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.';
 const MEMORY_CHOICES = [256, 512, 1024, 2048, 4096, 8192];
-
-// Overridable so tests can poll fast; defaults to 2s in real use.
-const POLL_INTERVAL_MS =
-  Number(process.env.NEON_FUNCTIONS_POLL_INTERVAL_MS) || 2000;
-
-// Upper bound on --wait polling so the CLI never hangs (e.g. if our deployment
-// never becomes active_deployment). Overridable so tests can time out fast;
-// defaults to 10 minutes in real use.
-const POLL_TIMEOUT_MS =
-  Number(process.env.NEON_FUNCTIONS_POLL_TIMEOUT_MS) || 600_000;
 
 export const command = 'functions';
 export const describe = 'Manage Neon Functions';
@@ -164,17 +146,6 @@ const parseEnv = (entries: string[] | undefined): string | undefined => {
   return JSON.stringify(map);
 };
 
-const statusHint = (slug: string, projectId: string, branchId: string) =>
-  `Check status with: neonctl functions get ${slug} --project-id ${projectId} --branch ${branchId}`;
-
-// A poll error worth retrying: a network error (no HTTP response), a 5xx, or a
-// 404 from eventual consistency. Anything else (e.g. 401/403) is surfaced.
-const isTransient = (err: unknown): boolean =>
-  isAxiosError(err) &&
-  (err.response === undefined ||
-    err.response.status === 404 ||
-    err.response.status >= 500);
-
 const deploy = async (props: DeployProps) => {
   // At least one deploy option must be passed (--wait is excluded: it controls
   // output, not what gets deployed).
@@ -213,109 +184,15 @@ const deploy = async (props: DeployProps) => {
   const zip = zipBundle(await bundleEntry(source));
   const branchId = await branchIdFromProps(props);
 
-  // Snapshot the active version before deploy so we can detect the new one
-  // afterward. A missing function (404) or no active version → undefined.
-  let before: number | undefined;
-  try {
-    const fn = await getFunction(
-      props.apiClient,
-      props.projectId,
-      branchId,
-      props.slug,
-    );
-    before = fn.active_deployment?.id;
-  } catch (err: unknown) {
-    if (!(isAxiosError(err) && err.response?.status === 404)) throw err;
-  }
-
-  await retryOnLock(() =>
-    createDeployment(props.apiClient, props.projectId, branchId, props.slug, {
-      zip,
-      memoryMib,
-      runtime,
-      environment,
-    }),
-  );
-  log.info(`Function deployment triggered for function ${props.slug}.`);
-
-  // Best-effort interrupt: a Ctrl-C lands at the next poll boundary. (No
-  // automated test; mirrors the resolution branches below, verified manually.)
-  let interrupted = false;
-  const onSignal = () => {
-    interrupted = true;
-  };
-  process.once('SIGINT', onSignal);
-  process.once('SIGTERM', onSignal);
-
-  // Poll until a NEW active version appears (id greater than the snapshot, or
-  // any version if there was none). --no-wait stops there; --wait stops at a
-  // terminal status. Bounded by POLL_TIMEOUT_MS so it never hangs.
-  let resolved: NeonFunctionDeployment | undefined;
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
-  try {
-    while (!interrupted && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      if (interrupted) break;
-      // The deploy already succeeded server-side; tolerate transient poll
-      // failures and retry on the next interval. Surface anything else.
-      let dep: NeonFunctionDeployment | undefined;
-      try {
-        dep = (
-          await getFunction(
-            props.apiClient,
-            props.projectId,
-            branchId,
-            props.slug,
-          )
-        ).active_deployment;
-      } catch (err: unknown) {
-        if (isTransient(err)) continue;
-        throw err;
-      }
-      const isNew =
-        dep !== undefined && (before === undefined || dep.id > before);
-      if (isNew && dep) {
-        resolved = dep;
-        if (!props.wait) break;
-        if (dep.status === 'completed' || dep.status === 'failed') break;
-      }
-    }
-  } finally {
-    process.removeListener('SIGINT', onSignal);
-    process.removeListener('SIGTERM', onSignal);
-  }
-
-  if (interrupted) {
-    log.info(statusHint(props.slug, props.projectId, branchId));
-    if (resolved) writer(props).end(resolved, { fields: DEPLOYMENT_FIELDS });
-    return;
-  }
-
-  if (resolved === undefined) {
-    log.info(statusHint(props.slug, props.projectId, branchId));
-    throw new Error(
-      `Timed out waiting for the deployment of ${props.slug} to start. It may still be in progress.`,
-    );
-  }
-
-  writer(props).end(resolved, { fields: DEPLOYMENT_FIELDS });
-
-  if (!props.wait) {
-    log.info(statusHint(props.slug, props.projectId, branchId));
-    return;
-  }
-  if (resolved.status === 'completed') {
-    log.info(`Function deployment ${props.slug}/${resolved.id} completed.`);
-    return;
-  }
-  if (resolved.status === 'failed') {
-    throw new Error(`Function deployment ${props.slug}/${resolved.id} failed.`);
-  }
-
-  // --wait, new version appeared but the deadline hit before it finished.
-  log.info(statusHint(props.slug, props.projectId, branchId));
-  throw new Error(
-    `Timed out waiting for function deployment ${props.slug}/${resolved.id} to finish. It may still be building.`,
+  await deployFunction(props, branchId, props.slug, props.wait, () =>
+    retryOnLock(() =>
+      createDeployment(props.apiClient, props.projectId, branchId, props.slug, {
+        zip,
+        memoryMib,
+        runtime,
+        environment,
+      }),
+    ),
   );
 };
 
