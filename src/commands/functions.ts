@@ -154,6 +154,31 @@ export const builder = (argv: yargs.Argv) =>
                 }),
             (args) => envAdd(args as any),
           )
+          .command(
+            ['rm <slug> <key>', 'remove <slug> <key>'],
+            'Remove an environment variable. Changing environment variables triggers a redeployment of the function. ' +
+              'Removal sends an empty value for the key, which drops it from the environment.',
+            (yargs) =>
+              yargs
+                .positional('slug', {
+                  describe: 'Function slug',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .positional('key', {
+                  describe: 'Environment variable name to remove',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .options({
+                  wait: {
+                    describe: 'Wait for the redeployment to finish building',
+                    type: 'boolean',
+                    default: true,
+                  },
+                }),
+            (args) => envRm(args as any),
+          )
           .demandCommand(1),
       (args) => args as any,
     );
@@ -263,6 +288,32 @@ const envAdd = async (props: EnvAddProps) => {
         props.slug,
         {
           [props.key]: props.value,
+        },
+      ),
+    ),
+  );
+};
+
+type EnvRmProps = BranchScopeProps & {
+  slug: string;
+  key: string;
+  wait: boolean;
+};
+
+const envRm = async (props: EnvRmProps) => {
+  if (!SLUG_PATTERN.test(props.slug)) {
+    throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
+  }
+  const branchId = await branchIdFromProps(props);
+  await deployFunction(props, branchId, props.slug, props.wait, () =>
+    retryOnLock(() =>
+      createEnvDeployment(
+        props.apiClient,
+        props.projectId,
+        branchId,
+        props.slug,
+        {
+          [props.key]: '',
         },
       ),
     ),

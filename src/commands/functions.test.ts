@@ -634,6 +634,31 @@ describe('functions', () => {
     );
   });
 
+  test('env rm sends an empty value to drop the key', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'env',
+        'rm',
+        'envrm',
+        'KEY',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: { NEON_FUNCTIONS_POLL_INTERVAL_MS: '1' },
+        stderr:
+          'INFO: Function deployment triggered for function envrm. ' +
+          'INFO: Function deployment envrm/2 completed.',
+      },
+    );
+  });
+
   // esbuild's diagnostic text is environment-specific, so assert the exit code
   // and the empty stdout snapshot only - not the stderr string.
   test('deploy fails cleanly when bundling fails', async ({
