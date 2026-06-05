@@ -377,15 +377,8 @@ const list = async (props: BranchScopeProps) => {
     return;
   }
 
-  const rows = functions.map((fn) => ({
-    slug: fn.slug,
-    name: fn.name,
-    invocation_url: fn.invocation_url,
-    status: fn.active_deployment?.status ?? '-',
-    created_at: fn.created_at,
-  }));
-  writer(props).end(rows, {
-    fields: ['slug', 'name', 'invocation_url', 'status', 'created_at'],
+  writer(props).end(functions, {
+    fields: FUNCTION_FIELDS,
     emptyMessage: 'No functions found on this branch.',
   });
 };
