@@ -1,3 +1,5 @@
+import { writeFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 import yargs from 'yargs';
 import { isAxiosError } from 'axios';
 
@@ -8,7 +10,9 @@ import { log } from '../log.js';
 import { writer } from '../writer.js';
 import {
   listProjectBranchBucketObjects,
+  getProjectBranchBucketObject,
   deleteProjectBranchBucketObject,
+  deleteProjectBranchBucketObjectsByPrefix,
 } from '../storage_api.js';
 
 type BucketProps = BranchScopeProps & {
@@ -33,11 +37,11 @@ const bucketOptions = {
   },
 } as const;
 
-export const command = 'buckets';
+export const command = 'bucket';
 export const describe = 'Manage objects in branch object-storage buckets';
 export const builder = (argv: yargs.Argv) =>
   argv
-    .usage('$0 buckets <sub-command> [options]')
+    .usage('$0 bucket <sub-command> [options]')
     .options({
       'project-id': {
         describe: 'Project ID',
@@ -46,11 +50,11 @@ export const builder = (argv: yargs.Argv) =>
     })
     .middleware(fillSingleProject as any)
     .command(
-      'objects <sub-command>',
-      'List or delete objects in a bucket',
+      'object <sub-command>',
+      'List, download or delete objects in a bucket',
       (yargs) =>
         yargs
-          .usage('$0 buckets objects <sub-command> [options]')
+          .usage('$0 bucket object <sub-command> [options]')
           .command(
             'list',
             'List objects in a bucket',
@@ -81,11 +85,32 @@ export const builder = (argv: yargs.Argv) =>
             (args) => list(args as any),
           )
           .command(
+            'get <key>',
+            'Download an object from a bucket to a local file',
+            (yargs) =>
+              yargs
+                .usage('$0 bucket object get <key> [options]')
+                .positional('key', {
+                  describe: 'The object key to download',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .options({
+                  ...bucketOptions,
+                  file: {
+                    describe:
+                      'Path to write the downloaded object to (defaults to the object filename in the current directory)',
+                    type: 'string',
+                  },
+                }),
+            (args) => getObject(args as any),
+          )
+          .command(
             'delete <key>',
             'Delete an object from a bucket',
             (yargs) =>
               yargs
-                .usage('$0 buckets objects delete <key> [options]')
+                .usage('$0 bucket object delete <key> [options]')
                 .positional('key', {
                   describe: 'The object key to delete',
                   type: 'string',
@@ -93,6 +118,21 @@ export const builder = (argv: yargs.Argv) =>
                 })
                 .options(bucketOptions),
             (args) => deleteObject(args as any),
+          )
+          .command(
+            'delete-folder <prefix>',
+            'Delete every object under a key prefix (folder) in a bucket',
+            (yargs) =>
+              yargs
+                .usage('$0 bucket object delete-folder <prefix> [options]')
+                .positional('prefix', {
+                  describe:
+                    'The key prefix (folder) to delete. Must end with "/"',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .options(bucketOptions),
+            (args) => deleteFolder(args as any),
           )
           .demandCommand(1, '')
           .strictCommands(),
@@ -150,6 +190,63 @@ const list = async (
   }
 };
 
+// Pull a filename out of a `Content-Disposition` header, falling back to the
+// last segment of the object key. Handles the plain and RFC 5987 (`filename*=`)
+// forms the download endpoint may emit.
+const filenameFromContentDisposition = (
+  contentDisposition: string | undefined,
+  key: string,
+): string => {
+  if (contentDisposition) {
+    const extended = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(contentDisposition);
+    if (extended?.[1]) {
+      try {
+        return basename(decodeURIComponent(extended[1].trim()));
+      } catch {
+        // Fall through to the plain form / key on malformed encoding.
+      }
+    }
+    const plain = /filename="?([^";]+)"?/i.exec(contentDisposition);
+    if (plain?.[1]) {
+      return basename(plain[1].trim());
+    }
+  }
+  return basename(key) || key;
+};
+
+const getObject = async (
+  props: BucketProps & { key: string; file?: string },
+): Promise<void> => {
+  const branchId = await branchIdFromProps(props);
+  let response;
+  try {
+    response = await getProjectBranchBucketObject(props.apiClient, {
+      projectId: props.projectId,
+      branchId,
+      bucketName: props.bucket,
+      objectKey: props.key,
+    });
+  } catch (err: unknown) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      throw new Error(
+        `Object "${props.key}" not found in bucket "${props.bucket}" on branch ${branchId}.`,
+      );
+    }
+    throw err;
+  }
+
+  const contentDisposition = response.headers['content-disposition'] as
+    | string
+    | undefined;
+  const destination =
+    props.file ?? filenameFromContentDisposition(contentDisposition, props.key);
+
+  await writeFile(destination, Buffer.from(response.data));
+  log.info(
+    `Object "${props.key}" downloaded from bucket "${props.bucket}" on branch ${branchId} to ${destination}`,
+  );
+};
+
 const deleteObject = async (
   props: BucketProps & { key: string },
 ): Promise<void> => {
@@ -173,5 +270,33 @@ const deleteObject = async (
   }
   log.info(
     `Object "${props.key}" deleted from bucket "${props.bucket}" on branch ${branchId}`,
+  );
+};
+
+const deleteFolder = async (
+  props: BucketProps & { prefix: string },
+): Promise<void> => {
+  const branchId = await branchIdFromProps(props);
+  let deleted: number;
+  try {
+    const { data } = await retryOnLock(() =>
+      deleteProjectBranchBucketObjectsByPrefix(props.apiClient, {
+        projectId: props.projectId,
+        branchId,
+        bucketName: props.bucket,
+        prefix: props.prefix,
+      }),
+    );
+    deleted = data.deleted;
+  } catch (err: unknown) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      throw new Error(
+        `Bucket "${props.bucket}" not found on branch ${branchId}.`,
+      );
+    }
+    throw err;
+  }
+  log.info(
+    `Deleted ${deleted} object(s) under prefix "${props.prefix}" from bucket "${props.bucket}" on branch ${branchId}`,
   );
 };

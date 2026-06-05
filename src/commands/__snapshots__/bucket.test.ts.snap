@@ -1,10 +1,14 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`buckets > objects delete 1`] = `""`;
+exports[`bucket > object delete 1`] = `""`;
 
-exports[`buckets > objects delete reports a helpful error when the object is missing 1`] = `""`;
+exports[`bucket > object delete reports a helpful error when the object is missing 1`] = `""`;
 
-exports[`buckets > objects list 1`] = `
+exports[`bucket > object delete-folder removes every object under the prefix 1`] = `""`;
+
+exports[`bucket > object get downloads to the given file 1`] = `""`;
+
+exports[`bucket > object list 1`] = `
 "folders:
   - images/
   - logs/
@@ -23,7 +27,7 @@ is_truncated: false
 "
 `;
 
-exports[`buckets > objects list with fully implicit project/branch resolution 1`] = `
+exports[`bucket > object list with fully implicit project/branch resolution 1`] = `
 "folders:
   - images/
   - logs/
@@ -42,7 +46,7 @@ is_truncated: false
 "
 `;
 
-exports[`buckets > objects list with prefix and delimiter 1`] = `
+exports[`bucket > object list with prefix and delimiter 1`] = `
 "folders:
   - images/
   - logs/
@@ -61,7 +65,7 @@ is_truncated: false
 "
 `;
 
-exports[`buckets > objects list with table output 1`] = `
+exports[`bucket > object list with table output 1`] = `
 "folders
 ┌─────────┐
 │ Name    │

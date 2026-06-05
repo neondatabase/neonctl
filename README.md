@@ -377,7 +377,7 @@ Function deploys declared under `preview.functions` are bundled by neonctl's own
 | [link](https://neon.com/docs/reference/cli-link)                           |                                                                                             | Link a directory to a project  |
 | config                                                                     | `status`, `plan`, `apply`                                                                   | Drive a branch from `neon.ts`  |
 | deploy                                                                     |                                                                                             | Alias for `config apply`       |
-| buckets                                                                    | `objects list`, `objects delete`                                                            | Manage bucket objects          |
+| bucket                                                                     | `object list`, `object get`, `object delete`, `object delete-folder`                        | Manage bucket objects          |
 | [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                             | Generate a completion script   |
 
 ## Global options
