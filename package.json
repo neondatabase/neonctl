@@ -38,6 +38,7 @@
     "@types/yargs": "17.0.32",
     "@yao-pkg/pkg": "6.10.0",
     "emocks": "3.0.4",
+    "esbuild": "0.28.0",
     "eslint": "9.29.0",
     "express": "4.19.2",
     "husky": "8.0.3",
