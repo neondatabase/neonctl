@@ -168,6 +168,14 @@ const parseEnv = (entries: string[] | undefined): string | undefined => {
 const statusHint = (slug: string, projectId: string, branchId: string) =>
   `Check status with: neonctl functions get ${slug} --project-id ${projectId} --branch ${branchId}`;
 
+// A poll error worth retrying: a network error (no HTTP response), a 5xx, or a
+// 404 from eventual consistency. Anything else (e.g. 401/403) is surfaced.
+const isTransient = (err: unknown): boolean =>
+  isAxiosError(err) &&
+  (err.response === undefined ||
+    err.response.status === 404 ||
+    err.response.status >= 500);
+
 const deploy = async (props: DeployProps) => {
   // At least one deploy option must be passed (--wait is excluded: it controls
   // output, not what gets deployed).
@@ -229,7 +237,7 @@ const deploy = async (props: DeployProps) => {
       environment,
     }),
   );
-  log.info(`Deployment triggered for ${props.slug}.`);
+  log.info(`Function deployment triggered for function ${props.slug}.`);
 
   // Best-effort interrupt: a Ctrl-C lands at the next poll boundary. (No
   // automated test; mirrors the resolution branches below, verified manually.)
@@ -249,14 +257,22 @@ const deploy = async (props: DeployProps) => {
     while (!interrupted && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       if (interrupted) break;
-      const dep = (
-        await getFunction(
-          props.apiClient,
-          props.projectId,
-          branchId,
-          props.slug,
-        )
-      ).active_deployment;
+      // The deploy already succeeded server-side; tolerate transient poll
+      // failures and retry on the next interval. Surface anything else.
+      let dep: NeonFunctionDeployment | undefined;
+      try {
+        dep = (
+          await getFunction(
+            props.apiClient,
+            props.projectId,
+            branchId,
+            props.slug,
+          )
+        ).active_deployment;
+      } catch (err: unknown) {
+        if (isTransient(err)) continue;
+        throw err;
+      }
       const isNew =
         dep !== undefined && (before === undefined || dep.id > before);
       if (isNew && dep) {
@@ -290,17 +306,17 @@ const deploy = async (props: DeployProps) => {
     return;
   }
   if (resolved.status === 'completed') {
-    log.info(`Deployment ${resolved.id} completed.`);
+    log.info(`Function deployment ${props.slug}/${resolved.id} completed.`);
     return;
   }
   if (resolved.status === 'failed') {
-    throw new Error(`Deployment ${resolved.id} failed.`);
+    throw new Error(`Function deployment ${props.slug}/${resolved.id} failed.`);
   }
 
   // --wait, new version appeared but the deadline hit before it finished.
   log.info(statusHint(props.slug, props.projectId, branchId));
   throw new Error(
-    `Timed out waiting for deployment ${resolved.id} to finish. It may still be building.`,
+    `Timed out waiting for function deployment ${props.slug}/${resolved.id} to finish. It may still be building.`,
   );
 };
 

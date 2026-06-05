@@ -38,7 +38,7 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment triggered for nowaitfunc. ' +
+          'INFO: Function deployment triggered for function nowaitfunc. ' +
           'INFO: Check status with: neonctl functions get nowaitfunc ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
@@ -142,8 +142,8 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment triggered for redeploy. ' +
-          'INFO: Deployment 2 completed.',
+          'INFO: Function deployment triggered for function redeploy. ' +
+          'INFO: Function deployment redeploy/2 completed.',
       },
     );
   });
@@ -170,8 +170,8 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment triggered for newfunc. ' +
-          'INFO: Deployment 1 completed.',
+          'INFO: Function deployment triggered for function newfunc. ' +
+          'INFO: Function deployment newfunc/1 completed.',
       },
     );
   });
@@ -199,8 +199,8 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment triggered for failfunc. ' +
-          'ERROR: Deployment 1 failed.',
+          'INFO: Function deployment triggered for function failfunc. ' +
+          'ERROR: Function deployment failfunc/1 failed.',
       },
     );
   });
@@ -229,7 +229,7 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment triggered for stuckstart. ' +
+          'INFO: Function deployment triggered for function stuckstart. ' +
           'INFO: Check status with: neonctl functions get stuckstart ' +
           '--project-id test-project-123456 --branch br-main-branch-123456 ' +
           'ERROR: Timed out waiting for the deployment of stuckstart to start. ' +
@@ -262,10 +262,10 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment triggered for stuckbuild. ' +
+          'INFO: Function deployment triggered for function stuckbuild. ' +
           'INFO: Check status with: neonctl functions get stuckbuild ' +
           '--project-id test-project-123456 --branch br-main-branch-123456 ' +
-          'ERROR: Timed out waiting for deployment 1 to finish. ' +
+          'ERROR: Timed out waiting for function deployment stuckbuild/1 to finish. ' +
           'It may still be building.',
       },
     );
@@ -298,7 +298,7 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment triggered for envfunc. ' +
+          'INFO: Function deployment triggered for function envfunc. ' +
           'INFO: Check status with: neonctl functions get envfunc ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
@@ -468,9 +468,66 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Deployment triggered for entryfunc. ' +
+          'INFO: Function deployment triggered for function entryfunc. ' +
           'INFO: Check status with: neonctl functions get entryfunc ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+  });
+
+  test('deploy --wait retries through a transient poll error', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'flaky',
+        '--path',
+        fnDir,
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Function deployment triggered for function flaky. ' +
+          'INFO: Function deployment flaky/1 completed.',
+      },
+    );
+  });
+
+  test('deploy --wait surfaces a non-transient poll error', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'denied',
+        '--path',
+        fnDir,
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Function deployment triggered for function denied. ' +
+          'ERROR: Forbidden',
       },
     );
   });

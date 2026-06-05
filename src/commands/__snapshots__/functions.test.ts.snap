@@ -54,6 +54,18 @@ created_at: 2026-06-03T00:00:00Z
 "
 `;
 
+exports[`functions > deploy --wait retries through a transient poll error 1`] = `
+"id: 1
+status: completed
+bundle_sha256: sha-1
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --wait surfaces a non-transient poll error 1`] = `""`;
+
 exports[`functions > deploy --wait times out when the deployment never becomes active 1`] = `""`;
 
 exports[`functions > deploy --wait times out while the new version is still building 1`] = `
