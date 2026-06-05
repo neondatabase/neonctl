@@ -26,3 +26,8 @@ export const collectFiles = (dir: string): Record<string, Uint8Array> => {
 };
 
 export const buildZip = (dir: string): Uint8Array => zipSync(collectFiles(dir));
+
+// Zip the esbuild output (out.js + out.js.map) into the archive the Functions
+// deploy endpoint expects. Compression level 6 matches the previous bundler.
+export const zipBundle = (entries: Record<string, Uint8Array>): Uint8Array =>
+  zipSync(entries, { level: 6 });
