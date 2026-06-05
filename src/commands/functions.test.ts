@@ -4,10 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from '../test_utils/fixtures';
 
+const esbuildBin = join(process.cwd(), 'node_modules', '.bin', 'esbuild');
+
 let fnDir: string;
 beforeAll(() => {
   fnDir = mkdtempSync(join(tmpdir(), 'neonctl-fn-'));
   writeFileSync(join(fnDir, 'index.ts'), 'export default {};\n');
+  writeFileSync(join(fnDir, 'custom.ts'), 'export default { custom: true };\n');
 });
 afterAll(() => {
   rmSync(fnDir, { recursive: true, force: true });
@@ -30,6 +33,7 @@ describe('functions', () => {
       ],
       {
         mockDir: 'single_org',
+        env: { NEON_ESBUILD_PATH: esbuildBin },
         stderr:
           'INFO: Deployment 1 created for my-func (status: pending) ' +
           'INFO: Check status with: neonctl functions get my-func ' +
@@ -130,7 +134,10 @@ describe('functions', () => {
       ],
       {
         mockDir: 'single_org',
-        env: { NEON_FUNCTIONS_POLL_INTERVAL_MS: '1' },
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
         stderr:
           'INFO: Deployment 1 created for my-func (status: pending) ' +
           'INFO: Deployment 1 completed.',
@@ -156,37 +163,13 @@ describe('functions', () => {
       {
         mockDir: 'single_org',
         code: 1,
-        env: { NEON_FUNCTIONS_POLL_INTERVAL_MS: '1' },
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
         stderr:
           'INFO: Deployment 1 created for failing-func (status: pending) ' +
           'ERROR: Deployment 1 failed.',
-      },
-    );
-  });
-
-  test('deploy rejects out-of-range --concurrency', async ({
-    testCliCommand,
-  }) => {
-    await testCliCommand(
-      [
-        'functions',
-        'deploy',
-        'my-func',
-        '--path',
-        fnDir,
-        '--no-wait',
-        '--concurrency',
-        '5000',
-        '--project-id',
-        'test-project-123456',
-        '--branch',
-        'main',
-      ],
-      {
-        mockDir: 'single_org',
-        code: 1,
-        stderr:
-          'ERROR: Invalid --concurrency 5000. It must be an integer between 1 and 1000.',
       },
     );
   });
@@ -213,6 +196,7 @@ describe('functions', () => {
       ],
       {
         mockDir: 'single_org',
+        env: { NEON_ESBUILD_PATH: esbuildBin },
         stderr:
           'INFO: Deployment 1 created for my-func (status: pending) ' +
           'INFO: Check status with: neonctl functions get my-func ' +
@@ -309,7 +293,9 @@ describe('functions', () => {
     );
   });
 
-  test('deploy errors when index.ts is missing', async ({ testCliCommand }) => {
+  test('deploy errors when the entry file is missing', async ({
+    testCliCommand,
+  }) => {
     const emptyDir = mkdtempSync(join(tmpdir(), 'neonctl-empty-'));
     await testCliCommand(
       [
@@ -327,9 +313,91 @@ describe('functions', () => {
       {
         mockDir: 'single_org',
         code: 1,
-        stderr: `ERROR: No index.ts found in ${emptyDir}. A function must have an index.ts at the root of --path.`,
+        stderr: `ERROR: Entry file not found: ${join(
+          emptyDir,
+          'index.ts',
+        )}. Pass --entry to point at your function's entry file (defaults to index.ts).`,
       },
     );
     rmSync(emptyDir, { recursive: true, force: true });
+  });
+
+  test('deploy requires at least one option', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Provide at least one option to deploy, e.g. --path, --entry, ' +
+          'or --env. See: neonctl functions deploy --help.',
+      },
+    );
+  });
+
+  test('deploy --entry selects a custom entry file', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--path',
+        fnDir,
+        '--entry',
+        'custom.ts',
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: { NEON_ESBUILD_PATH: esbuildBin },
+        stderr:
+          'INFO: Deployment 1 created for my-func (status: pending) ' +
+          'INFO: Check status with: neonctl functions get my-func ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+  });
+
+  // esbuild's diagnostic text is environment-specific, so assert the exit code
+  // and the empty stdout snapshot only - not the stderr string.
+  test('deploy fails cleanly when bundling fails', async ({
+    testCliCommand,
+  }) => {
+    const badDir = mkdtempSync(join(tmpdir(), 'neonctl-bad-'));
+    writeFileSync(join(badDir, 'index.ts'), 'export default {\n');
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--path',
+        badDir,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        env: { NEON_ESBUILD_PATH: esbuildBin },
+      },
+    );
+    rmSync(badDir, { recursive: true, force: true });
   });
 });

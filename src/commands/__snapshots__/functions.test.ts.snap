@@ -4,12 +4,21 @@ exports[`functions > delete 1`] = `""`;
 
 exports[`functions > delete reports a friendly error when the function is missing 1`] = `""`;
 
+exports[`functions > deploy --entry selects a custom entry file 1`] = `
+"id: 1
+status: pending
+bundle_sha256: abc123
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
 exports[`functions > deploy --env encodes environment as JSON 1`] = `
 "id: 1
 status: pending
 bundle_sha256: abc123
 memory_mib: 256
-concurrency: 1
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
 "
@@ -20,7 +29,6 @@ exports[`functions > deploy --no-wait 1`] = `
 status: pending
 bundle_sha256: abc123
 memory_mib: 256
-concurrency: 1
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
 "
@@ -31,7 +39,6 @@ exports[`functions > deploy --wait exits 1 when the deployment fails 1`] = `
 status: failed
 bundle_sha256: def456
 memory_mib: 256
-concurrency: 1
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
 "
@@ -42,19 +49,20 @@ exports[`functions > deploy --wait until completed 1`] = `
 status: completed
 bundle_sha256: abc123
 memory_mib: 256
-concurrency: 1
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
 "
 `;
 
-exports[`functions > deploy errors when index.ts is missing 1`] = `""`;
+exports[`functions > deploy errors when the entry file is missing 1`] = `""`;
+
+exports[`functions > deploy fails cleanly when bundling fails 1`] = `""`;
 
 exports[`functions > deploy rejects an invalid slug 1`] = `""`;
 
 exports[`functions > deploy rejects malformed --env 1`] = `""`;
 
-exports[`functions > deploy rejects out-of-range --concurrency 1`] = `""`;
+exports[`functions > deploy requires at least one option 1`] = `""`;
 
 exports[`functions > get (table) 1`] = `
 "function
@@ -64,11 +72,11 @@ exports[`functions > get (table) 1`] = `
 │ my-func │ My Func │ https://my-func.functions.neon.tech │ 2026-06-03T00:00:00Z │
 └─────────┴─────────┴─────────────────────────────────────┴──────────────────────┘
 active deployment
-┌────┬───────────┬──────────┬────────────┬─────────────┬───────────────┬──────────────────────┐
-│ Id │ Status    │ Runtime  │ Memory Mib │ Concurrency │ Bundle Sha256 │ Created At           │
-├────┼───────────┼──────────┼────────────┼─────────────┼───────────────┼──────────────────────┤
-│ 1  │ completed │ nodejs24 │ 256        │ 1           │ abc123        │ 2026-06-03T00:00:00Z │
-└────┴───────────┴──────────┴────────────┴─────────────┴───────────────┴──────────────────────┘
+┌────┬───────────┬──────────┬────────────┬───────────────┬──────────────────────┐
+│ Id │ Status    │ Runtime  │ Memory Mib │ Bundle Sha256 │ Created At           │
+├────┼───────────┼──────────┼────────────┼───────────────┼──────────────────────┤
+│ 1  │ completed │ nodejs24 │ 256        │ abc123        │ 2026-06-03T00:00:00Z │
+└────┴───────────┴──────────┴────────────┴───────────────┴──────────────────────┘
 "
 `;
 
@@ -83,7 +91,6 @@ active_deployment:
   status: completed
   bundle_sha256: abc123
   memory_mib: 256
-  concurrency: 1
   runtime: nodejs24
   created_at: 2026-06-03T00:00:00Z
 "
@@ -121,7 +128,6 @@ exports[`functions > list (yaml) 1`] = `
     status: completed
     bundle_sha256: abc123
     memory_mib: 256
-    concurrency: 1
     runtime: nodejs24
     created_at: 2026-06-03T00:00:00Z
 - id: fn-2
@@ -143,7 +149,6 @@ exports[`functions > list with implicit project and branch 1`] = `
     status: completed
     bundle_sha256: abc123
     memory_mib: 256
-    concurrency: 1
     runtime: nodejs24
     created_at: 2026-06-03T00:00:00Z
 - id: fn-2

@@ -10,7 +10,6 @@ export default function (req, res) {
       status: 'pending',
       bundle_sha256: 'def456',
       memory_mib: 256,
-      concurrency: 1,
       runtime: 'nodejs24',
       created_at: '2026-06-03T00:00:00Z',
     },

@@ -8,7 +8,8 @@ import { retryOnLock } from '../api.js';
 import { log } from '../log.js';
 import { BranchScopeProps } from '../types.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
-import { buildZip } from '../utils/zip.js';
+import { zipBundle } from '../utils/zip.js';
+import { bundleEntry } from '../utils/esbuild.js';
 import { writer } from '../writer.js';
 import {
   createDeployment,
@@ -31,7 +32,6 @@ const DEPLOYMENT_FIELDS = [
   'status',
   'runtime',
   'memory_mib',
-  'concurrency',
   'bundle_sha256',
   'created_at',
 ] as const;
@@ -74,26 +74,22 @@ export const builder = (argv: yargs.Argv) =>
           })
           .options({
             path: {
-              describe: 'Directory to deploy (must contain index.ts)',
+              describe: 'Base directory for the function (resolves --entry)',
               type: 'string',
-              default: '.',
+            },
+            entry: {
+              describe: 'Entry file to bundle, relative to --path',
+              type: 'string',
             },
             'memory-mib': {
               describe: 'Memory in MiB',
               type: 'number',
               choices: MEMORY_CHOICES,
-              default: 256,
-            },
-            concurrency: {
-              describe: 'Maximum concurrent invocations (1-1000)',
-              type: 'number',
-              default: 1,
             },
             runtime: {
               describe: 'Function runtime',
               type: 'string',
               choices: ['nodejs24'],
-              default: 'nodejs24',
             },
             env: {
               describe: 'Environment variable as KEY=VALUE (repeatable)',
@@ -143,10 +139,10 @@ export const handler = (args: yargs.Argv) => {
 
 type DeployProps = BranchScopeProps & {
   slug: string;
-  path: string;
-  memoryMib: number;
-  concurrency: number;
-  runtime: string;
+  path?: string;
+  entry?: string;
+  memoryMib?: number;
+  runtime?: string;
   env?: string[];
   wait: boolean;
 };
@@ -168,36 +164,49 @@ const statusHint = (slug: string, projectId: string, branchId: string) =>
   `Check status with: neonctl functions get ${slug} --project-id ${projectId} --branch ${branchId}`;
 
 const deploy = async (props: DeployProps) => {
-  // Cheap, offline validation first — fail before any network round-trip.
-  if (!SLUG_PATTERN.test(props.slug)) {
-    throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
-  }
-  if (
-    !Number.isInteger(props.concurrency) ||
-    props.concurrency < 1 ||
-    props.concurrency > 1000
-  ) {
+  // At least one deploy option must be passed (--wait is excluded: it controls
+  // output, not what gets deployed).
+  const hasOption =
+    props.path !== undefined ||
+    props.entry !== undefined ||
+    props.env !== undefined ||
+    props.memoryMib !== undefined ||
+    props.runtime !== undefined;
+  if (!hasOption) {
     throw new Error(
-      `Invalid --concurrency ${props.concurrency}. It must be an integer between 1 and 1000.`,
-    );
-  }
-  const environment = parseEnv(props.env);
-  const indexPath = join(props.path, 'index.ts');
-  if (!existsSync(indexPath)) {
-    throw new Error(
-      `No index.ts found in ${props.path}. A function must have an index.ts at the root of --path.`,
+      'Provide at least one option to deploy, e.g. --path, --entry, or --env. ' +
+        'See: neonctl functions deploy --help.',
     );
   }
 
+  // Cheap, offline validation first - fail before any network round-trip.
+  if (!SLUG_PATTERN.test(props.slug)) {
+    throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
+  }
+
+  const path = props.path ?? '.';
+  const entry = props.entry ?? 'index.ts';
+  const memoryMib = props.memoryMib ?? 256;
+  const runtime = props.runtime ?? 'nodejs24';
+
+  const environment = parseEnv(props.env);
+  const source = join(path, entry);
+  if (!existsSync(source)) {
+    throw new Error(
+      `Entry file not found: ${source}. Pass --entry to point at your function's entry file (defaults to index.ts).`,
+    );
+  }
+
+  // Bundle before resolving the branch: a bundling failure then fails fast
+  // offline, with no network round-trip.
+  const zip = zipBundle(await bundleEntry(source));
   const branchId = await branchIdFromProps(props);
-  const zip = buildZip(props.path);
 
   const deployment = await retryOnLock(() =>
     createDeployment(props.apiClient, props.projectId, branchId, props.slug, {
       zip,
-      memoryMib: props.memoryMib,
-      concurrency: props.concurrency,
-      runtime: props.runtime,
+      memoryMib,
+      runtime,
       environment,
     }),
   );
