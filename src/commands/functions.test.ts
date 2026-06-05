@@ -174,6 +174,38 @@ describe('functions', () => {
     );
   });
 
+  test('deploy --wait times out when the deployment never becomes active', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'stuck-func',
+        '--path',
+        fnDir,
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_FUNCTIONS_POLL_TIMEOUT_MS: '10',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Deployment 1 created for stuck-func (status: pending) ' +
+          'INFO: Check status with: neonctl functions get stuck-func ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456 ' +
+          'ERROR: Timed out waiting for deployment 1 to finish. It may still be building.',
+      },
+    );
+  });
+
   test('deploy --env encodes environment as JSON', async ({
     testCliCommand,
   }) => {

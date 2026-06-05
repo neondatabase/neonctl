@@ -44,6 +44,12 @@ const MEMORY_CHOICES = [256, 512, 1024, 2048, 4096, 8192];
 const POLL_INTERVAL_MS =
   Number(process.env.NEON_FUNCTIONS_POLL_INTERVAL_MS) || 2000;
 
+// Upper bound on --wait polling so the CLI never hangs (e.g. if our deployment
+// never becomes active_deployment). Overridable so tests can time out fast;
+// defaults to 10 minutes in real use.
+const POLL_TIMEOUT_MS =
+  Number(process.env.NEON_FUNCTIONS_POLL_TIMEOUT_MS) || 600_000;
+
 export const command = 'functions';
 export const describe = 'Manage Neon Functions';
 export const aliases = ['function'];
@@ -230,12 +236,18 @@ const deploy = async (props: DeployProps) => {
   process.once('SIGTERM', onSignal);
 
   let current: NeonFunctionDeployment = deployment;
+  let timedOut = false;
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
   try {
     while (
       current.status !== 'completed' &&
       current.status !== 'failed' &&
       !interrupted
     ) {
+      if (Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       if (interrupted) break;
       const fn = await getFunction(
@@ -258,6 +270,14 @@ const deploy = async (props: DeployProps) => {
     log.info(statusHint(props.slug, props.projectId, branchId));
     writer(props).end(current, { fields: DEPLOYMENT_FIELDS });
     return;
+  }
+
+  if (timedOut) {
+    log.info(statusHint(props.slug, props.projectId, branchId));
+    writer(props).end(current, { fields: DEPLOYMENT_FIELDS });
+    throw new Error(
+      `Timed out waiting for deployment ${deployment.id} to finish. It may still be building.`,
+    );
   }
 
   // Print the final deployment to stdout, then signal failure by throwing.
