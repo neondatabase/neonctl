@@ -79,7 +79,10 @@ export const builder = (argv: yargs.Argv) =>
               choices: ['nodejs24'],
             },
             env: {
-              describe: 'Environment variable as KEY=VALUE (repeatable)',
+              describe:
+                'Environment variable as KEY=VALUE (repeatable). Variables are ' +
+                'inherited from the previous deployment; pass --env only for the ' +
+                'variables you want to add or change.',
               type: 'string',
               array: true,
             },
