@@ -1,0 +1,6 @@
+import { zipSync } from 'fflate';
+
+// Zip the esbuild output (out.js + out.js.map) into the archive the Functions
+// deploy endpoint expects. Compression level 6 matches the previous bundler.
+export const zipBundle = (entries: Record<string, Uint8Array>): Uint8Array =>
+  zipSync(entries, { level: 6 });

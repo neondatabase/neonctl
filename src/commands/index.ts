@@ -16,6 +16,7 @@ import * as link from './link.js';
 import * as init from './init.js';
 import * as dataApi from './data_api.js';
 import * as neonAuth from './neon_auth.js';
+import * as functions from './functions.js';
 
 export default [
   auth,
@@ -36,4 +37,5 @@ export default [
   link,
   init,
   dataApi,
+  functions,
 ];

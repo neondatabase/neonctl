@@ -1,0 +1,9 @@
+{
+  "function": {
+    "id": "fn-2",
+    "slug": "other-func",
+    "name": "Other Func",
+    "invocation_url": "https://other-func.functions.neon.tech",
+    "created_at": "2026-06-02T00:00:00Z"
+  }
+}

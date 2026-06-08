@@ -1,0 +1,171 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`functions > delete 1`] = `""`;
+
+exports[`functions > delete reports a friendly error when the function is missing 1`] = `""`;
+
+exports[`functions > deploy --entry selects a custom entry file 1`] = `
+"id: 1
+status: building
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --env encodes environment as JSON 1`] = `
+"id: 1
+status: building
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --no-wait 1`] = `
+"id: 1
+status: building
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --wait exits 1 when the deployment fails 1`] = `
+"id: 1
+status: failed
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --wait on first deploy (no prior active version) 1`] = `
+"id: 1
+status: completed
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --wait retries through a transient poll error 1`] = `
+"id: 1
+status: completed
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --wait surfaces a non-transient poll error 1`] = `""`;
+
+exports[`functions > deploy --wait times out when the deployment never becomes active 1`] = `""`;
+
+exports[`functions > deploy --wait times out while the new version is still building 1`] = `
+"id: 1
+status: building
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy --wait until completed 1`] = `
+"id: 2
+status: completed
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > deploy errors when the entry file is missing 1`] = `""`;
+
+exports[`functions > deploy fails cleanly when bundling fails 1`] = `""`;
+
+exports[`functions > deploy rejects an invalid slug 1`] = `""`;
+
+exports[`functions > deploy rejects malformed --env 1`] = `""`;
+
+exports[`functions > deploy requires at least one option 1`] = `""`;
+
+exports[`functions > get (table) 1`] = `
+"function
+┌─────────┬─────────┬─────────────────────────────────────┬──────────────────────┐
+│ Slug    │ Name    │ Invocation Url                      │ Created At           │
+├─────────┼─────────┼─────────────────────────────────────┼──────────────────────┤
+│ my-func │ My Func │ https://my-func.functions.neon.tech │ 2026-06-03T00:00:00Z │
+└─────────┴─────────┴─────────────────────────────────────┴──────────────────────┘
+active deployment
+┌────┬───────────┬──────────┬────────────┬──────────────────────┐
+│ Id │ Status    │ Runtime  │ Memory Mib │ Created At           │
+├────┼───────────┼──────────┼────────────┼──────────────────────┤
+│ 1  │ completed │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
+└────┴───────────┴──────────┴────────────┴──────────────────────┘
+"
+`;
+
+exports[`functions > get (yaml) 1`] = `
+"id: fn-1
+slug: my-func
+name: My Func
+invocation_url: https://my-func.functions.neon.tech
+created_at: 2026-06-03T00:00:00Z
+active_deployment:
+  id: 1
+  status: completed
+  memory_mib: 256
+  runtime: nodejs24
+  created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > get with no active deployment 1`] = `
+"function
+┌────────────┬────────────┬────────────────────────────────────────┬──────────────────────┐
+│ Slug       │ Name       │ Invocation Url                         │ Created At           │
+├────────────┼────────────┼────────────────────────────────────────┼──────────────────────┤
+│ other-func │ Other Func │ https://other-func.functions.neon.tech │ 2026-06-02T00:00:00Z │
+└────────────┴────────────┴────────────────────────────────────────┴──────────────────────┘
+"
+`;
+
+exports[`functions > list (table) 1`] = `
+"┌────────────┬────────────┬────────────────────────────────────────┬──────────────────────┐
+│ Slug       │ Name       │ Invocation Url                         │ Created At           │
+├────────────┼────────────┼────────────────────────────────────────┼──────────────────────┤
+│ my-func    │ My Func    │ https://my-func.functions.neon.tech    │ 2026-06-03T00:00:00Z │
+├────────────┼────────────┼────────────────────────────────────────┼──────────────────────┤
+│ other-func │ Other Func │ https://other-func.functions.neon.tech │ 2026-06-02T00:00:00Z │
+└────────────┴────────────┴────────────────────────────────────────┴──────────────────────┘
+"
+`;
+
+exports[`functions > list (yaml) 1`] = `
+"- id: fn-1
+  slug: my-func
+  name: My Func
+  invocation_url: https://my-func.functions.neon.tech
+  created_at: 2026-06-03T00:00:00Z
+- id: fn-2
+  slug: other-func
+  name: Other Func
+  invocation_url: https://other-func.functions.neon.tech
+  created_at: 2026-06-02T00:00:00Z
+"
+`;
+
+exports[`functions > list with implicit project and branch 1`] = `
+"- id: fn-1
+  slug: my-func
+  name: My Func
+  invocation_url: https://my-func.functions.neon.tech
+  created_at: 2026-06-03T00:00:00Z
+- id: fn-2
+  slug: other-func
+  name: Other Func
+  invocation_url: https://other-func.functions.neon.tech
+  created_at: 2026-06-02T00:00:00Z
+"
+`;
