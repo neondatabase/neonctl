@@ -351,6 +351,22 @@ describe('executeInputString', () => {
     expect(observedBuf).toBe('SELECT 1; SELECT 2 ');
   });
 
+  test('a successful trailing statement does not clear an earlier error', async () => {
+    // The exit-code latch must hold across the tail-dispatch path: when an
+    // earlier statement failed, a final statement with no trailing `;` that
+    // succeeds must not reset `hadError`. Otherwise `psql -c "bad; ok"` would
+    // wrongly report success even though the first statement errored.
+    const failingConn = makeMockConnection('bad');
+    const { ctx, conn } = buildCtx(failingConn);
+    const outcome = await executeInputString('SELECT bad;\nSELECT ok', ctx, {
+      print: true,
+    });
+    // Both ran (the error doesn't halt without ON_ERROR_STOP) ...
+    expect(conn?.calls).toEqual(['SELECT bad;', 'SELECT ok']);
+    // ... and the trailing success left the error latched.
+    expect(outcome.hadError).toBe(true);
+  });
+
   test('buffer is reset after a backslash-command error (no tail re-run)', async () => {
     // Regression: the mainloop resets queryBuf when a slash command errors
     // so the residue doesn't re-execute at EOF via the tail-dispatch path.

@@ -319,12 +319,26 @@ describe('runMainLoop — backslash commands', () => {
     expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('hello');
   });
 
-  test('unknown backslash command writes an error and exits non-zero', async () => {
+  test('unknown backslash command writes an error but does not escalate the exit code', async () => {
     const { ctx, stderr } = buildCtx({ lines: ['\\nosuch'] });
     const code = await runMainLoop(ctx);
-    // Mirrors upstream MainLoop's `success` propagation: when the last
-    // submitted statement fails in scripted (notty) mode, the process exits
-    // EXIT_USER even without ON_ERROR_STOP.
+    // From piped stdin / `-f` without ON_ERROR_STOP, psql exits 0 even when a
+    // statement (including an invalid backslash command) failed — only
+    // ON_ERROR_STOP turns this into a non-zero exit. Verified on psql 18.4:
+    // `printf '\\nosuch\n' | psql` writes "invalid command" and exits 0.
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stderr.text()).toMatch(/invalid command \\nosuch/);
+  });
+
+  test('unknown backslash command under ON_ERROR_STOP exits EXIT_USER', async () => {
+    const { ctx, stderr } = buildCtx({
+      lines: ['\\nosuch'],
+      settingsOverride: (s) => {
+        s.onErrorStop = true;
+      },
+    });
+    const code = await runMainLoop(ctx);
+    // psql 18.4: `printf '\\nosuch\n' | psql -v ON_ERROR_STOP=1` exits 3.
     expect(code).toBe(EXIT_USER);
     expect(stderr.text()).toMatch(/invalid command \\nosuch/);
   });
@@ -863,6 +877,24 @@ describe('runMainLoop — error handling', () => {
     expect(code).toBe(EXIT_SUCCESS);
     expect(stderr.text()).toMatch(/syntax error/);
     expect(db?.calls).toEqual(['SELECT bad;', 'SELECT 1;']);
+  });
+
+  test('a trailing statement error does NOT escalate the exit code without ON_ERROR_STOP', async () => {
+    // Real psql exits 0 from piped stdin / `-f` even when the LAST statement
+    // failed, unless ON_ERROR_STOP is set. The old code latched `lastWasError`
+    // and escalated to EXIT_USER at terminal — verified wrong against psql
+    // 18.4 (`printf 'SELECT 1;\nSELECT 1/0;\n' | psql` → 0).
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('syntax error')],
+    ]);
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1;', 'SELECT bad;'],
+      canned,
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // Both statements ran (no halt), and the trailing error didn't bump it.
+    expect(db?.calls).toEqual(['SELECT 1;', 'SELECT bad;']);
   });
 
   test('onErrorStop returns exit 3 and halts further execution', async () => {

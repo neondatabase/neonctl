@@ -269,7 +269,7 @@ const runPreActions = async (
         // failed switch rather than crashing.
         const msg = err instanceof Error ? err.message : String(err);
         stderr.write(`psql: ERROR:  ${msg}\n`);
-        status = EXIT_USER;
+        status = EXIT_FAILURE;
         if (settings.onErrorStop) {
           earlyStopOnError = true;
           break;
@@ -281,10 +281,12 @@ const runPreActions = async (
         status = EXIT_BADCONN;
         break;
       }
-      // For `-c`: any failure (per-statement or stop-on-error) flips the
-      // outer exit code. The contained `\copy` errors are already on stderr.
+      // For `-c`: any failure flips the exit code to EXIT_FAILURE (1) — real
+      // psql exits 1 for a `-c` error regardless of ON_ERROR_STOP, NOT the
+      // EXIT_USER (3) used for ON_ERROR_STOP aborts in script/stdin mode
+      // (verified on psql 18.4). The `\copy` errors are on stderr.
       if (outcome.hadError || outcome.stoppedOnError) {
-        status = EXIT_USER;
+        status = EXIT_FAILURE;
       }
       if (outcome.stoppedOnError) {
         earlyStopOnError = true;

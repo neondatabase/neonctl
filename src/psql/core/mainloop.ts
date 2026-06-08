@@ -877,12 +877,6 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
   let stmtLineNumber = 1;
   let successResult = EXIT_SUCCESS;
   let exitRequested = false;
-  // Tracks whether the most recently dispatched SQL statement (NOT a
-  // backslash command) errored. Upstream psql's MainLoop maintains the
-  // equivalent `success` flag; at end-of-input, if the last statement
-  // failed we surface that as a non-zero exit even when ON_ERROR_STOP
-  // is off (mirrors `\timing on; SELECT error` exiting non-zero).
-  let lastWasError = false;
 
   // Parallel stack of saved scanner states keyed to cond.depth(). Upstream
   // `save_query_text_state` captures both `query_buf->len` AND the scanner
@@ -1132,7 +1126,6 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
           };
           conn.copyOutMidBatchSink = null;
         }
-        lastWasError = !ok;
         // After any SQL statement, the server may have closed the connection
         // (e.g. pg_terminate_backend on our own pid). Surface that once and
         // halt — psql cannot recover from a lost connection mid-script.
@@ -1384,7 +1377,6 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
             working = nlIdx === -1 ? '' : working.slice(nlIdx + 1);
           }
         }
-        lastWasError = bres?.status === 'error';
         // Backslash commands like \connect can also tear down the connection.
         if (checkConnectionLost()) return;
         if (bres?.status === 'error' && ctx.settings.onErrorStop) {
@@ -1507,7 +1499,7 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       // convenience — upstream gates them on `cur_cmd_interactive`. In a
       // non-interactive script (`printf 'quit;\n' | psql`) they must fall
       // through and be sent to the server as SQL (syntax error → exit 3),
-      // not silently exit 0 (review item #25).
+      // not silently exit 0.
       if (!ctx.settings.notty && isQuitKeyword(line)) {
         if (queryBuf.trim().length === 0) {
           reader.pushHistory(line);
@@ -1555,7 +1547,6 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
         sigintState.inQuery = true;
         const ok = await dispatchSendQuery(ctx, queryBuf);
         sigintState.inQuery = false;
-        lastWasError = !ok;
         if (ctx.settings.db?.isClosed()) {
           ctx.stderr.write('psql: error: connection to server was lost\n');
           successResult = EXIT_BADCONN;
@@ -1574,13 +1565,11 @@ export const runMainLoop = async (ctx: REPLContext): Promise<number> => {
       }
     }
 
-    // Upstream MainLoop's terminal check: when the very last statement
-    // errored and we haven't already escalated to a worse exit code, surface
-    // EXIT_USER. Only kicks in for scripted input (`notty`); the interactive
-    // REPL never propagates per-statement failures into the process exit.
-    if (lastWasError && ctx.settings.notty && successResult === EXIT_SUCCESS) {
-      successResult = EXIT_USER;
-    }
+    // NOTE: we deliberately do NOT escalate to EXIT_USER just because the last
+    // statement errored. Real psql exits 0 from piped stdin / `-f` even when a
+    // statement failed, UNLESS ON_ERROR_STOP is set — and that case is already
+    // handled by the per-statement `successResult = EXIT_USER` paths above
+    // (verified on psql 18.4: `printf 'SELECT 1;\nSELECT 1/0;\n' | psql` → 0).
   } finally {
     await reader.close();
     removeSigint();

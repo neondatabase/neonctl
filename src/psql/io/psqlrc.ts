@@ -317,7 +317,7 @@ export const executeInputString = async (
         const stats = await sendQuery(ctx, sqlText);
         // LATCH: a multi-statement input must report an error if ANY statement
         // failed, not just the last one — otherwise `-c "SELECT 1; SELECT 1/0;
-        // SELECT 2"` exits 0 and silently passes CI (review item #14). The
+        // SELECT 2"` exits 0 and silently passes CI. The
         // -f/psqlrc callers ignore this aggregate (they only act on
         // stoppedOnError), so latching is safe across all callers.
         if (stats.hadError) hadError = true;
@@ -390,7 +390,7 @@ export const executeInputString = async (
         queryBuf = '';
         scanState = initialScanState();
       }
-      if (res.status === 'error') hadError = true; // latch (review item #14)
+      if (res.status === 'error') hadError = true; // latch
       if (noteConnectionLost()) {
         return { hadError, stoppedOnError, connectionLost };
       }
@@ -415,12 +415,15 @@ export const executeInputString = async (
   if (tail.length > 0 && ctx.settings.db && ctx.cond.isActive()) {
     if (print) {
       const stats = await sendQuery(ctx, queryBuf);
-      hadError = stats.hadError;
+      // LATCH, same as the semicolon branch — a trailing statement (no `;`)
+      // that succeeds must not clear an earlier error, or `-c "bad; ok"`
+      // wrongly exits 0. The function's latch invariant applies
+      // to the tail path too.
+      if (stats.hadError) hadError = true;
       noteConnectionLost();
     } else {
       try {
         await ctx.settings.db.execSimple(queryBuf);
-        hadError = false;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.stderr.write(`psql: ERROR:  ${msg}\n`);
@@ -480,7 +483,7 @@ export const loadPsqlrc = async (
   // most ONE system file (versioned preferred over unversioned) and then at
   // most ONE user file. Running both the versioned AND unversioned file in a
   // location double-executes side effects and lets the unversioned file
-  // clobber the versioned one (review item #20).
+  // clobber the versioned one.
   let systemDone = false;
   for (const c of candidates) {
     const isSystem = c.description.startsWith('system');
