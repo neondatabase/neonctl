@@ -158,7 +158,7 @@ type ConnWithOpts = { opts?: ConnectOptions };
  * deliberately hides these, but {@link PgConnection} keeps them on a (TS-)
  * private `opts` field; we read it structurally, the same pattern as
  * {@link readConnectionPassword}. Used to SEED a `\c` reconnect so it doesn't
- * silently drop TLS/cert options or downgrade sslmode (review item #5).
+ * silently drop TLS/cert options or downgrade sslmode.
  * Returns `null` for a mock/absent connection.
  */
 const readConnectionOptions = (
@@ -231,6 +231,103 @@ export const parseConnectArgs = (
   return out;
 };
 
+/**
+ * Apply a single libpq-style connection keyword to `out`, validating values
+ * where psql does. `key` must already be lowercased. Returns `{ error }` on a
+ * bad value, or `null` on success. Shared by the `key=value` conninfo parser
+ * and the `\c <uri>` query-string parser so both honour the same keywords.
+ */
+const applyConnInfoKey = (
+  out: Partial<ConnectOptions>,
+  key: string,
+  value: string,
+): { error: string } | null => {
+  switch (key) {
+    case 'host':
+      out.host = value;
+      break;
+    case 'hostaddr':
+      // Distinct from `host`: hostaddr is the literal IP to dial, while the
+      // cert/SNI is still verified against `host`.
+      out.hostaddr = value;
+      break;
+    case 'port': {
+      const port = parseInt(value, 10);
+      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+        return { error: `invalid port "${value}"` };
+      }
+      out.port = port;
+      break;
+    }
+    case 'user':
+      out.user = value;
+      break;
+    case 'password':
+      out.password = value;
+      break;
+    case 'dbname':
+    case 'database':
+      out.database = value;
+      break;
+    case 'application_name':
+      out.applicationName = value;
+      break;
+    case 'sslmode': {
+      const allowed: ConnectOptions['ssl'][] = [
+        'disable',
+        'allow',
+        'prefer',
+        'require',
+        'verify-ca',
+        'verify-full',
+      ];
+      if (!allowed.includes(value as ConnectOptions['ssl'])) {
+        return { error: `invalid sslmode "${value}"` };
+      }
+      out.ssl = value as ConnectOptions['ssl'];
+      break;
+    }
+    case 'channel_binding': {
+      const allowed: NonNullable<ConnectOptions['channelBinding']>[] = [
+        'disable',
+        'prefer',
+        'require',
+      ];
+      if (
+        !allowed.includes(
+          value as NonNullable<ConnectOptions['channelBinding']>,
+        )
+      ) {
+        return { error: `invalid channel_binding "${value}"` };
+      }
+      out.channelBinding = value as NonNullable<
+        ConnectOptions['channelBinding']
+      >;
+      break;
+    }
+    case 'client_encoding':
+      out.clientEncoding = value;
+      break;
+    case 'connect_timeout': {
+      const n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 0) {
+        return { error: `invalid connect_timeout "${value}"` };
+      }
+      out.connectTimeoutMs = n * 1000;
+      break;
+    }
+    case 'options':
+      out.options = value;
+      break;
+    default:
+      // Unknown keys are silently ignored — matches libpq's permissiveness
+      // for forward-compat with future PG releases. We could warn here,
+      // but psql itself doesn't.
+      break;
+  }
+  return null;
+};
+
 const parseUri = (raw: string): Partial<ConnectOptions> | { error: string } => {
   let url: URL;
   try {
@@ -241,20 +338,34 @@ const parseUri = (raw: string): Partial<ConnectOptions> | { error: string } => {
     return { error: `invalid URI: ${msg}` };
   }
   const out: Partial<ConnectOptions> = {};
-  if (url.hostname.length > 0) out.host = decodeURIComponent(url.hostname);
-  if (url.port.length > 0) {
-    const port = parseInt(url.port, 10);
-    if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-      return { error: `invalid port in URI` };
+  // decodeURIComponent throws URIError on malformed `%` escapes (e.g. `%zz`);
+  // wrap every decode so a bad URI surfaces as a clean error rather than an
+  // unhandled exception that aborts the REPL.
+  try {
+    if (url.hostname.length > 0) out.host = decodeURIComponent(url.hostname);
+    if (url.port.length > 0) {
+      const port = parseInt(url.port, 10);
+      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+        return { error: `invalid port in URI` };
+      }
+      out.port = port;
     }
-    out.port = port;
+    if (url.username.length > 0) out.user = decodeURIComponent(url.username);
+    if (url.password.length > 0) {
+      out.password = decodeURIComponent(url.password);
+    }
+    const pathname = url.pathname.replace(/^\//, '');
+    if (pathname.length > 0) out.database = decodeURIComponent(pathname);
+    // Map the query string (?sslmode=require&connect_timeout=10&…) onto the
+    // same connection keywords libpq accepts in a URI.
+    for (const [rawKey, rawVal] of url.searchParams) {
+      const res = applyConnInfoKey(out, rawKey.toLowerCase(), rawVal);
+      if (res !== null) return res;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `invalid URI: ${msg}` };
   }
-  if (url.username.length > 0) out.user = decodeURIComponent(url.username);
-  if (url.password.length > 0) {
-    out.password = decodeURIComponent(url.password);
-  }
-  const pathname = url.pathname.replace(/^\//, '');
-  if (pathname.length > 0) out.database = decodeURIComponent(pathname);
   return out;
 };
 
@@ -305,89 +416,8 @@ const parseConninfo = (
     }
     const key = pair.slice(0, eq).toLowerCase();
     const value = pair.slice(eq + 1);
-    switch (key) {
-      case 'host':
-        out.host = value;
-        break;
-      case 'hostaddr':
-        // Distinct from `host`: hostaddr is the literal IP to dial, while the
-        // cert/SNI is still verified against `host` (review item #10).
-        out.hostaddr = value;
-        break;
-      case 'port': {
-        const port = parseInt(value, 10);
-        if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-          return { error: `invalid port "${value}"` };
-        }
-        out.port = port;
-        break;
-      }
-      case 'user':
-        out.user = value;
-        break;
-      case 'password':
-        out.password = value;
-        break;
-      case 'dbname':
-      case 'database':
-        out.database = value;
-        break;
-      case 'application_name':
-        out.applicationName = value;
-        break;
-      case 'sslmode': {
-        const allowed: ConnectOptions['ssl'][] = [
-          'disable',
-          'allow',
-          'prefer',
-          'require',
-          'verify-ca',
-          'verify-full',
-        ];
-        if (!allowed.includes(value as ConnectOptions['ssl'])) {
-          return { error: `invalid sslmode "${value}"` };
-        }
-        out.ssl = value as ConnectOptions['ssl'];
-        break;
-      }
-      case 'channel_binding': {
-        const allowed: NonNullable<ConnectOptions['channelBinding']>[] = [
-          'disable',
-          'prefer',
-          'require',
-        ];
-        if (
-          !allowed.includes(
-            value as NonNullable<ConnectOptions['channelBinding']>,
-          )
-        ) {
-          return { error: `invalid channel_binding "${value}"` };
-        }
-        out.channelBinding = value as NonNullable<
-          ConnectOptions['channelBinding']
-        >;
-        break;
-      }
-      case 'client_encoding':
-        out.clientEncoding = value;
-        break;
-      case 'connect_timeout': {
-        const n = parseInt(value, 10);
-        if (!Number.isFinite(n) || n < 0) {
-          return { error: `invalid connect_timeout "${value}"` };
-        }
-        out.connectTimeoutMs = n * 1000;
-        break;
-      }
-      case 'options':
-        out.options = value;
-        break;
-      default:
-        // Unknown keys are silently ignored — matches libpq's permissiveness
-        // for forward-compat with future PG releases. We could warn here,
-        // but psql itself doesn't.
-        break;
-    }
+    const res = applyConnInfoKey(out, key, value);
+    if (res !== null) return res;
   }
   return out;
 };
@@ -427,13 +457,13 @@ export const mergeConnectOpts = (
   // libpq's do_connect clones the prior connection's full conninfo and
   // overrides only user-specified keys — so a reconnect keeps sslmode,
   // sslrootcert/cert/key/crl, sslnegotiation, channelBinding, requireAuth,
-  // hostaddr, etc. (review item #5). Seed from the live connection's
-  // effective options; fall back to {} when there is none.
+  // hostaddr, etc. Seed from the live connection's effective options; fall
+  // back to {} when there is none.
   const seed: Partial<ConnectOptions> = prior ? { ...prior } : {};
 
   // libpq clears keep_password when user, host, OR port changes, so a stored
-  // credential isn't transmitted to a different principal/server (review
-  // item #4). Compare the override against the prior live target.
+  // credential isn't transmitted to a different principal/server. Compare the
+  // override against the prior live target.
   const hostChanged = ov.host !== undefined && ov.host !== prior?.host;
   const targetChanged =
     hostChanged ||
@@ -501,8 +531,8 @@ export const cmdConnect: BackslashCmdSpec = {
     }
 
     // Seed the reconnect from the live connection's EFFECTIVE options so TLS /
-    // cert / auth settings survive (review #5) and the prior password is only
-    // reused when the principal/server is unchanged (review #4). Both are read
+    // cert / auth settings survive and the prior password is only
+    // reused when the principal/server is unchanged. Both are read
     // structurally from PgConnection (the frozen Connection interface hides
     // them). readConnectionPassword stays as the fallback for mocks/drivers
     // that expose `password` but not `opts`.

@@ -288,7 +288,7 @@ describe('parseConnectArgs', () => {
     expect(r).toEqual({ host: 'h', ssl: 'require' });
   });
 
-  test('conninfo: hostaddr is kept distinct from host (review #10)', () => {
+  test('conninfo: hostaddr is kept distinct from host', () => {
     const r = parseConnectArgs('host=db.example.com hostaddr=1.2.3.4');
     expect(r).toEqual({ host: 'db.example.com', hostaddr: '1.2.3.4' });
   });
@@ -302,6 +302,45 @@ describe('parseConnectArgs', () => {
     const r = parseConnectArgs('host=h portisbad');
     // "portisbad" lacks `=` so it triggers the parse error.
     expect(r).toEqual({ error: expect.stringMatching(/missing "="/) });
+  });
+
+  test('URI: malformed percent-escape yields an error, not a thrown URIError', () => {
+    // `%zz` is not a valid percent-escape — decodeURIComponent throws URIError.
+    // It must surface as a clean error rather than crashing the REPL.
+    const r = parseConnectArgs('postgresql://user@host/db%zz');
+    expect(r).toEqual({ error: expect.stringMatching(/invalid URI/i) });
+  });
+
+  test('URI: percent-escapes in userinfo/dbname are decoded', () => {
+    const r = parseConnectArgs(
+      'postgresql://al%20ice:p%40ss@host.example.com/my%20db',
+    );
+    expect(r).toEqual({
+      host: 'host.example.com',
+      user: 'al ice',
+      password: 'p@ss',
+      database: 'my db',
+    });
+  });
+
+  test('URI: query parameters map onto connection keywords', () => {
+    const r = parseConnectArgs(
+      'postgresql://host.example.com/mydb?sslmode=require&connect_timeout=10&application_name=myapp',
+    );
+    expect(r).toEqual({
+      host: 'host.example.com',
+      database: 'mydb',
+      ssl: 'require',
+      connectTimeoutMs: 10_000,
+      applicationName: 'myapp',
+    });
+  });
+
+  test('URI: an invalid query-param value is rejected', () => {
+    const r = parseConnectArgs(
+      'postgresql://host.example.com/mydb?sslmode=garbage',
+    );
+    expect(r).toEqual({ error: expect.stringMatching(/invalid sslmode/) });
   });
 });
 
@@ -354,7 +393,7 @@ describe('mergeConnectOpts', () => {
     }
   });
 
-  test('carries TLS/cert options from the prior connection (review #5)', () => {
+  test('carries TLS/cert options from the prior connection', () => {
     const s = defaultSettings(createVarStore());
     const prior: Partial<ConnectOptions> = {
       host: 'h1',
@@ -380,7 +419,7 @@ describe('mergeConnectOpts', () => {
     });
   });
 
-  test('keeps the prior password when the target is unchanged (review #4)', () => {
+  test('keeps the prior password when the target is unchanged', () => {
     const s = defaultSettings(createVarStore());
     const prior: Partial<ConnectOptions> = {
       host: 'h1',
@@ -396,20 +435,17 @@ describe('mergeConnectOpts', () => {
     ['host', { host: 'attacker.example.com' }],
     ['user', { user: 'bob' }],
     ['port', { port: 5544 }],
-  ])(
-    'drops the prior password when %s changes (review #4)',
-    (_label, override) => {
-      const s = defaultSettings(createVarStore());
-      const prior: Partial<ConnectOptions> = {
-        host: 'h1',
-        port: 5432,
-        user: 'alice',
-        password: 's3cret',
-      };
-      const opts = mergeConnectOpts(s, override, prior);
-      expect('error' in opts ? undefined : opts.password).toBeUndefined();
-    },
-  );
+  ])('drops the prior password when %s changes', (_label, override) => {
+    const s = defaultSettings(createVarStore());
+    const prior: Partial<ConnectOptions> = {
+      host: 'h1',
+      port: 5432,
+      user: 'alice',
+      password: 's3cret',
+    };
+    const opts = mergeConnectOpts(s, override, prior);
+    expect('error' in opts ? undefined : opts.password).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
