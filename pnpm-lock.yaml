@@ -59,6 +59,10 @@ importers:
       yargs:
         specifier: 17.7.2
         version: 17.7.2
+    optionalDependencies:
+      esbuild:
+        specifier: 0.28.0
+        version: 0.28.0
     devDependencies:
       '@apidevtools/swagger-parser':
         specifier: 12.1.0
@@ -114,9 +118,6 @@ importers:
       emocks:
         specifier: 3.0.4
         version: 3.0.4
-      esbuild:
-        specifier: 0.28.0
-        version: 0.28.0
       eslint:
         specifier: 9.29.0
         version: 9.29.0
