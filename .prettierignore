@@ -1,3 +1,6 @@
 dist/
 *.gen.ts
 pnpm-lock.yaml
+# Object-storage download fixture: a raw octet-stream body served verbatim, so
+# it is intentionally not valid JSON despite the .json extension emocks needs.
+mocks/single_org/projects/test-project-123456/branches/br-main-branch-123456/buckets/my-bucket/objects/dir%2Ffile.txt/download/GET.json

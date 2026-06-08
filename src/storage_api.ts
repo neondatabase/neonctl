@@ -10,6 +10,8 @@
 // sites in `src/commands/bucket.ts` can switch over with no behavioural
 // change.
 
+import { type Readable } from 'node:stream';
+
 import { type Api } from '@neondatabase/api-client';
 
 export type ApiClient = Api<unknown>;
@@ -22,6 +24,37 @@ type ApiResponse<T> = { data: T };
 type ApiResponseWithHeaders<T> = {
   data: T;
   headers: Record<string, unknown>;
+};
+
+/** The visibility level of a bucket. Mirrors the `access_level` enum. */
+export type BucketAccessLevel = 'private' | 'public_read';
+
+/** A single bucket on a branch. Mirrors the `Bucket` schema. */
+export type Bucket = {
+  /** The bucket name (DNS-safe, unique within the branch). */
+  name: string;
+  /** Whether the bucket is private or publicly readable. */
+  access_level: BucketAccessLevel;
+};
+
+/** Response body of the create-bucket endpoint. Mirrors `BucketResponse`. */
+export type BucketResponse = {
+  /** The bucket that was created. */
+  bucket: Bucket;
+};
+
+/** Response body of the list-buckets endpoint. Mirrors `BucketsListResponse`. */
+export type BucketsListResponse = {
+  /** The buckets on the branch. */
+  buckets: Bucket[];
+};
+
+/** Request body of the create-bucket endpoint. Mirrors `BucketCreateRequest`. */
+export type BucketCreateRequest = {
+  /** The bucket name to create. */
+  name: string;
+  /** The visibility level. Defaults to `private` server-side when omitted. */
+  access_level?: BucketAccessLevel;
 };
 
 /** A single object stored in a bucket. Mirrors the `BucketObject` schema. */
@@ -82,10 +115,81 @@ export type ListObjectsParams = {
   limit?: number;
 };
 
-const bucketPath = (projectId: string, branchId: string, bucketName: string) =>
+const bucketsPath = (projectId: string, branchId: string) =>
   `/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(
     branchId,
-  )}/buckets/${encodeURIComponent(bucketName)}`;
+  )}/buckets`;
+
+const bucketPath = (projectId: string, branchId: string, bucketName: string) =>
+  `${bucketsPath(projectId, branchId)}/${encodeURIComponent(bucketName)}`;
+
+/**
+ * Create a bucket on a branch.
+ *
+ * @request POST /projects/{project_id}/branches/{branch_id}/buckets
+ */
+export const createProjectBranchBucket = (
+  apiClient: ApiClient,
+  {
+    projectId,
+    branchId,
+    name,
+    accessLevel,
+  }: {
+    projectId: string;
+    branchId: string;
+    name: string;
+    accessLevel?: BucketAccessLevel;
+  },
+): Promise<ApiResponse<BucketResponse>> => {
+  const body: BucketCreateRequest = { name };
+  // Omit access_level entirely so the server default (`private`) applies.
+  if (accessLevel !== undefined) {
+    body.access_level = accessLevel;
+  }
+  return apiClient.request<BucketResponse>({
+    path: bucketsPath(projectId, branchId),
+    method: 'POST',
+    body,
+    format: 'json',
+    secure: true,
+  });
+};
+
+/**
+ * List the buckets on a branch.
+ *
+ * @request GET /projects/{project_id}/branches/{branch_id}/buckets
+ */
+export const listProjectBranchBuckets = (
+  apiClient: ApiClient,
+  { projectId, branchId }: { projectId: string; branchId: string },
+): Promise<ApiResponse<BucketsListResponse>> =>
+  apiClient.request<BucketsListResponse>({
+    path: bucketsPath(projectId, branchId),
+    method: 'GET',
+    format: 'json',
+    secure: true,
+  });
+
+/**
+ * Delete a bucket from a branch.
+ *
+ * @request DELETE /projects/{project_id}/branches/{branch_id}/buckets/{bucket_name}
+ */
+export const deleteProjectBranchBucket = (
+  apiClient: ApiClient,
+  {
+    projectId,
+    branchId,
+    bucketName,
+  }: { projectId: string; branchId: string; bucketName: string },
+): Promise<ApiResponse<undefined>> =>
+  apiClient.request<undefined>({
+    path: bucketPath(projectId, branchId, bucketName),
+    method: 'DELETE',
+    secure: true,
+  });
 
 /**
  * List objects (and collapsed folders) in a bucket on a branch.
@@ -108,9 +212,11 @@ export const listProjectBranchBucketObjects = (
  * Download an object's raw bytes from a bucket on a branch.
  *
  * The server returns the body as `application/octet-stream` with a
- * `Content-Disposition: attachment` header; the helper reads the bytes as an
- * `ArrayBuffer` and returns them alongside the response headers so the caller
- * can derive a filename from `Content-Disposition`.
+ * `Content-Disposition: attachment` header; the helper requests the body as a
+ * stream (`responseType: 'stream'`), so `.data` is a Node `Readable` the caller
+ * can pipe straight to disk without buffering the whole object in memory. The
+ * response headers are returned alongside so the caller can derive a filename
+ * from `Content-Disposition`.
  *
  * The object key may contain `/`; it is percent-encoded into a single path
  * segment so nested keys are routed to the `{object_key}` parameter.
@@ -130,15 +236,15 @@ export const getProjectBranchBucketObject = (
     bucketName: string;
     objectKey: string;
   },
-): Promise<ApiResponseWithHeaders<ArrayBuffer>> =>
-  apiClient.request<ArrayBuffer>({
+): Promise<ApiResponseWithHeaders<Readable>> =>
+  apiClient.request<Readable>({
     path: `${bucketPath(projectId, branchId, bucketName)}/objects/${encodeURIComponent(
       objectKey,
     )}/download`,
     method: 'GET',
-    format: 'arraybuffer',
+    format: 'stream',
     secure: true,
-  }) as Promise<ApiResponseWithHeaders<ArrayBuffer>>;
+  }) as Promise<ApiResponseWithHeaders<Readable>>;
 
 /**
  * Delete an object from a bucket on a branch.

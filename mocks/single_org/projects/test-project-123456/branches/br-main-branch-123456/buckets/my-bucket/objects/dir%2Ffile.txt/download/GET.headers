@@ -1,0 +1,5 @@
+{
+  "Content-Type": "application/octet-stream",
+  "Content-Disposition": "attachment; filename=\"file.txt\"",
+  "X-Content-Type-Options": "nosniff"
+}
