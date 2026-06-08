@@ -103,6 +103,13 @@ export const builder = (argv: yargs.Argv) =>
             describe: 'Connect to a new branch via psql',
             default: false,
           },
+          fallback: {
+            type: 'boolean',
+            describe:
+              'Force the embedded TypeScript psql fallback (for testing)',
+            default: false,
+            hidden: true,
+          },
           annotation: {
             type: 'string',
             hidden: true,
@@ -332,6 +339,7 @@ const create = async (
     parent?: string;
     type: EndpointType;
     psql: boolean;
+    fallback: boolean;
     suspendTimeout: number;
     annotation?: string;
     schemaOnly: boolean;
@@ -446,7 +454,9 @@ const create = async (
     }
     const connection_uri = data.connection_uris[0].connection_uri;
     const psqlArgs = props['--'];
-    await psql(connection_uri, psqlArgs);
+    await psql(connection_uri, psqlArgs, {
+      mode: props.fallback ? 'ts' : 'auto',
+    });
   }
 };
 

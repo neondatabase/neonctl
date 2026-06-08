@@ -1,0 +1,4 @@
+# Local-only artifacts of the conformance suite.
+.tmp/
+*.log
+node_modules/

@@ -58,6 +58,80 @@ neonctl projects list --api-key <neon_api_key>
 
 For information about obtaining an Neon API key, see [Authentication](https://api-docs.neon.tech/reference/authentication), in the _Neon API Reference_.
 
+## Connect with psql
+
+Several commands accept a `--psql` flag that opens a psql session against the resolved endpoint:
+
+```bash
+neonctl connection-string --psql --project-id <id>
+neonctl projects create --psql
+neonctl branches create --psql
+```
+
+Any arguments after `--` are forwarded to psql, for example:
+
+```bash
+neonctl cs --psql --project-id <id> -- -c "SELECT version()"
+neonctl cs --psql --project-id <id> -- -f script.sql --csv
+```
+
+### Embedded psql fallback
+
+If the system has `psql` installed on `$PATH`, `--psql` continues to spawn the native binary — there is no behavior change for existing users.
+
+If `psql` is not found on `$PATH`, neonctl now falls back to an embedded TypeScript implementation. There is nothing to install or configure; it ships with `neonctl`. This removes the "no psql binary" trap on machines (and CI runners) that don't have PostgreSQL client tools installed.
+
+Automatic fallback is the intended path — there is normally no flag to set. The embedded implementation can also be force-selected (primarily for tests and CI, e.g. to exercise it even when a native `psql` is present):
+
+- `--fallback` — force the embedded implementation on `connection-string`, `projects create`, and `branches create`. Intentionally hidden from `--help`: it's a test/CI knob, not a user-facing option (the automatic fallback above is the supported behavior).
+- `NEONCTL_PSQL_FALLBACK=1` — environment variable with the same effect as `--fallback`. Convenient for scripts and CI.
+
+The embedded implementation is verified against a conformance suite that
+diffs its behavior against real PostgreSQL (14–18) and the upstream psql
+regression + TAP tests.
+
+#### What works
+
+**REPL & scripting**
+
+- Interactive REPL with a hand-rolled VT100 line editor (no native bindings); vi and emacs edit modes (`VI_MODE` psql variable)
+- Persistent command history (`~/.psql_history`, libreadline format)
+- `~/.psqlrc` autoload (including `$PGSYSCONFDIR/psqlrc` and version-suffixed variants)
+- Scripted modes: `-c "SQL"`, `-f script.sql`, and stdin; `--single-transaction`, `ON_ERROR_STOP`, `ECHO`, `--echo-all`
+- `SINGLELINE` (`-S`), `\timing`, `\watch` (named flags `c=`/`i=`/`m=`, unbounded continuous mode)
+
+**Backslash commands**
+
+- All output formats: aligned, unaligned, wrapped, csv, json, html, asciidoc, latex, latex-longtable, troff-ms (`\a \H \t \x \pset \f \C` …)
+- All `\d*` describe commands with full upstream parity (columns, indexes, foreign keys, triggers, view definitions, sequences, RLS, replica identity, partitions, tablespaces, access methods, inheritance, FDW, stats objects, publications, subscriptions, per-column FDW options, TOAST owner)
+- `\copy` to/from file, `PROGRAM`, `STDIN`, `STDOUT` (incl. the `\.` EOF marker); `\g` / `\gx` / `\gset` / `\gdesc` / `\gexec` and `\g | program` pipes
+- Extended query + pipeline mode (`\bind`, `\bind_named`, `\startpipeline`, `\parse`, `\sendpipeline`)
+- `\crosstabview`, `\lo_*` large objects, `\e`/`\edit` (external editor), `\s` (history), `\?`/`\h` help, `\if`/`\elif`/`\else`/`\endif`, `\set`/`\unset`, `\connect`, `\encoding` (live `SET client_encoding`), `\!`, `\cd`, `\prompt` (incl. no-echo `-`), `\password`
+- Tab completion (~88 rules incl. live `pg_settings` GUC lookup, deep `ALTER` sub-actions, `JOIN` clauses, window `OVER`)
+
+**Connection & authentication**
+
+- libpq-equivalent lookup precedence: argv flags > URI > `PG*` env vars > `~/.pgpass` > `pg_service.conf` > libpq defaults
+- SCRAM-SHA-256 / SCRAM-SHA-256-PLUS with `tls-server-end-point` channel binding (`channel_binding`); MD5 and cleartext; `require_auth`
+- Multi-host failover & load balancing: `target_session_attrs` (any / read-write / read-only / primary / standby / prefer-standby), `load_balance_hosts`, DNS fan-out, `hostaddr`
+- Unix-domain sockets (host beginning with `/`); TCP keepalives (`keepalives`, `keepalives_idle`)
+
+**TLS**
+
+- `sslmode` disable → verify-full; client certs in **PEM or DER** via `sslcert` / `sslkey` (+ `sslpassword` for encrypted keys, with the libpq group/world-readable-key check)
+- Trust config: `sslrootcert` (incl. `=system` with `SSL_CERT_FILE` / `SSL_CERT_DIR`), default client-cert discovery (`~/.postgresql/postgresql.{crt,key}`), `sslcertmode`
+- CRL: `sslcrl` and `sslcrldir`; `ssl_min_protocol_version` / `ssl_max_protocol_version`; `sslsni`
+- Direct-SSL negotiation (`sslnegotiation=direct`, PostgreSQL 17+, via ALPN)
+
+#### What's not supported
+
+- **GSSAPI / SSPI** (`gssencmode`, Kerberos/SSPI auth, `requirepeer`). GSS transport encryption needs a native Kerberos binding, which the embedded psql deliberately avoids (pure TypeScript, zero native dependencies — the same reason the line editor is hand-rolled). `node-postgres` doesn't support it either, and Neon doesn't use it. `gssencmode=disable` / `prefer` are accepted; `gssencmode=require` is rejected with a clear error. `requirepeer` is parsed but a Unix-socket connection that sets it is refused (Node exposes no peer-credential API — it is not silently ignored).
+- **`keepalives_interval` / `keepalives_count`** — Node's socket API exposes only keepalive enable + initial delay, so these are accepted but not applied.
+
+### Known limitations
+
+- **TLS cipher is runtime-dependent.** The negotiated TLS 1.3 ciphersuite is chosen by the host runtime's TLS library from an offer byte-identical to libpq's. Under Node (OpenSSL) that is `TLS_AES_256_GCM_SHA384`, matching vanilla psql; under Bun (BoringSSL) it is `TLS_AES_128_GCM_SHA256`. Both are TLS 1.3 AEAD suites with no practical security difference, and neither runtime exposes a client-side knob to steer the selection.
+
 ## Configure autocompletion
 
 The Neon CLI supports autocompletion, which you can configure in a few easy steps. See [Neon CLI commands — completion](https://neon.tech/docs/reference/cli-completion) for instructions.
@@ -297,6 +371,15 @@ To run commands from the local build, replace the `neonctl` command with `node d
 
 ```shell
 node dist branches --help
+```
+
+### Embedded psql tests
+
+The embedded TypeScript psql implementation has its own conformance test suite that runs the same scripts against the embedded psql and a reference `psql` binary, then diffs the output.
+
+```shell
+bun run test:conformance         # run against $PSQL_BINARY (defaults to the system psql)
+bun run test:conformance:matrix  # run across PG 14/15/16/17/18 locally (requires Docker)
 ```
 
 ## Releasing

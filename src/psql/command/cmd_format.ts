@@ -1,0 +1,1025 @@
+/**
+ * Formatting backslash commands.
+ *
+ * TypeScript port of the `exec_command_a/C/f/H/t/T/x/pset/encoding`
+ * implementations in upstream PostgreSQL's `src/bin/psql/command.c` and
+ * their backing `do_pset()` / `printPsetInfo()` helpers in the same file.
+ *
+ * All commands mutate `settings.popt.topt` (a {@link PrintTableOpts}) in
+ * place. Several are thin wrappers over `\pset <option>` — for instance
+ * `\a` is equivalent to `\pset format aligned|unaligned`. We keep the
+ * separate exports so the registry can advertise them under their public
+ * names without aliasing oddities.
+ *
+ * Encoding & connection coupling: `\encoding NAME` propagates the client
+ * encoding to the live connection via {@link Connection.setClientEncoding}
+ * (libpq's `PQsetClientEncoding`). Following upstream `do_encoding`, we
+ * validate the name client-side first — an unrecognised name prints
+ * `invalid encoding name "<name>"` and leaves the encoding unchanged,
+ * never touching the connection.
+ *
+ * Error format: upstream uses `\\<cmd>: <message>` for diagnostics. We
+ * mirror that exactly, writing to stderr and returning
+ * `{ status: 'error' }`.
+ */
+
+import { scanSlashArgs } from '../scanner/slash.js';
+import type {
+  BackslashCmdSpec,
+  BackslashContext,
+  BackslashResult,
+} from '../types/backslash.js';
+import type {
+  BorderStyle,
+  OutputFormat,
+  PrintTableOpts,
+  Unicode2BorderStyle,
+  Unicode2LineStyle,
+} from '../types/printer.js';
+
+import { writeErr, writeOut, parseBool, parseTriple } from './shared.js';
+
+/** Recognised output-format names accepted by `\pset format`. */
+const OUTPUT_FORMATS: readonly OutputFormat[] = [
+  'aligned',
+  'unaligned',
+  'wrapped',
+  'html',
+  'asciidoc',
+  'latex',
+  'latex-longtable',
+  'troff-ms',
+  'csv',
+  'json',
+];
+
+/** Convert OutputFormat to its human-readable display string. */
+const formatName = (f: OutputFormat): string => f;
+
+/**
+ * Stringify a triple-state for status lines (`\x`, `\pset expanded`).
+ * Matches upstream psql phrasing:
+ *   on   → "Expanded display is on."
+ *   off  → "Expanded display is off."
+ *   auto → "Expanded display is used automatically."
+ */
+const tripleLabel = (value: 'on' | 'off' | 'auto'): string =>
+  value === 'auto' ? 'used automatically' : value;
+
+/**
+ * `\a` — toggle aligned/unaligned.
+ *
+ * Upstream `exec_command_a` flips the format via `do_pset("format", …)`
+ * and, when not quiet, prints `Output format is <aligned|unaligned>.` —
+ * the same `printPsetInfo("format")` line `\pset format` emits. We mirror
+ * that here, gating the status write on QUIET like the sibling toggles.
+ */
+export const cmdA: BackslashCmdSpec = {
+  name: 'a',
+  helpKey: 'a',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    const topt = ctx.settings.popt.topt;
+    topt.format = topt.format === 'aligned' ? 'unaligned' : 'aligned';
+    if (!ctx.settings.quiet) {
+      writeOut(`Output format is ${formatName(topt.format)}.\n`);
+    }
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * `\C [title]` — set or clear `topt.title`. No arg clears, any arg sets to
+ * that string verbatim. Equivalent to `\pset title [value]`; upstream
+ * `exec_command_C` dispatches via `do_pset("title", value, …)` so the
+ * status line (`Title is "…".` / `Title is unset.`) is emitted by
+ * `printPsetInfo`.
+ */
+export const cmdC: BackslashCmdSpec = {
+  name: 'C',
+  helpKey: 'C',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    const arg = ctx.nextArg('normal');
+    return Promise.resolve(
+      applyPset(
+        ctx.settings.popt.topt,
+        'title',
+        arg,
+        ctx.cmdName,
+        ctx.settings.quiet,
+      ),
+    );
+  },
+};
+
+/**
+ * `\f [sep]` — set or show the unaligned field separator. With no arg, we
+ * print the current value (upstream prints `Field separator is "%s".`).
+ */
+export const cmdF: BackslashCmdSpec = {
+  name: 'f',
+  helpKey: 'f',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    const arg = ctx.nextArg('normal');
+    if (arg === null) {
+      writeOut(`Field separator is "${ctx.settings.popt.topt.fieldSep}".\n`);
+      return Promise.resolve({ status: 'ok' });
+    }
+    ctx.settings.popt.topt.fieldSep = arg;
+    // Upstream confirms the change (quiet-gated), like the other \pset-style
+    // setters (review: `\f SEP` is silent).
+    if (!ctx.settings.quiet) {
+      writeOut(`Field separator is "${arg}".\n`);
+    }
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * `\H` — toggle html on/off. If currently `html`, flip back to `aligned`;
+ * otherwise flip to `html` (upstream remembers the prior format only
+ * loosely — we always restore `aligned` to match the documented behaviour).
+ */
+export const cmdH: BackslashCmdSpec = {
+  name: 'H',
+  helpKey: 'H',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    const topt = ctx.settings.popt.topt;
+    topt.format = topt.format === 'html' ? 'aligned' : 'html';
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * `\t [on|off|toggle]` — tuples-only. No arg → toggle.
+ *
+ * Equivalent to `\pset tuples_only [value]`; upstream `exec_command_t`
+ * dispatches via `do_pset("tuples_only", opt, …)`. The
+ * `printPsetInfo("tuples_only")` confirmation line is only emitted when
+ * `opt` is NULL (the toggle path) — when a value is supplied,
+ * `do_pset` returns early via `ParseVariableBool` and skips
+ * `printPsetInfo`, so the status line is suppressed.
+ */
+export const cmdT: BackslashCmdSpec = {
+  name: 't',
+  helpKey: 't',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    const arg = ctx.nextArg('normal');
+    return Promise.resolve(
+      applyPset(
+        ctx.settings.popt.topt,
+        'tuples_only',
+        arg,
+        ctx.cmdName,
+        ctx.settings.quiet,
+      ),
+    );
+  },
+};
+
+/**
+ * `\T [attr]` — set HTML table attributes. No arg clears. Equivalent to
+ * `\pset tableattr [value]`; upstream `exec_command_T` dispatches via
+ * `do_pset("tableattr", value, …)` so the status line
+ * (`Table attributes are "…".` / `Table attributes unset.`) is emitted
+ * by `printPsetInfo`.
+ */
+export const cmdTitleAttr: BackslashCmdSpec = {
+  name: 'T',
+  helpKey: 'T',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    const arg = ctx.nextArg('normal');
+    return Promise.resolve(
+      applyPset(
+        ctx.settings.popt.topt,
+        'tableattr',
+        arg,
+        ctx.cmdName,
+        ctx.settings.quiet,
+      ),
+    );
+  },
+};
+
+/** `\x [on|off|auto|toggle]` — expanded output. No arg → toggle. */
+export const cmdX: BackslashCmdSpec = {
+  name: 'x',
+  helpKey: 'x',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    const arg = ctx.nextArg('normal');
+    const topt = ctx.settings.popt.topt;
+    let next: 'on' | 'off' | 'auto';
+    if (arg === null) {
+      next = topt.expanded === 'on' ? 'off' : 'on';
+    } else {
+      const parsed = parseTriple(arg);
+      if (parsed === null) {
+        writeErr(
+          `\\${ctx.cmdName}: unrecognized value "${arg}": Boolean expected\n`,
+        );
+        return Promise.resolve({ status: 'error', errorWritten: true });
+      }
+      if (parsed === 'toggle') {
+        next = topt.expanded === 'on' ? 'off' : 'on';
+      } else {
+        next = parsed;
+      }
+    }
+    topt.expanded = next;
+    writeOut(`Expanded display is ${tripleLabel(next)}.\n`);
+    return Promise.resolve({ status: 'ok' });
+  },
+};
+
+/**
+ * Canonical PostgreSQL encoding names, normalised the way upstream
+ * `pg_char_to_encoding` (`src/common/encnames.c`) normalises before
+ * comparing: lowercased with every `-` and `_` removed. The set covers the
+ * full `pg_enc2name` table — both the backend-usable encodings and the
+ * client-only ones (SJIS, BIG5, …) — because upstream `\encoding` validates
+ * via `pg_char_to_encoding`, which accepts any recognised name and lets the
+ * server reject genuinely unusable ones.
+ */
+const NORMALISED_ENCODINGS: ReadonlySet<string> = new Set([
+  'sqlascii',
+  'eucjp',
+  'euccn',
+  'euckr',
+  'euctw',
+  'eucjis2004',
+  'utf8',
+  'muleinternal',
+  'latin1',
+  'latin2',
+  'latin3',
+  'latin4',
+  'latin5',
+  'latin6',
+  'latin7',
+  'latin8',
+  'latin9',
+  'latin10',
+  'win1256',
+  'win1258',
+  'win866',
+  'win874',
+  'koi8r',
+  'win1251',
+  'win1252',
+  'iso88595',
+  'iso88596',
+  'iso88597',
+  'iso88598',
+  'win1250',
+  'win1253',
+  'win1254',
+  'win1255',
+  'win1257',
+  'koi8u',
+  'sjis',
+  'big5',
+  'gbk',
+  'uhc',
+  'gb18030',
+  'johab',
+  'shiftjis2004',
+  // Aliases upstream's encoding_match_list accepts as recognised names.
+  'unicode', // → UTF8
+  'mskanji', // → SJIS
+  'shiftjis', // → SJIS
+  'windows949', // → UHC
+  'windows950', // → BIG5
+  'windows936', // → GBK
+  'tcvn', // → WIN1258
+  'tcvn5712', // → WIN1258
+  'vscii', // → WIN1258
+  'alt', // → WIN866
+  'win', // → WIN1251
+  'koi8', // → KOI8R
+  'abc', // → WIN1258
+]);
+
+/**
+ * Mirror upstream `pg_char_to_encoding`'s name normalisation: drop every
+ * `-` and `_`, lowercase, and look the result up in the canonical set.
+ * Used to reproduce `\encoding`'s `invalid encoding name` guard without a
+ * server round-trip.
+ */
+const isValidEncodingName = (name: string): boolean =>
+  NORMALISED_ENCODINGS.has(name.replace(/[-_]/g, '').toLowerCase());
+
+/**
+ * `\encoding [name]` — show or set the client encoding.
+ *
+ * No arg: print the current `topt.encoding`. With an arg: validate the name
+ * the way upstream `do_encoding` does (`pg_char_to_encoding` >= 0) — an
+ * unrecognised name prints `\encoding: invalid encoding name "<name>"`,
+ * leaves `topt.encoding` untouched, and never calls the connection.
+ * Otherwise push it to the live connection via
+ * {@link Connection.setClientEncoding} (libpq `PQsetClientEncoding`) and
+ * mirror it into `topt.encoding` so prompts/printer see the new value.
+ */
+export const cmdEncoding: BackslashCmdSpec = {
+  name: 'encoding',
+  helpKey: 'encoding',
+  run: async (ctx: BackslashContext): Promise<BackslashResult> => {
+    const arg = ctx.nextArg('normal');
+    if (arg === null) {
+      writeOut(`${ctx.settings.popt.topt.encoding}\n`);
+      return { status: 'ok' };
+    }
+    if (!isValidEncodingName(arg)) {
+      // Upstream `do_encoding` reports the rejected name verbatim and leaves
+      // the current encoding in place.
+      writeErr(`\\${ctx.cmdName}: invalid encoding name "${arg}"\n`);
+      return { status: 'error', errorWritten: true };
+    }
+    const { db } = ctx.settings;
+    // `PgConnection` always implements setClientEncoding; the optional call
+    // only short-circuits when there's no live connection (or a partial mock
+    // in tests), in which case we still mirror the encoding into topt below.
+    if (db?.setClientEncoding) {
+      try {
+        await db.setClientEncoding(arg);
+      } catch (err) {
+        // Server refused the SET (or the connection failed mid-flight);
+        // surface the diagnostic and leave topt.encoding unchanged, matching
+        // upstream's "leave the encoding as it was on failure" behaviour.
+        const msg = err instanceof Error ? err.message : String(err);
+        writeErr(`\\${ctx.cmdName}: ${msg}\n`);
+        return { status: 'error', errorWritten: true };
+      }
+    }
+    ctx.settings.popt.topt.encoding = arg;
+    return { status: 'ok' };
+  },
+};
+
+/**
+ * The heart of `\pset`. Given a parsed `option` and optional `value`,
+ * mutates `topt` in place and emits the upstream-style status line.
+ *
+ * Returns `{ status: 'error' }` and writes an error if the value is
+ * unrecognised; `{ status: 'ok' }` otherwise.
+ *
+ * Wording reference: every status line is byte-matched against the
+ * `printPsetInfo` table in upstream `src/bin/psql/command.c`. Notable
+ * subtleties:
+ *
+ *  - `tuples_only`, `footer`, and `numericlocale` are silenced when a
+ *    value is supplied — upstream `do_pset` returns directly out of
+ *    `ParseVariableBool`, never reaching `printPsetInfo`. The toggle
+ *    paths still print.
+ *  - `recordsep` renders the literal `\n` as the `<newline>` sentinel.
+ *  - `columns` reports `0` as `Target width is unset.`.
+ *  - `unicode_*_linestyle` uses the multi-word "line style" phrasing
+ *    even though the option name itself is a single token.
+ *  - `pager_min_lines` pluralizes via `ngettext` — singular at 1, plural
+ *    everywhere else (including 0).
+ *  - `csv_fieldsep` reports as `Field separator for CSV is "…".`.
+ *  - `xheader_width` quotes the named enum values (`"full"`/`"column"`/
+ *    `"page"`) and prints the numeric form unquoted.
+ */
+export const applyPset = (
+  topt: PrintTableOpts,
+  option: string,
+  value: string | null,
+  cmdName: string,
+  // When `silent` is true, suppress the "X is now Y." status lines that
+  // `\pset` emits on a successful set. Errors (invalid option / bad
+  // value) still go to stderr. Used by `\g (option=value ...)` —
+  // upstream applies the temporary overrides silently.
+  silent = false,
+): BackslashResult => {
+  const writeOutMaybe = silent ? () => undefined : writeOut;
+  const opt = option.toLowerCase();
+  switch (opt) {
+    case 'format': {
+      if (value === null) {
+        writeOutMaybe(`Output format is ${formatName(topt.format)}.\n`);
+        return { status: 'ok' };
+      }
+      const v = value.toLowerCase();
+      // Upstream `do_pset` accepts unambiguous prefix matches for the
+      // format name via a hand-rolled cascade of `pg_strncasecmp` checks:
+      //
+      //   1. Special ambiguity guard for "aligned" vs "asciidoc" — any
+      //      input that is a prefix of BOTH is rejected with the
+      //      "ambiguous abbreviation" diagnostic (the only pair where
+      //      upstream cares).
+      //   2. Otherwise pick the first OUTPUT_FORMATS entry that starts
+      //      with `v` (the order in OUTPUT_FORMATS — `latex` before
+      //      `latex-longtable` etc. — encodes which canonical name wins
+      //      when one is a prefix of another).
+      const startsWithBoth =
+        'aligned'.startsWith(v) && 'asciidoc'.startsWith(v);
+      if (startsWithBoth) {
+        writeErr(
+          `\\pset: ambiguous abbreviation "${value}" matches both "aligned" and "asciidoc"\n`,
+        );
+        return { status: 'error', errorWritten: true };
+      }
+      const match = OUTPUT_FORMATS.find((f) => f.startsWith(v));
+      if (!match) {
+        writeErr(
+          `\\pset: allowed formats are aligned, asciidoc, csv, html, json, latex, latex-longtable, troff-ms, unaligned, wrapped\n`,
+        );
+        return { status: 'error', errorWritten: true };
+      }
+      topt.format = match;
+      writeOutMaybe(`Output format is ${formatName(match)}.\n`);
+      return { status: 'ok' };
+    }
+    case 'border': {
+      if (value === null) {
+        writeOutMaybe(`Border style is ${topt.border}.\n`);
+        return { status: 'ok' };
+      }
+      const n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 0 || n > 3) {
+        writeErr(`\\pset: invalid border "${value}"\n`);
+        return { status: 'error', errorWritten: true };
+      }
+      topt.border = n as BorderStyle;
+      writeOutMaybe(`Border style is ${topt.border}.\n`);
+      return { status: 'ok' };
+    }
+    case 'expanded':
+    case 'x': {
+      if (value === null) {
+        topt.expanded = topt.expanded === 'on' ? 'off' : 'on';
+      } else {
+        const p = parseTriple(value);
+        if (p === null) {
+          writeErr(
+            `\\pset: unrecognized value "${value}" for "expanded": Boolean expected\n`,
+          );
+          return { status: 'error', errorWritten: true };
+        }
+        topt.expanded =
+          p === 'toggle' ? (topt.expanded === 'on' ? 'off' : 'on') : p;
+      }
+      writeOutMaybe(`Expanded display is ${tripleLabel(topt.expanded)}.\n`);
+      return { status: 'ok' };
+    }
+    case 'fieldsep': {
+      if (value === null) {
+        writeOutMaybe(`Field separator is "${topt.fieldSep}".\n`);
+        return { status: 'ok' };
+      }
+      topt.fieldSep = value;
+      writeOutMaybe(`Field separator is "${topt.fieldSep}".\n`);
+      return { status: 'ok' };
+    }
+    case 'fieldsep_zero': {
+      // Upstream: any value (or none) forces fieldSep to the NUL byte.
+      // The bulk-view's `fieldsep_zero` line is derived from fieldSep
+      // (on iff fieldSep === '\0').
+      topt.fieldSep = '\0';
+      writeOutMaybe('Field separator is zero byte.\n');
+      return { status: 'ok' };
+    }
+    case 'footer': {
+      if (value !== null) {
+        // Upstream `do_pset` returns directly from `ParseVariableBool`
+        // for `footer`, bypassing the `printPsetInfo` call entirely
+        // — `\pset footer on` is silent, while `\pset footer`
+        // (toggle) still prints the new state.
+        const b = parseBool(value);
+        if (b === null) {
+          writeErr(
+            `\\pset: unrecognized value "${value}" for "footer": Boolean expected\n`,
+          );
+          return { status: 'error', errorWritten: true };
+        }
+        topt.defaultFooter = b;
+        return { status: 'ok' };
+      }
+      topt.defaultFooter = !topt.defaultFooter;
+      writeOutMaybe(
+        topt.defaultFooter
+          ? 'Default footer is on.\n'
+          : 'Default footer is off.\n',
+      );
+      return { status: 'ok' };
+    }
+    case 'recordsep': {
+      if (value !== null) {
+        topt.recordSep = value;
+      }
+      // Upstream `printPsetInfo` has three branches: the separator-zero
+      // path (handled by the dedicated `recordsep_zero` case), the
+      // "<newline>" sentinel for the literal `\n` byte, and the quoted
+      // verbatim form for everything else.
+      if (topt.recordSep === '\n') {
+        writeOutMaybe('Record separator is <newline>.\n');
+      } else {
+        writeOutMaybe(`Record separator is "${topt.recordSep}".\n`);
+      }
+      return { status: 'ok' };
+    }
+    case 'recordsep_zero': {
+      topt.recordSep = '\0';
+      writeOutMaybe('Record separator is zero byte.\n');
+      return { status: 'ok' };
+    }
+    case 'tuples_only':
+    case 't': {
+      if (value !== null) {
+        // Upstream `do_pset` returns directly from `ParseVariableBool`
+        // for `tuples_only`, bypassing `printPsetInfo` — so
+        // `\pset tuples_only on` (and the equivalent `\t on`) is
+        // silent. The toggle path (no value) still prints.
+        const b = parseBool(value);
+        if (b === null) {
+          writeErr(`\\pset: unrecognized value "${value}": Boolean expected\n`);
+          return { status: 'error', errorWritten: true };
+        }
+        topt.tuplesOnly = b;
+        return { status: 'ok' };
+      }
+      topt.tuplesOnly = !topt.tuplesOnly;
+      writeOutMaybe(
+        topt.tuplesOnly ? 'Tuples only is on.\n' : 'Tuples only is off.\n',
+      );
+      return { status: 'ok' };
+    }
+    case 'title': {
+      topt.title = value;
+      if (value === null) {
+        writeOutMaybe('Title is unset.\n');
+      } else {
+        writeOutMaybe(`Title is "${value}".\n`);
+      }
+      return { status: 'ok' };
+    }
+    case 'tableattr':
+    case 't_a': {
+      topt.tableAttr = value;
+      if (value === null) {
+        writeOutMaybe('Table attributes unset.\n');
+      } else {
+        writeOutMaybe(`Table attributes are "${value}".\n`);
+      }
+      return { status: 'ok' };
+    }
+    case 'pager': {
+      if (value === null) {
+        topt.pager = topt.pager === 'off' ? 'on' : 'off';
+      } else {
+        const lower = value.toLowerCase();
+        if (lower === 'always') {
+          topt.pager = 'always';
+        } else if (lower === 'on' || lower === 'off') {
+          topt.pager = lower;
+        } else {
+          const b = parseBool(value);
+          if (b === null) {
+            writeErr(`\\pset: unrecognized value "${value}" for "pager"\n`);
+            return { status: 'error', errorWritten: true };
+          }
+          topt.pager = b ? 'on' : 'off';
+        }
+      }
+      writeOutMaybe(
+        topt.pager === 'always'
+          ? 'Pager is always used.\n'
+          : topt.pager === 'on'
+            ? 'Pager is used for long output.\n'
+            : 'Pager usage is off.\n',
+      );
+      return { status: 'ok' };
+    }
+    case 'pager_min_lines': {
+      if (value !== null) {
+        const n = parseInt(value, 10);
+        if (!Number.isFinite(n) || n < 0) {
+          writeErr(`\\pset: invalid pager_min_lines "${value}"\n`);
+          return { status: 'error', errorWritten: true };
+        }
+        topt.pagerMinLines = n;
+      }
+      // Upstream uses `ngettext` so singular ("line") fires only for
+      // n == 1; 0 and 2+ render as "lines".
+      const lines = topt.pagerMinLines;
+      const unit = lines === 1 ? 'line' : 'lines';
+      writeOutMaybe(`Pager won't be used for less than ${lines} ${unit}.\n`);
+      return { status: 'ok' };
+    }
+    case 'null': {
+      topt.nullPrint = value ?? '';
+      writeOutMaybe(`Null display is "${topt.nullPrint}".\n`);
+      return { status: 'ok' };
+    }
+    case 'csv_fieldsep': {
+      if (value !== null) {
+        // Upstream `do_pset` splits the validation in two: length-based
+        // ("must be a single one-byte character") fires for empty / multi-
+        // char inputs *and* for the NUL byte (because in C the string is
+        // NUL-terminated, so `'\0'` decodes to an empty C string). The
+        // "cannot be a double quote, a newline, or a carriage return"
+        // path is reserved for the three forbidden single-byte values.
+        if (value.length !== 1 || value === '\0') {
+          writeErr(
+            `\\pset: csv_fieldsep must be a single one-byte character\n`,
+          );
+          return { status: 'error', errorWritten: true };
+        }
+        if (value === '"' || value === '\n' || value === '\r') {
+          writeErr(
+            `\\pset: csv_fieldsep cannot be a double quote, a newline, or a carriage return\n`,
+          );
+          return { status: 'error', errorWritten: true };
+        }
+        topt.csvFieldSep = value;
+      }
+      // Upstream wording: "Field separator for CSV is "%s".".
+      writeOutMaybe(`Field separator for CSV is "${topt.csvFieldSep}".\n`);
+      return { status: 'ok' };
+    }
+    case 'numericlocale': {
+      if (value !== null) {
+        // Upstream `do_pset` returns directly from `ParseVariableBool`
+        // for `numericlocale`, bypassing `printPsetInfo`. The toggle
+        // path (no value) still prints the new state.
+        const p = parseTriple(value);
+        if (p === null || p === 'auto') {
+          writeErr(
+            `\\pset: unrecognized value "${value}" for "numericlocale": Boolean expected\n`,
+          );
+          return { status: 'error', errorWritten: true };
+        }
+        topt.numericLocale = p === 'toggle' ? !topt.numericLocale : p === 'on';
+        return { status: 'ok' };
+      }
+      topt.numericLocale = !topt.numericLocale;
+      writeOutMaybe(
+        topt.numericLocale
+          ? 'Locale-adjusted numeric output is on.\n'
+          : 'Locale-adjusted numeric output is off.\n',
+      );
+      return { status: 'ok' };
+    }
+    case 'linestyle': {
+      if (value === null) {
+        writeOutMaybe(`Line style is ${topt.unicodeBorderLineStyle}.\n`);
+        return { status: 'ok' };
+      }
+      const lower = value.toLowerCase();
+      // Preserve 'old-ascii' verbatim so the bulk-view (`\pset` with no
+      // args) round-trips and the printer can pick the matching glyph
+      // table. Upstream `do_pset("linestyle", "old-ascii", …)` flips
+      // `popt.topt.line_style = &pg_asciiformat_old`; we carry the same
+      // three-way distinction on `unicodeBorderLineStyle`.
+      if (lower === 'ascii' || lower === 'old-ascii' || lower === 'unicode') {
+        const ls = lower as Unicode2LineStyle;
+        topt.unicodeBorderLineStyle = ls;
+        topt.unicodeColumnLineStyle = ls;
+        topt.unicodeHeaderLineStyle = ls;
+        writeOutMaybe(`Line style is ${ls}.\n`);
+        return { status: 'ok' };
+      }
+      writeErr(`\\pset: allowed line styles are ascii, old-ascii, unicode\n`);
+      return { status: 'error', errorWritten: true };
+    }
+    case 'columns': {
+      if (value !== null) {
+        const n = parseInt(value, 10);
+        if (!Number.isFinite(n) || n < 0) {
+          writeErr(`\\pset: invalid columns "${value}"\n`);
+          return { status: 'error', errorWritten: true };
+        }
+        topt.columns = n;
+      }
+      // Upstream `printPsetInfo` reports `0` as the special "unset"
+      // sentinel — see `command.c:5433`.
+      if (topt.columns === 0) {
+        writeOutMaybe('Target width is unset.\n');
+      } else {
+        writeOutMaybe(`Target width is ${topt.columns}.\n`);
+      }
+      return { status: 'ok' };
+    }
+    case 'xheader_width': {
+      if (value !== null) {
+        const lower = value.toLowerCase();
+        if (lower === 'full' || lower === 'column' || lower === 'page') {
+          topt.xheaderWidth = lower;
+        } else {
+          const n = parseInt(value, 10);
+          if (
+            !Number.isFinite(n) ||
+            n <= 0 ||
+            !/^[+]?\d+$/.test(value.trim())
+          ) {
+            writeErr(
+              `\\pset: allowed xheader_width values are "full" (default), "column", "page", or a number specifying the exact width\n`,
+            );
+            return { status: 'error', errorWritten: true };
+          }
+          topt.xheaderWidth = n;
+        }
+      }
+      // Upstream `printPsetInfo` quotes the three named widths
+      // ("full" / "column" / "page") but renders the numeric form
+      // unquoted as `Expanded header width is 33.`.
+      const current = topt.xheaderWidth ?? 'full';
+      if (typeof current === 'number') {
+        writeOutMaybe(`Expanded header width is ${current}.\n`);
+      } else {
+        writeOutMaybe(`Expanded header width is "${current}".\n`);
+      }
+      return { status: 'ok' };
+    }
+    case 'unicode_border_linestyle':
+    case 'unicode_column_linestyle':
+    case 'unicode_header_linestyle': {
+      // Upstream `printPsetInfo` renders these as
+      // `Unicode border line style is "single".` etc. — note the space
+      // between "line" and "style" in the message (the option name
+      // itself is one token, `linestyle`).
+      const which =
+        opt === 'unicode_border_linestyle'
+          ? 'border'
+          : opt === 'unicode_column_linestyle'
+            ? 'column'
+            : 'header';
+      if (value !== null) {
+        const lower = value.toLowerCase();
+        if (lower !== 'single' && lower !== 'double') {
+          writeErr(`\\pset: ${opt} must be single or double\n`);
+          return { status: 'error', errorWritten: true };
+        }
+        const style: Unicode2BorderStyle = lower;
+        if (opt === 'unicode_border_linestyle') {
+          topt.unicodeBorderStyle = style;
+        } else if (opt === 'unicode_column_linestyle') {
+          topt.unicodeColumnStyle = style;
+        } else {
+          topt.unicodeHeaderStyle = style;
+        }
+      }
+      const current =
+        opt === 'unicode_border_linestyle'
+          ? (topt.unicodeBorderStyle ?? 'single')
+          : opt === 'unicode_column_linestyle'
+            ? (topt.unicodeColumnStyle ?? 'single')
+            : (topt.unicodeHeaderStyle ?? 'single');
+      writeOutMaybe(`Unicode ${which} line style is "${current}".\n`);
+      return { status: 'ok' };
+    }
+    default: {
+      writeErr(`\\pset: unknown option "${option}"\n`);
+      return { status: 'error', errorWritten: true };
+    }
+  }
+};
+
+/**
+ * Wrap a string value in single quotes, escaping embedded newlines and
+ * single quotes. Mirrors upstream `pset_quoted_string` in
+ * `src/bin/psql/command.c` — used by the bulk-view formatter so the
+ * emitted line can be fed back into `\pset NAME VALUE`.
+ */
+const psetQuotedString = (str: string): string => {
+  let out = "'";
+  for (const ch of str) {
+    if (ch === '\n') out += '\\n';
+    else if (ch === "'") out += "\\'";
+    else out += ch;
+  }
+  out += "'";
+  return out;
+};
+
+/**
+ * Render the numeric pager encoding upstream uses in `printPsetInfo`:
+ * 0 = never, 1 = "if needed" (our `'on'`), 2 = always. We keep
+ * `topt.pager` as the upstream-style triple ('off'|'on'|'always') for
+ * `applyPset`'s state machine; this is only the bulk-view conversion.
+ */
+const pagerNumeric = (pager: PrintTableOpts['pager']): number =>
+  pager === 'off' ? 0 : pager === 'on' ? 1 : 2;
+
+/**
+ * Render `xheader_width` for the bulk view. Enum values print verbatim;
+ * numeric values print as the integer.
+ */
+const xheaderWidthDisplay = (
+  w: NonNullable<PrintTableOpts['xheaderWidth']>,
+): string => (typeof w === 'number' ? String(w) : w);
+
+/**
+ * Print the full current `\pset` state, one option per line, to stdout.
+ * Used when `\pset` is invoked with no arguments. String-valued settings
+ * are single-quoted (matching upstream `pset_value_string`); `tableattr`
+ * and `title` are unquoted-empty when unset. The set, ordering, and
+ * column-spacing mirror `printPsetInfo` in `src/bin/psql/command.c`.
+ */
+const printAllPset = (topt: PrintTableOpts): void => {
+  writeOut(`border                   ${topt.border}\n`);
+  writeOut(`columns                  ${topt.columns}\n`);
+  writeOut(`csv_fieldsep             ${psetQuotedString(topt.csvFieldSep)}\n`);
+  writeOut(`expanded                 ${topt.expanded}\n`);
+  writeOut(`fieldsep                 ${psetQuotedString(topt.fieldSep)}\n`);
+  // fieldsep_zero / recordsep_zero are derived: upstream emits "on" iff
+  // the corresponding separator is the NUL byte.
+  writeOut(
+    `fieldsep_zero            ${topt.fieldSep === '\0' ? 'on' : 'off'}\n`,
+  );
+  writeOut(`footer                   ${topt.defaultFooter ? 'on' : 'off'}\n`);
+  writeOut(`format                   ${topt.format}\n`);
+  writeOut(`linestyle                ${topt.unicodeBorderLineStyle}\n`);
+  writeOut(`null                     ${psetQuotedString(topt.nullPrint)}\n`);
+  writeOut(`numericlocale            ${topt.numericLocale ? 'on' : 'off'}\n`);
+  // pager is emitted numerically (0/1/2) — upstream uses %d in printPsetInfo.
+  writeOut(`pager                    ${pagerNumeric(topt.pager)}\n`);
+  writeOut(`pager_min_lines          ${topt.pagerMinLines}\n`);
+  writeOut(`recordsep                ${psetQuotedString(topt.recordSep)}\n`);
+  writeOut(
+    `recordsep_zero           ${topt.recordSep === '\0' ? 'on' : 'off'}\n`,
+  );
+  writeOut(
+    `tableattr                ${topt.tableAttr === null ? '' : psetQuotedString(topt.tableAttr)}\n`,
+  );
+  writeOut(
+    `title                    ${topt.title === null ? '' : psetQuotedString(topt.title)}\n`,
+  );
+  writeOut(`tuples_only              ${topt.tuplesOnly ? 'on' : 'off'}\n`);
+  writeOut(`unicode_border_linestyle ${topt.unicodeBorderStyle ?? 'single'}\n`);
+  writeOut(`unicode_column_linestyle ${topt.unicodeColumnStyle ?? 'single'}\n`);
+  writeOut(`unicode_header_linestyle ${topt.unicodeHeaderStyle ?? 'single'}\n`);
+  writeOut(
+    `xheader_width            ${xheaderWidthDisplay(topt.xheaderWidth ?? 'full')}\n`,
+  );
+};
+
+/**
+ * Lex extra args from the rest-of-line tail without expanding variables or
+ * executing backticks — mirrors upstream `ignore_slash_options`, which uses
+ * `psql_scan_slash_option(scan_state, OT_NO_EVAL, …)`. Quoting characters
+ * are preserved in the returned text so `:foo` stays `:foo`, `:'foo'` stays
+ * `:'foo'`, and `` `cmd` `` becomes `cmd` (backticks dropped, body kept
+ * unevaluated). Stops at the next backslash so the next command isn't
+ * eaten.
+ *
+ * Returns a list of `{ arg, endIdx }` entries so callers can also recover
+ * the byte position where each parsed token ends in the original `tail` —
+ * useful for splitting the rest-of-line into "consumed prefix" vs "extras
+ * we'll warn about" without re-lexing the whole thing through the proper
+ * (eval-mode) scanner.
+ */
+type RawArg = { arg: string; endIdx: number };
+
+const lexRawArgs = (tail: string): RawArg[] => {
+  const out: RawArg[] = [];
+  let i = 0;
+  const isSpace = (c: string | undefined): boolean =>
+    c === ' ' ||
+    c === '\t' ||
+    c === '\n' ||
+    c === '\r' ||
+    c === '\f' ||
+    c === '\v';
+  while (i < tail.length) {
+    while (i < tail.length && isSpace(tail[i])) i++;
+    if (i >= tail.length) break;
+    if (tail[i] === '\\') break;
+    let arg = '';
+    while (i < tail.length && !isSpace(tail[i]) && tail[i] !== '\\') {
+      const c = tail[i];
+      if (c === "'") {
+        // Single-quoted: keep delimiters in the warning text so the user
+        // sees the literal token.
+        let j = i + 1;
+        let inner = '';
+        while (j < tail.length && tail[j] !== "'") {
+          if (tail[j] === '\\' && j + 1 < tail.length) {
+            inner += tail[j] + tail[j + 1];
+            j += 2;
+            continue;
+          }
+          inner += tail[j];
+          j++;
+        }
+        arg += `'${inner}'`;
+        i = j < tail.length ? j + 1 : j;
+        continue;
+      }
+      if (c === '"') {
+        let j = i + 1;
+        let inner = '';
+        while (j < tail.length && tail[j] !== '"') {
+          inner += tail[j];
+          j++;
+        }
+        arg += `"${inner}"`;
+        i = j < tail.length ? j + 1 : j;
+        continue;
+      }
+      if (c === '`') {
+        // Drop the backtick delimiters; don't run the command (OT_NO_EVAL).
+        let j = i + 1;
+        let inner = '';
+        while (j < tail.length && tail[j] !== '`') {
+          inner += tail[j];
+          j++;
+        }
+        arg += inner;
+        i = j < tail.length ? j + 1 : j;
+        continue;
+      }
+      arg += c;
+      i++;
+    }
+    out.push({ arg, endIdx: i });
+  }
+  return out;
+};
+
+/**
+ * `\pset [option [value]]` — the master print-options setter.
+ *
+ * - No args: print all options.
+ * - Option only: toggle (for booleans) or show current value.
+ * - Option + value: set.
+ * - Option + value + extra: set, then emit one `extra argument "X" ignored`
+ *   per extra arg (matches upstream `exec_command_pset`'s post-`do_pset`
+ *   call to `ignore_slash_options`).
+ *
+ * Implementation note: the surrounding REPL's `BackslashContext` (built
+ * in `core/mainloop.ts::makeBackslashContext`) returns the full
+ * `rawArgs` verbatim from `restOfLine()` — there's no cursor we can
+ * read to find the unconsumed tail. We therefore lex `rawArgs` a second
+ * time with {@link lexExtraArgs} to recover the *raw* (unexpanded)
+ * token text, while still calling `ctx.nextArg('normal')` for
+ * option/value so variable substitution and backtick execution behave
+ * exactly like the rest of the slash-command layer. The drain pulls
+ * the raw token text from index 2+ so the warning preserves the
+ * upstream `OT_NO_EVAL` semantics — `:foo` stays as `:foo`, `` `cmd` ``
+ * collapses to `cmd` without running.
+ */
+export const cmdPset: BackslashCmdSpec = {
+  name: 'pset',
+  helpKey: 'pset',
+  run: (ctx: BackslashContext): Promise<BackslashResult> => {
+    // Upstream `exec_command_pset` calls `psql_scan_slash_option` twice
+    // (with `OT_NORMAL`, `evaluate=true`) for option + value, then loops
+    // `psql_scan_slash_option(scan_state, OT_NORMAL, NULL, false)` with
+    // `evaluate=false` over the remainder to emit the "extra argument …
+    // ignored" warnings. Our `BackslashContext.nextArg('normal')` route
+    // pre-parses the entire `rawArgs` through `scanSlashArgs` on the
+    // first call, which evaluates EVERY backtick — so an invocation
+    // like `\pset fieldsep | \`nosuchcommand\` :foo` would spawn the
+    // shell for `nosuchcommand` even though upstream never runs it.
+    //
+    // To match upstream's no-eval semantics we split the lex in two:
+    //   1. Walk `rawArgs` no-eval with {@link lexRawArgs} to recover the
+    //      byte boundary that ends arg #2 (option + value).
+    //   2. Re-parse the truncated prefix with `scanSlashArgs('normal')`
+    //      so option/value get their proper `:var` / `` ` ` `` expansion.
+    //   3. Walk the tail with `lexRawArgs` no-eval and emit one
+    //      "extra argument … ignored" warning per token, using the raw
+    //      (unexpanded) text so `:foo` stays `:foo` and `` `cmd` ``
+    //      collapses to `cmd` without running.
+    const rawEntries = lexRawArgs(ctx.rawArgs);
+    if (rawEntries.length === 0) {
+      printAllPset(ctx.settings.popt.topt);
+      return Promise.resolve({ status: 'ok' });
+    }
+    // Slice rawArgs up to the end of arg #2 (or arg #1 if only one was
+    // provided) and feed THAT to the eval-mode scanner. Anything past
+    // that boundary lives in the no-eval extras zone.
+    const headEndIdx =
+      rawEntries.length >= 2 ? rawEntries[1].endIdx : rawEntries[0].endIdx;
+    const headSlice = ctx.rawArgs.slice(0, headEndIdx);
+    const varLookup = (name: string): string | undefined =>
+      ctx.settings.vars.get(name);
+    const headArgs = scanSlashArgs(headSlice, 'normal', varLookup);
+    const option = headArgs[0] ?? null;
+    if (option === null) {
+      printAllPset(ctx.settings.popt.topt);
+      return Promise.resolve({ status: 'ok' });
+    }
+    const value = headArgs[1] ?? null;
+    // Under `--quiet` / `\set QUIET on`, upstream `exec_command_pset`
+    // (and the printPsetInfo helper it delegates to) suppresses the
+    // confirmation lines like `Null display is "…".` and `Tuples only
+    // is on.`. Pass `silent=true` so applyPset skips the writes —
+    // errors (invalid option / bad value) still go to stderr.
+    const result = applyPset(
+      ctx.settings.popt.topt,
+      option,
+      value,
+      ctx.cmdName,
+      ctx.settings.quiet,
+    );
+    // Drain extras. Index 2+ in the no-eval lex are the tokens past
+    // option+value; emit one warning per raw token.
+    for (let i = 2; i < rawEntries.length; i++) {
+      writeErr(
+        `\\${ctx.cmdName}: extra argument "${rawEntries[i].arg}" ignored\n`,
+      );
+    }
+    return Promise.resolve(result);
+  },
+};

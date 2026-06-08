@@ -55,8 +55,13 @@ export const builder = (argv: yargs.Argv) => {
         default: 'require',
         describe: 'SSL mode',
       },
+      fallback: {
+        type: 'boolean',
+        describe: 'Force the embedded TypeScript psql fallback (for testing)',
+        default: false,
+        hidden: true,
+      },
     })
-    .strict()
     .middleware(fillSingleProject as any);
 };
 
@@ -68,6 +73,7 @@ export const handler = async (
     pooled: boolean;
     endpointType?: EndpointType;
     ssl: (typeof SSL_MODES)[number];
+    fallback: boolean;
     '--'?: string[];
   },
 ) => {

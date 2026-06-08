@@ -105,10 +105,13 @@ export const analyticsMiddleware = async (args: {
   });
 };
 
-export const closeAnalytics = async () => {
+export const closeAnalytics = async (opts?: { timeout?: number }) => {
   if (client) {
     log.debug('Flushing CLI analytics');
-    await client.closeAndFlush();
+    // `timeout` bounds how long we wait for in-flight events to flush so a
+    // slow / unreachable track.neon.tech can't hang a short-lived command
+    // (e.g. the psql launch path, which flushes here before process.exit).
+    await client.closeAndFlush(opts);
     log.debug('Flushed CLI analytics');
   }
 };

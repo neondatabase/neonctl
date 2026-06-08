@@ -107,6 +107,13 @@ export const builder = (argv: yargs.Argv) => {
             describe: 'Connect to a new project via psql',
             default: false,
           },
+          fallback: {
+            type: 'boolean',
+            describe:
+              'Force the embedded TypeScript psql fallback (for testing)',
+            default: false,
+            hidden: true,
+          },
           database: {
             describe:
               projectCreateRequest['project.branch.database_name'].description,
@@ -273,6 +280,7 @@ const create = async (
     database?: string;
     role?: string;
     psql: boolean;
+    fallback: boolean;
     setContext: boolean;
     hipaa?: boolean;
     '--'?: string[];
@@ -339,7 +347,9 @@ const create = async (
   if (props.psql) {
     const connection_uri = data.connection_uris[0].connection_uri;
     const psqlArgs = props['--'];
-    await psql(connection_uri, psqlArgs);
+    await psql(connection_uri, psqlArgs, {
+      mode: props.fallback ? 'ts' : 'auto',
+    });
   }
 };
 

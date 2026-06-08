@@ -1,0 +1,1321 @@
+import { Readable, Writable } from 'node:stream';
+import { describe, expect, test } from 'vitest';
+
+import type {
+  Connection,
+  Notice,
+  ResultSet,
+  FieldDescription,
+} from '../types/connection.js';
+import type {
+  BackslashCmdSpec,
+  BackslashRegistry,
+} from '../types/backslash.js';
+import type { REPLContext } from '../types/repl.js';
+import type { PsqlSettings } from '../types/settings.js';
+
+import { createVarStore } from './variables.js';
+import { defaultSettings } from './settings.js';
+import { runMainLoop, EXIT_SUCCESS, EXIT_USER, __testing } from './mainloop.js';
+import { createCondStack } from '../command/cmd_cond.js';
+
+// ---------------------------------------------------------------------------
+// Mock Connection — canned responses keyed off SQL text. Anything not in the
+// map throws an error to simulate a server-side failure.
+// ---------------------------------------------------------------------------
+
+type Canned = ResultSet | (() => ResultSet) | Error;
+
+const buildResultSet = (
+  cmd: string,
+  fields: { name: string }[],
+  rows: unknown[][],
+): ResultSet => ({
+  command: cmd,
+  rowCount: rows.length,
+  oid: null,
+  fields: fields.map(
+    (f): FieldDescription => ({
+      name: f.name,
+      tableID: 0,
+      columnID: 0,
+      dataTypeID: 25,
+      dataTypeSize: -1,
+      dataTypeModifier: -1,
+      format: 0,
+    }),
+  ),
+  rows,
+  notices: [],
+});
+
+type QueryCall = { sql: string; params: unknown[] };
+
+type NotificationListener = (
+  channel: string,
+  payload: string,
+  pid: number,
+) => void;
+
+type NoticeListener = (notice: Notice) => void;
+
+type MockConn = Connection & {
+  calls: string[];
+  queryCalls: QueryCall[];
+  cancelCalls: number;
+  /** Set/override a ParameterStatus value (e.g. `client_encoding`). */
+  setParam(name: string, value: string): void;
+  /** Emit a NotificationResponse to every subscriber installed via onNotification. */
+  emitNotification(channel: string, payload: string, pid: number): void;
+  /** Emit a NoticeResponse to every subscriber installed via onNotice. */
+  emitNotice(notice: Notice): void;
+};
+
+const makeMockConnection = (
+  canned: Map<string, Canned> = new Map(),
+): MockConn => {
+  const calls: string[] = [];
+  const queryCalls: QueryCall[] = [];
+  let cancelCalls = 0;
+  const params = new Map<string, string>();
+  const notificationListeners = new Set<NotificationListener>();
+  const noticeListeners = new Set<NoticeListener>();
+  const conn = {
+    serverVersion: 170000,
+    parameterStatus: (name: string): string | undefined => params.get(name),
+    setParam(name: string, value: string): void {
+      params.set(name, value);
+    },
+    emitNotification(channel: string, payload: string, pid: number): void {
+      for (const l of notificationListeners) l(channel, payload, pid);
+    },
+    emitNotice(notice: Notice): void {
+      for (const l of noticeListeners) l(notice);
+    },
+    query(sql: string, params?: unknown[]): Promise<ResultSet> {
+      const trimmed = sql.trim();
+      queryCalls.push({ sql: trimmed, params: params ?? [] });
+      const lookup = canned.get(trimmed);
+      if (lookup === undefined) {
+        return Promise.resolve(
+          buildResultSet('SELECT', [{ name: '?column?' }], [[1]]),
+        );
+      }
+      if (lookup instanceof Error) return Promise.reject(lookup);
+      const rs = typeof lookup === 'function' ? lookup() : lookup;
+      return Promise.resolve(rs);
+    },
+    execSimple(sql: string): Promise<ResultSet[]> {
+      const trimmed = sql.trim();
+      calls.push(trimmed);
+      const lookup = canned.get(trimmed);
+      if (lookup === undefined) {
+        return Promise.resolve([
+          buildResultSet('SELECT', [{ name: '?column?' }], [[1]]),
+        ]);
+      }
+      if (lookup instanceof Error) return Promise.reject(lookup);
+      const rs = typeof lookup === 'function' ? lookup() : lookup;
+      return Promise.resolve([rs]);
+    },
+    prepare: () => Promise.reject(new Error('not implemented')),
+    startCopyIn: () => Promise.reject(new Error('not implemented')),
+    startCopyOut: () => Promise.reject(new Error('not implemented')),
+    pipeline: () => {
+      throw new Error('not implemented');
+    },
+    cancel: (): Promise<void> => {
+      cancelCalls += 1;
+      return Promise.resolve();
+    },
+    escapeIdentifier: (v: string) => `"${v}"`,
+    escapeLiteral: (v: string) => `'${v}'`,
+    onNotice(listener: NoticeListener): () => void {
+      noticeListeners.add(listener);
+      return () => noticeListeners.delete(listener);
+    },
+    onNotification(listener: NotificationListener): () => void {
+      notificationListeners.add(listener);
+      return () => notificationListeners.delete(listener);
+    },
+    close: () => Promise.resolve(),
+    isClosed: () => false,
+    get calls() {
+      return calls;
+    },
+    get queryCalls() {
+      return queryCalls;
+    },
+    get cancelCalls() {
+      return cancelCalls;
+    },
+  };
+  // The accessor properties above won't survive a structural cast cleanly;
+  // expose plain properties for tests to inspect.
+  return conn as unknown as MockConn;
+};
+
+// ---------------------------------------------------------------------------
+// In-memory writable stream — captures everything written for assertions.
+// ---------------------------------------------------------------------------
+
+const makeBuffer = (): NodeJS.WritableStream & { text(): string } => {
+  const chunks: Buffer[] = [];
+  const w = new Writable({
+    write(chunk: Buffer | string, _enc, cb): void {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      cb();
+    },
+  });
+  (w as unknown as { text: () => string }).text = (): string =>
+    Buffer.concat(chunks).toString('utf8');
+  return w as unknown as NodeJS.WritableStream & { text(): string };
+};
+
+// ---------------------------------------------------------------------------
+// Registry — a tiny in-memory implementation. We attach a one-shot \echo for
+// tests that need a non-cond backslash command.
+// ---------------------------------------------------------------------------
+
+const makeRegistry = (specs: BackslashCmdSpec[] = []): BackslashRegistry => {
+  const map = new Map<string, BackslashCmdSpec>();
+  const register = (spec: BackslashCmdSpec): void => {
+    map.set(spec.name, spec);
+    for (const a of spec.aliases ?? []) map.set(a, spec);
+  };
+  for (const s of specs) register(s);
+  return {
+    register,
+    lookup: (name) => map.get(name),
+    all: () => map.values(),
+  };
+};
+
+const echoSpec: BackslashCmdSpec = {
+  name: 'echo',
+  argMode: 'lex',
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async run(ctx) {
+    const args: string[] = [];
+    let next = ctx.nextArg('normal');
+    while (next !== null) {
+      args.push(next);
+      next = ctx.nextArg('normal');
+    }
+    // Echo cmd doesn't actually write — the run hook can't reach stdout here.
+    // For testability, stash a marker on settings.
+    ctx.settings.vars.set('__ECHO_LAST', args.join(' '));
+    return { status: 'ok' };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Builder for REPLContext given input lines and optional canned SQL.
+// ---------------------------------------------------------------------------
+
+type BuildCtxOpts = {
+  lines: string[];
+  canned?: Map<string, Canned>;
+  notty?: boolean;
+  registrySpecs?: BackslashCmdSpec[];
+  settingsOverride?: (s: PsqlSettings) => void;
+  noConnection?: boolean;
+};
+
+const buildCtx = (
+  opts: BuildCtxOpts,
+): {
+  ctx: REPLContext;
+  stdout: ReturnType<typeof makeBuffer>;
+  stderr: ReturnType<typeof makeBuffer>;
+  db: ReturnType<typeof makeMockConnection> | null;
+} => {
+  const vars = createVarStore();
+  const settings = defaultSettings(vars);
+  settings.notty = opts.notty ?? true;
+  const db = opts.noConnection ? null : makeMockConnection(opts.canned);
+  settings.db = db;
+  opts.settingsOverride?.(settings);
+  const stdin = Readable.from(opts.lines.map((l) => l + '\n'));
+  const stdout = makeBuffer();
+  const stderr = makeBuffer();
+  const registry = makeRegistry([echoSpec, ...(opts.registrySpecs ?? [])]);
+  const ctx: REPLContext = {
+    settings,
+    registry,
+    cond: createCondStack(),
+    stdin,
+    stdout,
+    stderr,
+  };
+  return { ctx, stdout, stderr, db };
+};
+
+// ---------------------------------------------------------------------------
+// SQL execution end-to-end
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — SQL', () => {
+  test('single-line statement is dispatched and aligned output written', async () => {
+    const { ctx, stdout, db } = buildCtx({ lines: ['SELECT 1;'] });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(db?.calls).toEqual(['SELECT 1;']);
+    const text = stdout.text();
+    // Aligned output should include the column header and the value.
+    expect(text).toContain('?column?');
+    expect(text).toContain('1');
+  });
+
+  test('multi-line statement is assembled before dispatch', async () => {
+    const { ctx, db } = buildCtx({ lines: ['SELECT', '1;'] });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // One execSimple call with the full multi-line SQL.
+    expect(db?.calls.length).toBe(1);
+    expect(db?.calls[0]).toMatch(/^SELECT/);
+    expect(db?.calls[0]).toContain('1;');
+  });
+
+  test('two semicolons in same input run two queries', async () => {
+    const { ctx, db } = buildCtx({ lines: ['SELECT 1; SELECT 2;'] });
+    await runMainLoop(ctx);
+    expect(db?.calls.length).toBe(2);
+    expect(db?.calls[0]).toBe('SELECT 1;');
+    expect(db?.calls[1]).toBe('SELECT 2;');
+  });
+
+  test('EOF closes cleanly', async () => {
+    const { ctx } = buildCtx({ lines: [] });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+  });
+
+  test('SINGLELINE: a newline terminates each statement (no trailing `;`)', async () => {
+    // With SINGLELINE on, each input line dispatches on its own — the scanner
+    // treats the line-ending newline as an implicit `;`. Two un-terminated
+    // lines therefore run as two separate queries.
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1', 'SELECT 2'],
+      settingsOverride: (s) => {
+        s.singleline = true;
+      },
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // The mock connection trims SQL, so the trailing `\n` is normalised away.
+    expect(db?.calls).toEqual(['SELECT 1', 'SELECT 2']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Backslash commands
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — backslash commands', () => {
+  test('\\echo is dispatched through the registry', async () => {
+    const { ctx } = buildCtx({ lines: ['\\echo hello'] });
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('hello');
+  });
+
+  test('unknown backslash command writes an error but does not escalate the exit code', async () => {
+    const { ctx, stderr } = buildCtx({ lines: ['\\nosuch'] });
+    const code = await runMainLoop(ctx);
+    // From piped stdin / `-f` without ON_ERROR_STOP, psql exits 0 even when a
+    // statement (including an invalid backslash command) failed — only
+    // ON_ERROR_STOP turns this into a non-zero exit. Verified on psql 18.4:
+    // `printf '\\nosuch\n' | psql` writes "invalid command" and exits 0.
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stderr.text()).toMatch(/invalid command \\nosuch/);
+  });
+
+  test('unknown backslash command under ON_ERROR_STOP exits EXIT_USER', async () => {
+    const { ctx, stderr } = buildCtx({
+      lines: ['\\nosuch'],
+      settingsOverride: (s) => {
+        s.onErrorStop = true;
+      },
+    });
+    const code = await runMainLoop(ctx);
+    // psql 18.4: `printf '\\nosuch\n' | psql -v ON_ERROR_STOP=1` exits 3.
+    expect(code).toBe(EXIT_USER);
+    expect(stderr.text()).toMatch(/invalid command \\nosuch/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Same-line backslash after buffered SQL.
+  //
+  // Upstream `psqlscan.l` recognises the backslash boundary regardless of
+  // buffer state, and `MainLoop()` forwards the accumulated buffer into the
+  // dispatched command's `query_buf`. Buffer-consuming commands (`\g`,
+  // `\gx`, `\gset`, `\gexec`, `\gdesc`, `\crosstabview`, `\watch`, `\bind`)
+  // read this through `ctx.queryBuf` and execute; commands that don't care
+  // (`\set`, `\echo`, `\!`, `\cd`, …) leave the buffer intact. These tests
+  // exercise the mainloop wiring that hands the pre-backslash SQL into
+  // BackslashContext.queryBuf.
+  // -------------------------------------------------------------------------
+
+  test('\\echo on same line as SQL: command runs, buffer survives for next ;', async () => {
+    const { ctx, db } = buildCtx({ lines: ['SELECT 1 \\echo hi', ';'] });
+    await runMainLoop(ctx);
+    // Echo command saw the rest-of-line args.
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('hi');
+    // Buffer was NOT consumed by \echo, so the `;` on the next line dispatches
+    // the buffered `SELECT 1`.
+    expect(db?.calls.length).toBe(1);
+    expect(db?.calls[0]).toMatch(/SELECT 1/);
+  });
+
+  test('buffer-consuming spec on same line: queryBuf reaches BackslashContext', async () => {
+    // Plug a small spec that records ctx.queryBuf so we can prove the
+    // pre-backslash SQL flowed through. Returning `reset-buf` matches the
+    // upstream contract for buffer-consuming commands.
+    const captured: string[] = [];
+    const captureSpec: BackslashCmdSpec = {
+      name: 'capture',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run(ctx) {
+        captured.push(ctx.queryBuf);
+        return { status: 'reset-buf', newBuf: '' };
+      },
+    };
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1 \\capture'],
+      registrySpecs: [captureSpec],
+    });
+    await runMainLoop(ctx);
+    expect(captured).toEqual(['SELECT 1 ']);
+    // The buffer was consumed (reset-buf), so no SQL was dispatched through
+    // the connection.
+    expect(db?.calls).toEqual([]);
+  });
+
+  test('buffer survives non-consuming command, then dispatches on next ;', async () => {
+    // \echo leaves the buffer intact. The trailing `;` on a later line then
+    // dispatches `SELECT 1 ` to the connection.
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1', '\\echo middle', '+ 2;'],
+    });
+    await runMainLoop(ctx);
+    // \echo fired with its args.
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('middle');
+    // The SELECT was assembled across the lines and dispatched as one query.
+    expect(db?.calls.length).toBe(1);
+    expect(db?.calls[0]).toMatch(/SELECT 1/);
+    expect(db?.calls[0]).toMatch(/\+ 2;/);
+  });
+
+  test('two successive reset-buf commands do not leak a leading \\n into queryBuf', async () => {
+    // Regression guard for the `\parse stmt1\nSELECT $1, $2 \parse stmt3`
+    // shape from regress/psql. With the original scanner (which stops the
+    // backslash boundary BEFORE the trailing `\n`), the residual `\n` would
+    // get folded back into queryBuf via the `eof` accumulation path on the
+    // very next scanSql call — and the next `reset-buf`-returning command
+    // would see queryBuf = `\nSELECT ...`. Commands that store the buffer
+    // verbatim (notably `\parse`) then emit a stray leading 0x0a byte.
+    //
+    // The mainloop's `reset-buf` branch now strips that residual line
+    // terminator from `working` so the next pass starts cleanly. Verify
+    // by recording what each invocation of a buffer-consuming command
+    // saw in `ctx.queryBuf`.
+    const captured: string[] = [];
+    const captureSpec: BackslashCmdSpec = {
+      name: 'capture',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run(ctx) {
+        captured.push(ctx.queryBuf);
+        return { status: 'reset-buf', newBuf: '' };
+      },
+    };
+    const { ctx } = buildCtx({
+      lines: ['SELECT 2 \\capture', 'SELECT $1, $2 \\capture'],
+      registrySpecs: [captureSpec],
+    });
+    await runMainLoop(ctx);
+    // Both buffers are exactly what the user typed before the slash — no
+    // leading `\n` on the second.
+    expect(captured).toEqual(['SELECT 2 ', 'SELECT $1, $2 ']);
+  });
+
+  test('errored slash command also strips the residual line terminator', async () => {
+    // Mirror of the `reset-buf` regression test but for the `error` branch:
+    // an errored slash command also drops the buffer, and we don't want the
+    // line-terminator residue to seep into the next statement's queryBuf
+    // either.
+    const captured: string[] = [];
+    const errSpec: BackslashCmdSpec = {
+      name: 'failsafe',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run() {
+        return { status: 'error', errorWritten: true };
+      },
+    };
+    const captureSpec: BackslashCmdSpec = {
+      name: 'capture',
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async run(ctx) {
+        captured.push(ctx.queryBuf);
+        return { status: 'reset-buf', newBuf: '' };
+      },
+    };
+    const { ctx } = buildCtx({
+      lines: ['SELECT 1 \\failsafe', 'SELECT 2 \\capture'],
+      registrySpecs: [errSpec, captureSpec],
+    });
+    await runMainLoop(ctx);
+    // The `\failsafe` errored (queryBuf dropped, line terminator stripped);
+    // `\capture` then sees a clean `SELECT 2 ` with no `\n` prefix.
+    expect(captured).toEqual(['SELECT 2 ']);
+  });
+
+  test('non-consuming slash-only line drops its trailing `\\n` from queryBuf', async () => {
+    // Mirrors upstream `MainLoop()`'s `query_buf->len == added_nl_pos`
+    // strip (mainloop.c lines 480-484): a source line whose only token is
+    // a slash command does NOT contribute a `\n` to query_buf. Without
+    // that strip, the next SQL statement assembled into queryBuf would
+    // start with a stray `\n` — shifting the server's `LINE N:` count by
+    // one and contaminating any `STATEMENT:  ...` echo emitted on error.
+    //
+    // Use a non-buffer-consuming command (`\echo`) that returns `'ok'`
+    // and a following SQL statement; assert execSimple receives the SQL
+    // verbatim (no leading newline).
+    const { ctx, db } = buildCtx({
+      lines: ['\\echo hello', 'SELECT 1;'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 1;']);
+  });
+
+  test('inline slash + multi-line SQL still preserves the inter-line `\\n`', async () => {
+    // The opposite case to the slash-only strip: when the slash command
+    // appears AFTER buffered SQL on the same physical line, the `\n` that
+    // follows IS a continuation separator and must survive into queryBuf
+    // so multi-line `LINE N:` numbering matches what the user typed.
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1 \\echo hello', '+ 2;'],
+    });
+    await runMainLoop(ctx);
+    // The query buffer reaches execSimple as `SELECT 1 \n+ 2;` (one inter-
+    // line newline). Strip the trailing `;` to compare without the
+    // mock's `.trim()` normalisation getting in the way.
+    expect(db?.calls.length).toBe(1);
+    expect(db?.calls[0]).toMatch(/SELECT 1\s*\n\s*\+ 2;/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// :NAME variable substitution end-to-end through the mainloop. Confirms that
+// the wiring from scanSql → dispatched SQL and slash-arg → echo body both
+// honour the active VarStore. The defaultSettings hook seeds
+// WATCH_INTERVAL=2, so we use that for one of the cases without needing
+// any explicit `\set` step.
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — :NAME substitution', () => {
+  test('SQL body: :NAME expands before the query reaches the connection', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT :x;'],
+      settingsOverride: (s) => {
+        s.vars.set('x', '42');
+      },
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 42;']);
+  });
+
+  test("SQL body: :'NAME' produces a quoted SQL literal", async () => {
+    const { ctx, db } = buildCtx({
+      lines: ["SELECT :'v';"],
+      settingsOverride: (s) => {
+        s.vars.set('v', "it's");
+      },
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(["SELECT 'it''s';"]);
+  });
+
+  test('slash command body: \\echo :NAME substitutes through the registry', async () => {
+    const { ctx } = buildCtx({
+      lines: ['\\echo :greeting'],
+      settingsOverride: (s) => {
+        s.vars.set('greeting', 'hi');
+      },
+    });
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('hi');
+  });
+
+  test('built-in WATCH_INTERVAL (seeded to 2) is visible to \\echo', async () => {
+    const { ctx } = buildCtx({
+      lines: ['\\echo :WATCH_INTERVAL'],
+    });
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBe('2');
+  });
+
+  test(':: cast operator survives intact (no false substitution)', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ["SELECT '1'::int;"],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(["SELECT '1'::int;"]);
+  });
+
+  test('unknown :NAME falls back to literal — no silent empty string', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT :MISSING;'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT :MISSING;']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conditional flow
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — conditional dispatch', () => {
+  test('\\if true keeps SELECT executable', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['\\if true', 'SELECT 1;', '\\endif'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 1;']);
+    expect(ctx.cond.depth()).toBe(0);
+  });
+
+  test('\\if false suppresses the SELECT', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['\\if false', 'SELECT 1;', '\\endif'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual([]);
+    expect(ctx.cond.depth()).toBe(0);
+  });
+
+  test('nested: outer false suppresses inner true', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['\\if false', '\\if true', 'SELECT 1;', '\\endif', '\\endif'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual([]);
+    expect(ctx.cond.depth()).toBe(0);
+  });
+
+  test('\\elif matrix: first-true wins', async () => {
+    const { ctx, db } = buildCtx({
+      lines: [
+        '\\if false',
+        'SELECT 1;',
+        '\\elif true',
+        'SELECT 2;',
+        '\\elif true',
+        'SELECT 3;',
+        '\\endif',
+      ],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 2;']);
+  });
+
+  test('\\else fires when no prior branch matched', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['\\if false', 'SELECT 1;', '\\else', 'SELECT 2;', '\\endif'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 2;']);
+  });
+
+  test('\\else is skipped when an earlier branch matched', async () => {
+    const { ctx, db } = buildCtx({
+      lines: ['\\if true', 'SELECT 1;', '\\else', 'SELECT 2;', '\\endif'],
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 1;']);
+  });
+
+  test('\\endif without \\if writes a bare error to process.stderr', async () => {
+    // Cond commands emit their diagnostics BARE (no `psql: ERROR:` prefix)
+    // via `writeErr` → process.stderr — matching upstream and the regress
+    // expected output. ctx.stderr only sees the mainloop's `psql: ERROR:`
+    // fallback, which is suppressed via `errorWritten: true`. We spy on
+    // process.stderr to assert the diagnostic shape.
+    const chunks: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { ctx, stderr } = buildCtx({ lines: ['\\endif'] });
+      const code = await runMainLoop(ctx);
+      const captured = chunks.join('');
+      expect(captured).toMatch(/^\\endif: no matching \\if\n/);
+      expect(captured).not.toMatch(/psql: ERROR/);
+      // Cond errors must NOT escalate to EXIT_USER under default settings
+      // (vanilla psql exits 0 from a script whose only failure was a cond
+      // diagnostic). Only ON_ERROR_STOP can escalate.
+      expect(code).toBe(EXIT_SUCCESS);
+      // ctx.stderr stays empty for the cond diagnostic itself.
+      expect(stderr.text()).not.toMatch(/\\endif/);
+    } finally {
+      process.stderr.write = orig;
+    }
+  });
+
+  test('unbalanced \\if at EOF logs a warning', async () => {
+    const { ctx, stderr } = buildCtx({ lines: ['\\if true'] });
+    await runMainLoop(ctx);
+    expect(stderr.text()).toMatch(/reached EOF without finding closing/);
+  });
+
+  // Upstream `HandleSlashCmds` does the registry lookup BEFORE consulting
+  // the conditional stack, so an unknown backslash command in an INACTIVE
+  // branch still emits `invalid command \X` to stderr. The diagnostic must
+  // fire, but it must NOT taint `lastWasError` (vanilla exits 0 from this
+  // shape) and must NOT trigger ON_ERROR_STOP.
+  test('unknown backslash inside \\if false branch still reports invalid command', async () => {
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['\\if false', '\\lo', '\\endif'],
+    });
+    const code = await runMainLoop(ctx);
+    expect(stderr.text()).toMatch(/invalid command \\lo/);
+    // Inactive branch — no SQL or known commands ran.
+    expect(db?.calls).toEqual([]);
+    expect(ctx.cond.depth()).toBe(0);
+    // Vanilla exits 0 from a script whose only failure was an unknown
+    // backslash in an inactive branch.
+    expect(code).toBe(EXIT_SUCCESS);
+  });
+
+  test('known backslash inside \\if false branch is skipped silently', async () => {
+    // Sanity check that the new lookup-before-active-check path doesn't
+    // accidentally run registered commands in an inactive branch. \echo
+    // is registered, so the lookup finds it — but cond.isActive() is false
+    // so it must NOT execute (no __ECHO_LAST update, no stderr write).
+    const { ctx, stderr } = buildCtx({
+      lines: ['\\if false', '\\echo skipped', '\\endif'],
+    });
+    const code = await runMainLoop(ctx);
+    expect(stderr.text()).toBe('');
+    expect(ctx.settings.vars.get('__ECHO_LAST')).toBeUndefined();
+    expect(code).toBe(EXIT_SUCCESS);
+  });
+
+  // -------------------------------------------------------------------------
+  // save_query_text_state / discard_query_text — \if-inside-statement.
+  //
+  // Upstream regress: `select \if true 42 \else (bogus \endif forty_two;`
+  // dispatches `select  42  forty_two;` (the inactive `(bogus` is rolled
+  // back via discard_query_text). Without the fix the `(bogus` survived in
+  // queryBuf AND `parenDepth` stayed at 1, so the trailing `;` failed to
+  // trigger a boundary and the whole rest of the script accumulated into
+  // a single giant dispatch.
+  // -------------------------------------------------------------------------
+
+  test('inactive branch text is discarded mid-statement (\\if/\\else/\\endif inside SELECT)', async () => {
+    const { ctx, db } = buildCtx({
+      lines: [
+        'select',
+        '  \\if true',
+        '    42',
+        '  \\else',
+        '    (bogus',
+        '  \\endif',
+        '  forty_two;',
+      ],
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // The assembled SQL must NOT contain `(bogus` — that text was inside an
+    // inactive `\else` branch and should be rolled back by \endif. The
+    // exact whitespace mirrors the source lines: scanSql preserves the
+    // newlines/indent the user typed (minus the discarded branch).
+    expect(db?.calls).toEqual(['select\n  \n    42\n  \n  forty_two;']);
+  });
+
+  test('inline \\if false / \\\\ ... \\else / \\\\ ... \\endif rolls back the inactive branch', async () => {
+    // Single line: `select \if false \\ (bogus \else \\ 42 \endif \\ forty_two;`
+    // Parses as: select, \if false, \\ separator, (bogus, \else (was inactive
+    // → truncate), \\, 42, \endif (just-completed was active → no truncate),
+    // \\, forty_two; → assembled: `select 42 forty_two;`.
+    const { ctx, db } = buildCtx({
+      lines: [
+        'select \\if false \\\\ (bogus \\else \\\\ 42 \\endif \\\\ forty_two;',
+      ],
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // Buffer assembled with the literal whitespace seen by the scanner.
+    // The key assertion is the absence of `(bogus`.
+    expect(db?.calls).toHaveLength(1);
+    expect(db?.calls?.[0]).not.toContain('(bogus');
+    expect(db?.calls?.[0]).toMatch(/select\s+42\s+forty_two;/);
+  });
+
+  test('inactive branch with `(` does not leak parenDepth into surrounding statement', async () => {
+    // Regression test: without restoring scanState on truncate, the `(` in
+    // `(bogus` increments parenDepth, the trailing `;` never triggers a
+    // statement boundary, and the next dispatch concatenates many statements
+    // into a single giant query.
+    const { ctx, db } = buildCtx({
+      lines: [
+        'select',
+        '  \\if true',
+        '    42',
+        '  \\else',
+        '    (bogus',
+        '  \\endif',
+        '  forty_two;',
+        'SELECT 1;',
+      ],
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // Both queries must dispatch independently — they must NOT have merged
+    // into a single payload because of stale parenDepth.
+    expect(db?.calls).toHaveLength(2);
+    expect(db?.calls?.[1]).toBe('SELECT 1;');
+    // First call is the partial-query result; assert it doesn't contain
+    // `(bogus` (was discarded) AND that the second statement didn't bleed
+    // into it (the trailing `SELECT 1;` would otherwise be appended when
+    // parenDepth stayed > 0 across the truncate).
+    expect(db?.calls?.[0]).not.toContain('(bogus');
+    expect(db?.calls?.[0]).not.toContain('SELECT 1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COPY ... TO STDOUT mid-batch sink routing
+//
+// The wire layer routes mid-batch CopyData bytes via
+// `copyOutMidBatchSink`. Mainloop installs that sink ahead of
+// `dispatchSendQuery` so the wire side has a target before the server
+// pushes data. The sink must route to the active query output target —
+// `\o FILE` stash when set, otherwise `ctx.stdout` — matching upstream
+// `handleCopyOut(pset.queryFout, ...)`.
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — COPY-OUT mid-batch sink', () => {
+  test('sink writes to ctx.stdout when no \\o redirect is active', async () => {
+    const { ctx, stdout, db } = buildCtx({
+      lines: [`COPY (SELECT 'foo') TO STDOUT;`],
+    });
+    // Capture the sink mainloop installs so we can drive it directly,
+    // bypassing the wire layer. The mock execSimple is what triggers
+    // mainloop's prior installation.
+    let installedSink: ((chunk: Buffer) => void) | null = null;
+    const conn = db as unknown as {
+      copyOutMidBatchSink: ((chunk: Buffer) => void) | null;
+      execSimple: (sql: string) => Promise<ResultSet[]>;
+    };
+    const origExec = conn.execSimple.bind(conn);
+    conn.execSimple = (sql: string): Promise<ResultSet[]> => {
+      installedSink = conn.copyOutMidBatchSink ?? null;
+      installedSink?.(Buffer.from('foo\n'));
+      return origExec(sql);
+    };
+    await runMainLoop(ctx);
+    expect(stdout.text()).toContain('foo\n');
+  });
+
+  test('sink writes to queryFout stash (\\o FILE target) when active', async () => {
+    const { ctx, stdout, db } = buildCtx({
+      lines: [`COPY (SELECT 'bar') TO STDOUT;`],
+    });
+    const redirected = makeBuffer();
+    // Mimic `\o FILE` by stashing a queryFout entry directly. The
+    // symbol key matches cmd_io.ts's `QUERY_FOUT_KEY`.
+    const stash = ctx.settings as unknown as Record<symbol, unknown>;
+    stash[Symbol.for('neonctl.psql.queryFout')] = {
+      stream: redirected,
+      close: () => Promise.resolve(),
+    };
+    const conn = db as unknown as {
+      copyOutMidBatchSink: ((chunk: Buffer) => void) | null;
+      execSimple: (sql: string) => Promise<ResultSet[]>;
+    };
+    const origExec = conn.execSimple.bind(conn);
+    conn.execSimple = (sql: string): Promise<ResultSet[]> => {
+      conn.copyOutMidBatchSink?.(Buffer.from('bar\n'));
+      return origExec(sql);
+    };
+    await runMainLoop(ctx);
+    expect(redirected.text()).toContain('bar\n');
+    expect(stdout.text()).not.toContain('bar\n');
+  });
+
+  test('sink is cleared once the batch settles', async () => {
+    const { ctx, db } = buildCtx({
+      lines: [`COPY (SELECT 'baz') TO STDOUT;`],
+    });
+    const conn = db as unknown as {
+      copyOutMidBatchSink: ((chunk: Buffer) => void) | null;
+    };
+    await runMainLoop(ctx);
+    // Post-batch teardown leaves the sink null so the next call starts
+    // with a fresh slate (no write-after-close hazard on closed \o files).
+    expect(conn.copyOutMidBatchSink).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error handling
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — error handling', () => {
+  test('error keeps loop running by default', async () => {
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('syntax error')],
+    ]);
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['SELECT bad;', 'SELECT 1;'],
+      canned,
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stderr.text()).toMatch(/syntax error/);
+    expect(db?.calls).toEqual(['SELECT bad;', 'SELECT 1;']);
+  });
+
+  test('a trailing statement error does NOT escalate the exit code without ON_ERROR_STOP', async () => {
+    // Real psql exits 0 from piped stdin / `-f` even when the LAST statement
+    // failed, unless ON_ERROR_STOP is set. The old code latched `lastWasError`
+    // and escalated to EXIT_USER at terminal — verified wrong against psql
+    // 18.4 (`printf 'SELECT 1;\nSELECT 1/0;\n' | psql` → 0).
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('syntax error')],
+    ]);
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT 1;', 'SELECT bad;'],
+      canned,
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+    // Both statements ran (no halt), and the trailing error didn't bump it.
+    expect(db?.calls).toEqual(['SELECT 1;', 'SELECT bad;']);
+  });
+
+  test('onErrorStop returns exit 3 and halts further execution', async () => {
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('boom')],
+    ]);
+    const { ctx, db } = buildCtx({
+      lines: ['SELECT bad;', 'SELECT 1;'],
+      canned,
+      settingsOverride: (s) => {
+        s.onErrorStop = true;
+      },
+    });
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_USER);
+    expect(db?.calls).toEqual(['SELECT bad;']);
+  });
+
+  test('lastErrorResult is populated after a failure', async () => {
+    const canned = new Map<string, Canned>([
+      ['SELECT bad;', new Error('the error')],
+    ]);
+    const { ctx } = buildCtx({ lines: ['SELECT bad;'], canned });
+    await runMainLoop(ctx);
+    expect(ctx.settings.lastErrorResult?.message).toBe('the error');
+  });
+
+  test('no connection: SQL writes a no-connection error', async () => {
+    const { ctx, stderr } = buildCtx({
+      lines: ['SELECT 1;'],
+      noConnection: true,
+    });
+    await runMainLoop(ctx);
+    expect(stderr.text()).toMatch(/no connection to the server/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// \timing
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — \\timing', () => {
+  test('emits Time: line when settings.timing is on', async () => {
+    const { ctx, stdout } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.timing = true;
+      },
+    });
+    await runMainLoop(ctx);
+    expect(stdout.text()).toMatch(/^Time: \d+\.\d{3} ms$/m);
+  });
+
+  test('no Time: line when timing is off', async () => {
+    const { ctx, stdout } = buildCtx({ lines: ['SELECT 1;'] });
+    await runMainLoop(ctx);
+    expect(stdout.text()).not.toMatch(/^Time: /m);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ECHO=all — mirrors upstream `--echo-all`. Every input line is echoed to
+// stdout before processing, EXCEPT bare-empty lines outside any quoted
+// construct (those upstream drops entirely via the `psql_scan_in_quote`
+// gate in `mainloop.c` MainLoop's blank-line short-circuit).
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — ECHO=all', () => {
+  test('echoes a non-empty SQL line before its result', async () => {
+    const { ctx, stdout } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.echo = 'all';
+      },
+    });
+    await runMainLoop(ctx);
+    const out = stdout.text();
+    const echoIdx = out.indexOf('SELECT 1;');
+    const resultIdx = out.indexOf('?column?');
+    expect(echoIdx).toBeGreaterThanOrEqual(0);
+    expect(resultIdx).toBeGreaterThan(echoIdx);
+  });
+
+  test('drops bare-empty lines between statements (no echo, no dispatch)', async () => {
+    const { ctx, stdout, db } = buildCtx({
+      lines: ['SELECT 1;', '', 'SELECT 2;'],
+      settingsOverride: (s) => {
+        s.echo = 'all';
+      },
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toEqual(['SELECT 1;', 'SELECT 2;']);
+    expect(stdout.text()).not.toMatch(/SELECT 1;\n\nSELECT 2;/);
+  });
+
+  test('echoes blank lines inside a multi-line quoted identifier', async () => {
+    // Multi-line quoted identifier `"a\n\nb"` — the scanner stays in
+    // double-quote state across the blank line, so upstream echoes it
+    // through. Mirrors the regress/psql `prepare q as select ... as
+    // "ab\n\nc" ...` test case where the embedded blank lands on its
+    // own line and must surface in the `--echo-all` stream.
+    const { ctx, stdout, db } = buildCtx({
+      lines: ['SELECT 1 AS "a', '', 'b";'],
+      settingsOverride: (s) => {
+        s.echo = 'all';
+      },
+    });
+    await runMainLoop(ctx);
+    expect(db?.calls).toHaveLength(1);
+    expect(stdout.text()).toMatch(/SELECT 1 AS "a\n\nb";\n/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `\bind` — extended-protocol path with parameter substitution.
+//
+// `cmd_pipeline.ts` stashes parameters on a Symbol-keyed slot of
+// `PsqlSettings`; the mainloop consumes them on the next `;` boundary and
+// routes the SQL through `Connection.query(sql, params)` instead of
+// `execSimple`. The result must render through the same printer pipeline as
+// the simple-query path (not a stderr placeholder).
+// ---------------------------------------------------------------------------
+
+const BIND_STATE_KEY = Symbol.for('neonctl.psql.bindState');
+
+describe('runMainLoop — \\bind', () => {
+  test('bound query is dispatched via query() and rendered on stdout', async () => {
+    const { ctx, stdout, stderr, db } = buildCtx({ lines: ['SELECT $1;'] });
+    // Pre-stash bind params via the same Symbol the `\bind` command writes
+    // to. The mainloop's `dispatchSendQuery` should pick this up, call
+    // `db.query(sql, values)`, and print the result through the printer.
+    (ctx.settings as unknown as Record<symbol, unknown>)[BIND_STATE_KEY] = {
+      name: '',
+      values: ['hello'],
+    };
+
+    const code = await runMainLoop(ctx);
+    expect(code).toBe(EXIT_SUCCESS);
+
+    // query() — not execSimple() — was called with the stashed params.
+    expect(db?.queryCalls).toHaveLength(1);
+    expect(db?.queryCalls[0]).toMatchObject({
+      sql: 'SELECT $1;',
+      params: ['hello'],
+    });
+    expect(db?.calls).toEqual([]);
+
+    // The printer output landed on stdout, not on the old stderr placeholder.
+    const stdoutText = stdout.text();
+    expect(stdoutText).toContain('?column?');
+    expect(stdoutText).toContain('1');
+    expect(stderr.text()).not.toContain('-- bound query:');
+  });
+
+  test('bind stash is cleared after dispatch (next query takes simple path)', async () => {
+    const { ctx, db } = buildCtx({ lines: ['SELECT $1;', 'SELECT 2;'] });
+    (ctx.settings as unknown as Record<symbol, unknown>)[BIND_STATE_KEY] = {
+      name: '',
+      values: ['once'],
+    };
+
+    await runMainLoop(ctx);
+
+    // First query went through the extended path; second through execSimple.
+    expect(db?.queryCalls).toHaveLength(1);
+    expect(db?.queryCalls[0]).toMatchObject({
+      sql: 'SELECT $1;',
+      params: ['once'],
+    });
+    expect(db?.calls).toEqual(['SELECT 2;']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ENCODING — seeded from server's client_encoding at startup; refreshed
+// after each successful query (mirrors upstream's tail-of-SendQuery refresh
+// in common.c).
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — ENCODING', () => {
+  test('seeded from server client_encoding on startup', async () => {
+    const { ctx, db } = buildCtx({ lines: [] });
+    db?.setParam('client_encoding', 'LATIN1');
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('ENCODING')).toBe('LATIN1');
+  });
+
+  test('falls back to default UTF8 when no parameterStatus is set', async () => {
+    const { ctx } = buildCtx({ lines: [] });
+    await runMainLoop(ctx);
+    // defaultSettings seeds ENCODING=UTF8 and no client_encoding was set
+    // on the mock, so refresh keeps the default.
+    expect(ctx.settings.vars.get('ENCODING')).toBe('UTF8');
+  });
+
+  test('refreshes after a SET client_encoding statement', async () => {
+    const { ctx, db } = buildCtx({ lines: ['SELECT 1;'] });
+    db?.setParam('client_encoding', 'UTF8');
+    // Drive the connection's perceived encoding to flip after the query.
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        // Mock the server returning a ParameterStatus mid-flight by
+        // mutating the mock's params map before resolving.
+        db.setParam('client_encoding', 'LATIN1');
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(ctx.settings.vars.get('ENCODING')).toBe('LATIN1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Asynchronous NotificationResponse (LISTEN/NOTIFY)
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — NotificationResponse', () => {
+  test('renders the upstream "Asynchronous notification" line (no payload)', async () => {
+    const { ctx, stdout, db } = buildCtx({ lines: ['SELECT 1;'] });
+    // Drive the mock to emit a NotificationResponse during the query.
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotification('foo', '', 4242);
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stdout.text()).toMatch(
+      /Asynchronous notification "foo" received from server process with PID 4242\./,
+    );
+  });
+
+  test('includes payload clause when payload is non-empty', async () => {
+    const { ctx, stdout, db } = buildCtx({ lines: ['SELECT 1;'] });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotification('foo', 'bar', 7);
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stdout.text()).toMatch(
+      /Asynchronous notification "foo" with payload "bar" received from server process with PID 7\./,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NoticeResponse — mainloop subscribes once per REPL invocation and prints
+// each notice via libpq's default `psql_notice_processor` format (severity
+// line + DETAIL / HINT / CONTEXT). Notices land on stderr.
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — NoticeResponse', () => {
+  const drive = (
+    notice: Notice,
+  ): Promise<{
+    stdoutText: string;
+    stderrText: string;
+  }> => {
+    const { ctx, stdout, stderr, db } = buildCtx({ lines: ['SELECT 1;'] });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotice(notice);
+        return orig(sql);
+      };
+    }
+    return runMainLoop(ctx).then(() => ({
+      stdoutText: stdout.text(),
+      stderrText: stderr.text(),
+    }));
+  };
+
+  test('renders the upstream "NOTICE:  <msg>" line on stderr', async () => {
+    const { stderrText } = await drive({
+      severity: 'NOTICE',
+      message: 'foo',
+    });
+    expect(stderrText).toContain('NOTICE:  foo\n');
+  });
+
+  test('renders DETAIL and HINT below the severity line', async () => {
+    const { stderrText } = await drive({
+      severity: 'NOTICE',
+      message: 'foo',
+      detail: 'extra detail',
+      hint: 'try this',
+    });
+    expect(stderrText).toBe(
+      'NOTICE:  foo\nDETAIL:  extra detail\nHINT:  try this\n',
+    );
+  });
+
+  test('suppresses CONTEXT for NOTICE when SHOW_CONTEXT is errors (default)', async () => {
+    const { stderrText } = await drive({
+      severity: 'NOTICE',
+      message: 'foo',
+      where: 'PL/pgSQL function inline_code_block line 3 at RAISE',
+    });
+    expect(stderrText).toBe('NOTICE:  foo\n');
+  });
+
+  test('renders CONTEXT for NOTICE when SHOW_CONTEXT is always', async () => {
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.showContext = 'always';
+        s.vars.set('SHOW_CONTEXT', 'always');
+      },
+    });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotice({
+          severity: 'NOTICE',
+          message: 'foo',
+          where: 'PL/pgSQL function inline_code_block line 3 at RAISE',
+        });
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stderr.text()).toContain(
+      'NOTICE:  foo\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\n',
+    );
+  });
+
+  test('strips DETAIL / HINT / CONTEXT in terse verbosity', async () => {
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.verbosity = 'terse';
+      },
+    });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotice({
+          severity: 'NOTICE',
+          message: 'foo',
+          detail: 'd',
+          hint: 'h',
+          where: 'w',
+        });
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stderr.text()).toBe('NOTICE:  foo\n');
+  });
+
+  test('prepends SQLSTATE in sqlstate verbosity', async () => {
+    const { ctx, stderr, db } = buildCtx({
+      lines: ['SELECT 1;'],
+      settingsOverride: (s) => {
+        s.verbosity = 'sqlstate';
+      },
+    });
+    const orig = db?.execSimple.bind(db);
+    if (db && orig) {
+      db.execSimple = (sql: string): Promise<ResultSet[]> => {
+        db.emitNotice({
+          severity: 'NOTICE',
+          code: '00P01',
+          message: 'foo',
+        });
+        return orig(sql);
+      };
+    }
+    await runMainLoop(ctx);
+    expect(stderr.text()).toBe('NOTICE:  00P01: foo\n');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VI_MODE — the psql variable that controls the LineEditor editing mode.
+// We exercise the small parsing helpers directly here; the editor-side
+// integration (setMode applied at next prompt) is covered by the LineEditor
+// unit tests.
+// ---------------------------------------------------------------------------
+
+describe('mainloop — VI_MODE helpers', () => {
+  test('parseBoolVar accepts the upstream on/off spellings', () => {
+    expect(__testing.parseBoolVar('on')).toBe(true);
+    expect(__testing.parseBoolVar('ON')).toBe(true);
+    expect(__testing.parseBoolVar('true')).toBe(true);
+    expect(__testing.parseBoolVar('yes')).toBe(true);
+    expect(__testing.parseBoolVar('1')).toBe(true);
+    expect(__testing.parseBoolVar('')).toBe(true);
+    expect(__testing.parseBoolVar('off')).toBe(false);
+    expect(__testing.parseBoolVar('false')).toBe(false);
+    expect(__testing.parseBoolVar('no')).toBe(false);
+    expect(__testing.parseBoolVar('0')).toBe(false);
+  });
+
+  test('parseBoolVar returns null for unrecognised input', () => {
+    expect(__testing.parseBoolVar('banana')).toBeNull();
+    expect(__testing.parseBoolVar('2')).toBeNull();
+    expect(__testing.parseBoolVar('vi')).toBeNull();
+  });
+
+  test('viModeOption defaults to emacs when unset', () => {
+    expect(__testing.viModeOption(undefined)).toBe('emacs');
+  });
+
+  test('viModeOption translates truthy values to vi', () => {
+    expect(__testing.viModeOption('on')).toBe('vi');
+    expect(__testing.viModeOption('1')).toBe('vi');
+    expect(__testing.viModeOption('yes')).toBe('vi');
+  });
+
+  test('viModeOption translates falsy values to emacs', () => {
+    expect(__testing.viModeOption('off')).toBe('emacs');
+    expect(__testing.viModeOption('0')).toBe('emacs');
+    // Unrecognised input falls back to emacs — same as upstream's `set
+    // editing-mode unknown` (silently ignored). The hook itself emits the
+    // diagnostic before reaching this translator.
+    expect(__testing.viModeOption('banana')).toBe('emacs');
+  });
+});
