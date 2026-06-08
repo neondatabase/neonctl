@@ -64,7 +64,9 @@ const bundleViaModule = async (
   } catch {
     throw new ModuleNotAvailable();
   }
-  // Mirrors the binary-path flags below; write:false keeps output in memory.
+  // Mirrors the binary-path bundling flags; write:false keeps output in memory.
+  // logLevel:'silent' suppresses esbuild's own stderr — the rejected error
+  // still carries the diagnostic, matching the binary path's captured-stderr.
   const result = await esbuild
     .build({
       entryPoints: [source],
@@ -76,7 +78,7 @@ const bundleViaModule = async (
       format: 'esm',
       platform: 'node',
       packages: 'external',
-      logLevel: 'error',
+      logLevel: 'silent',
     })
     .catch((err: unknown) => {
       throw new Error(

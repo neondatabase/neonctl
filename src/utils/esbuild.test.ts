@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { strFromU8 } from 'fflate';
-import { bundleEntry } from './esbuild';
+import { bundleEntry, type BundleDeps } from './esbuild';
 
 const require = createRequire(import.meta.url);
 // Absolute, CWD- and PATH-independent path to the esbuild CLI shipped with the
@@ -15,7 +15,7 @@ const ESBUILD_BIN = require.resolve('esbuild/bin/esbuild');
 // Explicit npm-mode deps: process.pkg undefined + real esbuild import. Passing
 // these explicitly keeps these tests on the in-process module path even if a
 // future test setup ever shimmed process.pkg.
-const npmDeps = {
+const npmDeps: BundleDeps = {
   isPackaged: () => false,
   loadEsbuild: (name: string) => import(name),
 };
