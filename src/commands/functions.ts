@@ -31,7 +31,6 @@ const DEPLOYMENT_FIELDS = [
   'status',
   'runtime',
   'memory_mib',
-  'bundle_sha256',
   'created_at',
 ] as const;
 

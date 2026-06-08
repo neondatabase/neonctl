@@ -6,7 +6,6 @@ export type DeploymentStatus = 'pending' | 'building' | 'completed' | 'failed';
 export type NeonFunctionDeployment = {
   id: number;
   status: DeploymentStatus;
-  bundle_sha256: string;
   memory_mib: number;
   runtime: string;
   created_at: string;
