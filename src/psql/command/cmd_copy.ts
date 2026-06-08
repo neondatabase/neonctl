@@ -551,11 +551,17 @@ const parseCopyTagRows = (tag: string | null): number | null => {
  * appropriate stream end depending on COPY direction. Stderr is inherited so
  * the user sees diagnostics in their terminal.
  */
+type ProgramExit = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  error: Error | null;
+};
+
 type ProgramHandles = {
   child: ChildProcessWithoutNullStreams;
   readable: Readable | null;
   writable: Writable | null;
-  closed: Promise<void>;
+  closed: Promise<ProgramExit>;
 };
 
 const spawnProgram = (
@@ -569,12 +575,16 @@ const spawnProgram = (
       'inherit',
     ],
   }) as ChildProcessWithoutNullStreams;
-  const closed = new Promise<void>((resolve) => {
-    child.once('close', () => {
-      resolve();
+  // Capture the program's terminal status so the caller can surface a nonzero
+  // exit / signal as a COPY failure rather than silently reporting success.
+  // `close` carries (code, signal); `error` fires when the spawn itself
+  // failed (e.g. sh missing).
+  const closed = new Promise<ProgramExit>((resolve) => {
+    child.once('close', (code, signal) => {
+      resolve({ code, signal, error: null });
     });
-    child.once('error', () => {
-      resolve();
+    child.once('error', (error) => {
+      resolve({ code: null, signal: null, error });
     });
   });
   return {
@@ -583,6 +593,23 @@ const spawnProgram = (
     writable: direction === 'to' ? child.stdin : null,
     closed,
   };
+};
+
+/**
+ * Turn a {@link ProgramExit} into psql-style diagnostic text, or `null` when
+ * the program succeeded (exit 0, no signal, no spawn error).
+ */
+const describeProgramExit = (cmd: string, exit: ProgramExit): string | null => {
+  if (exit.error !== null) {
+    return `could not execute command "${cmd}": ${exit.error.message}`;
+  }
+  if (exit.signal !== null) {
+    return `program "${cmd}" was terminated by signal ${exit.signal}`;
+  }
+  if (exit.code !== null && exit.code !== 0) {
+    return `program "${cmd}" failed with exit code ${exit.code}`;
+  }
+  return null;
 };
 
 /**
@@ -671,7 +698,7 @@ const pumpStdinWithEofMarker = async (
       // Operate in the BYTE domain — never decode to a JS string. A
       // Buffer -> string -> Buffer round-trip mangles a multibyte char split
       // across chunk boundaries and any non-UTF-8 client_encoding byte
-      // (LATIN1/SJIS) into U+FFFD (review item #3). stdin yields Buffers;
+      // (LATIN1/SJIS) into U+FFFD. stdin yields Buffers;
       // guard the rare string case without assuming a lossy re-encode.
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
       tail = tail.length === 0 ? buf : Buffer.concat([tail, buf]);
@@ -794,6 +821,12 @@ export const doCopy = async (
   let readable: Readable | null = null;
   let writable: Writable | null = null;
   let program: ProgramHandles | null = null;
+  // Captures an async write-stream error for the COPY TO <file> path. Without
+  // a listener, an open() failure (EACCES/ENOTDIR on an unwritable path) emits
+  // 'error' with nothing attached and aborts the whole process. An array (vs a
+  // nullable let) keeps the captured value visible to control-flow narrowing
+  // even though it's only assigned inside the async listener.
+  const fileWriteErrors: Error[] = [];
   /**
    * True iff the data path is "psql stdin" — i.e. the user typed
    * `\copy t FROM STDIN`. Only this path honours the `\.` text-mode EOF
@@ -889,6 +922,11 @@ export const doCopy = async (
           // ENOENT is fine for write — createWriteStream will create it.
         }
         const stream = createWriteStream(opts.file);
+        // Trap the async open/write error synchronously so it can't crash the
+        // process; surfaced as a COPY failure after the drive.
+        stream.once('error', (e: Error) => {
+          fileWriteErrors.push(e);
+        });
         writable = stream;
         cleanups.push(
           () =>
@@ -919,7 +957,7 @@ export const doCopy = async (
       // `\.` on its own line as end-of-data in either) — only binary STDIN and
       // file/PROGRAM sources stream bytes verbatim. Gating on text-only made a
       // CSV `\copy … FROM STDIN` swallow the `\.` line as a data row and the
-      // following SQL into the copy stream (review item #16).
+      // following SQL into the copy stream.
       if (
         fromStdin &&
         !isCopyBinaryFormat(opts.beforeToFrom, opts.afterToFrom)
@@ -933,6 +971,23 @@ export const doCopy = async (
         return failWith('no output stream for COPY TO');
       }
       await drainCopyTo(conn, sql, writable);
+      // A deferred open()/write() failure on the output file: report it as a
+      // COPY failure instead of letting the unhandled 'error' abort the
+      // process. (`finally` below still runs the stream cleanups.)
+      if (fileWriteErrors.length > 0)
+        return failWith(fileWriteErrors[0].message);
+    }
+    // For `PROGRAM '...'` sources/sinks, wait for the child to exit and fold a
+    // nonzero exit / signal / spawn error into the COPY result. Without this a
+    // failing program (e.g. `\copy t TO PROGRAM 'false'`) reported success.
+    // Close the program's stdin first so a TO PROGRAM child that
+    // reads to EOF can finish.
+    if (program !== null) {
+      program.writable?.end();
+      const exit = await program.closed;
+      // A program is only spawned when opts.file holds the command string.
+      const progErr = describeProgramExit(opts.file ?? '', exit);
+      if (progErr !== null) throw new Error(progErr);
     }
     // The connection records the trailing CommandComplete tag for us. We
     // narrow via a duck-type check so we don't tighten the Connection type.

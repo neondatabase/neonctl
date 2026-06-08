@@ -549,6 +549,77 @@ describe('doCopy', () => {
     if (result.ok) return;
     expect(result.error).toMatch(/relation "missing"/);
   });
+
+  test('TO an unwritable path fails gracefully instead of crashing', async () => {
+    // Parent directory does not exist → createWriteStream emits an async
+    // 'error' (ENOENT). Without a listener this aborts the whole process; the
+    // fix traps it and routes through the normal failure path.
+    const badPath = path.join(tmpDir, 'no-such-subdir', 'out.csv');
+    const { conn } = makeMockConn({
+      copyOutChunks: [Buffer.from('hello\n')],
+      copyTag: 'COPY 1',
+    });
+    const result = await doCopy(conn, {
+      beforeToFrom: 't',
+      afterToFrom: null,
+      file: badPath,
+      program: false,
+      psqlInOut: false,
+      direction: 'to',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/ENOENT|no such file/i);
+  });
+
+  test('TO PROGRAM that exits nonzero is reported as a failure', async () => {
+    // `cat` consumes stdin (so no EPIPE on the write side), then `exit 7`.
+    const { conn } = makeMockConn({
+      copyOutChunks: [Buffer.from('row\n')],
+      copyTag: 'COPY 1',
+    });
+    const result = await doCopy(conn, {
+      beforeToFrom: 't',
+      afterToFrom: null,
+      file: 'cat >/dev/null; exit 7',
+      program: true,
+      psqlInOut: false,
+      direction: 'to',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/exit code 7/);
+  });
+
+  test('FROM PROGRAM that exits nonzero is reported as a failure', async () => {
+    const { conn } = makeMockConn({ copyTag: 'COPY 1' });
+    const result = await doCopy(conn, {
+      beforeToFrom: 't',
+      afterToFrom: null,
+      file: 'echo hi; exit 5',
+      program: true,
+      psqlInOut: false,
+      direction: 'from',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/exit code 5/);
+  });
+
+  test('FROM PROGRAM that exits 0 still succeeds', async () => {
+    const { conn, recorded } = makeMockConn({ copyTag: 'COPY 1' });
+    const result = await doCopy(conn, {
+      beforeToFrom: 't',
+      afterToFrom: null,
+      file: 'echo data',
+      program: true,
+      psqlInOut: false,
+      direction: 'from',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(recorded.copyInBytes.toString('utf8')).toBe('data\n');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -927,7 +998,7 @@ describe('pumpStdinWithEofMarker', () => {
     expect(capture.bytes.toString('utf8')).toBe('foo\r\n');
   });
 
-  test('preserves a multibyte char split across chunk boundaries (review #3)', async () => {
+  test('preserves a multibyte char split across chunk boundaries', async () => {
     // 😀 (U+1F600) = F0 9F 98 80, split after byte 2, then a newline. The old
     // Buffer->string->Buffer round-trip turned the split halves into U+FFFD.
     const readable = Readable.from([
@@ -941,7 +1012,7 @@ describe('pumpStdinWithEofMarker', () => {
     expect(capture.bytes.toString('utf8')).toBe('😀\n');
   });
 
-  test('forwards non-UTF-8 (LATIN1) bytes verbatim (review #3)', async () => {
+  test('forwards non-UTF-8 (LATIN1) bytes verbatim', async () => {
     // 0xE9 is LATIN1 'é' — invalid UTF-8 on its own; must NOT become U+FFFD.
     const readable = Readable.from([Buffer.from([0x31, 0xe9, 0x0a])]); // 1<é>\n
     const { stream, capture } = captureCopyIn();
@@ -1045,7 +1116,7 @@ describe('doCopy STDIN with `\\.` marker', () => {
     });
   });
 
-  test('csv format also honours `\\.` and stops before the marker (review #16)', async () => {
+  test('csv format also honours `\\.` and stops before the marker', async () => {
     const { conn, recorded } = makeMockConn({ copyTag: 'COPY 3' });
     const stdin = stringReadable('1,a\n\\.\n2,b\n');
     await withStdin(stdin, async () => {
