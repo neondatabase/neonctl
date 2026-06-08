@@ -50,7 +50,7 @@
     "tsx": "4.22.3",
     "typescript": "4.9.5",
     "typescript-eslint": "8.28.0",
-    "vitest": "1.6.1"
+    "vitest": "4.1.0"
   },
   "dependencies": {
     "@neondatabase/api-client": "2.7.1",
