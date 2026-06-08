@@ -163,6 +163,12 @@ export const ensureAuth = async (
     return;
   }
 
+  // `dev` runs a function locally. It injects the selected branch's env vars
+  // when credentials happen to be available, but must never trigger an
+  // interactive login: use an API key or existing stored credentials if
+  // present, otherwise run with no API client (env injection is skipped).
+  const isLocalDev = props._[0] === 'dev';
+
   // Use existing API key or handle auth command
   if (props.apiKey || props._[0] === 'auth') {
     if (props.apiKey) {
@@ -214,6 +220,14 @@ export const ensureAuth = async (
       'Credentials file %s does not exist, starting authentication',
       credentialsPath,
     );
+  }
+
+  // `dev` never launches the interactive browser flow. With no usable
+  // credentials it proceeds without an API client; env injection is skipped
+  // and the function still runs locally.
+  if (isLocalDev) {
+    log.debug('dev: no usable credentials; running without env injection');
+    return;
   }
 
   // Start new auth flow if no valid token exists or refresh failed

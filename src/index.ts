@@ -55,6 +55,8 @@ const NO_SUBCOMMANDS_VERBS = [
 
   'init',
 
+  'dev',
+
   // aliases
 ];
 
