@@ -57,6 +57,8 @@ const NO_SUBCOMMANDS_VERBS = [
 
   'dev',
 
+  'deploy',
+
   // aliases
 ];
 

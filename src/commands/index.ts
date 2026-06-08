@@ -18,6 +18,8 @@ import * as dataApi from './data_api.js';
 import * as neonAuth from './neon_auth.js';
 import * as functions from './functions.js';
 import * as dev from './dev.js';
+import * as config from './config.js';
+import * as deploy from './deploy.js';
 
 export default [
   auth,
@@ -40,4 +42,6 @@ export default [
   dataApi,
   functions,
   dev,
+  config,
+  deploy,
 ];
