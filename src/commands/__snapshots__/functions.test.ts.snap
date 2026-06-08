@@ -93,7 +93,6 @@ exports[`functions > deploy requires at least one option 1`] = `""`;
 exports[`functions > env add --no-wait stops after triggering 1`] = `
 "id: 2
 status: building
-bundle_sha256: sha-2
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
@@ -107,7 +106,6 @@ exports[`functions > env add rejects an invalid slug 1`] = `""`;
 exports[`functions > env add triggers an env-only redeploy and waits 1`] = `
 "id: 2
 status: completed
-bundle_sha256: sha-2
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
@@ -119,7 +117,6 @@ exports[`functions > env rm rejects an invalid slug 1`] = `""`;
 exports[`functions > env rm sends an empty value to drop the key 1`] = `
 "id: 2
 status: completed
-bundle_sha256: sha-2
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z

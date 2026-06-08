@@ -3,7 +3,6 @@ let calls = 0;
 const version = (id, status) => ({
   id,
   status,
-  bundle_sha256: `sha-${id}`,
   memory_mib: 256,
   runtime: 'nodejs24',
   created_at: '2026-06-03T00:00:00Z',
