@@ -310,7 +310,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'my-func',
+        'myfunc',
         '--path',
         fnDir,
         '--no-wait',
@@ -347,7 +347,30 @@ describe('functions', () => {
         mockDir: 'single_org',
         code: 1,
         stderr:
-          'ERROR: Invalid function slug "Bad_Slug". Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.',
+          'ERROR: Invalid function slug "Bad_Slug". Use 1-20 lowercase letters and digits (no hyphens or other characters).',
+      },
+    );
+  });
+
+  test('deploy rejects a hyphenated slug', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'my-func',
+        '--path',
+        fnDir,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Invalid function slug "my-func". Use 1-20 lowercase letters and digits (no hyphens or other characters).',
       },
     );
   });
@@ -401,7 +424,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'my-func',
+        'myfunc',
         '--path',
         emptyDir,
         '--no-wait',
@@ -427,7 +450,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'my-func',
+        'myfunc',
         '--project-id',
         'test-project-123456',
         '--branch',
@@ -543,7 +566,7 @@ describe('functions', () => {
       [
         'functions',
         'deploy',
-        'my-func',
+        'myfunc',
         '--path',
         badDir,
         '--no-wait',
