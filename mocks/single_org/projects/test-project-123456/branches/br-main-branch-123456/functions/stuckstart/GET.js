@@ -1,7 +1,6 @@
 const version = {
   id: 1,
   status: 'completed',
-  bundle_sha256: 'sha-1',
   memory_mib: 256,
   runtime: 'nodejs24',
   created_at: '2026-06-03T00:00:00Z',
