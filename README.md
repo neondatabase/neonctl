@@ -269,6 +269,63 @@ $ cat .neon
 
 **`.gitignore` scaffolding**: when `.neon` is **created** for the first time, the CLI also makes sure a `.gitignore` sits alongside it listing `.neon`. If `.gitignore` doesn't exist it's created with a single `.neon` line; if it does exist, `.neon` is appended only when missing (no duplicates, your other entries are left alone). On subsequent updates to an existing `.neon`, `.gitignore` is left untouched — so if you deliberately un-ignore `.neon` (e.g. to commit shared context), the entry is not re-added on every command.
 
+## Config as code (`config` / `deploy`)
+
+Describe a branch's desired state in a `neon.ts` policy and reconcile it from the CLI — the Neon equivalent of `terraform status` / `plan` / `apply`. The policy is a function of the branch it's being evaluated for; you switch on the branch (`name`, `isDefault`, …) and return the config you want (auth, Data API, compute settings, TTL, protection, and Preview features like Functions and buckets):
+
+```ts
+// neon.ts
+import { defineConfig } from '@neondatabase/config/v1';
+
+export default defineConfig((branch) => {
+  if (branch.isDefault) {
+    return { protected: true, auth: {} };
+  }
+  return { parent: 'main', ttl: '7d' };
+});
+```
+
+Three sub-commands plus a top-level alias drive it:
+
+```bash
+# Inspect the branch's live Neon state (read-only — never mutates)
+neon config status
+
+# Dry-run diff: show exactly what `apply` would change
+neon config plan
+
+# Reconcile the policy against the branch
+neon config apply
+
+# `neon deploy` is an alias for `neon config apply`
+neon deploy
+```
+
+**Project & branch resolution** follows the same chain as the rest of the CLI, each entry winning over the next:
+
+1. `--project-id <id>` flag
+2. `projectId` from the closest `.neon` file (found by walking up from the current directory — see "Where `.neon` lives" above)
+3. If still unresolved and the API key maps to exactly one project, that project is auto-detected
+
+The branch is chosen with `--branch <id|name>`; without it the project's default branch is used. The policy itself is found by walking up from the current directory for a `neon.ts`, or pass `--config <path>` to point at one explicitly.
+
+**Apply-only flags** (also available on `deploy`):
+
+- `--update-existing` — auto-confirm overriding existing remote settings on the branch. Without it, drift on settings already present remotely (compute, TTL, `protected`) is reported as a **conflict** and `apply` makes no changes until you resolve it or pass this flag.
+- `--allow-protected` — auto-confirm applying to a branch Neon marks as protected. Without it, `apply` refuses to touch a protected branch.
+
+**Output**: `status` prints the project, branch, and reverse-engineered config; `plan` / `apply` print the planned/applied changes and any conflicts as tables. Pass `--output json` (or `--output yaml`) to emit the full machine-readable result (`PushResult`) for piping into other tools or CI.
+
+```bash
+# CI gate: fail the build if the branch has drifted from the policy
+neon config plan --project-id polished-snowflake-12345678 --output json
+
+# Reconcile a feature branch, overriding any manual tweaks made in the console
+neon deploy --branch my-feature --update-existing
+```
+
+Function deploys declared under `preview.functions` are bundled by neonctl's own esbuild helper and uploaded as part of `apply`, so the policy stays declarative and the packaged CLI never has to embed esbuild's native binary.
+
 ## Commands
 
 | Command                                                                    | Subcommands                                                                                 | Description                    |
@@ -287,6 +344,8 @@ $ cat .neon
 | [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                             | Set context for session        |
 | checkout                                                                   |                                                                                             | Pin a branch in `.neon`        |
 | [link](https://neon.com/docs/reference/cli-link)                           |                                                                                             | Link a directory to a project  |
+| config                                                                     | `status`, `plan`, `apply`                                                                   | Drive a branch from `neon.ts`  |
+| deploy                                                                     |                                                                                             | Alias for `config apply`       |
 | [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                             | Generate a completion script   |
 
 ## Global options
