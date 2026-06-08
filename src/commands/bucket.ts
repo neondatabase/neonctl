@@ -337,8 +337,49 @@ const filenameFromContentDisposition = (
   return basename(key) || key;
 };
 
+// Pull the `message` field out of a server error body, returning undefined when
+// the body is absent, not an object, or carries no usable message.
+const serverErrorMessage = (body: unknown): string | undefined => {
+  const message = (body as { message?: unknown } | null | undefined)?.message;
+  return typeof message === 'string' && message.trim() !== ''
+    ? message
+    : undefined;
+};
+
+// Drain a streamed error body (the form an `octet-stream` download 404 takes)
+// and parse its `message`. Returns undefined on any read/parse failure so the
+// caller falls back to its default message.
+const streamErrorMessage = async (
+  stream: unknown,
+): Promise<string | undefined> => {
+  if (
+    typeof (stream as { [Symbol.asyncIterator]?: unknown })?.[
+      Symbol.asyncIterator
+    ] !== 'function'
+  ) {
+    return undefined;
+  }
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream as AsyncIterable<Buffer | string>) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return serverErrorMessage(JSON.parse(Buffer.concat(chunks).toString()));
+  } catch {
+    return undefined;
+  }
+};
+
+const objectNotFoundFallback = (
+  key: string,
+  bucket: string,
+  branchId: string,
+): string =>
+  `Object "${key}" not found in bucket "${bucket}" on branch ${branchId}.`;
+
 // Prefer the server's error message when present so a missing bucket is not
-// misreported as a missing object; otherwise fall back to a clean default.
+// misreported as a missing object; otherwise fall back to a clean default. Used
+// for the JSON (non-streamed) endpoints where the body is already parsed.
 const objectNotFoundMessage = (
   err: unknown,
   key: string,
@@ -346,12 +387,12 @@ const objectNotFoundMessage = (
   branchId: string,
 ): string => {
   if (isAxiosError(err)) {
-    const serverMessage = (err.response?.data as { message?: string })?.message;
-    if (typeof serverMessage === 'string' && serverMessage.trim() !== '') {
+    const serverMessage = serverErrorMessage(err.response?.data);
+    if (serverMessage !== undefined) {
       return serverMessage;
     }
   }
-  return `Object "${key}" not found in bucket "${bucket}" on branch ${branchId}.`;
+  return objectNotFoundFallback(key, bucket, branchId);
 };
 
 const getObject = async (
@@ -373,7 +414,13 @@ const getObject = async (
     });
   } catch (err: unknown) {
     if (isAxiosError(err) && err.response?.status === 404) {
-      throw new Error(objectNotFoundMessage(err, key, bucket, branchId));
+      // The download response is a stream, so a 404 body arrives as a stream
+      // too; drain and parse it to recover the server's message (which
+      // distinguishes a missing bucket from a missing object).
+      const serverMessage = await streamErrorMessage(err.response.data);
+      throw new Error(
+        serverMessage ?? objectNotFoundFallback(key, bucket, branchId),
+      );
     }
     throw err;
   }

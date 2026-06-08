@@ -190,6 +190,28 @@ describe('bucket', () => {
     });
   });
 
+  test('object get surfaces the server message when the object is missing', async ({
+    testCliCommand,
+  }) => {
+    const dest = join(TEST_TMP, 'missing.txt');
+    await testCliCommand(
+      [
+        'bucket',
+        'object',
+        'get',
+        'my-bucket/missing.txt',
+        '--file',
+        dest,
+        ...SCOPE,
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr: 'ERROR: Not Found',
+      },
+    );
+  });
+
   test('object delete', async ({ testCliCommand }) => {
     await testCliCommand(
       ['bucket', 'object', 'delete', 'my-bucket/hello.txt', ...SCOPE],

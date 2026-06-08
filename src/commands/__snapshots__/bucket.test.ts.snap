@@ -52,6 +52,8 @@ exports[`bucket > object get downloads a nested key 1`] = `""`;
 
 exports[`bucket > object get downloads to the given file 1`] = `""`;
 
+exports[`bucket > object get surfaces the server message when the object is missing 1`] = `""`;
+
 exports[`bucket > object get without a key is rejected client-side 1`] = `""`;
 
 exports[`bucket > object list 1`] = `
