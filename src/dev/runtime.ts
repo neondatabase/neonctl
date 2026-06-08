@@ -159,24 +159,35 @@ export const startRuntime = async ({
 };
 
 /**
- * Build a {@link PortSelection} from the environment:
- *   - `NEON_DEV_PORT` set -> explicit bind (crash if taken)
- *   - otherwise           -> search upward from `NEON_DEV_PORT_BASE` (or default)
+ * Build a {@link PortSelection} from the environment. Precedence:
+ *   1. `NEON_DEV_PORT` -> explicit bind (crash if taken). Set by `neon dev` from an
+ *      explicit `--port` / `dev.port`.
+ *   2. `PORT`          -> explicit bind. This is what `portless` injects (and what a bare
+ *      `PORT=3000 neon dev` sets), so the runtime binds the port chosen for it.
+ *   3. otherwise        -> search upward from `NEON_DEV_PORT_BASE` (or the default base).
  */
 export const portSelectionFromEnv = (env: NodeJS.ProcessEnv): PortSelection => {
   const explicit = env.NEON_DEV_PORT;
   if (explicit !== undefined && explicit !== '') {
-    const port = Number(explicit);
-    if (!Number.isInteger(port) || port < 0 || port > 65535) {
-      throw new Error(`Invalid NEON_DEV_PORT: "${explicit}"`);
-    }
-    return { mode: 'explicit', port };
+    return { mode: 'explicit', port: parsePort(explicit, 'NEON_DEV_PORT') };
+  }
+  const injected = env.PORT;
+  if (injected !== undefined && injected !== '') {
+    return { mode: 'explicit', port: parsePort(injected, 'PORT') };
   }
   const base = Number(env.NEON_DEV_PORT_BASE ?? DEFAULT_SEARCH_BASE);
   return {
     mode: 'search',
     from: Number.isInteger(base) ? base : DEFAULT_SEARCH_BASE,
   };
+};
+
+const parsePort = (value: string, varName: string): number => {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`Invalid ${varName}: "${value}"`);
+  }
+  return port;
 };
 
 const isDirectExecution = (): boolean => {

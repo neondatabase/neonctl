@@ -91,6 +91,25 @@ describe('portSelectionFromEnv', () => {
       /Invalid NEON_DEV_PORT/,
     );
   });
+
+  it('binds an injected PORT (e.g. from portless) when NEON_DEV_PORT is unset', () => {
+    expect(portSelectionFromEnv({ PORT: '4123' })).toEqual({
+      mode: 'explicit',
+      port: 4123,
+    });
+  });
+
+  it('prefers NEON_DEV_PORT over PORT', () => {
+    expect(
+      portSelectionFromEnv({ NEON_DEV_PORT: '3000', PORT: '4123' }),
+    ).toEqual({ mode: 'explicit', port: 3000 });
+  });
+
+  it('throws on an invalid PORT', () => {
+    expect(() => portSelectionFromEnv({ PORT: 'nope' })).toThrow(
+      /Invalid PORT/,
+    );
+  });
 });
 
 describe('getRequestListener round-trip', () => {
