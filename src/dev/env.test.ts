@@ -18,7 +18,7 @@ import type {
   NeonRoleSnapshot,
 } from '@neondatabase/config';
 
-import { resolveDevEnv } from './env.js';
+import { DevEnvMismatchError, resolveDevEnv } from './env.js';
 
 const PROJECT_ID = 'patient-art-12345';
 const BRANCH_ID = 'br-main-00000001';
@@ -232,7 +232,7 @@ describe('resolveDevEnv', () => {
     expect(result.NEON_AUTH_BASE_URL).toBeUndefined();
   });
 
-  it('tier 2 with Auth integration present: still only Postgres URLs (auth is not surfaced)', async () => {
+  it('tier 2 with Auth integration present: surfaces NEON_AUTH_BASE_URL too', async () => {
     const api = new FakeNeonApi({
       getNeonAuth: async () => ({
         projectId: 'auth-project',
@@ -241,12 +241,11 @@ describe('resolveDevEnv', () => {
       }),
     });
 
-    // Tier 2 derives its config from `pullConfig`, whose `buildPulledBranchConfig`
-    // never emits an `auth` block. `resolveConfig` therefore resolves `authEnabled`
-    // to `false`, so `fetchEnv` never calls `getNeonAuth` and NEON_AUTH_BASE_URL is
-    // not injected — even when a live Neon Auth integration exists on the branch.
-    // Enabling auth requires a tier-1 `neon.ts` policy that returns `auth: {}`
-    // (covered by the tier-1 test below).
+    // Tier 2 derives its config from `pullConfig`, which now reverse-engineers the
+    // branch's Auth / Data API enablement into `config.auth` / `config.dataApi`. So
+    // `resolveConfig` sees `authEnabled === true`, `fetchEnv` calls `getNeonAuth`,
+    // and NEON_AUTH_BASE_URL is injected from the branch's live state — without any
+    // neon.ts. This mirrors what the deployed function would receive.
     const result = await resolveDevEnv({
       cwd,
       projectId: PROJECT_ID,
@@ -257,8 +256,9 @@ describe('resolveDevEnv', () => {
     expect(Object.keys(result).sort()).toEqual([
       'DATABASE_URL',
       'DATABASE_URL_UNPOOLED',
+      'NEON_AUTH_BASE_URL',
     ]);
-    expect(result.NEON_AUTH_BASE_URL).toBeUndefined();
+    expect(result.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
   });
 
   it('tier 1: a neon.ts policy enabling auth -> DATABASE_URL and NEON_AUTH_BASE_URL', async () => {
@@ -284,6 +284,65 @@ describe('resolveDevEnv', () => {
 
     expect(result.DATABASE_URL).toBeDefined();
     expect(result.DATABASE_URL_UNPOOLED).toBeDefined();
+    expect(result.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
+  });
+
+  it('tier 1 mismatch: neon.ts enables auth the branch lacks -> throws DevEnvMismatchError', async () => {
+    writeFileSync(
+      join(cwd, 'neon.ts'),
+      'export default () => ({ auth: {} });\n',
+    );
+
+    // The branch has NO Auth integration (default `getNeonAuth` -> null), so
+    // `plan` reports an `enable-auth` create: the policy declares a resource the
+    // branch is missing. `dev` must stop and point the user at `neonctl deploy`.
+    const api = new FakeNeonApi();
+
+    await expect(
+      resolveDevEnv({
+        cwd,
+        projectId: PROJECT_ID,
+        branchId: BRANCH_ID,
+        api,
+      }),
+    ).rejects.toBeInstanceOf(DevEnvMismatchError);
+  });
+
+  it('tier 1 mismatch error: names the missing resource and points at deploy', async () => {
+    writeFileSync(
+      join(cwd, 'neon.ts'),
+      'export default () => ({ auth: {} });\n',
+    );
+    const api = new FakeNeonApi();
+
+    await expect(
+      resolveDevEnv({ cwd, projectId: PROJECT_ID, branchId: BRANCH_ID, api }),
+    ).rejects.toThrow(/auth.*neonctl deploy/s);
+  });
+
+  it('tier 1 match: neon.ts enables auth the branch already has -> injects, no throw', async () => {
+    writeFileSync(
+      join(cwd, 'neon.ts'),
+      'export default () => ({ auth: {} });\n',
+    );
+
+    // The branch already has the Auth integration, so `plan` reports no missing
+    // resource and `dev` injects NEON_AUTH_BASE_URL.
+    const api = new FakeNeonApi({
+      getNeonAuth: async () => ({
+        projectId: 'auth-project',
+        jwksUrl: 'https://auth.fake.neon.tech/.well-known/jwks.json',
+        baseUrl: 'https://auth.fake.neon.tech',
+      }),
+    });
+
+    const result = await resolveDevEnv({
+      cwd,
+      projectId: PROJECT_ID,
+      branchId: BRANCH_ID,
+      api,
+    });
+
     expect(result.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
   });
 
