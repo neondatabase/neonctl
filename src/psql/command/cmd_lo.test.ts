@@ -119,9 +119,32 @@ const mkCtx = (
     cmdName,
     queryBuf: '',
     rawArgs,
+    // Mirrors the real OT_NORMAL slash lexer closely enough for these tests:
+    // skips leading whitespace, treats a single-quoted span as ONE token
+    // (with `''` → `'`), otherwise reads up to the next whitespace. This is
+    // what lets us prove `\lo_import` reads the comment as the lexed token
+    // *after* the file (not the whole raw line).
     nextArg: (): string | null => {
       while (cursor < rawArgs.length && /\s/.test(rawArgs[cursor])) cursor++;
       if (cursor >= rawArgs.length) return null;
+      if (rawArgs[cursor] === "'") {
+        cursor++;
+        let token = '';
+        while (cursor < rawArgs.length) {
+          if (rawArgs[cursor] === "'") {
+            if (rawArgs[cursor + 1] === "'") {
+              token += "'";
+              cursor += 2;
+              continue;
+            }
+            cursor++;
+            break;
+          }
+          token += rawArgs[cursor];
+          cursor++;
+        }
+        return token;
+      }
       const start = cursor;
       while (cursor < rawArgs.length && !/\s/.test(rawArgs[cursor])) cursor++;
       return rawArgs.slice(start, cursor);
@@ -327,9 +350,10 @@ describe('cmd_lo — \\lo_import', () => {
       ],
       spy,
     );
+    // Quoted comment is a single lexed token AFTER the file argument.
     const ctx = mkCtx(
       'lo_import',
-      `${filePath} my comment with ' inside`,
+      `${filePath} 'my comment with '' inside'`,
       mkSettings(conn),
     );
 
@@ -340,6 +364,35 @@ describe('cmd_lo — \\lo_import', () => {
       "COMMENT ON LARGE OBJECT 42 IS 'my comment with '' inside'",
     );
     expect(stdoutChunks.join('')).toMatch(/lo_import 42/);
+  });
+
+  test('comment is the lexed token after the file, not the whole line', async () => {
+    const filePath = path.join(tmpDir, 'lo-src-bare.bin');
+    await fs.writeFile(filePath, Buffer.from([1, 2, 3]));
+
+    const spy = { queries: [], execs: [] } as {
+      queries: QueryCall[];
+      execs: string[];
+    };
+    const conn = mkConn(
+      [
+        {
+          match: (sql) => sql.includes('lo_from_bytea'),
+          rs: mkResultSet(['lo_from_bytea'], [[42]]),
+        },
+      ],
+      spy,
+    );
+    // An unquoted multi-word "comment" — psql's OT_NORMAL reads only the first
+    // token (`hello`), and crucially the filename must NOT leak into it (the
+    // old `restOfLine()` returned the entire raw line including the path).
+    const ctx = mkCtx('lo_import', `${filePath} hello world`, mkSettings(conn));
+
+    const r = await cmdLoImport.run(ctx);
+    expect(r.status).toBe('ok');
+    expect(spy.execs.length).toBe(1);
+    expect(spy.execs[0]).toBe("COMMENT ON LARGE OBJECT 42 IS 'hello'");
+    expect(spy.execs[0]).not.toContain(filePath);
   });
 
   test('missing file argument → error', async () => {

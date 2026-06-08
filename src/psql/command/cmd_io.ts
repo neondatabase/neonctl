@@ -514,8 +514,8 @@ const openWriter = (target: string): QueryFoutEntry => {
   // openSync catches OPEN failures synchronously, but a WRITE-time failure
   // (ENOSPC / EDQUOT after a clean open, e.g. a multi-MB result to a
   // quota-limited fs) emits an asynchronous 'error'. Without a listener Node
-  // re-raises it as an uncaught exception and kills the whole neonctl process
-  // (review item #17). Capture it; close() surfaces it to the caller.
+  // re-raises it as an uncaught exception and kills the whole neonctl process.
+  // Capture it; close() surfaces it to the caller.
   let writeError: Error | null = null;
   stream.on('error', (err: Error) => {
     writeError = writeError ?? err;
@@ -857,7 +857,7 @@ const runInclude = async (
   // -c/-f/stdin path: the latter (`executeInputString`) does not drain the
   // `\i` input queue, so an `enqueueInput()` here would (a) never run under
   // -f/-c and (b) double-run interactively (the mainloop drains the queue
-  // AND we run execSimple). See review item #2.
+  // AND we run execSimple). See.
   if (!ctx.settings.db) {
     return errResult(ctx, 'no connection to the server');
   }
@@ -1125,7 +1125,11 @@ const runGCore = async (
     // quoted). The conformance corpus exercises `format=`,
     // `csv_fieldsep=`, and `title=` only.
     psetOverrides = parseGPsetOptions(rawTrimmed.slice(1, close).trim());
-    target = null;
+    // Anything after the matching `)` is the output target — `\g (format=csv)
+    // out.txt` writes to out.txt. Previously this was dropped, so the file/pipe
+    // redirect was silently ignored whenever options were present.
+    const afterParen = rawTrimmed.slice(close + 1).trim();
+    target = afterParen.length > 0 ? afterParen : null;
   } else {
     target = ctx.nextArg('filepipe');
   }
@@ -2098,7 +2102,7 @@ const openWatchPager = (): WatchPagerHandle | null => {
         // If the pager already exited (e.g. PSQL_WATCH_PAGER=false, or the
         // user quit it) the 'close'/'error' events have ALREADY fired, so a
         // freshly-registered `once()` listener would never run and close()
-        // would hang forever — taking `\watch` with it (review item #18).
+        // would hang forever — taking `\watch` with it.
         if (child.exitCode !== null || child.signalCode !== null) {
           resolve();
           return;

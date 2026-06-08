@@ -135,6 +135,20 @@ describe('tokenize', () => {
     expect(tokenize('\\!').map((x) => x.text)).toEqual(['\\!']);
   });
 
+  it('folds a trailing `+` suffix into the backslash word', () => {
+    // `\dt+ foo` must tokenize as ['\\dt+', 'foo'] — not ['\\dt', '+', 'foo'] —
+    // so describe completion rules that key on `prevWords.length === 1` fire.
+    expect(tokenize('\\dt+ mytable').map((x) => x.text)).toEqual([
+      '\\dt+',
+      'mytable',
+    ]);
+    // The `S` (system) suffix is a letter, so `\dtS+` stays one token too.
+    expect(tokenize('\\dtS+ foo').map((x) => x.text)).toEqual([
+      '\\dtS+',
+      'foo',
+    ]);
+  });
+
   it('separates punctuation', () => {
     const t = tokenize('SELECT a, b FROM x;');
     expect(t.map((x) => x.text)).toEqual([
@@ -195,6 +209,13 @@ describe('splitForCompletion', () => {
   it('handles backslash command + arg-in-progress', () => {
     const r = splitForCompletion('\\dt my_', 7);
     expect(r.prevWords).toEqual(['\\dt']);
+    expect(r.currentWord).toBe('my_');
+    expect(r.replaceLength).toBe(3);
+  });
+
+  it('keeps a `+`-suffixed backslash command as the only prev word', () => {
+    const r = splitForCompletion('\\dt+ my_', 8);
+    expect(r.prevWords).toEqual(['\\dt+']);
     expect(r.currentWord).toBe('my_');
     expect(r.replaceLength).toBe(3);
   });

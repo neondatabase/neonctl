@@ -511,7 +511,7 @@ const makeDescribeCmd = (baseName: string): BackslashCmdSpec => ({
     // try a per-relation detail; otherwise list.
     if (pattern && !/[*?]/.test(pattern)) {
       // Pass the raw pattern straight through — lookupOneRelation folds /
-      // dequotes / splits schema.name via processSQLNamePattern (review #22).
+      // dequotes / splits schema.name via processSQLNamePattern.
       try {
         const rel = await lookupOneRelation(c, pattern);
         if (rel) {
@@ -1993,8 +1993,12 @@ export const registerDescribeCommands = (registry: BackslashRegistry): void => {
   // Descriptions.
   registry.register(cmdObjectDescription);
 
-  // Databases.
+  // Databases. `\l`/`\list` plus their `+` (verbose) variants — the scanner
+  // folds the trailing `+` into the command name, so `\l+` needs its own
+  // registration or it dispatches to nothing. `decodeSuffix`
+  // reads the verbose flag back off `ctx.cmdName` at runtime.
   registry.register(cmdListAllDbs);
+  registry.register({ ...cmdListAllDbs, name: 'l+', aliases: ['list+'] });
 
   // Config / event triggers / extensions / large objects.
   registry.register(cmdDescribeConfigParams);

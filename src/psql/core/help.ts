@@ -864,8 +864,8 @@ const writeEntry = (out: NodeJS.WritableStream, entry: SqlHelpEntry): void => {
  * Behaviour matches upstream psql:
  *   - No topic        → list every command name in fixed-width columns.
  *   - Unknown topic   → "No help available for ..." hint.
- *   - Multiple matches → list the matching command names.
- *   - Exactly one match → render its synopsis.
+ *   - One or more prefix matches → render the full synopsis of each match
+ *     (blank-line separated), exactly as upstream does.
  *
  * Lookups are case-insensitive and prefix-matched per token. "create t"
  * matches CREATE TABLE / CREATE TRIGGER / CREATE TYPE.
@@ -894,12 +894,12 @@ export const helpSQL = (
     );
     return;
   }
-  if (matches.length === 1) {
-    writeEntry(out, matches[0]);
-    return;
-  }
-  out.write(`Several matches for "${topic}":\n`);
-  for (const m of matches) {
-    out.write(`  ${m.cmd}\n`);
-  }
+  // psql has no "several matches" name listing — it prints the full help
+  // block for every command whose name prefix-matches the topic, whether one
+  // or many. Blocks are separated by a blank line, mirroring
+  // upstream's trailing newline after each entry's `URL:` line.
+  matches.forEach((m, idx) => {
+    if (idx > 0) out.write('\n');
+    writeEntry(out, m);
+  });
 };

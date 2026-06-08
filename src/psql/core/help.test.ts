@@ -287,16 +287,19 @@ describe('helpSQL', () => {
     expect(mixed).toBe(upper);
   });
 
-  it('lists matches for ambiguous prefix `\\h CREATE T`', () => {
+  it('renders a full block per match for ambiguous prefix `\\h CREATE T`', () => {
     const out = collect((s) => {
       helpSQL(s as unknown as NodeJS.WritableStream, 'CREATE T', 80);
     });
-    expect(out).toContain('Several matches for "CREATE T":');
-    expect(out).toContain('  CREATE TABLE');
-    expect(out).toContain('  CREATE TRIGGER');
-    expect(out).toContain('  CREATE TYPE');
+    // psql prints the full synopsis of every prefix match, not a name list.
+    expect(out).not.toContain('Several matches');
+    expect(out).toContain('Command:     CREATE TABLE');
+    expect(out).toContain('Command:     CREATE TRIGGER');
+    expect(out).toContain('Command:     CREATE TYPE');
+    // Each block carries its Syntax/URL detail.
+    expect(out).toContain('Syntax:');
     // CREATE FUNCTION starts with F, not T, so must not appear here.
-    expect(out).not.toContain('  CREATE FUNCTION');
+    expect(out).not.toContain('Command:     CREATE FUNCTION');
   });
 
   it('emits the "no help" message for an unknown topic', () => {
@@ -311,10 +314,10 @@ describe('helpSQL', () => {
     const out = collect((s) => {
       helpSQL(s as unknown as NodeJS.WritableStream, 'create p', 80);
     });
-    expect(out).toContain('Several matches for "create p":');
-    expect(out).toContain('CREATE PROCEDURE');
-    expect(out).toContain('CREATE POLICY');
-    expect(out).toContain('CREATE PUBLICATION');
+    expect(out).not.toContain('Several matches');
+    expect(out).toContain('Command:     CREATE PROCEDURE');
+    expect(out).toContain('Command:     CREATE POLICY');
+    expect(out).toContain('Command:     CREATE PUBLICATION');
   });
 
   it('resolves to a single entry when the full multi-word name is given', () => {

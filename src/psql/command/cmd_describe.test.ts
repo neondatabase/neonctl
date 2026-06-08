@@ -350,6 +350,33 @@ describe('cmd_describe', () => {
     expect(stdoutChunks.join('')).toContain('postgres');
   });
 
+  it('\\l+ and \\list+ are registered and add verbose columns', async () => {
+    const r = buildRegistry();
+    // Both the `+` form and its `list+` alias must resolve — the scanner
+    // folds the trailing `+` into the command name, so each needs its own
+    // registration.
+    expect(r.lookup('l+')).toBeDefined();
+    expect(r.lookup('list+')).toBeDefined();
+
+    const spy: QuerySpy[] = [];
+    const conn = mkConnection(
+      [
+        {
+          match: (s) => s.includes('FROM pg_catalog.pg_database'),
+          rs: mkResultSet(['Name', 'Size'], [['postgres', '8553 kB']]),
+        },
+      ],
+      spy,
+    );
+    const spec = mustLookup(r, 'l+');
+    const ctx = mkCtx('l+', '', mkSettings(conn));
+    const res = await spec.run(ctx);
+    expect(res.status).toBe('ok');
+    // verbose=true → the Size/Tablespace/Description columns are projected.
+    expect(spy[0].sql).toContain('pg_database_size');
+    expect(spy[0].sql).toContain('"Size"');
+  });
+
   it('\\dx lists extensions', async () => {
     const spy: QuerySpy[] = [];
     const conn = mkConnection(

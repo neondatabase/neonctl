@@ -203,6 +203,12 @@ export const tokenize = (input: string): Token[] => {
         i++;
       } else {
         while (i < input.length && /[A-Za-z_]/.test(input[i])) i++;
+        // Fold a trailing `+` run (the verbose suffix) into the command word
+        // so `\dt+ <TAB>` tokenizes as a single word and the describe rules
+        // that key on `prevWords.length === 1` still fire. The
+        // `S` (system-objects) suffix is already a letter, so it's consumed
+        // above; only `+` needs explicit handling here.
+        while (i < input.length && input[i] === '+') i++;
       }
       out.push({
         text: input.slice(start, i),

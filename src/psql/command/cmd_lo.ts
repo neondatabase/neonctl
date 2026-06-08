@@ -202,11 +202,14 @@ export const cmdLoImport: BackslashCmdSpec = {
       ctx.settings.lastErrorResult = { message: 'missing required argument' };
       return { status: 'error' };
     }
-    // Comment is the rest of the line (raw), trimmed. Upstream reads the
-    // remaining slash-arg lexed token, but for typical psql usage that
-    // means everything after the file is the comment string.
-    const commentRaw = ctx.restOfLine().trim();
-    const comment = commentRaw.length > 0 ? commentRaw : null;
+    // Comment is the next lexed slash-arg token, mirroring upstream
+    // `do_lo_import`'s second `psql_scan_slash_option(OT_NORMAL)`. Using the
+    // lexer (not the raw line) means it picks up the token AFTER the file —
+    // `restOfLine()` ignored the read cursor and re-included the filename
+    // itself in the comment.
+    const commentRaw = ctx.nextArg('normal');
+    const comment =
+      commentRaw !== null && commentRaw.length > 0 ? commentRaw : null;
 
     let bytes: Buffer;
     try {

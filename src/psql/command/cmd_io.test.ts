@@ -418,6 +418,24 @@ describe('\\g', () => {
     expect(conn.history).toEqual([]);
   });
 
+  test('`\\g (options) FILE` applies pset overrides AND honours the file target', async () => {
+    const conn = makeMockConn();
+    conn.reply = () => [rs(['a', 'b'], [[1, 2]])];
+    const s = makeSettings(conn);
+    const file = tmpFile();
+    // Previously the file after `)` was dropped, so output leaked to stdout
+    // and the file stayed empty. The format=csv override must also apply.
+    const ctx = makeMockCtx('g', `(format=csv) ${file}`, s, 'select a, b');
+    const r = await run(cmdG, ctx);
+    expect(r.status).toBe('reset-buf');
+    const written = await fs.readFile(file, 'utf8');
+    // CSV format → comma-separated header + row, proving the override applied.
+    expect(written).toBe('a,b\n1,2\n');
+    // Nothing should have leaked to stdout, and the redirect must not persist.
+    expect(stdout()).not.toMatch(/1,2/);
+    expect(getQueryFout(s)).toBeNull();
+  });
+
   test('no connection yields an error', async () => {
     const s = makeSettings();
     const ctx = makeMockCtx('g', '', s, 'select 1');
@@ -1547,7 +1565,7 @@ describe('\\i / \\include', () => {
     expect(conn.history).toEqual(['select 1;']);
     // `\i` executes the file exactly once, via execSimple here. It must NOT
     // also enqueue: under the interactive mainloop the queue is drained too,
-    // which would double-run the file (review item #2).
+    // which would double-run the file.
     expect(inputQueueSize()).toBe(0);
   });
 
