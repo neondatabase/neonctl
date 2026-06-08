@@ -84,6 +84,8 @@ exports[`functions > deploy errors when the entry file is missing 1`] = `""`;
 
 exports[`functions > deploy fails cleanly when bundling fails 1`] = `""`;
 
+exports[`functions > deploy rejects a hyphenated slug 1`] = `""`;
+
 exports[`functions > deploy rejects an invalid slug 1`] = `""`;
 
 exports[`functions > deploy rejects malformed --env 1`] = `""`;

@@ -34,9 +34,9 @@ const DEPLOYMENT_FIELDS = [
   'created_at',
 ] as const;
 
-const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
+const SLUG_PATTERN = /^[a-z0-9]{1,20}$/;
 const SLUG_HELP =
-  'Use 1-40 lowercase letters, digits, and hyphens; it must start and end with a letter or digit.';
+  'Use 1-20 lowercase letters and digits (no hyphens or other characters).';
 const MEMORY_CHOICES = [256, 512, 1024, 2048, 4096, 8192];
 
 // Overridable so tests can poll fast; defaults to 2s in real use.
@@ -72,7 +72,7 @@ export const builder = (argv: yargs.Argv) =>
       (yargs) =>
         yargs
           .positional('slug', {
-            describe: 'Function slug (lowercase DNS label)',
+            describe: 'Function slug (1-20 lowercase letters and digits)',
             type: 'string',
             demandOption: true,
           })
