@@ -1,0 +1,5 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`dev > exits 1 when --source is missing 1`] = `""`;
+
+exports[`dev > exits 1 when --source points at a file that does not exist 1`] = `""`;
