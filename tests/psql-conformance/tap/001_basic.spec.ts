@@ -101,6 +101,15 @@ const expectPsqlLike = async (
  * Mirror of upstream's `psql_fails_like($node, $sql, $regex, $name)`
  * — runs the SQL via stdin and asserts non-zero exit + stderr matches.
  *
+ * Runs with `ON_ERROR_STOP=1`, matching upstream: `psql_fails_like` goes
+ * through `PostgreSQL::Test::Cluster::psql`, whose default is
+ * `on_error_stop => 1`. That default is load-bearing here — psql exits 0
+ * from a piped script even when a statement (or backslash command) fails,
+ * UNLESS ON_ERROR_STOP is set, in which case it stops and exits 3. Without
+ * it, the non-zero-exit assertion below would be wrong (verified against
+ * psql 18.4: `printf 'SELECT 3 \watch m=x\n' | psql` exits 0, but with
+ * `-v ON_ERROR_STOP=1` it exits 3).
+ *
  * `timeoutMs` lets pipeline / COPY tests bound the child quickly:
  * upstream relies on `IPC::Run` to drain stdin and reap the process,
  * but our TS impl can hang waiting for stdin in some COPY-in-pipeline
@@ -121,6 +130,7 @@ const expectPsqlFailsLike = async (
       launcher: paths.launcher,
       uri,
       script: sql,
+      extraArgs: ['-v', 'ON_ERROR_STOP=1'],
       timeoutMs: opts.timeoutMs,
     });
   } catch (err) {
@@ -346,6 +356,10 @@ describe.skipIf(!SHOULD_RUN_INTEGRATION)('tap/001_basic', () => {
         launcher: paths.launcher,
         uri,
         script: '\\timing on\nSELECT error',
+        // Upstream's `$node->psql` defaults to on_error_stop => 1; that's what
+        // turns the failing SELECT into a non-zero exit (a piped script
+        // without it exits 0 even on error).
+        extraArgs: ['-v', 'ON_ERROR_STOP=1'],
       });
       // Upstream: ret != 0 (query failed), `Time:` line printed, and
       // it is NOT exactly 0.000 ms.
