@@ -144,6 +144,17 @@ describe('readEnvFile', () => {
     });
   });
 
+  it('keeps `=` characters inside a value', () => {
+    const path = join(cwd, '.env');
+    writeFileSync(
+      path,
+      'DATABASE_URL=postgres://u:p@h/db?sslmode=require&options=-c%20a=b\n',
+    );
+    expect(readEnvFile(path).DATABASE_URL).toBe(
+      'postgres://u:p@h/db?sslmode=require&options=-c%20a=b',
+    );
+  });
+
   it('throws when the file does not exist', () => {
     expect(() => readEnvFile(join(cwd, 'missing.env'))).toThrow(
       /Env file not found/,
