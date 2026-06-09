@@ -106,28 +106,59 @@ export const resolveNeonEnvVars = async (
 };
 
 /**
+ * The outcome of {@link resolveDevEnv}: the resolved Neon branch vars plus, when none could
+ * be injected, a calm and actionable `skipped` reason for the dev server to surface. We
+ * return the reason rather than logging it here so the imperative shell (`neon dev`) can
+ * present it in context (in the banner, next to the URLs) — keeping this resolver a pure
+ * "compute what env we have" function.
+ */
+export type DevEnvResolution = {
+  /** Neon branch env vars to inject (DATABASE_URL[_UNPOOLED], NEON_AUTH_BASE_URL, …). */
+  vars: Record<string, string>;
+  /**
+   * Present only when `vars` is empty *because* resolution was skipped/degraded (not when
+   * the branch legitimately has no extra services). A short, actionable explanation.
+   */
+  skipped?: { reason: string };
+};
+
+/**
  * `neon dev`'s env resolver: {@link resolveNeonEnvVars} with graceful degradation.
- * A missing branch context or any failure (no Neon account, no `.neon`, no network)
- * logs a warning and returns `{}` so the function still runs locally; only a
- * {@link DevEnvMismatchError} (policy declares a resource the branch lacks) is
- * re-thrown for the caller to surface.
+ *
+ * - Success → `{ vars }` (possibly just the always-present Postgres URLs).
+ * - No linked branch / project → `{ vars: {}, skipped }` with a "link a branch" hint; the
+ *   function still runs locally, just without Neon env.
+ * - Any other failure (offline, transient API error) → `{ vars: {}, skipped }` naming the
+ *   cause; again non-fatal.
+ * - {@link DevEnvMismatchError} (policy declares a secret-bearing service the branch lacks)
+ *   is the one hard stop and is re-thrown for the caller to surface.
  */
 export const resolveDevEnv = async (
   ctx: DevEnvContext,
-): Promise<Record<string, string>> => {
+): Promise<DevEnvResolution> => {
   try {
-    return await resolveNeonEnvVars(ctx);
+    return { vars: await resolveNeonEnvVars(ctx) };
   } catch (err) {
     if (err instanceof DevEnvMismatchError) throw err;
     if (err instanceof MissingBranchContextError) {
       log.debug('dev: %s; skipping env injection', err.message);
-      return {};
+      return {
+        vars: {},
+        skipped: {
+          reason:
+            'no linked Neon branch — run `neonctl link`, then ' +
+            '`neonctl checkout <branch>`, to inject DATABASE_URL and friends',
+        },
+      };
     }
-    log.warning(
-      'Could not inject Neon env vars; the function will run without them: %s',
-      err instanceof Error ? err.message : String(err),
-    );
-    return {};
+    const detail = err instanceof Error ? err.message : String(err);
+    log.debug('dev: env resolution failed: %s', detail);
+    return {
+      vars: {},
+      skipped: {
+        reason: `could not reach Neon (${detail}); running without Neon env`,
+      },
+    };
   }
 };
 
