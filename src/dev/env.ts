@@ -35,65 +35,87 @@ export class DevEnvMismatchError extends Error {
 }
 
 /**
- * Resolve the Neon env vars to inject into a locally-served function, mirroring
- * what the deployed function would receive for the selected branch (pooled /
- * direct `DATABASE_URL`, plus Auth / Data API when enabled).
+ * Signals that no project/branch context could be resolved, so there is nothing to
+ * resolve env from. `resolveDevEnv` degrades on this (dev runs without injection);
+ * `env pull` surfaces it (an explicit pull needs a branch).
+ */
+export class MissingBranchContextError extends Error {
+  override readonly name = 'MissingBranchContextError';
+}
+
+/**
+ * Resolve the branch's Neon env vars (pooled / direct `DATABASE_URL`, plus Auth /
+ * Data API when enabled) into a `{ KEY: value }` map. Shared by `neon dev` (which
+ * injects them) and `neon env pull` (which writes them to a `.env` file).
  *
  * Tiered:
  *
- *   1. a `neon.ts` policy is found -> the policy is the source of truth for what
- *      the function *wants*. We first check the policy against the branch's live
- *      state (`plan`); if the policy declares a resource the branch is missing,
- *      we stop with a {@link DevEnvMismatchError} pointing the user at
- *      `neonctl deploy`. Otherwise `fetchEnv` evaluates the policy and injects.
+ *   1. a `neon.ts` policy is found -> the policy is the source of truth. We first
+ *      check it against the branch's live state (`plan`); if it declares a resource
+ *      the branch is missing, we stop with a {@link DevEnvMismatchError} pointing at
+ *      `neonctl deploy`. Otherwise `fetchEnv` evaluates the policy.
  *   2. no `neon.ts`, but a project + branch are known -> `pullConfig` reads the
- *      branch's live state (incl. Auth / Data API enablement) into a config,
- *      then `fetchEnv` injects what is actually enabled, silently.
- *   3. otherwise -> inject nothing.
+ *      branch's live state (incl. Auth / Data API enablement) into a config, then
+ *      `fetchEnv` resolves what is actually enabled.
+ *   3. otherwise -> throw {@link MissingBranchContextError}.
  *
- * Every failure **except** {@link DevEnvMismatchError} degrades gracefully: it
- * logs a warning and returns `{}` so the function still runs (no Neon account,
- * no `.neon`, no network). A mismatch is re-thrown for the caller to surface.
+ * Unlike {@link resolveDevEnv}, this never swallows errors — callers decide how to
+ * handle them.
+ */
+export const resolveNeonEnvVars = async (
+  ctx: DevEnvContext,
+): Promise<Record<string, string>> => {
+  const config = await loadNeonConfig(ctx.cwd);
+
+  if (config) {
+    if (!ctx.projectId || !ctx.branchId) {
+      throw new MissingBranchContextError(
+        'Found a neon.ts but could not resolve the project/branch. ' +
+          'Run `neonctl link` and `neonctl checkout <branch>`, or pass ' +
+          '--project-id / --branch.',
+      );
+    }
+    await assertPolicyMatchesBranch(config, ctx);
+    return await fetchAndProject(config, ctx);
+  }
+
+  if (ctx.projectId && ctx.branchId) {
+    const pulled = await pullConfig({
+      projectId: ctx.projectId,
+      branchId: ctx.branchId,
+      ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
+      ...(ctx.api ? { api: ctx.api } : {}),
+    });
+    return await fetchAndProject(
+      defineConfig(() => pulled.config),
+      ctx,
+    );
+  }
+
+  throw new MissingBranchContextError(
+    'No project/branch context found. Link a branch (`neonctl link` / ' +
+      '`neonctl checkout`) or pass --project-id and --branch.',
+  );
+};
+
+/**
+ * `neon dev`'s env resolver: {@link resolveNeonEnvVars} with graceful degradation.
+ * A missing branch context or any failure (no Neon account, no `.neon`, no network)
+ * logs a warning and returns `{}` so the function still runs locally; only a
+ * {@link DevEnvMismatchError} (policy declares a resource the branch lacks) is
+ * re-thrown for the caller to surface.
  */
 export const resolveDevEnv = async (
   ctx: DevEnvContext,
 ): Promise<Record<string, string>> => {
   try {
-    const config = await loadNeonConfig(ctx.cwd);
-
-    if (config) {
-      if (!ctx.projectId || !ctx.branchId) {
-        log.warning(
-          'Found a neon.ts but could not resolve the project/branch to ' +
-            'inject env for. Run `neonctl link` and `neonctl checkout <branch>`.',
-        );
-        return {};
-      }
-      await assertPolicyMatchesBranch(config, ctx);
-      return await fetchAndProject(config, ctx);
-    }
-
-    if (ctx.projectId && ctx.branchId) {
-      const pulled = await pullConfig({
-        projectId: ctx.projectId,
-        branchId: ctx.branchId,
-        ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
-        ...(ctx.api ? { api: ctx.api } : {}),
-      });
-      const branchConfig = pulled.config;
-      return await fetchAndProject(
-        defineConfig(() => branchConfig),
-        ctx,
-      );
-    }
-
-    log.debug(
-      'dev: no neon.ts and no project/branch context; skipping env injection',
-    );
-    return {};
+    return await resolveNeonEnvVars(ctx);
   } catch (err) {
-    // A policy/branch mismatch is intentional and actionable — surface it.
     if (err instanceof DevEnvMismatchError) throw err;
+    if (err instanceof MissingBranchContextError) {
+      log.debug('dev: %s; skipping env injection', err.message);
+      return {};
+    }
     log.warning(
       'Could not inject Neon env vars; the function will run without them: %s',
       err instanceof Error ? err.message : String(err),

@@ -20,6 +20,7 @@ import * as functions from './functions.js';
 import * as dev from './dev.js';
 import * as config from './config.js';
 import * as deploy from './deploy.js';
+import * as env from './env.js';
 
 export default [
   auth,
@@ -44,4 +45,5 @@ export default [
   dev,
   config,
   deploy,
+  env,
 ];
