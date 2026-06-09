@@ -71,7 +71,10 @@ const bundleViaModule = async (
     .build({
       entryPoints: [source],
       bundle: true,
-      outfile: 'out.js',
+      // Emit `index.mjs` (not `out.js`): the Functions runtime imports the archive's entry
+      // by the conventional `index.{js,mjs}` name, and `.mjs` makes Node treat the ESM
+      // output as a module without needing a `package.json` type marker alongside it.
+      outfile: 'index.mjs',
       write: false,
       sourcemap: true,
       minify: true,
@@ -86,7 +89,7 @@ const bundleViaModule = async (
       );
     });
   const files = result.outputFiles ?? [];
-  // write:false with one entry always yields out.js + out.js.map; an empty set
+  // write:false with one entry always yields index.mjs + index.mjs.map; an empty set
   // means the API contract changed under us — fail loud rather than ship an
   // empty archive.
   if (files.length === 0) {
@@ -138,7 +141,7 @@ const bundleViaBinary = async (
 ): Promise<Record<string, Uint8Array>> => {
   const bin = resolveEsbuild();
   const outDir = mkdtempSync(join(tmpdir(), 'neon-fn-bundle-'));
-  const outfile = join(outDir, 'out.js');
+  const outfile = join(outDir, 'index.mjs');
   try {
     const { code, stderr } = await runEsbuild(bin, [
       source,
@@ -157,8 +160,8 @@ const bundleViaBinary = async (
       );
     }
     return {
-      'out.js': new Uint8Array(readFileSync(outfile)),
-      'out.js.map': new Uint8Array(readFileSync(`${outfile}.map`)),
+      'index.mjs': new Uint8Array(readFileSync(outfile)),
+      'index.mjs.map': new Uint8Array(readFileSync(`${outfile}.map`)),
     };
   } finally {
     rmSync(outDir, { recursive: true, force: true });
