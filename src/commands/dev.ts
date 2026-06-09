@@ -101,6 +101,8 @@ const runSingleSource = async (props: DevProps): Promise<void> => {
     label: null,
   };
 
+  // No config reload in single-source mode: there's exactly one file to serve, and
+  // nothing to add or remove. neon.ts hot-reload is config-mode only.
   await runSupervisor([unit]);
 };
 
@@ -110,15 +112,16 @@ const runSingleSource = async (props: DevProps): Promise<void> => {
  */
 const runFromConfig = async (props: DevProps): Promise<void> => {
   const branchId = await resolveBranchId(props);
-  const functions = await resolveFunctionsFromConfig(process.cwd());
+  const resolved = await resolveFunctionsFromConfig(process.cwd());
 
-  if (functions === null) {
+  if (resolved === null) {
     throw new Error(
       'No --source given and no neon.ts found. Pass --source <path> to run a ' +
         'single function, or add a neon.ts that declares functions under ' +
         '`preview.functions`.',
     );
   }
+  const { configPath, functions } = resolved;
   if (functions.length === 0) {
     throw new Error(
       'neon.ts has no functions to serve. Add at least one under ' +
@@ -133,16 +136,49 @@ const runFromConfig = async (props: DevProps): Promise<void> => {
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
   });
 
-  // Give each search-mode (no dev.port, non-portless) function a distinct search base so
-  // they don't all start probing at the same port. The runtime still walks upward from its
-  // base, so an occupied base self-resolves; the offset just makes startup deterministic.
+  const units = planFunctionsToUnits(functions, neonEnv, DEFAULT_PORT_BASE);
+
+  // Re-derive the units from neon.ts on demand so the config watcher can hot-add/remove
+  // functions without restarting the dev server. `searchBase` lets a freshly-added unit
+  // start probing above the ports already taken by live units (the runtime still walks
+  // upward from there, so this never fails — it just keeps startup deterministic).
+  const replan: Replan = async (searchBase) => {
+    const re = await resolveFunctionsFromConfig(process.cwd());
+    if (re === null) return null;
+    return planFunctionsToUnits(re.functions, neonEnv, searchBase);
+  };
+
+  await runSupervisor(units, { configPath, replan });
+};
+
+/** Re-resolve neon.ts into units, searching ports from `searchBase`. `null` if neon.ts vanished. */
+type Replan = (searchBase: number) => Promise<ServedUnit[] | null>;
+
+/** Extra wiring the supervisor needs to hot-reload neon.ts (config mode only). */
+type ConfigReload = {
+  configPath: string;
+  replan: Replan;
+};
+
+/**
+ * Map a list of {@link PlannedFunction}s to {@link ServedUnit}s, coordinating the search
+ * base across them so search-mode functions don't all probe the same starting port.
+ *
+ * Each search-mode (no `dev.port`, non-portless) function gets a distinct base starting at
+ * `searchBase`; the runtime still walks upward from its base, so an occupied base
+ * self-resolves and this never fails — the offset just makes startup deterministic.
+ */
+const planFunctionsToUnits = (
+  functions: PlannedFunction[],
+  neonEnv: Record<string, string>,
+  searchBase: number,
+): ServedUnit[] => {
   let searchOffset = 0;
-  const units = functions.map((fn) => {
-    const base = DEFAULT_PORT_BASE + searchOffset;
+  return functions.map((fn) => {
+    const base = searchBase + searchOffset;
     if (!fn.portless && fn.port === undefined) searchOffset += 1;
     return plannedToUnit(fn, neonEnv, base);
   });
-  await runSupervisor(units);
 };
 
 /**
@@ -214,6 +250,16 @@ const plannedToUnit = (
     bundleDir: join(process.cwd(), 'node_modules', '.neon-dev', fn.slug),
     childEnv,
     label: fn.slug,
+    // Signature of the function's *own* neon.ts config (NOT the dynamically-chosen search
+    // base) so reconcile can tell a real change from a no-op save. A search-mode function
+    // re-planned with a different base must hash identically, or it would be needlessly
+    // restarted — see reconcile().
+    configKey: JSON.stringify({
+      source: fn.source,
+      port: fn.port ?? null,
+      portless: fn.portless,
+      env: fn.env,
+    }),
     ...(fn.portless ? { portless: { slug: fn.slug } } : {}),
   };
 };
@@ -244,16 +290,22 @@ const buildChildEnv = (
  * One function being served locally. `slug`/`label` are null in single-source mode
  * (one unnamed server). `portless`, when set, wraps the child with `portless run`.
  */
-type ServedUnit = {
+export type ServedUnit = {
   slug: string | null;
   source: string;
   bundleDir: string;
   childEnv: NodeJS.ProcessEnv;
   label: string | null;
+  /**
+   * Signature of the function's own neon.ts config (source/port/portless/env), used by the
+   * config reconciler to detect a real change vs a no-op save. Independent of the dynamic
+   * port search base. Absent in single-source mode (no reconcile there).
+   */
+  configKey?: string;
   portless?: { slug: string };
 };
 
-type RunningUnit = {
+export type RunningUnit = {
   unit: ServedUnit;
   child: ChildProcess | null;
   boundPort: number | null;
@@ -272,8 +324,17 @@ const READY_PATTERN = /neon-dev:ready (\d+)/;
  * as errored and recovered on the next edit). A single SIGINT/SIGTERM shuts all of them
  * down, tree-killing each child so no descendant (e.g. a portless-wrapped runtime) is
  * orphaned.
+ *
+ * In config mode, `reload` lets the supervisor watch `neon.ts` and reconcile the live set
+ * of units when it changes: a newly-declared function is hot-added (its own child, watcher,
+ * and port) and a removed one is torn down — all without disturbing the functions that
+ * stayed the same. A function whose config (env/port/portless/source) changed is restarted
+ * in place; siblings are untouched.
  */
-const runSupervisor = async (units: ServedUnit[]): Promise<void> => {
+const runSupervisor = async (
+  units: ServedUnit[],
+  reload?: ConfigReload,
+): Promise<void> => {
   if (hasPortlessUnit(units)) {
     assertPortlessAvailable();
   }
@@ -281,15 +342,7 @@ const runSupervisor = async (units: ServedUnit[]): Promise<void> => {
   const runtimePath = resolveRuntimePath();
   let shuttingDown = false;
 
-  const running: RunningUnit[] = units.map((unit) => ({
-    unit,
-    child: null,
-    boundPort: null,
-    everReady: false,
-    restartTimer: null,
-    watcher: null,
-    status: 'starting',
-  }));
+  const running: RunningUnit[] = units.map(makeRunningUnit);
 
   const bundleAndStart = async (r: RunningUnit): Promise<void> => {
     let bundlePath: string;
@@ -358,44 +411,72 @@ const runSupervisor = async (units: ServedUnit[]): Promise<void> => {
     }, 150);
   };
 
-  // Create each watcher before its first bundle so bundleAndStart can sync the
-  // watch set on every run (including the initial one).
-  for (const r of running) {
+  // Bring a unit fully online: create its source watcher (before the first bundle so
+  // bundleAndStart can sync the watch set on every run) then bundle + spawn it.
+  const startUnit = async (r: RunningUnit): Promise<void> => {
     r.watcher = await startWatcher(r.unit.source, () => {
       restart(r);
     });
-  }
+    await bundleAndStart(r);
+  };
+
+  // Tear a unit down completely: stop its restart timer + watcher, reap its child tree, and
+  // remove its bundle dir. Used both on shutdown and when neon.ts drops a function.
+  const stopUnit = async (r: RunningUnit): Promise<void> => {
+    if (r.restartTimer) clearTimeout(r.restartTimer);
+    await r.watcher?.close();
+    if (r.child) await killTree(r.child);
+    rmSync(r.unit.bundleDir, { recursive: true, force: true });
+  };
 
   // Start every unit. They are independent: keep going if one fails.
-  await Promise.all(running.map((r) => bundleAndStart(r)));
+  await Promise.all(running.map((r) => startUnit(r)));
 
   if (running.every((r) => r.status === 'error')) {
-    await Promise.all(running.map((r) => r.watcher?.close()));
-    await Promise.all(
-      running.map((r) => (r.child ? killTree(r.child) : undefined)),
-    );
-    for (const r of running)
-      rmSync(r.unit.bundleDir, { recursive: true, force: true });
+    await Promise.all(running.map((r) => stopUnit(r)));
     throw new Error('No function started. See the output above for details.');
   }
 
   printBanner(running);
+
+  // Config mode only: watch neon.ts and reconcile the live unit set when it changes.
+  // Reconciles are serialized: a burst of saves (editor write-then-format) must not run
+  // overlapping diffs against the mutating `running` array. A trailing run coalesces the
+  // burst and picks up the latest config.
+  let configWatcher: Watcher | null = null;
+  if (reload) {
+    const ops: ReconcileOps = {
+      isShuttingDown: () => shuttingDown,
+      startUnit,
+      stopUnit,
+      restartUnit: restart,
+    };
+    let inFlight: Promise<void> | null = null;
+    let pending = false;
+    const drive = (): void => {
+      if (inFlight) {
+        pending = true;
+        return;
+      }
+      inFlight = (async () => {
+        do {
+          pending = false;
+          await reconcileOnce(running, reload.replan, ops);
+        } while (pending && !shuttingDown);
+      })().finally(() => {
+        inFlight = null;
+      });
+    };
+    configWatcher = await startConfigWatcher(reload.configPath, drive);
+  }
 
   await new Promise<void>((resolveRun) => {
     const shutdown = (): void => {
       if (shuttingDown) return;
       shuttingDown = true;
       void (async () => {
-        for (const r of running) {
-          if (r.restartTimer) clearTimeout(r.restartTimer);
-        }
-        await Promise.all(running.map((r) => r.watcher?.close()));
-        await Promise.all(
-          running.map((r) => (r.child ? killTree(r.child) : undefined)),
-        );
-        for (const r of running) {
-          rmSync(r.unit.bundleDir, { recursive: true, force: true });
-        }
+        await configWatcher?.close();
+        await Promise.all(running.map((r) => stopUnit(r)));
         log.info(chalk.dim('Stopped the dev server.'));
         resolveRun();
       })();
@@ -403,6 +484,147 @@ const runSupervisor = async (units: ServedUnit[]): Promise<void> => {
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
   });
+};
+
+const makeRunningUnit = (unit: ServedUnit): RunningUnit => ({
+  unit,
+  child: null,
+  boundPort: null,
+  everReady: false,
+  restartTimer: null,
+  watcher: null,
+  status: 'starting',
+});
+
+/** Lifecycle hooks the reconciler drives, supplied by {@link runSupervisor}. */
+type ReconcileOps = {
+  isShuttingDown: () => boolean;
+  startUnit: (r: RunningUnit) => Promise<void>;
+  stopUnit: (r: RunningUnit) => Promise<void>;
+  restartUnit: (r: RunningUnit) => void;
+};
+
+/**
+ * The converging actions of one reconcile, computed by the pure {@link diffUnits} and then
+ * carried out by {@link reconcileOnce}. Splitting the decision from the side effects keeps
+ * the slug-diff logic testable without spawning real children.
+ */
+export type ReconcilePlan = {
+  /** Live units whose slug disappeared from neon.ts — torn down. */
+  remove: RunningUnit[];
+  /** Live units whose function config changed — restarted in place (kept, not replaced). */
+  restart: RunningUnit[];
+  /** Units for slugs newly declared in neon.ts — hot-added. */
+  add: ServedUnit[];
+};
+
+/**
+ * Pure slug-keyed diff of the live units against the freshly-resolved desired set:
+ *   - a slug present now but not before → **add** (new child + watcher + port),
+ *   - a slug gone from neon.ts → **remove** (torn down),
+ *   - a slug whose config (source/port/portless/env) changed → **restart** in place,
+ *   - an unchanged slug → left out of the plan entirely (never touched).
+ * Functions that stayed the same never die, so an edit that only adds a function is
+ * non-disruptive. `desired === null` (neon.ts deleted) is treated as "no functions".
+ */
+export const diffUnits = (
+  running: RunningUnit[],
+  desired: ServedUnit[] | null,
+): ReconcilePlan => {
+  const desiredBySlug = new Map<string, ServedUnit>();
+  for (const u of desired ?? []) {
+    if (u.slug !== null) desiredBySlug.set(u.slug, u);
+  }
+  const runningBySlug = new Map<string, RunningUnit>();
+  for (const r of running) {
+    if (r.unit.slug !== null) runningBySlug.set(r.unit.slug, r);
+  }
+
+  const plan: ReconcilePlan = { remove: [], restart: [], add: [] };
+
+  for (const [slug, r] of runningBySlug) {
+    if (!desiredBySlug.has(slug)) plan.remove.push(r);
+  }
+  for (const [slug, want] of desiredBySlug) {
+    const r = runningBySlug.get(slug);
+    if (r) {
+      if (r.unit.configKey !== want.configKey) {
+        r.unit = want;
+        plan.restart.push(r);
+      }
+    } else {
+      plan.add.push(want);
+    }
+  }
+  return plan;
+};
+
+/**
+ * Run one reconcile: re-resolve neon.ts (ignoring the change with a clear message if it no
+ * longer loads), {@link diffUnits} against the live set, then apply the plan — tearing down
+ * removed functions, restarting changed ones in place, and hot-adding new ones. Mutates
+ * `running` in place so the surrounding supervisor sees the converged set.
+ */
+const reconcileOnce = async (
+  running: RunningUnit[],
+  replan: Replan,
+  ops: ReconcileOps,
+): Promise<void> => {
+  if (ops.isShuttingDown()) return;
+
+  let desired: ServedUnit[] | null;
+  try {
+    desired = await replan(nextSearchBase(running));
+  } catch (err) {
+    log.info(
+      chalk.red('neon.ts change ignored: ') +
+        (err instanceof Error ? err.message : String(err)) +
+        chalk.dim(' (fix it and save again)'),
+    );
+    return;
+  }
+  if (ops.isShuttingDown()) return;
+
+  if (hasPortlessUnit(desired ?? [])) assertPortlessAvailable();
+
+  const plan = diffUnits(running, desired);
+
+  for (const r of plan.remove) {
+    logUnit(r.unit, chalk.dim('removed from neon.ts, stopping…'));
+    await ops.stopUnit(r);
+    const idx = running.indexOf(r);
+    if (idx !== -1) running.splice(idx, 1);
+  }
+
+  for (const r of plan.restart) ops.restartUnit(r);
+
+  if (plan.add.length > 0) {
+    const added = plan.add.map((unit) => {
+      const r = makeRunningUnit(unit);
+      running.push(r);
+      logUnit(unit, chalk.dim('added in neon.ts, starting…'));
+      return r;
+    });
+    await Promise.all(added.map((r) => ops.startUnit(r)));
+    for (const r of added) {
+      if (r.status === 'ready') {
+        logUnit(r.unit, chalk.green('ready') + ` ${urlFor(r.boundPort)}`);
+      }
+    }
+  }
+};
+
+/**
+ * Choose a port search base above every port the live units already bound, so a hot-added
+ * search-mode function starts probing where there's room. The runtime still walks upward
+ * from here, so it never fails even if this guess is taken — it just keeps things tidy.
+ */
+const nextSearchBase = (running: RunningUnit[]): number => {
+  let max = DEFAULT_PORT_BASE - 1;
+  for (const r of running) {
+    if (r.boundPort !== null && r.boundPort > max) max = r.boundPort;
+  }
+  return max + 1;
 };
 
 const hasPortlessUnit = (units: ServedUnit[]): boolean =>
@@ -560,6 +782,27 @@ const startWatcher = async (
     return startDirectoryWatcher(chokidar, source, restart);
   }
   return startInputWatcher(chokidar, source, initialInputs, restart);
+};
+
+/**
+ * Watch the neon.ts file itself for changes, firing `onChange` on every save. Used by the
+ * supervisor (config mode only) to hot-add/remove/restart functions when the declared set
+ * changes. We watch the single config file rather than its import graph: editing neon.ts to
+ * add or remove a function is the case that matters, and a plain file watch is robust where
+ * the esbuild-based input resolution (built for function bundles) is not a fit for a
+ * jiti-loaded config.
+ */
+const startConfigWatcher = async (
+  configPath: string,
+  onChange: () => void,
+): Promise<Watcher> => {
+  const { default: chokidar } = await import('chokidar');
+  const watcher = chokidar.watch(configPath, { ignoreInitial: true });
+  await once(watcher, 'ready');
+  watcher.on('all', () => {
+    onChange();
+  });
+  return { sync: () => Promise.resolve(), close: () => watcher.close() };
 };
 
 type Chokidar = typeof import('chokidar').default;

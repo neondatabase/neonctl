@@ -41,7 +41,9 @@ describe('resolveFunctionsFromConfig', () => {
 
   it('returns an empty list when neon.ts declares no functions', async () => {
     writeWorkspace(cwd, 'export default {};\n', []);
-    await expect(resolveFunctionsFromConfig(cwd)).resolves.toEqual([]);
+    const resolved = await resolveFunctionsFromConfig(cwd);
+    expect(resolved?.functions).toEqual([]);
+    expect(resolved?.configPath).toBe(join(cwd, 'neon.ts'));
   });
 
   it('resolves each function with an absolute source and its dev settings', async () => {
@@ -59,8 +61,10 @@ describe('resolveFunctionsFromConfig', () => {
       ['hello.ts', 'api.ts', 'bare.ts'],
     );
 
-    const fns = await resolveFunctionsFromConfig(cwd);
-    expect(fns).not.toBeNull();
+    const resolved = await resolveFunctionsFromConfig(cwd);
+    expect(resolved).not.toBeNull();
+    expect(resolved?.configPath).toBe(join(cwd, 'neon.ts'));
+    const fns = resolved?.functions;
     const bySlug = Object.fromEntries((fns ?? []).map((f) => [f.slug, f]));
 
     expect(bySlug.hello).toMatchObject({
@@ -107,7 +111,7 @@ describe('resolveFunctionsFromConfig', () => {
       };\n`,
       ['e.ts'],
     );
-    const fns = await resolveFunctionsFromConfig(cwd);
-    expect(fns?.[0].env).toEqual({ FOO: 'bar' });
+    const resolved = await resolveFunctionsFromConfig(cwd);
+    expect(resolved?.functions[0].env).toEqual({ FOO: 'bar' });
   });
 });
