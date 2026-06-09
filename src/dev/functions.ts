@@ -24,6 +24,17 @@ export type PlannedFunction = {
 };
 
 /**
+ * The result of resolving `neon.ts`: the path to the config file that was loaded (so the
+ * dev server can watch it for hot-add/remove of functions) plus the {@link PlannedFunction}s
+ * it declares.
+ */
+export type ResolvedConfigFunctions = {
+  /** Absolute path to the loaded `neon.ts` (or `.mts`/`.js`/`.mjs`). */
+  configPath: string;
+  functions: PlannedFunction[];
+};
+
+/**
  * Load `neon.ts` (if any) and resolve the list of functions it declares into
  * {@link PlannedFunction}s for `neon dev` to serve. Returns `null` when there is no
  * `neon.ts` on the path from `cwd` up to the repo root — the caller turns that into a
@@ -35,18 +46,18 @@ export type PlannedFunction = {
 export const resolveFunctionsFromConfig = async (
   cwd: string,
   branchName?: string,
-): Promise<PlannedFunction[] | null> => {
+): Promise<ResolvedConfigFunctions | null> => {
   const loaded = await loadNeonConfig(cwd);
   if (!loaded) return null;
 
-  const { config, configDir } = loaded;
+  const { config, configDir, configPath } = loaded;
   const resolved = resolveConfig(config, {
     name: branchName ?? 'local',
     exists: branchName !== undefined,
   });
 
   const functions = resolved.preview?.functions ?? [];
-  return functions.map((fn) => {
+  const planned = functions.map((fn) => {
     const source = isAbsolute(fn.source)
       ? fn.source
       : resolve(configDir, fn.source);
@@ -67,6 +78,8 @@ export const resolveFunctionsFromConfig = async (
       env: { ...fn.env },
     };
   });
+
+  return { configPath, functions: planned };
 };
 
 /**
@@ -77,17 +90,22 @@ export const resolveFunctionsFromConfig = async (
 const devPort = (dev: FunctionDevConfig | undefined): number | undefined =>
   dev?.port;
 
-type LoadedConfig = { config: Config; configDir: string };
+type LoadedConfig = { config: Config; configDir: string; configPath: string };
 
 /**
- * Load a `neon.ts` policy if one exists, returning the loaded config and the directory
- * it lives in (used to resolve each function's relative `source`). Returns `null` when no
- * config file is found; surfaces real load errors (e.g. a syntax error).
+ * Load a `neon.ts` policy if one exists, returning the loaded config, the resolved path to
+ * the config file (used by the dev server to watch it), and the directory it lives in (used
+ * to resolve each function's relative `source`). Returns `null` when no config file is
+ * found; surfaces real load errors (e.g. a syntax error).
  */
 const loadNeonConfig = async (cwd: string): Promise<LoadedConfig | null> => {
   try {
     const { config, resolvedPath } = await loadConfigFromFile({ cwd });
-    return { config, configDir: dirname(resolvedPath) };
+    return {
+      config,
+      configDir: dirname(resolvedPath),
+      configPath: resolvedPath,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (/Could not find a Neon config file/i.test(message)) {
