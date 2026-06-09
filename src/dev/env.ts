@@ -1,5 +1,4 @@
 import {
-  defineConfig,
   loadConfigFromFile,
   type Config,
   type NeonApi,
@@ -86,10 +85,9 @@ export const resolveNeonEnvVars = async (
       ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
       ...(ctx.api ? { api: ctx.api } : {}),
     });
-    return await fetchAndProject(
-      defineConfig(() => pulled.config),
-      ctx,
-    );
+    // `pulled.config` is already a `Config` (static auth/dataApi toggles + a branch
+    // tuning closure), so it feeds straight into fetchEnv — no wrapping needed.
+    return await fetchAndProject(pulled.config, ctx);
   }
 
   throw new MissingBranchContextError(

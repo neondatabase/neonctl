@@ -201,10 +201,7 @@ describe('env pull', () => {
 
   it('includes NEON_AUTH_BASE_URL when the branch has Auth enabled', async () => {
     // A neon.ts that enables auth, plus a branch that actually has the integration.
-    writeFileSync(
-      join(cwd, 'neon.ts'),
-      'export default () => ({ auth: {} });\n',
-    );
+    writeFileSync(join(cwd, 'neon.ts'), 'export default { auth: {} };\n');
     const api = new FakeNeonApi({
       getNeonAuth: async () => ({
         projectId: 'auth-project',

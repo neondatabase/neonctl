@@ -262,10 +262,7 @@ describe('resolveDevEnv', () => {
   });
 
   it('tier 1: a neon.ts policy enabling auth -> DATABASE_URL and NEON_AUTH_BASE_URL', async () => {
-    writeFileSync(
-      join(cwd, 'neon.ts'),
-      'export default () => ({ auth: {} });\n',
-    );
+    writeFileSync(join(cwd, 'neon.ts'), 'export default { auth: {} };\n');
 
     const api = new FakeNeonApi({
       getNeonAuth: async () => ({
@@ -288,10 +285,7 @@ describe('resolveDevEnv', () => {
   });
 
   it('tier 1 mismatch: neon.ts enables auth the branch lacks -> throws DevEnvMismatchError', async () => {
-    writeFileSync(
-      join(cwd, 'neon.ts'),
-      'export default () => ({ auth: {} });\n',
-    );
+    writeFileSync(join(cwd, 'neon.ts'), 'export default { auth: {} };\n');
 
     // The branch has NO Auth integration (default `getNeonAuth` -> null), so
     // `plan` reports an `enable-auth` create: the policy declares a resource the
@@ -309,10 +303,7 @@ describe('resolveDevEnv', () => {
   });
 
   it('tier 1 mismatch error: names the missing resource and points at deploy', async () => {
-    writeFileSync(
-      join(cwd, 'neon.ts'),
-      'export default () => ({ auth: {} });\n',
-    );
+    writeFileSync(join(cwd, 'neon.ts'), 'export default { auth: {} };\n');
     const api = new FakeNeonApi();
 
     await expect(
@@ -321,10 +312,7 @@ describe('resolveDevEnv', () => {
   });
 
   it('tier 1 match: neon.ts enables auth the branch already has -> injects, no throw', async () => {
-    writeFileSync(
-      join(cwd, 'neon.ts'),
-      'export default () => ({ auth: {} });\n',
-    );
+    writeFileSync(join(cwd, 'neon.ts'), 'export default { auth: {} };\n');
 
     // The branch already has the Auth integration, so `plan` reports no missing
     // resource and `dev` injects NEON_AUTH_BASE_URL.

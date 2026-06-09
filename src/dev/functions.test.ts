@@ -40,22 +40,22 @@ describe('resolveFunctionsFromConfig', () => {
   });
 
   it('returns an empty list when neon.ts declares no functions', async () => {
-    writeWorkspace(cwd, 'export default () => ({});\n', []);
+    writeWorkspace(cwd, 'export default {};\n', []);
     await expect(resolveFunctionsFromConfig(cwd)).resolves.toEqual([]);
   });
 
   it('resolves each function with an absolute source and its dev settings', async () => {
     writeWorkspace(
       cwd,
-      `export default () => ({
+      `export default {
         preview: {
-          functions: [
-            { slug: 'hello', name: 'Hello', source: './hello.ts', dev: { port: 8788 } },
-            { slug: 'api', name: 'Api', source: './api.ts', dev: { portless: true } },
-            { slug: 'bare', name: 'Bare', source: './bare.ts' },
-          ],
+          functions: {
+            hello: { name: 'Hello', source: './hello.ts', dev: { port: 8788 } },
+            api: { name: 'Api', source: './api.ts', dev: { portless: true } },
+            bare: { name: 'Bare', source: './bare.ts' },
+          },
         },
-      });\n`,
+      };\n`,
       ['hello.ts', 'api.ts', 'bare.ts'],
     );
 
@@ -85,9 +85,9 @@ describe('resolveFunctionsFromConfig', () => {
   it('throws when a declared function source does not exist on disk', async () => {
     writeWorkspace(
       cwd,
-      `export default () => ({
-        preview: { functions: [{ slug: 'gone', name: 'Gone', source: './missing.ts' }] },
-      });\n`,
+      `export default {
+        preview: { functions: { gone: { name: 'Gone', source: './missing.ts' } } },
+      };\n`,
       [],
     );
     await expect(resolveFunctionsFromConfig(cwd)).rejects.toThrow(
@@ -98,13 +98,13 @@ describe('resolveFunctionsFromConfig', () => {
   it('carries per-function env through', async () => {
     writeWorkspace(
       cwd,
-      `export default () => ({
+      `export default {
         preview: {
-          functions: [
-            { slug: 'e', name: 'E', source: './e.ts', env: { FOO: 'bar' } },
-          ],
+          functions: {
+            e: { name: 'E', source: './e.ts', env: { FOO: 'bar' } },
+          },
         },
-      });\n`,
+      };\n`,
       ['e.ts'],
     );
     const fns = await resolveFunctionsFromConfig(cwd);
