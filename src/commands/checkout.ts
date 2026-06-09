@@ -104,8 +104,9 @@ export const handler = async (props: CheckoutProps) => {
  * - Branch **name**: looked up by name. If it doesn't exist, in an interactive
  *   terminal we offer to create it (like `neonctl branch create --name <name>`);
  *   in a non-interactive context it's the usual "not found" error.
- * - **Omitted**: open an interactive picker listing the project's branches (TTY
- *   only); in a non-interactive context a missing branch is a hard error.
+ * - **Omitted**: open an interactive picker listing the project's branches plus a
+ *   "create a new branch" option (TTY only); in a non-interactive context a missing
+ *   branch is a hard error.
  */
 type ResolvedBranch = {
   branchId: string;
@@ -121,9 +122,14 @@ const resolveBranchId = async (
     .data.branches;
 
   if (!props.id) {
+    const picked = await pickBranchInteractively(branches);
+    if (picked.kind === 'existing') {
+      return { branchId: picked.branchId, created: false };
+    }
+    // The user chose "create a new branch" from the picker.
     return {
-      branchId: await pickBranchInteractively(branches, projectId),
-      created: false,
+      branchId: await createBranch(props, projectId, picked.name, branches),
+      created: true,
     };
   }
 
@@ -169,37 +175,75 @@ const notFoundMessage = (ref: string, branches: Branch[]): string =>
     .map((b: Branch) => b.name)
     .join(', ')}`;
 
+/**
+ * Outcome of the interactive picker: either an existing branch's id was chosen, or the
+ * user opted to create a new branch and supplied its name.
+ */
+type PickedBranch =
+  | { kind: 'existing'; branchId: string }
+  | { kind: 'create'; name: string };
+
+/** Sentinel `value` for the "create a new branch" choice (no branch id can collide). */
+const CREATE_BRANCH_CHOICE = Symbol('create-branch');
+
 const pickBranchInteractively = async (
   branches: Branch[],
-  projectId: string,
-): Promise<string> => {
+): Promise<PickedBranch> => {
   if (isCi() || !process.stdout.isTTY) {
     throw new Error(
       'No branch specified. Pass a branch name or id (e.g. `neonctl checkout main`), ' +
         'or run interactively to pick one from a list.',
     );
   }
-  if (branches.length === 0) {
-    throw new Error(`No branches found for project ${projectId}.`);
-  }
-  const defaultIndex = Math.max(
-    0,
-    branches.findIndex((b: Branch) => b.default),
-  );
-  const { branchId } = await prompts({
+  // The default selection is the project's default branch when there are branches to
+  // show; the create option sits at the top, so offset the default index by one.
+  const defaultBranchIndex = branches.findIndex((b: Branch) => b.default);
+  const initial = defaultBranchIndex >= 0 ? defaultBranchIndex + 1 : 0;
+  const { choice } = await prompts({
     type: 'select',
-    name: 'branchId',
+    name: 'choice',
     message: 'Which branch would you like to check out?',
-    choices: branches.map((b: Branch) => ({
-      title: `${b.default ? '✱ ' : ''}${b.name} (${b.id})`,
-      value: b.id,
-    })),
-    initial: defaultIndex,
+    choices: [
+      { title: '＋ Create a new branch…', value: CREATE_BRANCH_CHOICE },
+      ...branches.map((b: Branch) => ({
+        title: `${b.default ? '✱ ' : ''}${b.name} (${b.id})`,
+        value: b.id,
+      })),
+    ],
+    initial,
   });
-  if (!branchId) {
+  if (choice === undefined) {
     throw new Error('Aborted: no branch selected.');
   }
-  return branchId;
+  if (choice === CREATE_BRANCH_CHOICE) {
+    return { kind: 'create', name: await promptNewBranchName(branches) };
+  }
+  return { kind: 'existing', branchId: choice as string };
+};
+
+/**
+ * Prompt for a new branch name, rejecting empty input and names already taken on the
+ * project (so we never silently check out a different, pre-existing branch).
+ */
+const promptNewBranchName = async (branches: Branch[]): Promise<string> => {
+  const existing = new Set(branches.map((b: Branch) => b.name));
+  const { name } = await prompts({
+    type: 'text',
+    name: 'name',
+    message: 'New branch name:',
+    validate: (value: string) => {
+      const trimmed = value.trim();
+      if (trimmed === '') return 'Branch name cannot be empty.';
+      if (existing.has(trimmed))
+        return `A branch named "${trimmed}" already exists.`;
+      return true;
+    },
+  });
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (trimmed === '') {
+    throw new Error('Aborted: no branch name provided.');
+  }
+  return trimmed;
 };
 
 /**
