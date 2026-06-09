@@ -1,13 +1,16 @@
-import { Branch, EndpointType } from '@neondatabase/api-client';
+import { Branch } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
 import prompts from 'prompts';
 import yargs from 'yargs';
 
-import { retryOnLock } from '../api.js';
 import { applyContext, readContextFile } from '../context.js';
 import { isCi } from '../env.js';
 import { log } from '../log.js';
 import { CommonProps } from '../types.js';
+import {
+  createBranch,
+  pickBranchInteractively,
+} from '../utils/branch_picker.js';
 import { fillSingleProject } from '../utils/enrichers.js';
 import { looksLikeBranchId } from '../utils/formats.js';
 import { applyPolicyOnCreate } from './config.js';
@@ -122,13 +125,23 @@ const resolveBranchId = async (
     .data.branches;
 
   if (!props.id) {
-    const picked = await pickBranchInteractively(branches);
+    const picked = await pickBranchInteractively(branches, {
+      message: 'Which branch would you like to check out?',
+      nonInteractiveMessage:
+        'No branch specified. Pass a branch name or id (e.g. `neonctl checkout main`), ' +
+        'or run interactively to pick one from a list.',
+    });
     if (picked.kind === 'existing') {
       return { branchId: picked.branchId, created: false };
     }
     // The user chose "create a new branch" from the picker.
     return {
-      branchId: await createBranch(props, projectId, picked.name, branches),
+      branchId: await createBranch(
+        props.apiClient,
+        projectId,
+        picked.name,
+        branches,
+      ),
       created: true,
     };
   }
@@ -165,7 +178,7 @@ const resolveBranchId = async (
     throw new Error(`Aborted: branch "${ref}" was not found and not created.`);
   }
   return {
-    branchId: await createBranch(props, projectId, ref, branches),
+    branchId: await createBranch(props.apiClient, projectId, ref, branches),
     created: true,
   };
 };
@@ -174,106 +187,6 @@ const notFoundMessage = (ref: string, branches: Branch[]): string =>
   `Branch ${ref} not found.\nAvailable branches: ${branches
     .map((b: Branch) => b.name)
     .join(', ')}`;
-
-/**
- * Outcome of the interactive picker: either an existing branch's id was chosen, or the
- * user opted to create a new branch and supplied its name.
- */
-type PickedBranch =
-  | { kind: 'existing'; branchId: string }
-  | { kind: 'create'; name: string };
-
-/** Sentinel `value` for the "create a new branch" choice (no branch id can collide). */
-const CREATE_BRANCH_CHOICE = Symbol('create-branch');
-
-const pickBranchInteractively = async (
-  branches: Branch[],
-): Promise<PickedBranch> => {
-  if (isCi() || !process.stdout.isTTY) {
-    throw new Error(
-      'No branch specified. Pass a branch name or id (e.g. `neonctl checkout main`), ' +
-        'or run interactively to pick one from a list.',
-    );
-  }
-  // The default selection is the project's default branch when there are branches to
-  // show; the create option sits at the top, so offset the default index by one.
-  const defaultBranchIndex = branches.findIndex((b: Branch) => b.default);
-  const initial = defaultBranchIndex >= 0 ? defaultBranchIndex + 1 : 0;
-  const { choice } = await prompts({
-    type: 'select',
-    name: 'choice',
-    message: 'Which branch would you like to check out?',
-    choices: [
-      { title: '＋ Create a new branch…', value: CREATE_BRANCH_CHOICE },
-      ...branches.map((b: Branch) => ({
-        title: `${b.default ? '✱ ' : ''}${b.name} (${b.id})`,
-        value: b.id,
-      })),
-    ],
-    initial,
-  });
-  if (choice === undefined) {
-    throw new Error('Aborted: no branch selected.');
-  }
-  if (choice === CREATE_BRANCH_CHOICE) {
-    return { kind: 'create', name: await promptNewBranchName(branches) };
-  }
-  return { kind: 'existing', branchId: choice as string };
-};
-
-/**
- * Prompt for a new branch name, rejecting empty input and names already taken on the
- * project (so we never silently check out a different, pre-existing branch).
- */
-const promptNewBranchName = async (branches: Branch[]): Promise<string> => {
-  const existing = new Set(branches.map((b: Branch) => b.name));
-  const { name } = await prompts({
-    type: 'text',
-    name: 'name',
-    message: 'New branch name:',
-    validate: (value: string) => {
-      const trimmed = value.trim();
-      if (trimmed === '') return 'Branch name cannot be empty.';
-      if (existing.has(trimmed))
-        return `A branch named "${trimmed}" already exists.`;
-      return true;
-    },
-  });
-  const trimmed = typeof name === 'string' ? name.trim() : '';
-  if (trimmed === '') {
-    throw new Error('Aborted: no branch name provided.');
-  }
-  return trimmed;
-};
-
-/**
- * Create a branch with the same defaults as `neonctl branch create --name <name>`:
- * branched from the project's default branch with a read-write compute endpoint.
- */
-const createBranch = async (
-  props: CheckoutProps,
-  projectId: string,
-  name: string,
-  branches: Branch[],
-): Promise<string> => {
-  const defaultBranch = branches.find((b: Branch) => b.default);
-  if (!defaultBranch) {
-    throw new Error('No default branch found');
-  }
-  const { data } = await retryOnLock(() =>
-    props.apiClient.createProjectBranch(projectId, {
-      branch: { name, parent_id: defaultBranch.id },
-      endpoints: [{ type: EndpointType.ReadWrite }],
-    }),
-  );
-  if (defaultBranch.protected) {
-    log.warning(
-      'The parent branch is protected; a unique role password has been generated for the new branch.',
-    );
-  }
-  log.info('Created branch %s (%s).', data.branch.name, data.branch.id);
-  return data.branch.id;
-};
 
 /**
  * Resolve the org id to heal into the context file.

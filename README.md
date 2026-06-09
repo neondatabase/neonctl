@@ -157,6 +157,16 @@ Linked .neon:
   branchId:  br-main-branch-87654321
 ```
 
+When you link an **existing** project that has more than one branch, `link` adds a final
+step to pick which branch to pin — the same `＋ Create a new branch…` + list selector used by
+`neonctl checkout` (a single-branch project is pinned automatically, no prompt):
+
+```bash
+? Which organization would you like to link? › Personal Org (org-abc123)
+? Which project would you like to link? › my-app (polished-snowflake-12345678)
+? Which branch would you like to link? › ✱ main (br-main-branch-87654321)
+```
+
 **Non-interactive (flags or `--params` JSON)** — for scripts and CI:
 
 ```bash

@@ -13,6 +13,10 @@ import { applyContext, readContextFile } from '../context.js';
 import { isCi } from '../env.js';
 import { log } from '../log.js';
 import { CommonProps } from '../types.js';
+import {
+  createBranch,
+  pickBranchInteractively,
+} from '../utils/branch_picker.js';
 import { REGIONS } from './projects.js';
 
 const PROJECTS_LIST_LIMIT = 100;
@@ -276,7 +280,7 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
   }
 
   if (inputs.projectId) {
-    const branchId = await resolveDefaultBranchId(props, inputs.projectId);
+    const branchId = await resolveInteractiveBranchId(props, inputs.projectId);
     applyContext(props.contextFile, {
       orgId,
       projectId: inputs.projectId,
@@ -320,7 +324,7 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
   const action = await promptProjectChoice(projects, inputs.projectName);
 
   if (action.type === 'existing') {
-    const branchId = await resolveDefaultBranchId(props, action.projectId);
+    const branchId = await resolveInteractiveBranchId(props, action.projectId);
     applyContext(props.contextFile, {
       orgId,
       projectId: action.projectId,
@@ -758,6 +762,40 @@ const resolveDefaultBranchId = async (
     );
   }
   return branch.id;
+};
+
+/**
+ * Resolve which branch to pin for an interactively-chosen project. When the project has a
+ * single branch there is nothing to choose, so we pin it silently. Otherwise we offer the
+ * shared branch picker (the same "＋ Create a new branch…" + list as `neonctl checkout`),
+ * creating the branch when the user opts to. This makes `link` a full org → project →
+ * branch flow instead of always pinning the default branch.
+ */
+const resolveInteractiveBranchId = async (
+  props: CommonProps,
+  projectId: string,
+): Promise<string> => {
+  const { data } = await props.apiClient.listProjectBranches({ projectId });
+  const branches = data.branches;
+  if (branches.length <= 1) {
+    const only = branches.find((b: Branch) => b.default) ?? branches[0];
+    if (!only) {
+      throw new Error(
+        `Could not find a default branch for project ${projectId}.`,
+      );
+    }
+    return only.id;
+  }
+  const picked = await pickBranchInteractively(branches, {
+    message: 'Which branch would you like to link?',
+    nonInteractiveMessage:
+      'No branch could be selected without an interactive terminal. ' +
+      'Re-run `neonctl link` interactively, or `neonctl checkout <branch>` to pin one.',
+  });
+  if (picked.kind === 'existing') {
+    return picked.branchId;
+  }
+  return createBranch(props.apiClient, projectId, picked.name, branches);
 };
 
 const fetchRegions = async (props: CommonProps): Promise<RegionResponse[]> => {
