@@ -74,8 +74,17 @@ export const resolveNeonEnvVars = async (
           '--project-id / --branch.',
       );
     }
-    await assertPolicyMatchesBranch(config, ctx);
-    return await fetchAndProject(config, ctx);
+    // Resolve env from the policy with its `preview.functions` removed. Functions carry no
+    // branch-level secrets — their env comes from the local `neon.ts` `functions.<slug>.env`,
+    // layered per-function by the dev server — so env resolution never needs the functions
+    // API. Probing it (via `plan`/`fetchEnv`) only adds a failure mode: an undeployed
+    // function, or a project where the Functions Preview isn't enabled, would error and sink
+    // ALL injection (including DATABASE_URL). Stripping functions keeps env resolution honest
+    // while leaving buckets / AI Gateway / Auth / Data API fully checked — those DO carry
+    // secrets, so a declared-but-missing one still hard-stops (see assertPolicyMatchesBranch).
+    const envConfig = withoutPreviewFunctions(config);
+    await assertPolicyMatchesBranch(envConfig, ctx);
+    return await fetchAndProject(envConfig, ctx);
   }
 
   if (ctx.projectId && ctx.branchId) {
@@ -123,14 +132,31 @@ export const resolveDevEnv = async (
 };
 
 /**
+ * Return the policy with its `preview.functions` removed, so the env path never enumerates
+ * functions against the Neon API. Functions are local-source-bundled and produce no
+ * branch-level secrets, so they are irrelevant to env resolution; probing them only risks
+ * failing the whole resolve (undeployed function, or Functions Preview disabled on the
+ * project). Buckets / AI Gateway and the top-level Auth / Data API toggles are preserved —
+ * they DO carry env, so they must still be checked and resolved. Returns the config
+ * unchanged when it declares no functions.
+ */
+const withoutPreviewFunctions = (config: Config): Config => {
+  const preview = config.preview;
+  if (!preview?.functions) return config;
+  const previewWithoutFunctions = { ...preview };
+  delete previewWithoutFunctions.functions;
+  return { ...config, preview: previewWithoutFunctions };
+};
+
+/**
  * Tier-1 guard. Dry-run the policy against the branch's live state and stop if
  * it declares a branch-level resource the branch is missing. Built on `plan` so
  * it covers every present and future provisionable resource for free: any
  * `create` action is a resource `neonctl deploy` would provision.
  *
- * Functions are deliberately excluded: running an *un*deployed function locally
- * is the whole point of `neon dev`, so a not-yet-deployed function in the policy
- * must not block the dev server.
+ * Called with functions already stripped (see {@link withoutPreviewFunctions}), so the
+ * `plan` probe never enumerates the functions API — an undeployed function, or a project
+ * without the Functions Preview, must never block local dev or sink env injection.
  */
 const assertPolicyMatchesBranch = async (
   config: Config,
