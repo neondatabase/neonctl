@@ -1,5 +1,6 @@
 import { Branch } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
+import chalk from 'chalk';
 import prompts from 'prompts';
 import yargs from 'yargs';
 
@@ -13,6 +14,7 @@ import {
 } from '../utils/branch_picker.js';
 import { fillSingleProject } from '../utils/enrichers.js';
 import { looksLikeBranchId } from '../utils/formats.js';
+import { ENV_PULL_NEXT_STEP } from './env.js';
 import { applyPolicyOnCreate } from './config.js';
 import { handler as linkHandler } from './link.js';
 
@@ -97,6 +99,8 @@ export const handler = async (props: CheckoutProps) => {
       ...(props.apiKey ? { apiKey: props.apiKey } : {}),
     });
   }
+
+  log.info(chalk.dim(ENV_PULL_NEXT_STEP));
 };
 
 /**

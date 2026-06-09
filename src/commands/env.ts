@@ -20,6 +20,14 @@ export type EnvPullProps = BranchScopeProps & {
 
 export const command = 'env';
 export const describe = "Manage a branch's Neon env variables locally";
+
+/**
+ * The canonical "what to do next" after a branch is pinned (`checkout` / `link`): pull its
+ * Neon env vars into a local `.env`. Shared so the hint reads identically across commands
+ * (and the `link --agent` JSON message), and updates in one place.
+ */
+export const ENV_PULL_NEXT_STEP =
+  'Next: run `neonctl env pull` to write this branch’s env vars (DATABASE_URL, …) into a local .env';
 export const builder = (argv: yargs.Argv) =>
   argv
     .usage('$0 env <sub-command> [options]')

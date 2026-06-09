@@ -6,6 +6,7 @@ import {
   RegionResponse,
 } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
+import chalk from 'chalk';
 import prompts, { InitialReturnValue } from 'prompts';
 import yargs from 'yargs';
 
@@ -17,6 +18,7 @@ import {
   createBranch,
   pickBranchInteractively,
 } from '../utils/branch_picker.js';
+import { ENV_PULL_NEXT_STEP } from './env.js';
 import { REGIONS } from './projects.js';
 
 const PROJECTS_LIST_LIMIT = 100;
@@ -514,7 +516,7 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
       context_file: props.contextFile,
       context: { orgId, projectId, branchId },
       project: { id: projectId },
-      message: `Linked ${props.contextFile} to project ${projectId} (org ${orgId}) on branch ${branchId}.`,
+      message: `Linked ${props.contextFile} to project ${projectId} (org ${orgId}) on branch ${branchId}. ${ENV_PULL_NEXT_STEP}`,
     });
     return;
   }
@@ -558,7 +560,7 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
         name: created.project.name,
         region_id: created.project.region_id,
       },
-      message: `Created project ${created.project.id} ("${created.project.name ?? projectName}") in ${created.project.region_id ?? regionId} and linked ${props.contextFile}.`,
+      message: `Created project ${created.project.id} ("${created.project.name ?? projectName}") in ${created.project.region_id ?? regionId} and linked ${props.contextFile}. ${ENV_PULL_NEXT_STEP}`,
     });
     return;
   }
@@ -886,6 +888,8 @@ const printHumanSummary = (_props: LinkProps, summary: HumanSummary): void => {
   lines.push(`  orgId:    ${summary.orgId}`);
   lines.push(`  projectId: ${summary.projectId}`);
   lines.push(`  branchId:  ${summary.branchId}`);
+  lines.push('');
+  lines.push(chalk.dim(ENV_PULL_NEXT_STEP));
   lines.push('');
   process.stdout.write(`${lines.join('\n')}\n`);
 };
