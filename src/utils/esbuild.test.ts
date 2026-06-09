@@ -60,17 +60,17 @@ afterAll(() => {
 describe('bundleEntry', () => {
   test('inlines local imports and emits a linked sourcemap', async () => {
     const out = await bundleEntry(join(dir, 'index.ts'), npmDeps);
-    const js = strFromU8(out['out.js']);
+    const js = strFromU8(out['index.mjs']);
     expect(js).toContain('hi from helper');
     expect(js).not.toContain('./helper');
-    expect(js).toContain('sourceMappingURL=out.js.map');
-    expect(out['out.js.map'].length).toBeGreaterThan(0);
+    expect(js).toContain('sourceMappingURL=index.mjs.map');
+    expect(out['index.mjs.map'].length).toBeGreaterThan(0);
   });
 
   // packages=external leaves ALL bare imports external, not just built-ins.
   test('leaves bare imports (node built-ins and npm packages) external', async () => {
     const js = strFromU8(
-      (await bundleEntry(join(dir, 'index.ts'), npmDeps))['out.js'],
+      (await bundleEntry(join(dir, 'index.ts'), npmDeps))['index.mjs'],
     );
     expect(js).toContain('node:fs');
     expect(js).toContain('neon-fake-external-pkg');
@@ -95,7 +95,7 @@ describe('bundleEntry', () => {
         loadEsbuild,
       });
       expect(loadEsbuild).not.toHaveBeenCalled();
-      expect(strFromU8(out['out.js'])).toContain('hi from helper');
+      expect(strFromU8(out['index.mjs'])).toContain('hi from helper');
     });
   });
 
@@ -109,7 +109,7 @@ describe('bundleEntry', () => {
         loadEsbuild,
       });
       expect(loadEsbuild).toHaveBeenCalledOnce();
-      expect(strFromU8(out['out.js'])).toContain('hi from helper');
+      expect(strFromU8(out['index.mjs'])).toContain('hi from helper');
     });
   });
 
