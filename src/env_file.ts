@@ -69,6 +69,43 @@ export const mergeEnvContent = (
 };
 
 /**
+ * Read a dotenv file at `path` into a plain `{ KEY: value }` map. A non-existent file is an
+ * error (callers pass an explicit `--env` path, so a typo should fail loudly rather than
+ * silently load nothing). Quotes are stripped and `\"` / `\\` unescaped, matching the
+ * quoting {@link mergeEnvFile} writes. Comments, blank lines, and non-assignment lines are
+ * ignored.
+ */
+export const readEnvFile = (path: string): Record<string, string> => {
+  if (!existsSync(path)) {
+    throw new Error(`Env file not found: ${path}`);
+  }
+  const out: Record<string, string> = {};
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    const parsed = parseAssignment(line);
+    if (parsed) out[parsed.key] = parsed.value;
+  }
+  return out;
+};
+
+/**
+ * Load a dotenv file into `process.env` so values are available to anything read later
+ * (e.g. a `neon.ts` whose function `env` values come from `process.env.X`). Existing
+ * `process.env` entries are **not** overridden — an already-exported var wins over the
+ * file, matching dotenv's default. Returns the keys that were applied.
+ */
+export const loadEnvFileIntoProcess = (path: string): string[] => {
+  const parsed = readEnvFile(path);
+  const applied: string[] = [];
+  for (const [key, value] of Object.entries(parsed)) {
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+      applied.push(key);
+    }
+  }
+  return applied;
+};
+
+/**
  * Extract the variable name from a dotenv line, or `null` for comments / blank lines / any
  * line that isn't a `KEY=value` assignment. Tolerates a leading `export ` and surrounding
  * whitespace, matching common `.env` styles.
@@ -76,6 +113,33 @@ export const mergeEnvContent = (
 const parseKey = (line: string): string | null => {
   const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
   return match ? match[1] : null;
+};
+
+/**
+ * Parse a `KEY=value` dotenv line into its key and unquoted value, or `null` for
+ * comments / blank lines / non-assignments. Mirrors {@link formatLine}'s quoting.
+ */
+const parseAssignment = (
+  line: string,
+): { key: string; value: string } | null => {
+  const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(
+    line,
+  );
+  const key = match?.[1];
+  const raw = match?.[2];
+  if (key === undefined || raw === undefined) return null;
+  return { key, value: unquote(raw.trim()) };
+};
+
+/** Strip matching surrounding quotes and unescape `\"` / `\\` inside double quotes. */
+const unquote = (value: string): string => {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1);
+  }
+  return value;
 };
 
 /**

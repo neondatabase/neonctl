@@ -13,6 +13,7 @@ import {
 
 import { log } from '../log.js';
 import { BranchScopeProps } from '../types.js';
+import { loadEnvFileIntoProcess } from '../env_file.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { bundleEntry } from '../utils/esbuild.js';
 import { zipBundle } from '../utils/zip.js';
@@ -40,6 +41,13 @@ const CONFLICT_FIELDS = [
 export type ConfigProps = BranchScopeProps & {
   /** Explicit path to a neon.ts policy. When omitted, loadConfigFromFile walks up from cwd. */
   config?: string;
+  /**
+   * Optional path to a `.env` file loaded into `process.env` **before** the `neon.ts`
+   * policy is evaluated, so function `env` values that read `process.env.X` pick up the
+   * right per-environment values without juggling shells. Existing `process.env` entries
+   * win over the file.
+   */
+  env?: string;
   /** Auto-confirm overriding existing remote settings (apply only). */
   updateExisting?: boolean;
   /** Auto-confirm applying to a protected branch (apply only). */
@@ -47,6 +55,19 @@ export type ConfigProps = BranchScopeProps & {
   /** Injected NeonApi adapter (tests). Production omits it so the real adapter is built from credentials. */
   runtimeApi?: NeonApi;
 };
+
+/**
+ * Shared `--env` flag for `config plan|apply` and `deploy`. Loads a `.env` into
+ * `process.env` before the policy is evaluated.
+ */
+export const envFlag = {
+  env: {
+    describe:
+      'Path to a .env file to load into the environment before evaluating neon.ts ' +
+      '(so function env values resolve from it). Existing env vars are not overridden.',
+    type: 'string',
+  },
+} as const;
 
 /** Apply-only flags, exported so `deploy` can reuse the exact same surface. */
 export const applyFlags = {
@@ -101,6 +122,7 @@ export const builder = (argv: yargs.Argv) =>
               'Path to a neon.ts policy (defaults to walking up from cwd)',
             type: 'string',
           },
+          ...envFlag,
         }),
       (args) => planCmd(args as any),
     )
@@ -114,6 +136,7 @@ export const builder = (argv: yargs.Argv) =>
               'Path to a neon.ts policy (defaults to walking up from cwd)',
             type: 'string',
           },
+          ...envFlag,
           ...applyFlags,
         }),
       (args) => applyCmd(args as any),
@@ -124,6 +147,17 @@ export const handler = (args: yargs.Argv) => {
 };
 
 const loadConfig = async (props: ConfigProps): Promise<Config> => {
+  // Load the optional --env file FIRST so a `neon.ts` whose function `env` values read
+  // `process.env.X` sees them. Must happen before the policy module is imported/evaluated.
+  if (props.env) {
+    const applied = loadEnvFileIntoProcess(props.env);
+    log.debug(
+      'Loaded %d var(s) from %s into the environment: %s',
+      applied.length,
+      props.env,
+      applied.join(', '),
+    );
+  }
   const { config } = await loadConfigFromFile({
     ...(props.config ? { path: props.config } : {}),
   });
@@ -235,3 +269,54 @@ const stringify = (value: unknown): string =>
     : typeof value === 'string'
       ? value
       : JSON.stringify(value);
+
+/**
+ * Apply a `neon.ts` policy to a **freshly created** branch (used by `neonctl checkout`
+ * when it creates a branch). No-op when there is no `neon.ts` on the path from cwd up to
+ * the repo root — checkout still succeeds, it just has no policy to apply.
+ *
+ * The branch was just created by us, so we apply non-interactively (`updateExisting` /
+ * `allowProtectedBranch`) — there is no pre-existing state a user would be surprised to
+ * see overridden. Functions are bundled with neonctl's own esbuild helper.
+ */
+export const applyPolicyOnCreate = async (props: {
+  projectId: string;
+  branchId: string;
+  apiKey?: string;
+  runtimeApi?: NeonApi;
+  /** Directory to search for `neon.ts` from. Defaults to the process cwd. */
+  cwd?: string;
+}): Promise<void> => {
+  let config: Config;
+  try {
+    ({ config } = await loadConfigFromFile({
+      ...(props.cwd ? { cwd: props.cwd } : {}),
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/Could not find a Neon config file/i.test(message)) return;
+    throw err;
+  }
+
+  log.info('Applying neon.ts policy to the new branch…');
+  const result = await apply(config, {
+    projectId: props.projectId,
+    branchId: props.branchId,
+    ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
+    updateExisting: true,
+    allowProtectedBranch: true,
+    bundleFunction: neonctlBundler,
+  });
+  const changes = result.applied.filter((c) => c.action !== 'noop');
+  if (changes.length === 0) {
+    log.info('neon.ts applied — no changes were needed.');
+    return;
+  }
+  log.info(
+    'neon.ts applied — %d change%s: %s',
+    changes.length,
+    changes.length === 1 ? '' : 's',
+    changes.map((c) => `${c.action} ${c.identifier}`).join(', '),
+  );
+};

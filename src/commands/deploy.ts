@@ -1,7 +1,7 @@
 import yargs from 'yargs';
 
 import { fillSingleProject } from '../utils/enrichers.js';
-import { applyCmd, applyFlags, type ConfigProps } from './config.js';
+import { applyCmd, applyFlags, envFlag, type ConfigProps } from './config.js';
 
 export const command = 'deploy';
 export const describe =
@@ -22,6 +22,7 @@ export const builder = (argv: yargs.Argv) =>
         describe: 'Path to a neon.ts policy (defaults to walking up from cwd)',
         type: 'string',
       },
+      ...envFlag,
       ...applyFlags,
     })
     .middleware(fillSingleProject as any)

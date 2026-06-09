@@ -22,7 +22,7 @@ import type {
 } from '@neondatabase/config';
 
 import type { ConfigProps } from './config.js';
-import { applyCmd, planCmd, status } from './config.js';
+import { applyCmd, applyPolicyOnCreate, planCmd, status } from './config.js';
 
 const PROJECT_ID = 'patient-art-12345';
 const BRANCH_ID = 'br-snowy-frost-12345';
@@ -294,7 +294,7 @@ describe('config commands', () => {
   it('plan is a dry run whose applied list includes the auth service change', async () => {
     const api = new FakeNeonApi();
     const { stream, read } = captureOut();
-    const config = writeConfig('export default () => ({ auth: {} });\n');
+    const config = writeConfig('export default { auth: {} };\n');
 
     await planCmd({ ...baseProps(api, stream), config });
 
@@ -312,7 +312,7 @@ describe('config commands', () => {
   it('apply actually enables Neon Auth and is not a dry run', async () => {
     const api = new FakeNeonApi();
     const { stream, read } = captureOut();
-    const config = writeConfig('export default () => ({ auth: {} });\n');
+    const config = writeConfig('export default { auth: {} };\n');
 
     await applyCmd({ ...baseProps(api, stream), config });
 
@@ -338,9 +338,9 @@ describe('config commands', () => {
       "export default { fetch() { return new Response('ok'); } };\n",
     );
     const config = writeConfig(
-      `export default () => ({ preview: { functions: [{ slug: 'hello', name: 'Hello', source: ${JSON.stringify(
+      `export default { preview: { functions: { hello: { name: 'Hello', source: ${JSON.stringify(
         source,
-      )} }] } });\n`,
+      )} } } } };\n`,
     );
 
     await applyCmd({ ...baseProps(api, stream), config });
@@ -362,5 +362,75 @@ describe('config commands', () => {
     expect(bundle.byteLength).toBeGreaterThan(0);
     expect(bundle[0]).toBe(0x50); // 'P'
     expect(bundle[1]).toBe(0x4b); // 'K'
+  });
+
+  it('--env loads a .env file into the environment before evaluating neon.ts', async () => {
+    const api = new FakeNeonApi();
+    const { stream } = captureOut();
+
+    const source = join(cwd, 'hello.ts');
+    writeFileSync(
+      source,
+      "export default { fetch() { return new Response('ok'); } };\n",
+    );
+    // The function's env value reads process.env.RESEND_API_KEY — which is only present if
+    // the --env file is loaded before the policy is evaluated.
+    const config = writeConfig(
+      `export default { preview: { functions: { hello: { name: 'Hello', source: ${JSON.stringify(
+        source,
+      )}, env: { resendApiKey: process.env.RESEND_API_KEY ?? '' } } } } };\n`,
+    );
+    const envFile = join(cwd, '.env.deploy');
+    writeFileSync(envFile, 'RESEND_API_KEY=re_from_file\n');
+
+    try {
+      await applyCmd({ ...baseProps(api, stream), config, env: envFile });
+    } finally {
+      delete process.env.RESEND_API_KEY;
+    }
+
+    expect(api.deployBranchFunctionCalls).toHaveLength(1);
+    expect(api.deployBranchFunctionCalls[0].input.environment).toEqual({
+      resendApiKey: 're_from_file',
+    });
+  });
+});
+
+describe('applyPolicyOnCreate', () => {
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = mkdtempSync(join(tmpdir(), 'neonctl-create-'));
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('applies the neon.ts policy to the new branch when one is present', async () => {
+    const api = new FakeNeonApi();
+    writeFileSync(join(cwd, 'neon.ts'), 'export default { auth: {} };\n');
+
+    await applyPolicyOnCreate({
+      projectId: PROJECT_ID,
+      branchId: BRANCH_ID,
+      runtimeApi: api,
+      cwd,
+    });
+
+    expect(api.enableNeonAuthCalls).toHaveLength(1);
+  });
+
+  it('is a no-op when there is no neon.ts on the path', async () => {
+    const api = new FakeNeonApi();
+
+    await applyPolicyOnCreate({
+      projectId: PROJECT_ID,
+      branchId: BRANCH_ID,
+      runtimeApi: api,
+      cwd, // empty temp dir, no neon.ts
+    });
+
+    expect(api.enableNeonAuthCalls).toHaveLength(0);
   });
 });
