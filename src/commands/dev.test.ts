@@ -2,7 +2,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { test } from '../test_utils/fixtures';
-import { diffUnits, type RunningUnit, type ServedUnit } from './dev.js';
+import {
+  diffUnits,
+  formatEnvSummary,
+  type RunningUnit,
+  type ServedUnit,
+} from './dev.js';
 
 describe('dev', () => {
   test('exits 1 when no --source and no neon.ts is found', async ({
@@ -133,5 +138,39 @@ describe('diffUnits', () => {
     expect(plan.restart.map((r) => r.unit.slug)).toEqual(['change']);
     // 'keep' is never in any bucket and its object identity is preserved.
     expect(running[0].unit).toBe(keep);
+  });
+});
+
+/**
+ * The transparent env line in the dev banner: shows the *names* of the env vars injected
+ * into each function (Neon branch vars + the function's own neon.ts env keys), never values.
+ */
+describe('formatEnvSummary', () => {
+  it('lists Neon branch vars and neon.ts keys, each sorted, in distinct groups', () => {
+    expect(
+      formatEnvSummary({
+        neon: ['DATABASE_URL_UNPOOLED', 'DATABASE_URL'],
+        fn: ['STRIPE_KEY', 'RESEND_API_KEY'],
+      }),
+    ).toBe(
+      'env: DATABASE_URL, DATABASE_URL_UNPOOLED · neon.ts: RESEND_API_KEY, STRIPE_KEY',
+    );
+  });
+
+  it('shows only the Neon group when the function declares no env', () => {
+    expect(formatEnvSummary({ neon: ['DATABASE_URL'], fn: [] })).toBe(
+      'env: DATABASE_URL',
+    );
+  });
+
+  it('shows only the neon.ts group when no Neon env was injected', () => {
+    expect(formatEnvSummary({ neon: [], fn: ['RESEND_API_KEY'] })).toBe(
+      'neon.ts: RESEND_API_KEY',
+    );
+  });
+
+  it('returns an empty string when nothing is injected (caller skips the line)', () => {
+    expect(formatEnvSummary({ neon: [], fn: [] })).toBe('');
+    expect(formatEnvSummary(undefined)).toBe('');
   });
 });

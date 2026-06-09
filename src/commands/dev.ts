@@ -86,7 +86,7 @@ const runSingleSource = async (props: DevProps): Promise<void> => {
   }
 
   const branchId = await resolveBranchId(props);
-  const neonEnv = await resolveDevEnv({
+  const { vars: neonEnv, skipped } = await resolveDevEnv({
     cwd: process.cwd(),
     ...(props.projectId ? { projectId: props.projectId } : {}),
     ...(branchId ? { branchId } : {}),
@@ -99,11 +99,14 @@ const runSingleSource = async (props: DevProps): Promise<void> => {
     bundleDir: join(process.cwd(), 'node_modules', '.neon-dev'),
     childEnv: buildChildEnv(neonEnv, portFromProps(props.port)),
     label: null,
+    envSummary: { neon: Object.keys(neonEnv), fn: [] },
   };
 
   // No config reload in single-source mode: there's exactly one file to serve, and
   // nothing to add or remove. neon.ts hot-reload is config-mode only.
-  await runSupervisor([unit]);
+  await runSupervisor([unit], {
+    ...(skipped ? { envNote: skipped.reason } : {}),
+  });
 };
 
 /**
@@ -129,7 +132,7 @@ const runFromConfig = async (props: DevProps): Promise<void> => {
     );
   }
 
-  const neonEnv = await resolveDevEnv({
+  const { vars: neonEnv, skipped } = await resolveDevEnv({
     cwd: process.cwd(),
     ...(props.projectId ? { projectId: props.projectId } : {}),
     ...(branchId ? { branchId } : {}),
@@ -148,7 +151,10 @@ const runFromConfig = async (props: DevProps): Promise<void> => {
     return planFunctionsToUnits(re.functions, neonEnv, searchBase);
   };
 
-  await runSupervisor(units, { configPath, replan });
+  await runSupervisor(units, {
+    reload: { configPath, replan },
+    ...(skipped ? { envNote: skipped.reason } : {}),
+  });
 };
 
 /** Re-resolve neon.ts into units, searching ports from `searchBase`. `null` if neon.ts vanished. */
@@ -158,6 +164,17 @@ type Replan = (searchBase: number) => Promise<ServedUnit[] | null>;
 type ConfigReload = {
   configPath: string;
   replan: Replan;
+};
+
+/** Options for {@link runSupervisor}. */
+type SupervisorOptions = {
+  /** Present in config mode: lets the supervisor watch neon.ts and reconcile the unit set. */
+  reload?: ConfigReload;
+  /**
+   * A calm, one-line reason shown in the banner when no Neon branch env could be injected
+   * (e.g. not linked). Functions still run; this just explains the absence of DATABASE_URL.
+   */
+  envNote?: string;
 };
 
 /**
@@ -250,6 +267,7 @@ const plannedToUnit = (
     bundleDir: join(process.cwd(), 'node_modules', '.neon-dev', fn.slug),
     childEnv,
     label: fn.slug,
+    envSummary: { neon: Object.keys(branchEnv), fn: Object.keys(fn.env) },
     // Signature of the function's *own* neon.ts config (NOT the dynamically-chosen search
     // base) so reconcile can tell a real change from a no-op save. A search-mode function
     // re-planned with a different base must hash identically, or it would be needlessly
@@ -302,6 +320,12 @@ export type ServedUnit = {
    * port search base. Absent in single-source mode (no reconcile there).
    */
   configKey?: string;
+  /**
+   * The env-var *names* injected into this unit, split by origin, for a transparent dev
+   * banner: `neon` are the Neon branch vars (DATABASE_URL, …), `fn` are the keys from this
+   * function's `neon.ts` `env` block. Values are intentionally omitted (secrets).
+   */
+  envSummary?: { neon: string[]; fn: string[] };
   portless?: { slug: string };
 };
 
@@ -333,8 +357,9 @@ const READY_PATTERN = /neon-dev:ready (\d+)/;
  */
 const runSupervisor = async (
   units: ServedUnit[],
-  reload?: ConfigReload,
+  options: SupervisorOptions = {},
 ): Promise<void> => {
+  const { reload, envNote } = options;
   if (hasPortlessUnit(units)) {
     assertPortlessAvailable();
   }
@@ -437,7 +462,7 @@ const runSupervisor = async (
     throw new Error('No function started. See the output above for details.');
   }
 
-  printBanner(running);
+  printBanner(running, envNote);
 
   // Config mode only: watch neon.ts and reconcile the live unit set when it changes.
   // Reconciles are serialized: a burst of saves (editor write-then-format) must not run
@@ -608,7 +633,13 @@ const reconcileOnce = async (
     await Promise.all(added.map((r) => ops.startUnit(r)));
     for (const r of added) {
       if (r.status === 'ready') {
-        logUnit(r.unit, chalk.green('ready') + ` ${urlFor(r.boundPort)}`);
+        const env = formatEnvSummary(r.unit.envSummary);
+        logUnit(
+          r.unit,
+          chalk.green('ready') +
+            ` ${urlFor(r.boundPort)}` +
+            (env ? chalk.dim(`  ${env}`) : ''),
+        );
       }
     }
   }
@@ -750,7 +781,7 @@ const pipeChildOutput = (child: ChildProcess, label: string | null): void => {
   forward('stderr');
 };
 
-const printBanner = (running: RunningUnit[]): void => {
+const printBanner = (running: RunningUnit[], envNote?: string): void => {
   log.info('');
   log.info(chalk.green.bold('  Neon Functions dev server'));
   log.info('');
@@ -758,8 +789,32 @@ const printBanner = (running: RunningUnit[]): void => {
     const name = r.unit.label ?? 'function';
     const url = urlFor(r.boundPort);
     log.info(`  ${chalk.dim(name.padEnd(20))} ${url}`);
+    const env = formatEnvSummary(r.unit.envSummary);
+    if (env) log.info(`  ${' '.repeat(20)} ${chalk.dim(env)}`);
+  }
+  if (envNote) {
+    log.info('');
+    log.info(`  ${chalk.yellow('!')} ${chalk.dim(`Neon env: ${envNote}`)}`);
   }
   log.info('');
+};
+
+/**
+ * Render a unit's injected env into one transparent line for the banner, e.g.
+ * `env: DATABASE_URL, DATABASE_URL_UNPOOLED · neon.ts: RESEND_API_KEY`. Var **names** only
+ * (never values — they're secrets). Returns `''` when nothing is injected, so the caller can
+ * skip the line. Exported for unit testing.
+ */
+export const formatEnvSummary = (summary: ServedUnit['envSummary']): string => {
+  if (!summary) return '';
+  const parts: string[] = [];
+  if (summary.neon.length > 0) {
+    parts.push(`env: ${[...summary.neon].sort().join(', ')}`);
+  }
+  if (summary.fn.length > 0) {
+    parts.push(`neon.ts: ${[...summary.fn].sort().join(', ')}`);
+  }
+  return parts.join(' · ');
 };
 
 const logUnit = (unit: ServedUnit, message: string): void => {

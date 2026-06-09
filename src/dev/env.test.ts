@@ -230,8 +230,10 @@ describe('resolveDevEnv', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('tier 3: no neon.ts and no project/branch -> {}', async () => {
-    await expect(resolveDevEnv({ cwd })).resolves.toEqual({});
+  it('tier 3: no neon.ts and no project/branch -> empty vars + a "link a branch" note', async () => {
+    const result = await resolveDevEnv({ cwd });
+    expect(result.vars).toEqual({});
+    expect(result.skipped?.reason).toMatch(/neonctl link/);
   });
 
   it('tier 2: no neon.ts but project + branch -> pooled + unpooled DATABASE_URL', async () => {
@@ -242,10 +244,11 @@ describe('resolveDevEnv', () => {
       api: new FakeNeonApi(),
     });
 
-    expect(result.DATABASE_URL).toContain('-pooler.fake.neon.tech');
-    expect(result.DATABASE_URL_UNPOOLED).toBeDefined();
-    expect(result.DATABASE_URL_UNPOOLED).not.toContain('-pooler.');
-    expect(result.NEON_AUTH_BASE_URL).toBeUndefined();
+    expect(result.vars.DATABASE_URL).toContain('-pooler.fake.neon.tech');
+    expect(result.vars.DATABASE_URL_UNPOOLED).toBeDefined();
+    expect(result.vars.DATABASE_URL_UNPOOLED).not.toContain('-pooler.');
+    expect(result.vars.NEON_AUTH_BASE_URL).toBeUndefined();
+    expect(result.skipped).toBeUndefined();
   });
 
   it('tier 2 with Auth integration present: surfaces NEON_AUTH_BASE_URL too', async () => {
@@ -269,12 +272,12 @@ describe('resolveDevEnv', () => {
       api,
     });
 
-    expect(Object.keys(result).sort()).toEqual([
+    expect(Object.keys(result.vars).sort()).toEqual([
       'DATABASE_URL',
       'DATABASE_URL_UNPOOLED',
       'NEON_AUTH_BASE_URL',
     ]);
-    expect(result.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
+    expect(result.vars.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
   });
 
   it('tier 1: a neon.ts policy enabling auth -> DATABASE_URL and NEON_AUTH_BASE_URL', async () => {
@@ -295,9 +298,9 @@ describe('resolveDevEnv', () => {
       api,
     });
 
-    expect(result.DATABASE_URL).toBeDefined();
-    expect(result.DATABASE_URL_UNPOOLED).toBeDefined();
-    expect(result.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
+    expect(result.vars.DATABASE_URL).toBeDefined();
+    expect(result.vars.DATABASE_URL_UNPOOLED).toBeDefined();
+    expect(result.vars.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
   });
 
   it('tier 1 mismatch: neon.ts enables auth the branch lacks -> throws DevEnvMismatchError', async () => {
@@ -347,24 +350,24 @@ describe('resolveDevEnv', () => {
       api,
     });
 
-    expect(result.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
+    expect(result.vars.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
   });
 
-  it('graceful: an api whose listBranches throws -> {} (does not throw)', async () => {
+  it('graceful: an api whose listBranches throws -> empty vars + a "could not reach Neon" note', async () => {
     const api = new FakeNeonApi({
       listBranches: async () => {
         throw new Error('network down');
       },
     });
 
-    await expect(
-      resolveDevEnv({
-        cwd,
-        projectId: PROJECT_ID,
-        branchId: BRANCH_ID,
-        api,
-      }),
-    ).resolves.toEqual({});
+    const result = await resolveDevEnv({
+      cwd,
+      projectId: PROJECT_ID,
+      branchId: BRANCH_ID,
+      api,
+    });
+    expect(result.vars).toEqual({});
+    expect(result.skipped?.reason).toMatch(/network down/);
   });
 
   it('tier 1 functions-only: never calls the functions API, still injects DATABASE_URL', async () => {
@@ -385,8 +388,8 @@ describe('resolveDevEnv', () => {
       api,
     });
 
-    expect(result.DATABASE_URL).toBeDefined();
-    expect(result.DATABASE_URL_UNPOOLED).toBeDefined();
+    expect(result.vars.DATABASE_URL).toBeDefined();
+    expect(result.vars.DATABASE_URL_UNPOOLED).toBeDefined();
     expect(api.listBranchFunctionsCalled).toBe(false);
   });
 
@@ -412,7 +415,7 @@ describe('resolveDevEnv', () => {
       api,
     });
 
-    expect(result.DATABASE_URL).toBeDefined();
+    expect(result.vars.DATABASE_URL).toBeDefined();
     expect(api.listBranchFunctionsCalled).toBe(false);
   });
 
