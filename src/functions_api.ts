@@ -72,7 +72,6 @@ export const deleteFunction = async (
 
 export type DeployParams = {
   zip: Uint8Array;
-  memoryMib: number;
   runtime: string;
   environment?: string; // JSON-encoded string-to-string map
 };
@@ -86,7 +85,6 @@ export const createDeployment = async (
 ): Promise<void> => {
   const form = new FormData();
   form.append('zip', new Blob([params.zip]), 'bundle.zip');
-  form.append('memory_mib', String(params.memoryMib));
   form.append('runtime', params.runtime);
   if (params.environment) form.append('environment', params.environment);
 

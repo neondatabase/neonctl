@@ -37,7 +37,6 @@ const DEPLOYMENT_FIELDS = [
 const SLUG_PATTERN = /^[a-z0-9]{1,20}$/;
 const SLUG_HELP =
   'Use 1-20 lowercase letters and digits (no hyphens or other characters).';
-const MEMORY_CHOICES = [256, 512, 1024, 2048, 4096, 8192];
 
 // Overridable so tests can poll fast; defaults to 2s in real use.
 const POLL_INTERVAL_MS =
@@ -84,11 +83,6 @@ export const builder = (argv: yargs.Argv) =>
             entry: {
               describe: 'Entry file to bundle, relative to --path',
               type: 'string',
-            },
-            'memory-mib': {
-              describe: 'Memory in MiB',
-              type: 'number',
-              choices: MEMORY_CHOICES,
             },
             runtime: {
               describe: 'Function runtime',
@@ -145,7 +139,6 @@ type DeployProps = BranchScopeProps & {
   slug: string;
   path?: string;
   entry?: string;
-  memoryMib?: number;
   runtime?: string;
   env?: string[];
   wait: boolean;
@@ -182,7 +175,6 @@ const deploy = async (props: DeployProps) => {
     props.path !== undefined ||
     props.entry !== undefined ||
     props.env !== undefined ||
-    props.memoryMib !== undefined ||
     props.runtime !== undefined;
   if (!hasOption) {
     throw new Error(
@@ -198,7 +190,6 @@ const deploy = async (props: DeployProps) => {
 
   const path = props.path ?? '.';
   const entry = props.entry ?? 'index.ts';
-  const memoryMib = props.memoryMib ?? 256;
   const runtime = props.runtime ?? 'nodejs24';
 
   const environment = parseEnv(props.env);
@@ -231,7 +222,6 @@ const deploy = async (props: DeployProps) => {
   await retryOnLock(() =>
     createDeployment(props.apiClient, props.projectId, branchId, props.slug, {
       zip,
-      memoryMib,
       runtime,
       environment,
     }),

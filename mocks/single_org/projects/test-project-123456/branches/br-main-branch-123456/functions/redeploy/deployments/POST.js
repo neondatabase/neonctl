@@ -12,7 +12,6 @@ export default function (req, res) {
   req.on('end', () => {
     expect(raw).toContain('name="zip"; filename="bundle.zip"');
     expect(raw).toContain('PK'); // ZIP local-file-header magic
-    expect(raw).toContain('name="memory_mib"');
     expect(raw).toContain('name="runtime"');
     res.status(201).send({
       operation: { id: 'op-1', action: 'deploy_function', status: 'running' },
