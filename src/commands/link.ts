@@ -414,19 +414,21 @@ const promptProjectChoice = async (
   suggestedName?: string,
 ): Promise<ProjectChoice> => {
   const choices = [
+    { title: '＋ Create new project…', value: CREATE_NEW_SENTINEL },
     ...projects.map((project) => ({
       title: `${project.name} (${project.id})`,
       value: project.id,
     })),
-    { title: '+ Create new project', value: CREATE_NEW_SENTINEL },
   ];
+  // Create sits at the top, so default to the first existing project (index 1) when there
+  // is one; with no projects to show, the create option (index 0) is the only choice.
   const { selection } = await prompts({
     onState: onPromptState,
     type: 'select',
     name: 'selection',
     message: 'Which project would you like to link?',
     choices,
-    initial: choices.length === 1 ? 0 : 0,
+    initial: projects.length > 0 ? 1 : 0,
   });
   if (selection === CREATE_NEW_SENTINEL) {
     return { type: 'create', suggestedName };

@@ -147,7 +147,7 @@ There are three modes:
 ```bash
 $ neonctl link
 ? Which organization would you like to link? › Personal Org (org-abc123)
-? Which project would you like to link? › + Create new project
+? Which project would you like to link? › ＋ Create new project…
 ? Name for the new project: › my-app
 ? Which region should the new project run in? › AWS US East (Ohio) (aws-us-east-2)
 Created project polished-snowflake-12345678 ("my-app") in aws-us-east-2.
