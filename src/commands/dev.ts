@@ -469,6 +469,11 @@ const writeBundle = async (
 ): Promise<string> => {
   const files = await bundleEntry(source);
   mkdirSync(bundleDir, { recursive: true });
+  // The bundle is ESM (`format: 'esm'`), but it's written into a `.js` file under the
+  // user's node_modules — where Node, finding no `"type"`, would treat `.js` as CommonJS
+  // and throw `Unexpected token 'export'`. Drop a `package.json` marker so Node runs it as
+  // ESM. (A bare `out.mjs` would also work but breaks the `out.js.map` sourcemap link.)
+  writeFileSync(join(bundleDir, 'package.json'), '{"type":"module"}\n');
   for (const [name, contents] of Object.entries(files)) {
     writeFileSync(join(bundleDir, name), contents);
   }
