@@ -1,6 +1,7 @@
 import { Branch, EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
+import { readContextFile } from '../context.js';
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { branchCreateRequest } from '../parameters.gen.js';
@@ -306,26 +307,33 @@ const list = async (props: ProjectScopeProps) => {
   } = await props.apiClient.listProjectBranches({
     projectId: props.projectId,
   });
+  // The branch pinned in the local context (.neon), so we can flag it as `[current]` — the
+  // one commands target by default and that `neonctl env pull` would read.
+  const currentBranchId = readContextFile(props.contextFile).branchId;
   writer(props).end(branches, {
     fields: BRANCH_FIELDS,
     renderColumns: {
       expires_at: (br) => br.expires_at || 'never',
+      // Word labels (not symbols) so they read clearly and match the existing `[anon]`.
       name: (br) => {
         const annotation = annotations[br.id];
         const isAnon = annotation?.value.anonymized;
-        const result: string[] = [];
+        const labels: string[] = [];
         if (br.default) {
-          result.push('✱');
+          labels.push('[default]');
         }
         if (br.protected) {
-          result.push('⛨');
+          labels.push('[protected]');
         }
         if (isAnon) {
-          result.push('[anon]');
+          labels.push('[anon]');
         }
-        result.push(br.name);
+        if (currentBranchId !== undefined && br.id === currentBranchId) {
+          labels.push('[current]');
+        }
+        labels.push(br.name);
 
-        return result.join(' ');
+        return labels.join(' ');
       },
     },
   });
