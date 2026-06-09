@@ -1,4 +1,5 @@
 import yargs from 'yargs';
+import { resolveConfig } from '@neondatabase/config';
 import {
   apply,
   inspect,
@@ -10,6 +11,7 @@ import {
   type NeonApi,
   type PushResult,
 } from '@neondatabase/config-runtime';
+import { toNeonConfigView } from '../config_format.js';
 
 import { log } from '../log.js';
 import { BranchScopeProps } from '../types.js';
@@ -52,6 +54,8 @@ export type ConfigProps = BranchScopeProps & {
   updateExisting?: boolean;
   /** Auto-confirm applying to a protected branch (apply only). */
   allowProtected?: boolean;
+  /** `status` only: print just the neon.ts-shaped config JSON to stdout. */
+  configJson?: boolean;
   /** Injected NeonApi adapter (tests). Production omits it so the real adapter is built from credentials. */
   runtimeApi?: NeonApi;
 };
@@ -104,10 +108,13 @@ export const builder = (argv: yargs.Argv) =>
       "Show the branch's live Neon state",
       (yargs) =>
         yargs.options({
-          config: {
+          'config-json': {
             describe:
-              'Path to a neon.ts policy (defaults to walking up from cwd)',
-            type: 'string',
+              "Print only the branch's live config as neon.ts-shaped JSON " +
+              '(services + branch tuning + preview), to stdout. Useful for ' +
+              'scripting or copying into a neon.ts.',
+            type: 'boolean',
+            default: false,
           },
         }),
       (args) => status(args as any),
@@ -172,7 +179,34 @@ export const status = async (props: ConfigProps): Promise<void> => {
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
   });
-  writer(props).end(live, { fields: INSPECT_FIELDS });
+
+  // The pulled `config` carries the branch's tuning inside a closure that JSON can't
+  // render. Resolve it against the live branch target to get the concrete settings, then
+  // project both that and the separately-pulled preview state into a neon.ts-shaped view.
+  const resolved = resolveConfig(live.config, {
+    name: live.branch.name,
+    id: live.branch.id,
+    exists: true,
+    isDefault: live.branch.isDefault,
+    isProtected: live.branch.protected,
+    ...(live.branch.parent ? { parentId: live.branch.parent } : {}),
+    ...(live.branch.expiresAt ? { expiresAt: live.branch.expiresAt } : {}),
+  });
+  const configView = toNeonConfigView(resolved, live.preview);
+
+  // `--config-json`: emit just the neon.ts-shaped config to stdout (script-friendly,
+  // copy-paste-able), regardless of the global --output.
+  if (props.configJson) {
+    process.stdout.write(`${JSON.stringify(configView, null, 2)}\n`);
+    return;
+  }
+
+  // Default: the live project/branch tables, but with the unhelpful raw `config` replaced
+  // by the resolved neon.ts-shaped view so the user sees enabled infra + branch tuning.
+  writer(props).end(
+    { project: live.project, branch: live.branch, config: configView },
+    { fields: INSPECT_FIELDS },
+  );
 };
 
 export const planCmd = async (props: ConfigProps): Promise<void> => {

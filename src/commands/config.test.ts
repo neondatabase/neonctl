@@ -279,7 +279,7 @@ describe('config commands', () => {
     return path;
   };
 
-  it('status returns the live project + branch state', async () => {
+  it('status returns the live project + branch state with a resolved neon.ts-shaped config', async () => {
     const api = new FakeNeonApi();
     const { stream, read } = captureOut();
 
@@ -289,6 +289,40 @@ describe('config commands', () => {
     expect(parsed.project.id).toBe(PROJECT_ID);
     expect(parsed.branch.id).toBe(BRANCH_ID);
     expect(parsed.branch.name).toBe(BRANCH_NAME);
+    // The `config` column is the resolved neon.ts-shaped view, not the raw `{}`: the fake
+    // branch has compute settings (so a `branch.postgres` section) and no auth/dataApi.
+    expect(parsed.config.branch.postgres.computeSettings).toMatchObject({
+      autoscalingLimitMaxCu: 0.25,
+      suspendTimeout: '5m',
+    });
+    expect(parsed.config.auth).toBeUndefined();
+    expect(parsed.config.dataApi).toBeUndefined();
+    expect(parsed.config.preview).toBeUndefined();
+  });
+
+  it('status --config-json prints only the neon.ts-shaped config to stdout', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+
+    // Capture process.stdout (the --config-json path writes there directly).
+    const chunks: string[] = [];
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      chunks.push(chunk.toString());
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await status({ ...baseProps(api, stream), configJson: true });
+    } finally {
+      process.stdout.write = orig;
+    }
+
+    // The writer (table/json output) is NOT used; only stdout JSON.
+    expect(read()).toBe('');
+    const json = JSON.parse(chunks.join(''));
+    // No project/branch envelope — just the config.
+    expect(json.project).toBeUndefined();
+    expect(json.branch.postgres.computeSettings.suspendTimeout).toBe('5m');
   });
 
   it('plan is a dry run whose applied list includes the auth service change', async () => {
