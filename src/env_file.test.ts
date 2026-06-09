@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { mergeEnvContent, resolveEnvFilePath } from './env_file.js';
+import {
+  loadEnvFileIntoProcess,
+  mergeEnvContent,
+  readEnvFile,
+  resolveEnvFilePath,
+} from './env_file.js';
 
 describe('mergeEnvContent', () => {
   it('writes keys into an empty file with a trailing newline', () => {
@@ -105,5 +110,70 @@ describe('resolveEnvFilePath', () => {
   it('uses an existing .env when present (vercel-style)', () => {
     writeFileSync(join(cwd, '.env'), 'EXISTING=1\n');
     expect(resolveEnvFilePath(cwd)).toBe(join(cwd, '.env'));
+  });
+});
+
+describe('readEnvFile', () => {
+  let cwd: string;
+  beforeEach(() => {
+    cwd = mkdtempSync(join(tmpdir(), 'neonctl-readenv-'));
+  });
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('parses assignments, ignoring comments / blanks and unquoting values', () => {
+    const path = join(cwd, '.env');
+    writeFileSync(
+      path,
+      [
+        '# a comment',
+        '',
+        'PLAIN=value',
+        'export EXPORTED=exp',
+        'QUOTED="has space"',
+        "SINGLE='single'",
+        'not an assignment',
+      ].join('\n'),
+    );
+    expect(readEnvFile(path)).toEqual({
+      PLAIN: 'value',
+      EXPORTED: 'exp',
+      QUOTED: 'has space',
+      SINGLE: 'single',
+    });
+  });
+
+  it('throws when the file does not exist', () => {
+    expect(() => readEnvFile(join(cwd, 'missing.env'))).toThrow(
+      /Env file not found/,
+    );
+  });
+});
+
+describe('loadEnvFileIntoProcess', () => {
+  let cwd: string;
+  beforeEach(() => {
+    cwd = mkdtempSync(join(tmpdir(), 'neonctl-loadenv-'));
+  });
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+    delete process.env.NEONCTL_TEST_LOADENV_NEW;
+    delete process.env.NEONCTL_TEST_LOADENV_EXISTING;
+  });
+
+  it('sets unset vars but never overrides existing process.env entries', () => {
+    process.env.NEONCTL_TEST_LOADENV_EXISTING = 'from-process';
+    const path = join(cwd, '.env');
+    writeFileSync(
+      path,
+      'NEONCTL_TEST_LOADENV_NEW=from-file\nNEONCTL_TEST_LOADENV_EXISTING=from-file\n',
+    );
+
+    const applied = loadEnvFileIntoProcess(path);
+
+    expect(process.env.NEONCTL_TEST_LOADENV_NEW).toBe('from-file');
+    expect(process.env.NEONCTL_TEST_LOADENV_EXISTING).toBe('from-process');
+    expect(applied).toEqual(['NEONCTL_TEST_LOADENV_NEW']);
   });
 });

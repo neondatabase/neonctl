@@ -10,6 +10,7 @@ import { log } from '../log.js';
 import { CommonProps } from '../types.js';
 import { fillSingleProject } from '../utils/enrichers.js';
 import { looksLikeBranchId } from '../utils/formats.js';
+import { applyPolicyOnCreate } from './config.js';
 import { handler as linkHandler } from './link.js';
 
 type CheckoutProps = CommonProps & {
@@ -60,7 +61,7 @@ export const handler = async (props: CheckoutProps) => {
   // nothing resolves, fall back to an interactive `neonctl link`.
   const projectId = await resolveProjectId(props);
 
-  const branchId = await resolveBranchId(props, projectId);
+  const { branchId, created } = await resolveBranchId(props, projectId);
 
   const orgId = await resolveOrgId(props, projectId);
 
@@ -81,6 +82,18 @@ export const handler = async (props: CheckoutProps) => {
     orgId ? ` (org ${orgId})` : '',
     props.contextFile,
   );
+
+  // Only when checkout just *created* the branch do we apply the local neon.ts policy,
+  // so a new branch comes up with the declared settings/infra immediately. Checking out an
+  // existing branch never reconciles it — that's an explicit `neonctl deploy` / `config
+  // apply`. No neon.ts on disk → nothing to apply.
+  if (created) {
+    await applyPolicyOnCreate({
+      projectId,
+      branchId,
+      ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    });
+  }
 };
 
 /**
@@ -94,15 +107,24 @@ export const handler = async (props: CheckoutProps) => {
  * - **Omitted**: open an interactive picker listing the project's branches (TTY
  *   only); in a non-interactive context a missing branch is a hard error.
  */
+type ResolvedBranch = {
+  branchId: string;
+  /** True only when this checkout created a new branch (vs. selecting an existing one). */
+  created: boolean;
+};
+
 const resolveBranchId = async (
   props: CheckoutProps,
   projectId: string,
-): Promise<string> => {
+): Promise<ResolvedBranch> => {
   const branches = (await props.apiClient.listProjectBranches({ projectId }))
     .data.branches;
 
   if (!props.id) {
-    return pickBranchInteractively(branches, projectId);
+    return {
+      branchId: await pickBranchInteractively(branches, projectId),
+      created: false,
+    };
   }
 
   const ref = props.id;
@@ -111,14 +133,14 @@ const resolveBranchId = async (
   if (looksLikeBranchId(ref)) {
     const byId = branches.find((b: Branch) => b.id === ref);
     if (byId) {
-      return byId.id;
+      return { branchId: byId.id, created: false };
     }
     throw new Error(notFoundMessage(ref, branches));
   }
 
   const byName = branches.find((b: Branch) => b.name === ref);
   if (byName) {
-    return byName.id;
+    return { branchId: byName.id, created: false };
   }
 
   // Name not found: offer to create it interactively, mirroring `branch create`.
@@ -136,7 +158,10 @@ const resolveBranchId = async (
   if (!create) {
     throw new Error(`Aborted: branch "${ref}" was not found and not created.`);
   }
-  return createBranch(props, projectId, ref, branches);
+  return {
+    branchId: await createBranch(props, projectId, ref, branches),
+    created: true,
+  };
 };
 
 const notFoundMessage = (ref: string, branches: Branch[]): string =>
