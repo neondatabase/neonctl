@@ -13,7 +13,7 @@ exports[`link > --agent mode > with full project details creates project and emi
     "id": "new-project-789012",
     "name": "test_project"
   },
-  "message": "Created project new-project-789012 (\\"test_project\\") in aws-us-east-2 and linked <TMP>/agent_linked_create/.neon. Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env"
+  "message": "Created project new-project-789012 (\\"test_project\\") in aws-us-east-2 and linked <TMP>/agent_linked_create/.neon. Skipped env pull (--no-env-pull); run \`neonctl env pull\` later, or inject env at runtime with \`neon-env run -- <your dev command>\`."
 }
 "
 `;
@@ -88,7 +88,7 @@ exports[`link > --agent mode > with org+project emits linked JSON and writes .ne
   "project": {
     "id": "test"
   },
-  "message": "Linked <TMP>/agent_linked_existing/.neon to project test (org org-2) on branch br-main-branch-123456. Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env"
+  "message": "Linked <TMP>/agent_linked_existing/.neon to project test (org org-2) on branch br-main-branch-123456. Skipped env pull (--no-env-pull); run \`neonctl env pull\` later, or inject env at runtime with \`neon-env run -- <your dev command>\`."
 }
 "
 `;
@@ -138,8 +138,6 @@ exports[`link > gitignore scaffolding > appends .neon to an existing .gitignore 
   projectId: test
   branchId:  br-main-branch-123456
 
-Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env
-
 "
 `;
 
@@ -149,8 +147,6 @@ exports[`link > gitignore scaffolding > appends .neon to an existing .gitignore 
   projectId: test
   branchId:  br-main-branch-123456
 
-Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env
-
 "
 `;
 
@@ -159,8 +155,6 @@ exports[`link > gitignore scaffolding > creates a .gitignore listing .neon next 
   orgId:    org-2
   projectId: test
   branchId:  br-main-branch-123456
-
-Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env
 
 "
 `;
@@ -175,8 +169,6 @@ Linked <TMP>/flag_create/.neon:
   orgId:    org-2
   projectId: new-project-789012
   branchId:  br-test-branch-789012
-
-Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env
 
 "
 `;
@@ -195,8 +187,6 @@ exports[`link > non-interactive flag mode > link to existing project writes .neo
   projectId: test
   branchId:  br-main-branch-123456
 
-Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env
-
 "
 `;
 
@@ -213,8 +203,6 @@ exports[`link > non-interactive flag mode > link with --params JSON behaves like
   orgId:    org-2
   projectId: test
   branchId:  br-main-branch-123456
-
-Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env
 
 "
 `;
@@ -308,8 +296,6 @@ exports[`link > overwrites an existing .neon when re-linking non-interactively 1
   orgId:    org-2
   projectId: test
   branchId:  br-main-branch-123456
-
-Next: run \`neonctl env pull\` to write this branch’s env vars (DATABASE_URL, …) into a local .env
 
 "
 `;

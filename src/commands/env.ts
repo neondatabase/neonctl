@@ -1,3 +1,4 @@
+import chalk from 'chalk';
 import yargs from 'yargs';
 
 import { type NeonApi } from '@neondatabase/config';
@@ -22,12 +23,13 @@ export const command = 'env';
 export const describe = "Manage a branch's Neon env variables locally";
 
 /**
- * The canonical "what to do next" after a branch is pinned (`checkout` / `link`): pull its
- * Neon env vars into a local `.env`. Shared so the hint reads identically across commands
- * (and the `link --agent` JSON message), and updates in one place.
+ * Shown (to stderr) when `link` / `checkout` skip the bundled env pull because the user passed
+ * `--no-env-pull`. Names the two ways to get the branch's vars without an on-disk file written
+ * eagerly: an explicit `neonctl env pull`, or runtime injection via `neon-env run`.
  */
-export const ENV_PULL_NEXT_STEP =
-  'Next: run `neonctl env pull` to write this branch’s env vars (DATABASE_URL, …) into a local .env';
+export const ENV_PULL_SKIPPED_HINT =
+  'Skipped env pull (--no-env-pull). Run `neonctl env pull` to write this branch’s env vars ' +
+  '(DATABASE_URL, …) into a local .env, or inject them at runtime with `neon-env run -- <your dev command>`.';
 export const builder = (argv: yargs.Argv) =>
   argv
     .usage('$0 env <sub-command> [options]')
@@ -59,7 +61,9 @@ export const builder = (argv: yargs.Argv) =>
             '$0 env pull --branch preview --file .env.preview',
             'Pull a specific branch into a specific file',
           ),
-      (args) => pull(args as any),
+      async (args) => {
+        await pull(args as any);
+      },
     )
     .demandCommand(1);
 
@@ -70,7 +74,16 @@ const NEON_VAR_NAMES = Object.values(NEON_ENV_VAR_KEYS).flatMap((group) =>
   Object.values(group),
 );
 
-export const pull = async (props: EnvPullProps): Promise<void> => {
+/**
+ * What an env pull actually did, so callers (notably `link --agent`) can report it precisely
+ * instead of guessing. `written` lists the keys merged into `file`; `empty` means the branch
+ * has no Neon vars to pull yet (no DATABASE_URL / Auth / Data API).
+ */
+export type PullOutcome =
+  | { status: 'written'; written: string[]; file: string }
+  | { status: 'empty' };
+
+export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
   const cwd = props.cwd ?? process.cwd();
   const branchId = await branchIdFromProps(props);
 
@@ -91,7 +104,7 @@ export const pull = async (props: EnvPullProps): Promise<void> => {
       'No Neon env variables to pull for this branch (no DATABASE_URL or ' +
         'enabled Auth / Data API).',
     );
-    return;
+    return { status: 'empty' };
   }
 
   const targetPath = resolveEnvFilePath(cwd, props.file);
@@ -103,6 +116,70 @@ export const pull = async (props: EnvPullProps): Promise<void> => {
     targetPath,
     written.join(', '),
   );
+  return { status: 'written', written, file: targetPath };
+};
+
+/**
+ * Outcome of the env pull that `link` / `checkout` run automatically once a branch is pinned.
+ * Adds the two non-`pull` cases: the user opted out (`--no-env-pull`), or the pull failed (and
+ * was degraded to a warning so the pin still stands).
+ */
+export type AutoPullResult =
+  | PullOutcome
+  | { status: 'skipped' }
+  | { status: 'failed'; message: string };
+
+/**
+ * Pull a freshly-pinned branch's Neon env vars into a local `.env`, bundled into `link` and
+ * `checkout` so the branch-first loop is just *link + checkout* — `env pull` runs for you.
+ *
+ * On by default; `--no-env-pull` opts out (e.g. when env is injected at runtime via
+ * `neon-env run` / `neon dev`, or to keep secrets out of the working tree). The pin is the
+ * command's primary effect and has already succeeded by the time this runs, so a pull failure
+ * degrades to a warning rather than failing the command. Returns what happened so
+ * `link --agent` can fold an accurate note into its JSON message.
+ */
+export const autoPullEnvAfterPin = async (
+  props: EnvPullProps & { envPull: boolean },
+): Promise<AutoPullResult> => {
+  if (!props.envPull) {
+    log.info(chalk.dim(ENV_PULL_SKIPPED_HINT));
+    return { status: 'skipped' };
+  }
+  try {
+    return await pull(props);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warning(
+      'Branch pinned, but pulling its Neon env vars failed: %s\n' +
+        'Run `neonctl env pull` once resolved (e.g. `neonctl deploy` if a declared service ' +
+        'is missing), or inject them at runtime with `neon-env run -- <your dev command>`.',
+      message,
+    );
+    return { status: 'failed', message };
+  }
+};
+
+/**
+ * Render the one-line env-pull note appended to `link --agent`'s JSON `message`, so an agent
+ * reading the structured output knows whether its branch env is already on disk.
+ */
+export const renderAgentPullNote = (result: AutoPullResult): string => {
+  switch (result.status) {
+    case 'written':
+      return ` Pulled ${result.written.length} Neon env var${
+        result.written.length === 1 ? '' : 's'
+      } into ${result.file}.`;
+    case 'empty':
+      return ' No Neon env vars to pull for this branch yet.';
+    case 'skipped':
+      return (
+        ' Skipped env pull (--no-env-pull); run `neonctl env pull` later, ' +
+        'or inject env at runtime with `neon-env run -- <your dev command>`.'
+      );
+    case 'failed':
+      return ` Could not pull env vars (${result.message}); run \`neonctl env pull\` once resolved.`;
+  }
 };
 
 /**

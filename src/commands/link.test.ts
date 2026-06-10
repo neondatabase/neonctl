@@ -143,6 +143,7 @@ describe('link', () => {
         'org-2',
         '--project-id',
         'test',
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);
@@ -159,6 +160,7 @@ describe('link', () => {
         'link',
         '--params',
         JSON.stringify({ orgId: 'org-2', projectId: 'test' }),
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);
@@ -179,6 +181,7 @@ describe('link', () => {
         'test_project',
         '--region-id',
         'aws-us-east-2',
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);
@@ -251,6 +254,7 @@ describe('link', () => {
         'org-2',
         '--project-id',
         'test',
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);
@@ -291,6 +295,7 @@ describe('link', () => {
         'test_project',
         '--region-id',
         'aws-us-east-2',
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);
@@ -449,6 +454,7 @@ describe('link', () => {
       'org-2',
       '--project-id',
       'test',
+      '--no-env-pull',
       '--context-file',
       ctx,
     ]);
@@ -467,6 +473,7 @@ describe('link', () => {
         'org-2',
         '--project-id',
         'test',
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);
@@ -487,6 +494,7 @@ describe('link', () => {
         'org-2',
         '--project-id',
         'test',
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);
@@ -499,6 +507,7 @@ describe('link', () => {
         'org-2',
         '--project-id',
         'test',
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);
