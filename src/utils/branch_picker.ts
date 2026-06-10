@@ -18,6 +18,22 @@ export type PickedBranch =
 const CREATE_BRANCH_CHOICE = Symbol('create-branch');
 
 /**
+ * Render a branch's display name with the same word labels as `neonctl branch list`
+ * (`[default]`, `[protected]`) instead of symbols, so the picker reads clearly.
+ */
+const branchLabel = (branch: Branch): string => {
+  const labels: string[] = [];
+  if (branch.default) {
+    labels.push('[default]');
+  }
+  if (branch.protected) {
+    labels.push('[protected]');
+  }
+  labels.push(branch.name);
+  return labels.join(' ');
+};
+
+/**
  * Prompt the user to pick a branch from `branches`, with a "＋ Create a new branch…" option
  * pinned to the top (mirroring the project/org pickers). The default selection is the
  * project's default branch (the create option sits at index 0, so the default index is
@@ -42,7 +58,7 @@ export const pickBranchInteractively = async (
     choices: [
       { title: '＋ Create a new branch…', value: CREATE_BRANCH_CHOICE },
       ...branches.map((b: Branch) => ({
-        title: `${b.default ? '✱ ' : ''}${b.name} (${b.id})`,
+        title: `${branchLabel(b)} (${b.id})`,
         value: b.id,
       })),
     ],

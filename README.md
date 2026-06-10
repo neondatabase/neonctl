@@ -166,7 +166,7 @@ step to pick which branch to pin — the same `＋ Create a new branch…` + lis
 ```bash
 ? Which organization would you like to link? › Personal Org (org-abc123)
 ? Which project would you like to link? › my-app (polished-snowflake-12345678)
-? Which branch would you like to link? › ✱ main (br-main-branch-87654321)
+? Which branch would you like to link? › [default] main (br-main-branch-87654321)
 ```
 
 **Non-interactive (flags or `--params` JSON)** — for scripts and CI:
