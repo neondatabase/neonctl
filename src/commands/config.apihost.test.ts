@@ -17,6 +17,9 @@ vi.mock('@neondatabase/config-runtime', async (importOriginal) => {
     apply: vi.fn(() => {
       throw new Error('STOP');
     }),
+    createBranch: vi.fn(() => {
+      throw new Error('STOP');
+    }),
   };
 });
 
@@ -28,9 +31,20 @@ vi.mock('../utils/enrichers.js', async (importOriginal) => {
   };
 });
 
-import { apply, inspect, plan } from '@neondatabase/config-runtime';
+import {
+  apply,
+  createBranch,
+  inspect,
+  plan,
+} from '@neondatabase/config-runtime';
 import type { ConfigProps } from './config.js';
-import { applyCmd, applyPolicyOnCreate, planCmd, status } from './config.js';
+import {
+  applyCmd,
+  applyPolicyOnCreate,
+  createBranchFromPolicyOnCheckout,
+  planCmd,
+  status,
+} from './config.js';
 
 const HOST = 'https://stage.example/api/v2';
 
@@ -104,6 +118,23 @@ describe('config handlers forward apiHost', () => {
         }),
       ).rejects.toThrow('STOP');
       expect(apply).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ apiHost: HOST }),
+      );
+    });
+  });
+
+  it('createBranchFromPolicyOnCheckout forwards apiHost into createBranch', async () => {
+    await withNeonTs(async (cwd) => {
+      await expect(
+        createBranchFromPolicyOnCheckout({
+          projectId: 'p',
+          branchName: 'feature-x',
+          apiHost: HOST,
+          cwd,
+        }),
+      ).rejects.toThrow('STOP');
+      expect(createBranch).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ apiHost: HOST }),
       );

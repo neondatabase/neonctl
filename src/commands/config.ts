@@ -382,6 +382,7 @@ export const createBranchFromPolicyOnCheckout = async (props: {
   projectId: string;
   branchName: string;
   apiKey?: string;
+  apiHost?: string;
   runtimeApi?: NeonApi;
   /** Directory to search for `neon.ts` from. Defaults to the process cwd. */
   cwd?: string;
@@ -403,6 +404,7 @@ export const createBranchFromPolicyOnCheckout = async (props: {
       projectId: props.projectId,
       branchName: props.branchName,
       ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+      ...(props.apiHost ? { apiHost: props.apiHost } : {}),
       ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
       bundleFunction: neonctlBundler,
     },
