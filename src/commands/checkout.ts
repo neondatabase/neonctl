@@ -14,7 +14,10 @@ import {
 import { fillSingleProject } from '../utils/enrichers.js';
 import { looksLikeBranchId } from '../utils/formats.js';
 import { autoPullEnvAfterPin } from './env.js';
-import { applyPolicyOnCreate } from './config.js';
+import {
+  applyPolicyOnCreate,
+  createBranchFromPolicyOnCheckout,
+} from './config.js';
 import { handler as linkHandler } from './link.js';
 
 type CheckoutProps = CommonProps & {
@@ -74,7 +77,10 @@ export const handler = async (props: CheckoutProps) => {
   // nothing resolves, fall back to an interactive `neonctl link`.
   const projectId = await resolveProjectId(props);
 
-  const { branchId, created } = await resolveBranchId(props, projectId);
+  const { branchId, created, policyApplied } = await resolveBranchId(
+    props,
+    projectId,
+  );
 
   const orgId = await resolveOrgId(props, projectId);
 
@@ -96,11 +102,12 @@ export const handler = async (props: CheckoutProps) => {
     props.contextFile,
   );
 
-  // Only when checkout just *created* the branch do we apply the local neon.ts policy,
-  // so a new branch comes up with the declared settings/infra immediately. Checking out an
-  // existing branch never reconciles it — that's an explicit `neonctl deploy` / `config
-  // apply`. No neon.ts on disk → nothing to apply.
-  if (created) {
+  // When checkout *created* the branch and a neon.ts exists, the branch was created straight
+  // from the policy (evaluated as a new branch) so its settings/infra are already applied —
+  // see `policyApplied`. The fallback below covers the case where the branch was created bare
+  // (e.g. a policy-driven create wasn't possible); `applyPolicyOnCreate` is a no-op when there
+  // is no neon.ts on disk. Checking out an existing branch never reconciles it.
+  if (created && !policyApplied) {
     await applyPolicyOnCreate({
       projectId,
       branchId,
@@ -134,6 +141,12 @@ type ResolvedBranch = {
   branchId: string;
   /** True only when this checkout created a new branch (vs. selecting an existing one). */
   created: boolean;
+  /**
+   * True when the branch was created straight from the local `neon.ts` policy (so its
+   * settings/infra are already applied and the handler must not re-apply). False for an
+   * existing branch or a bare create with no policy on disk.
+   */
+  policyApplied: boolean;
 };
 
 const resolveBranchId = async (
@@ -151,18 +164,14 @@ const resolveBranchId = async (
         'or run interactively to pick one from a list.',
     });
     if (picked.kind === 'existing') {
-      return { branchId: picked.branchId, created: false };
+      return {
+        branchId: picked.branchId,
+        created: false,
+        policyApplied: false,
+      };
     }
     // The user chose "create a new branch" from the picker.
-    return {
-      branchId: await createBranch(
-        props.apiClient,
-        projectId,
-        picked.name,
-        branches,
-      ),
-      created: true,
-    };
+    return createCheckoutBranch(props, projectId, picked.name, branches);
   }
 
   const ref = props.id;
@@ -171,14 +180,14 @@ const resolveBranchId = async (
   if (looksLikeBranchId(ref)) {
     const byId = branches.find((b: Branch) => b.id === ref);
     if (byId) {
-      return { branchId: byId.id, created: false };
+      return { branchId: byId.id, created: false, policyApplied: false };
     }
     throw new Error(notFoundMessage(ref, branches));
   }
 
   const byName = branches.find((b: Branch) => b.name === ref);
   if (byName) {
-    return { branchId: byName.id, created: false };
+    return { branchId: byName.id, created: false, policyApplied: false };
   }
 
   // Name not found: offer to create it interactively, mirroring `branch create`.
@@ -196,9 +205,38 @@ const resolveBranchId = async (
   if (!create) {
     throw new Error(`Aborted: branch "${ref}" was not found and not created.`);
   }
+  return createCheckoutBranch(props, projectId, ref, branches);
+};
+
+/**
+ * Create the branch to check out. When a `neon.ts` exists, route through the policy-driven
+ * create so the new branch comes up branched from the policy's `parent` and configured with
+ * its declared TTL / compute / services (evaluated as a *new* branch). Otherwise fall back to
+ * a bare branch off the default — the handler then applies the policy (a no-op with no
+ * `neon.ts`).
+ */
+const createCheckoutBranch = async (
+  props: CheckoutProps,
+  projectId: string,
+  name: string,
+  branches: Branch[],
+): Promise<ResolvedBranch> => {
+  const fromPolicy = await createBranchFromPolicyOnCheckout({
+    projectId,
+    branchName: name,
+    ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+  });
+  if (fromPolicy) {
+    return {
+      branchId: fromPolicy.branchId,
+      created: true,
+      policyApplied: true,
+    };
+  }
   return {
-    branchId: await createBranch(props.apiClient, projectId, ref, branches),
+    branchId: await createBranch(props.apiClient, projectId, name, branches),
     created: true,
+    policyApplied: false,
   };
 };
 
