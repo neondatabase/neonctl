@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe } from 'vitest';
 
 import { test } from '../test_utils/fixtures';
@@ -13,6 +16,29 @@ describe('branches', () => {
     await testCliCommand(['branches', 'list', '--project-id', 'test'], {
       outputTable: true,
     });
+  });
+
+  test('list/table marks the branch pinned in .neon as [current]', async ({
+    testCliCommand,
+  }) => {
+    // Seed a .neon pinning the default branch; it should render `[default] [current] main`.
+    const dir = mkdtempSync(join(tmpdir(), 'neonctl-branches-'));
+    const ctx = join(dir, '.neon');
+    writeFileSync(
+      ctx,
+      JSON.stringify({
+        projectId: 'test',
+        branchId: 'br-main-branch-123456',
+      }),
+    );
+    try {
+      await testCliCommand(
+        ['branches', 'list', '--project-id', 'test', '--context-file', ctx],
+        { outputTable: true },
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   /* create */
