@@ -1,5 +1,6 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@neondatabase/config-runtime', async (importOriginal) => {
@@ -18,14 +19,16 @@ import { resolveNeonEnvVars } from './env.js';
 
 const HOST = 'https://stage.example/api/v2';
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('resolveNeonEnvVars forwards apiHost', () => {
   it('forwards ctx.apiHost into pullConfig (no neon.ts tier)', async () => {
-    // Invariant: a fresh /tmp dir has no neon.ts on the walk up to root (the loader
-    // stops at $HOME, and /tmp is not under $HOME), so resolveNeonEnvVars takes the
-    // pullConfig tier. A stray /tmp/neon.ts or /neon.ts would flip the tier.
-    const cwd = mkdtempSync(`${tmpdir()}/neonctl-dev-`);
+    // A `.git` dir marks the temp dir as a repo root, so the config-file walk stops
+    // there: no neon.ts is found and the resolver takes the pullConfig tier.
+    const cwd = mkdtempSync(join(tmpdir(), 'neonctl-dev-'));
+    mkdirSync(join(cwd, '.git'));
     try {
       await expect(
         resolveNeonEnvVars({

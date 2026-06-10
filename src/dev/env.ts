@@ -23,6 +23,13 @@ export type DevEnvContext = {
   api?: NeonApi;
 };
 
+/** The API-targeting options every runtime call forwards from the context. */
+const apiOptions = (ctx: DevEnvContext) => ({
+  ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
+  ...(ctx.apiHost ? { apiHost: ctx.apiHost } : {}),
+  ...(ctx.api ? { api: ctx.api } : {}),
+});
+
 /**
  * Thrown when a `neon.ts` policy declares a branch-level resource (Neon Auth,
  * Data API, a bucket, the AI Gateway) that the linked remote branch does not
@@ -93,9 +100,7 @@ export const resolveNeonEnvVars = async (
     const pulled = await pullConfig({
       projectId: ctx.projectId,
       branchId: ctx.branchId,
-      ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
-      ...(ctx.apiHost ? { apiHost: ctx.apiHost } : {}),
-      ...(ctx.api ? { api: ctx.api } : {}),
+      ...apiOptions(ctx),
     });
     // `pulled.config` is already a `Config` (static auth/dataApi toggles + a branch
     // tuning closure), so it feeds straight into fetchEnv — no wrapping needed.
@@ -199,9 +204,7 @@ const assertPolicyMatchesBranch = async (
   const result = await plan(config, {
     projectId: ctx.projectId as string,
     branchId: ctx.branchId as string,
-    ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
-    ...(ctx.apiHost ? { apiHost: ctx.apiHost } : {}),
-    ...(ctx.api ? { api: ctx.api } : {}),
+    ...apiOptions(ctx),
   });
 
   const missing = result.applied.filter(isMissingResource);
@@ -234,9 +237,7 @@ const fetchAndProject = async (
   const env = await fetchEnv(config, {
     projectId: ctx.projectId as string,
     branchId: ctx.branchId as string,
-    ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
-    ...(ctx.apiHost ? { apiHost: ctx.apiHost } : {}),
-    ...(ctx.api ? { api: ctx.api } : {}),
+    ...apiOptions(ctx),
   });
   return toEntries(env);
 };

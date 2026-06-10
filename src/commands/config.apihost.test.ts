@@ -44,7 +44,9 @@ const baseProps = (): ConfigProps => ({
   branch: 'main',
 });
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 const withNeonTs = async (run: (cwd: string) => Promise<void>) => {
   const cwd = mkdtempSync(join(tmpdir(), 'neonctl-cfg-'));
