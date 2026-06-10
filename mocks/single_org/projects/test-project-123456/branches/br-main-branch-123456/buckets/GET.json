@@ -1,0 +1,6 @@
+{
+  "buckets": [
+    { "name": "my-bucket", "access_level": "private" },
+    { "name": "public-bucket", "access_level": "public_read" }
+  ]
+}

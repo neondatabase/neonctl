@@ -1,0 +1,169 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`bucket > create with default access level 1`] = `""`;
+
+exports[`bucket > create with public_read access level 1`] = `""`;
+
+exports[`bucket > delete 1`] = `""`;
+
+exports[`bucket > delete reports a helpful error when the bucket is missing 1`] = `""`;
+
+exports[`bucket > list (yaml) 1`] = `
+"- name: my-bucket
+  access_level: private
+- name: public-bucket
+  access_level: public_read
+"
+`;
+
+exports[`bucket > list with table output 1`] = `
+"buckets
+┌───────────────┬──────────────┐
+│ Name          │ Access Level │
+├───────────────┼──────────────┤
+│ my-bucket     │ private      │
+├───────────────┼──────────────┤
+│ public-bucket │ public_read  │
+└───────────────┴──────────────┘
+"
+`;
+
+exports[`bucket > ls alias lists buckets 1`] = `
+"- name: my-bucket
+  access_level: private
+- name: public-bucket
+  access_level: public_read
+"
+`;
+
+exports[`bucket > object delete --recursive rejects a prefix without a trailing slash 1`] = `""`;
+
+exports[`bucket > object delete --recursive rejects an empty prefix 1`] = `""`;
+
+exports[`bucket > object delete --recursive removes every object under the prefix 1`] = `""`;
+
+exports[`bucket > object delete 1`] = `""`;
+
+exports[`bucket > object delete a nested key 1`] = `""`;
+
+exports[`bucket > object delete surfaces the server message when missing 1`] = `""`;
+
+exports[`bucket > object get downloads a nested key 1`] = `""`;
+
+exports[`bucket > object get downloads to the given file 1`] = `""`;
+
+exports[`bucket > object get surfaces the server message when the object is missing 1`] = `""`;
+
+exports[`bucket > object get without a key is rejected client-side 1`] = `""`;
+
+exports[`bucket > object list 1`] = `
+"folders:
+  - images/
+  - logs/
+objects:
+  - key: hello.txt
+    size: 12
+    last_modified: 2021-01-01T00:00:00.000Z
+    etag: '"abc123"'
+  - key: readme.md
+    size: 2048
+    last_modified: 2021-02-02T00:00:00.000Z
+    etag: '"def456"'
+prefix: ""
+delimiter: ""
+limit: ""
+cursor: ""
+next_cursor: ""
+is_truncated: false
+"
+`;
+
+exports[`bucket > object list forwards prefix, delimiter and limit 1`] = `
+"folders:
+  - images/
+  - logs/
+objects:
+  - key: hello.txt
+    size: 12
+    last_modified: 2021-01-01T00:00:00.000Z
+    etag: '"abc123"'
+  - key: readme.md
+    size: 2048
+    last_modified: 2021-02-02T00:00:00.000Z
+    etag: '"def456"'
+prefix: logs/
+delimiter: /
+limit: "100"
+cursor: ""
+next_cursor: ""
+is_truncated: false
+"
+`;
+
+exports[`bucket > object list with fully implicit project/branch resolution 1`] = `
+"folders:
+  - images/
+  - logs/
+objects:
+  - key: hello.txt
+    size: 12
+    last_modified: 2021-01-01T00:00:00.000Z
+    etag: '"abc123"'
+  - key: readme.md
+    size: 2048
+    last_modified: 2021-02-02T00:00:00.000Z
+    etag: '"def456"'
+prefix: ""
+delimiter: ""
+limit: ""
+cursor: ""
+next_cursor: ""
+is_truncated: false
+"
+`;
+
+exports[`bucket > object list with table output 1`] = `
+"folders
+┌─────────┐
+│ Name    │
+├─────────┤
+│ images/ │
+├─────────┤
+│ logs/   │
+└─────────┘
+objects
+┌───────────┬──────┬──────────────────────────┬──────────┐
+│ Key       │ Size │ Last Modified            │ Etag     │
+├───────────┼──────┼──────────────────────────┼──────────┤
+│ hello.txt │ 12   │ 2021-01-01T00:00:00.000Z │ "abc123" │
+├───────────┼──────┼──────────────────────────┼──────────┤
+│ readme.md │ 2048 │ 2021-02-02T00:00:00.000Z │ "def456" │
+└───────────┴──────┴──────────────────────────┴──────────┘
+"
+`;
+
+exports[`bucket > object ls alias 1`] = `
+"folders:
+  - images/
+  - logs/
+objects:
+  - key: hello.txt
+    size: 12
+    last_modified: 2021-01-01T00:00:00.000Z
+    etag: '"abc123"'
+  - key: readme.md
+    size: 2048
+    last_modified: 2021-02-02T00:00:00.000Z
+    etag: '"def456"'
+prefix: ""
+delimiter: ""
+limit: ""
+cursor: ""
+next_cursor: ""
+is_truncated: false
+"
+`;
+
+exports[`bucket > object rm alias 1`] = `""`;
+
+exports[`bucket > rm alias deletes a bucket 1`] = `""`;
