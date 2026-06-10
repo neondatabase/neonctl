@@ -17,6 +17,8 @@ export type DevEnvContext = {
   projectId?: string;
   branchId?: string;
   apiKey?: string;
+  /** Neon API base URL. Falls back to `NEON_API_HOST`, then production. */
+  apiHost?: string;
   /** Injected NeonApi adapter (tests). Production builds it from `apiKey`. */
   api?: NeonApi;
 };
@@ -92,6 +94,7 @@ export const resolveNeonEnvVars = async (
       projectId: ctx.projectId,
       branchId: ctx.branchId,
       ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
+      ...(ctx.apiHost ? { apiHost: ctx.apiHost } : {}),
       ...(ctx.api ? { api: ctx.api } : {}),
     });
     // `pulled.config` is already a `Config` (static auth/dataApi toggles + a branch
@@ -197,6 +200,7 @@ const assertPolicyMatchesBranch = async (
     projectId: ctx.projectId as string,
     branchId: ctx.branchId as string,
     ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
+    ...(ctx.apiHost ? { apiHost: ctx.apiHost } : {}),
     ...(ctx.api ? { api: ctx.api } : {}),
   });
 
@@ -231,6 +235,7 @@ const fetchAndProject = async (
     projectId: ctx.projectId as string,
     branchId: ctx.branchId as string,
     ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
+    ...(ctx.apiHost ? { apiHost: ctx.apiHost } : {}),
     ...(ctx.api ? { api: ctx.api } : {}),
   });
   return toEntries(env);
