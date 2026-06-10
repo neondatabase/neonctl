@@ -1,5 +1,11 @@
 /* eslint-disable @typescript-eslint/require-await */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -18,7 +24,7 @@ import type {
   NeonRoleSnapshot,
 } from '@neondatabase/config';
 
-import { pull, type EnvPullProps } from './env.js';
+import { autoPullEnvAfterPin, pull, type EnvPullProps } from './env.js';
 
 const PROJECT_ID = 'patient-art-12345';
 const BRANCH_ID = 'br-snowy-frost-12345';
@@ -238,5 +244,59 @@ describe('env pull', () => {
     await pull({ ...baseProps(new FakeNeonApi(), cwd), file: '.env.preview' });
     const content = readFileSync(join(cwd, '.env.preview'), 'utf8');
     expect(content).toMatch(/^DATABASE_URL=/m);
+  });
+});
+
+/**
+ * Branch-level `getConnectionUri` failure, to exercise the auto-pull failure path. The pin
+ * (`link` / `checkout`) has already happened by the time auto-pull runs, so a pull failure
+ * must degrade to a non-throwing `failed` result rather than tearing down the command.
+ */
+class UnreachableNeonApi extends FakeNeonApi {
+  override async getConnectionUri(): Promise<{ uri: string }> {
+    throw new Error('boom: Neon API unreachable');
+  }
+}
+
+describe('autoPullEnvAfterPin (bundled into link / checkout)', () => {
+  let cwd: string;
+  beforeEach(() => {
+    cwd = mkdtempSync(join(tmpdir(), 'neonctl-auto-pull-'));
+  });
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('pulls by default, writing the branch vars into .env.local', async () => {
+    const result = await autoPullEnvAfterPin({
+      ...baseProps(new FakeNeonApi(), cwd),
+      envPull: true,
+    });
+
+    expect(result.status).toBe('written');
+    const content = readFileSync(join(cwd, '.env.local'), 'utf8');
+    expect(content).toMatch(/^DATABASE_URL=/m);
+  });
+
+  it('skips the pull (writing nothing) when --no-env-pull is passed', async () => {
+    const result = await autoPullEnvAfterPin({
+      ...baseProps(new FakeNeonApi(), cwd),
+      envPull: false,
+    });
+
+    expect(result).toEqual({ status: 'skipped' });
+    expect(existsSync(join(cwd, '.env.local'))).toBe(false);
+    expect(existsSync(join(cwd, '.env'))).toBe(false);
+  });
+
+  it('degrades a pull failure to a warning instead of throwing (the pin still stands)', async () => {
+    const result = await autoPullEnvAfterPin({
+      ...baseProps(new UnreachableNeonApi(), cwd),
+      envPull: true,
+    });
+
+    expect(result.status).toBe('failed');
+    // Nothing is written when the pull fails before resolving any vars.
+    expect(existsSync(join(cwd, '.env.local'))).toBe(false);
   });
 });

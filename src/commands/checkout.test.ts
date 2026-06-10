@@ -66,6 +66,7 @@ describe('checkout', () => {
       'main',
       '--project-id',
       'test',
+      '--no-env-pull',
       '--context-file',
       ctx,
     ]);
@@ -86,6 +87,7 @@ describe('checkout', () => {
       'br-sunny-branch-123456',
       '--project-id',
       'test',
+      '--no-env-pull',
       '--context-file',
       ctx,
     ]);
@@ -104,7 +106,13 @@ describe('checkout', () => {
       orgId: 'org-keep',
       projectId: 'test',
     });
-    await testCliCommand(['checkout', 'test_branch', '--context-file', ctx]);
+    await testCliCommand([
+      'checkout',
+      'test_branch',
+      '--no-env-pull',
+      '--context-file',
+      ctx,
+    ]);
     expect(parseContext(readFile(ctx))).toEqual({
       orgId: 'org-keep',
       projectId: 'test',
@@ -120,9 +128,12 @@ describe('checkout', () => {
     // The .neon only has projectId; checkout should look up the project's
     // org_id and write all three fields so the context file ends up complete.
     const ctx = tmpContext('heal_org', { projectId: 'test' });
-    await testCliCommand(['checkout', 'main', '--context-file', ctx], {
-      mockDir: 'checkout_heal_org',
-    });
+    await testCliCommand(
+      ['checkout', 'main', '--no-env-pull', '--context-file', ctx],
+      {
+        mockDir: 'checkout_heal_org',
+      },
+    );
     expect(parseContext(readFile(ctx))).toEqual({
       orgId: 'org-healed-123',
       projectId: 'test',
@@ -136,7 +147,13 @@ describe('checkout', () => {
     tmpContext,
   }) => {
     const ctx = tmpContext('project_from_file', { projectId: 'test' });
-    await testCliCommand(['checkout', 'main', '--context-file', ctx]);
+    await testCliCommand([
+      'checkout',
+      'main',
+      '--no-env-pull',
+      '--context-file',
+      ctx,
+    ]);
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test',
       branchId: 'br-main-branch-123456',
@@ -151,9 +168,12 @@ describe('checkout', () => {
     // No --project-id and a fresh .neon: checkout should fall
     // back to single-project auto-detection (same behaviour as branches / cs).
     const ctx = tmpContext('autodetect_single');
-    await testCliCommand(['checkout', 'main', '--context-file', ctx], {
-      mockDir: 'single_project',
-    });
+    await testCliCommand(
+      ['checkout', 'main', '--no-env-pull', '--context-file', ctx],
+      {
+        mockDir: 'single_project',
+      },
+    );
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test-project-123456',
       branchId: 'br-main-branch-123456',

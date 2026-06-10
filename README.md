@@ -140,6 +140,8 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 
 `neonctl link` is a Vercel-style command that binds the current directory to a Neon project. It picks (or creates) an organization, picks (or creates) a project, resolves the project's default branch, and writes a `.neon` file with `{ "orgId", "projectId", "branchId" }`. Subsequent commands run in this directory (or any sub-directory) automatically pick up that context.
 
+Once the branch is pinned, `link` also runs [`env pull`](#env-pull) for you so the branch's Neon env vars (`DATABASE_URL`, …) land in a local `.env` and the project is immediately ready for local dev. Pass `--no-env-pull` to skip it (for example when injecting env at runtime with `neon-env run` or `neonctl dev`).
+
 There are three modes:
 
 **Interactive (default)** — guided prompts for humans:
@@ -275,6 +277,24 @@ $ cat .neon
 }
 ```
 
+After pinning the branch, `checkout` also runs [`env pull`](#env-pull) by default, so the branch's Neon env vars are written to your local `.env` and you can start building right away — the branch-first loop is just `link` + `checkout`. Pass `--no-env-pull` to skip it (for example when env is injected at runtime via `neon-env run` / `neonctl dev`, or to keep secrets out of the working tree). A pull failure never undoes the checkout: the branch stays pinned and the failure is surfaced as a warning pointing you at `neonctl env pull` (or `neonctl deploy` if a `neon.ts`-declared service is missing).
+
+### env pull
+
+`env pull` writes the linked branch's Neon environment variables into a local dotenv file: an existing `.env` if you have one, otherwise `.env.local` (override with `--file <path>`). Only Neon-managed keys (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`, and the Neon Auth / Data API URLs when those services are enabled) are written; any other lines in the file are preserved. The branch comes from the closest `.neon` file, so no `--branch` is needed (pass `--branch <id|name>` to target another branch).
+
+`link` and `checkout` invoke `env pull` automatically (see above), so you usually only run it by hand to refresh vars or to pull a different branch into a specific file:
+
+```bash
+# Refresh the linked branch's vars in place
+neonctl env pull
+
+# Pull a specific branch into a specific file
+neonctl env pull --branch preview --file .env.preview
+```
+
+If you'd rather not keep env vars on disk, inject them at runtime instead with `neon-env run -- <your dev command>` (from `@neondatabase/env`) or `neonctl dev`, and pass `--no-env-pull` to `link` / `checkout`.
+
 **Where `.neon` lives**: `link` (and `set-context`) write `.neon` into the **current working directory** by default. If an existing `.neon` is found in any parent directory, that file is reused — so commands run from a sub-directory of a linked project still pick up the project's context. To pin the location explicitly, pass `--context-file <path>`.
 
 **`.gitignore` scaffolding**: when `.neon` is **created** for the first time, the CLI also makes sure a `.gitignore` sits alongside it listing `.neon`. If `.gitignore` doesn't exist it's created with a single `.neon` line; if it does exist, `.neon` is appended only when missing (no duplicates, your other entries are left alone). On subsequent updates to an existing `.neon`, `.gitignore` is left untouched — so if you deliberately un-ignore `.neon` (e.g. to commit shared context), the entry is not re-added on every command.
@@ -352,6 +372,7 @@ Function deploys declared under `preview.functions` are bundled by neonctl's own
 | [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                             | Get connection string          |
 | psql                                                                       |                                                                                             | Connect to a database via psql |
 | [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                             | Set context for session        |
+| env                                                                        | `pull`                                                                                      | Manage a branch's env vars     |
 | checkout                                                                   |                                                                                             | Pin a branch in `.neon`        |
 | [link](https://neon.com/docs/reference/cli-link)                           |                                                                                             | Link a directory to a project  |
 | config                                                                     | `status`, `plan`, `apply`                                                                   | Drive a branch from `neon.ts`  |

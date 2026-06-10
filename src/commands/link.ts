@@ -6,7 +6,6 @@ import {
   RegionResponse,
 } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
-import chalk from 'chalk';
 import prompts, { InitialReturnValue } from 'prompts';
 import yargs from 'yargs';
 
@@ -18,7 +17,7 @@ import {
   createBranch,
   pickBranchInteractively,
 } from '../utils/branch_picker.js';
-import { ENV_PULL_NEXT_STEP } from './env.js';
+import { autoPullEnvAfterPin, renderAgentPullNote } from './env.js';
 import { REGIONS } from './projects.js';
 
 const PROJECTS_LIST_LIMIT = 100;
@@ -33,6 +32,7 @@ type LinkProps = CommonProps & {
   params?: string;
   agent: boolean;
   yes: boolean;
+  envPull: boolean;
 };
 
 type Inputs = {
@@ -116,6 +116,14 @@ export const builder = (argv: yargs.Argv) =>
         'Skip the "already linked" confirmation in interactive mode and re-link anyway.',
       type: 'boolean',
       default: false,
+    },
+    'env-pull': {
+      describe:
+        "Pull the linked branch's Neon env vars (DATABASE_URL, …) into a local .env after " +
+        'linking. On by default; use --no-env-pull to skip (e.g. when injecting env at ' +
+        'runtime with `neon-env run` / `neon dev`).',
+      type: 'boolean',
+      default: true,
     },
   });
 
@@ -223,7 +231,7 @@ const runNonInteractive = async (props: LinkProps, inputs: Inputs) => {
       projectId: inputs.projectId,
       branchId,
     });
-    printHumanSummary(props, {
+    await finalizeHumanLink(props, {
       contextFile: props.contextFile,
       orgId,
       projectId: inputs.projectId,
@@ -242,7 +250,7 @@ const runNonInteractive = async (props: LinkProps, inputs: Inputs) => {
     projectId: created.project.id,
     branchId: created.branchId,
   });
-  printHumanSummary(props, {
+  await finalizeHumanLink(props, {
     contextFile: props.contextFile,
     orgId,
     projectId: created.project.id,
@@ -288,7 +296,7 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
       projectId: inputs.projectId,
       branchId,
     });
-    printHumanSummary(props, {
+    await finalizeHumanLink(props, {
       contextFile: props.contextFile,
       orgId,
       projectId: inputs.projectId,
@@ -309,7 +317,7 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
       projectId: created.project.id,
       branchId: created.branchId,
     });
-    printHumanSummary(props, {
+    await finalizeHumanLink(props, {
       contextFile: props.contextFile,
       orgId,
       projectId: created.project.id,
@@ -332,7 +340,7 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
       projectId: action.projectId,
       branchId,
     });
-    printHumanSummary(props, {
+    await finalizeHumanLink(props, {
       contextFile: props.contextFile,
       orgId,
       projectId: action.projectId,
@@ -357,7 +365,7 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
     projectId: created.project.id,
     branchId: created.branchId,
   });
-  printHumanSummary(props, {
+  await finalizeHumanLink(props, {
     contextFile: props.contextFile,
     orgId,
     projectId: created.project.id,
@@ -511,12 +519,20 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
   if (projectId) {
     const branchId = await resolveDefaultBranchId(props, projectId);
     applyContext(props.contextFile, { orgId, projectId, branchId });
+    const pullNote = renderAgentPullNote(
+      await autoPullEnvAfterPin({
+        ...props,
+        projectId,
+        branch: branchId,
+        envPull: props.envPull,
+      }),
+    );
     emitAgent({
       status: 'linked',
       context_file: props.contextFile,
       context: { orgId, projectId, branchId },
       project: { id: projectId },
-      message: `Linked ${props.contextFile} to project ${projectId} (org ${orgId}) on branch ${branchId}. ${ENV_PULL_NEXT_STEP}`,
+      message: `Linked ${props.contextFile} to project ${projectId} (org ${orgId}) on branch ${branchId}.${pullNote}`,
     });
     return;
   }
@@ -547,6 +563,14 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
       projectId: created.project.id,
       branchId: created.branchId,
     });
+    const pullNote = renderAgentPullNote(
+      await autoPullEnvAfterPin({
+        ...props,
+        projectId: created.project.id,
+        branch: created.branchId,
+        envPull: props.envPull,
+      }),
+    );
     emitAgent({
       status: 'linked',
       context_file: props.contextFile,
@@ -560,7 +584,7 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
         name: created.project.name,
         region_id: created.project.region_id,
       },
-      message: `Created project ${created.project.id} ("${created.project.name ?? projectName}") in ${created.project.region_id ?? regionId} and linked ${props.contextFile}. ${ENV_PULL_NEXT_STEP}`,
+      message: `Created project ${created.project.id} ("${created.project.name ?? projectName}") in ${created.project.region_id ?? regionId} and linked ${props.contextFile}.${pullNote}`,
     });
     return;
   }
@@ -889,9 +913,25 @@ const printHumanSummary = (_props: LinkProps, summary: HumanSummary): void => {
   lines.push(`  projectId: ${summary.projectId}`);
   lines.push(`  branchId:  ${summary.branchId}`);
   lines.push('');
-  lines.push(chalk.dim(ENV_PULL_NEXT_STEP));
-  lines.push('');
   process.stdout.write(`${lines.join('\n')}\n`);
+};
+
+/**
+ * Print the link summary, then run the bundled `env pull` so a human `link` ends with the
+ * branch's connection string already on disk — the branch-first loop is just link + checkout.
+ * `--no-env-pull` opts out (env pull's own status / skip hint is logged to stderr).
+ */
+const finalizeHumanLink = async (
+  props: LinkProps,
+  summary: HumanSummary,
+): Promise<void> => {
+  printHumanSummary(props, summary);
+  await autoPullEnvAfterPin({
+    ...props,
+    projectId: summary.projectId,
+    branch: summary.branchId,
+    envPull: props.envPull,
+  });
 };
 
 const onPromptState = (state: {

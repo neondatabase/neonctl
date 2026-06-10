@@ -1,6 +1,5 @@
 import { Branch } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
-import chalk from 'chalk';
 import prompts from 'prompts';
 import yargs from 'yargs';
 
@@ -14,7 +13,7 @@ import {
 } from '../utils/branch_picker.js';
 import { fillSingleProject } from '../utils/enrichers.js';
 import { looksLikeBranchId } from '../utils/formats.js';
-import { ENV_PULL_NEXT_STEP } from './env.js';
+import { autoPullEnvAfterPin } from './env.js';
 import { applyPolicyOnCreate } from './config.js';
 import { handler as linkHandler } from './link.js';
 
@@ -22,6 +21,7 @@ type CheckoutProps = CommonProps & {
   projectId?: string;
   orgId?: string;
   id?: string;
+  envPull: boolean;
 };
 
 // The positional is optional: omitting it in an interactive terminal opens a
@@ -42,6 +42,14 @@ export const builder = (argv: yargs.Argv) =>
       'project-id': {
         describe: 'Project ID',
         type: 'string',
+      },
+      'env-pull': {
+        describe:
+          "Pull the branch's Neon env vars (DATABASE_URL, …) into a local .env after " +
+          'checkout. On by default; use --no-env-pull to skip (e.g. when injecting env at ' +
+          'runtime with `neon-env run` / `neon dev`).',
+        type: 'boolean',
+        default: true,
       },
     })
     .example([
@@ -100,7 +108,14 @@ export const handler = async (props: CheckoutProps) => {
     });
   }
 
-  log.info(chalk.dim(ENV_PULL_NEXT_STEP));
+  // Bundle `env pull` so the branch-first loop is just link + checkout: the branch you
+  // checked out is immediately usable for local dev. `--no-env-pull` opts out.
+  await autoPullEnvAfterPin({
+    ...props,
+    projectId,
+    branch: branchId,
+    envPull: props.envPull,
+  });
 };
 
 /**
