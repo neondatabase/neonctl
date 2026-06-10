@@ -2,6 +2,7 @@ import yargs from 'yargs';
 import { resolveConfig } from '@neondatabase/config';
 import {
   apply,
+  createBranch as createBranchFromPolicy,
   inspect,
   loadConfigFromFile,
   plan,
@@ -342,6 +343,11 @@ export const applyPolicyOnCreate = async (props: {
     allowProtectedBranch: true,
     bundleFunction: neonctlBundler,
   });
+  logPolicyResult(result);
+};
+
+/** Log a one-line summary of what applying a `neon.ts` policy changed (or that nothing did). */
+const logPolicyResult = (result: PushResult): void => {
   const changes = result.applied.filter((c) => c.action !== 'noop');
   if (changes.length === 0) {
     log.info('neon.ts applied — no changes were needed.');
@@ -353,4 +359,50 @@ export const applyPolicyOnCreate = async (props: {
     changes.length === 1 ? '' : 's',
     changes.map((c) => `${c.action} ${c.identifier}`).join(', '),
   );
+};
+
+/**
+ * Create a branch **from** the local `neon.ts` policy. Returns `null` when there is no
+ * `neon.ts` on the path from cwd up to the repo root, so `neonctl checkout` can fall back to a
+ * bare branch create.
+ *
+ * Unlike a bare create followed by {@link applyPolicyOnCreate}, this evaluates the policy for
+ * the **new** branch (`exists: false`): the runtime branches from the policy's `parent` and
+ * brings the branch up with its declared TTL / compute settings / services. That's what makes
+ * a policy keyed on `!branch.exists` (the common "only configure new branches" shape) take
+ * effect on the very first `checkout` — a bare create + `apply` always saw `exists: true` and
+ * skipped that block.
+ */
+export const createBranchFromPolicyOnCheckout = async (props: {
+  projectId: string;
+  branchName: string;
+  apiKey?: string;
+  runtimeApi?: NeonApi;
+  /** Directory to search for `neon.ts` from. Defaults to the process cwd. */
+  cwd?: string;
+}): Promise<{ branchId: string } | null> => {
+  let config: Config;
+  try {
+    ({ config } = await loadConfigFromFile({
+      ...(props.cwd ? { cwd: props.cwd } : {}),
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/Could not find a Neon config file/i.test(message)) return null;
+    throw err;
+  }
+
+  const { branchId, branchName, result } = await createBranchFromPolicy(
+    config,
+    {
+      projectId: props.projectId,
+      branchName: props.branchName,
+      ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+      ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
+      bundleFunction: neonctlBundler,
+    },
+  );
+  log.info('Created branch %s (%s) from neon.ts policy.', branchName, branchId);
+  logPolicyResult(result);
+  return { branchId };
 };
