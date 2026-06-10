@@ -178,6 +178,7 @@ export const status = async (props: ConfigProps): Promise<void> => {
     projectId: props.projectId,
     branchId,
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.apiHost ? { apiHost: props.apiHost } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
   });
 
@@ -219,6 +220,7 @@ export const planCmd = async (props: ConfigProps): Promise<void> => {
     projectId: props.projectId,
     branchId,
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.apiHost ? { apiHost: props.apiHost } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
   });
   reportPushResult(props, result, 'plan');
@@ -231,6 +233,7 @@ export const applyCmd = async (props: ConfigProps): Promise<void> => {
     projectId: props.projectId,
     branchId,
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.apiHost ? { apiHost: props.apiHost } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
     ...(props.updateExisting ? { updateExisting: true } : {}),
     ...(props.allowProtected ? { allowProtectedBranch: true } : {}),
@@ -318,6 +321,7 @@ export const applyPolicyOnCreate = async (props: {
   projectId: string;
   branchId: string;
   apiKey?: string;
+  apiHost?: string;
   runtimeApi?: NeonApi;
   /** Directory to search for `neon.ts` from. Defaults to the process cwd. */
   cwd?: string;
@@ -338,6 +342,7 @@ export const applyPolicyOnCreate = async (props: {
     projectId: props.projectId,
     branchId: props.branchId,
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.apiHost ? { apiHost: props.apiHost } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
     updateExisting: true,
     allowProtectedBranch: true,
