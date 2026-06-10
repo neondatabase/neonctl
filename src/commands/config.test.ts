@@ -7,11 +7,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { NeonApi } from '@neondatabase/config-runtime';
 import type {
   CreateBucketInput,
+  CreateCredentialInput,
   DeployFunctionInput,
   GetConnectionUriInput,
   NeonAuthSnapshot,
   NeonBranchSnapshot,
   NeonBucketSnapshot,
+  NeonCredentialMeta,
+  NeonCredentialSecret,
   NeonDataApiSnapshot,
   NeonDatabaseSnapshot,
   NeonEndpointSnapshot,
@@ -215,6 +218,30 @@ class FakeNeonApi implements NeonApi {
 
   async disableAiGateway(): Promise<void> {
     throw new Error('not implemented');
+  }
+
+  async createCredential(
+    _projectId: string,
+    branchId: string,
+    input: CreateCredentialInput,
+  ): Promise<NeonCredentialSecret> {
+    return {
+      tokenId: 'cred-fake-0000',
+      tokenIdShort: 'credfake0000',
+      apiToken: 'nt_live_credfake0000_secret',
+      s3SecretAccessKey: 's3secret'.padEnd(64, '0'),
+      scopes: input.scopes,
+      branchId,
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+  }
+
+  async listCredentials(): Promise<NeonCredentialMeta[]> {
+    return [];
+  }
+
+  async revokeCredential(): Promise<void> {
+    return;
   }
 }
 

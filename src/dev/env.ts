@@ -19,6 +19,13 @@ export type DevEnvContext = {
   apiKey?: string;
   /** Injected NeonApi adapter (tests). Production builds it from `apiKey`. */
   api?: NeonApi;
+  /**
+   * Env source layered under `process.env` when resolving the branch env. Lets callers
+   * supply already-persisted values (e.g. the existing `.env` for `env pull`) so one-time
+   * secrets — Neon Auth keys and the unified branch credential's `api_token` /
+   * `s3_secret_access_key` — are **reused** rather than re-minted on every run.
+   */
+  env?: NodeJS.ProcessEnv;
 };
 
 /**
@@ -232,6 +239,7 @@ const fetchAndProject = async (
     branchId: ctx.branchId as string,
     ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
     ...(ctx.api ? { api: ctx.api } : {}),
+    ...(ctx.env ? { env: ctx.env } : {}),
   });
   return toEntries(env);
 };

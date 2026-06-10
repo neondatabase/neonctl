@@ -4,10 +4,12 @@ import yargs from 'yargs';
 import { type NeonApi } from '@neondatabase/config';
 import { NEON_ENV_VAR_KEYS } from '@neondatabase/env';
 
+import { existsSync } from 'node:fs';
+
 import { log } from '../log.js';
 import { BranchScopeProps } from '../types.js';
 import { resolveNeonEnvVars } from '../dev/env.js';
-import { mergeEnvFile, resolveEnvFilePath } from '../env_file.js';
+import { mergeEnvFile, readEnvFile, resolveEnvFilePath } from '../env_file.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 
 export type EnvPullProps = BranchScopeProps & {
@@ -87,6 +89,13 @@ export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
   const cwd = props.cwd ?? process.cwd();
   const branchId = await branchIdFromProps(props);
 
+  // Resolve the target file first and layer its current contents under the resolver's env
+  // source. This lets `fetchEnv` reuse one-time secrets that are already on disk — Neon Auth
+  // keys and the unified branch credential's `api_token` / `s3_secret_access_key`, which the
+  // API returns exactly once — instead of minting a fresh credential on every pull.
+  const targetPath = resolveEnvFilePath(cwd, props.file);
+  const existingEnv = existsSync(targetPath) ? readEnvFile(targetPath) : {};
+
   // Reuse `neon dev`'s tiered resolver (neon.ts policy -> plan gate -> fetchEnv, else
   // pullConfig -> fetchEnv). Unlike dev, an unresolved context or failure is surfaced —
   // `env pull` is an explicit action, so it should error rather than write nothing.
@@ -94,6 +103,7 @@ export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
     cwd,
     projectId: props.projectId,
     branchId,
+    env: { ...process.env, ...existingEnv },
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
   });
@@ -107,7 +117,6 @@ export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
     return { status: 'empty' };
   }
 
-  const targetPath = resolveEnvFilePath(cwd, props.file);
   const { written } = mergeEnvFile(targetPath, neonVars);
   log.info(
     'Pulled %d Neon variable%s into %s: %s',
