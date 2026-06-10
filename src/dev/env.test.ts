@@ -9,6 +9,7 @@ import type {
   NeonApi,
   NeonAuthSnapshot,
   NeonBranchSnapshot,
+  NeonBranchStorageSnapshot,
   NeonBucketSnapshot,
   NeonCredentialMeta,
   NeonCredentialSecret,
@@ -243,6 +244,14 @@ class FakeNeonApi implements NeonApi {
 
   async revokeCredential(): Promise<void> {
     return;
+  }
+
+  async getProjectBranchStorage(): Promise<NeonBranchStorageSnapshot | null> {
+    return {
+      s3Endpoint: 'https://fake.storage.neon.tech',
+      region: 'us-east-1',
+      forcePathStyle: true,
+    };
   }
 }
 
