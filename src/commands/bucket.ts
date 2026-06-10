@@ -1,9 +1,9 @@
-import { createWriteStream } from 'node:fs';
-import { unlink } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { stat, unlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import yargs from 'yargs';
-import { isAxiosError } from 'axios';
+import axios, { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../api.js';
 import { BranchScopeProps } from '../types.js';
@@ -19,11 +19,18 @@ import {
   getProjectBranchBucketObject,
   deleteProjectBranchBucketObject,
   deleteProjectBranchBucketObjectsByPrefix,
+  presignUpload,
 } from '../storage_api.js';
 
 const OBJECT_FIELDS = ['key', 'size', 'last_modified', 'etag'] as const;
 const BUCKET_FIELDS = ['name', 'access_level'] as const;
 const ACCESS_LEVELS = ['private', 'public_read'] as const;
+
+// Single-PUT upload cap. Objects larger than this must use multipart upload,
+// which is out of scope for v1; we reject them client-side before any HTTP so
+// the user gets an immediate, clear error rather than a server-side rejection
+// part-way through a large transfer.
+const MAX_OBJECT_BYTES = 100 * 1024 * 1024; // 100 MB
 
 // Ambient scope shared by every bucket sub-command. The bucket name (and the
 // object key/prefix) is always a positional, never a flag.
@@ -115,7 +122,7 @@ export const builder = (argv: yargs.Argv) =>
     })
     .command(
       'object <sub-command>',
-      'List, download or delete objects in a bucket',
+      'List, download, upload or delete objects in a bucket',
       (yargs) =>
         yargs
           .usage('$0 bucket object <sub-command> [options]')
@@ -172,6 +179,32 @@ export const builder = (argv: yargs.Argv) =>
                   },
                 }),
             (args) => getObject(args as any),
+          )
+          .command(
+            'put <target>',
+            'Upload a local file to a bucket as an object',
+            (yargs) =>
+              yargs
+                .usage('$0 bucket object put <bucket>/<key> [options]')
+                .positional('target', {
+                  describe: 'The object to upload to: <bucket>/<key>',
+                  type: 'string',
+                  demandOption: true,
+                })
+                .options({
+                  ...scopeOptions,
+                  file: {
+                    describe: 'Path to the local file to upload',
+                    type: 'string',
+                    demandOption: true,
+                  },
+                  'content-type': {
+                    describe:
+                      'Content-Type to store the object with (e.g. text/plain)',
+                    type: 'string',
+                  },
+                }),
+            (args) => putObject(args as any),
           )
           .command({
             command: 'delete <target>',
@@ -440,6 +473,78 @@ const getObject = async (
   }
   log.info(
     `Object "${key}" downloaded from bucket "${bucket}" on branch ${branchId} to ${destination}`,
+  );
+};
+
+const putObject = async (
+  props: BranchScopeProps & {
+    target: string;
+    file: string;
+    contentType?: string;
+  },
+): Promise<void> => {
+  const branchId = await branchIdFromProps(props);
+  const { bucket, rest: key } = splitBucketTarget(props.target);
+  if (key === '') {
+    throw new Error('Object target must be in the form <bucket>/<key>.');
+  }
+
+  // Stat the file first so we fail fast on a missing/unreadable file and can
+  // enforce the single-PUT size cap BEFORE any network round-trip. We also
+  // reuse the byte count as the PUT Content-Length so the stream is uploaded
+  // without buffering the whole file in memory.
+  let fileSize: number;
+  try {
+    const fileStat = await stat(props.file);
+    if (!fileStat.isFile()) {
+      throw new Error(`"${props.file}" is not a regular file.`);
+    }
+    fileSize = fileStat.size;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      throw new Error(`File "${props.file}" does not exist.`);
+    }
+    throw err;
+  }
+
+  if (fileSize > MAX_OBJECT_BYTES) {
+    throw new Error(
+      `File "${props.file}" is ${fileSize} bytes, which exceeds the ${MAX_OBJECT_BYTES}-byte (100 MB) single-upload limit. Larger objects are not supported yet.`,
+    );
+  }
+
+  // Ask the console for a presigned PUT URL plus the headers that must travel
+  // with the upload for the signature to verify. No SigV4 happens in neonctl.
+  let presign;
+  try {
+    ({ data: presign } = await presignUpload(props.apiClient, {
+      projectId: props.projectId,
+      branchId,
+      bucketName: bucket,
+      objectKey: key,
+      contentType: props.contentType,
+    }));
+  } catch (err: unknown) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      throw new Error(objectNotFoundMessage(err, key, bucket, branchId));
+    }
+    throw err;
+  }
+
+  // Stream the file straight into the PUT body; never buffer the whole file.
+  // The presigned URL targets the branch S3 data-plane endpoint directly, so
+  // this PUT goes through a plain axios call rather than the console api-client.
+  await axios.put(presign.url, createReadStream(props.file), {
+    headers: {
+      ...presign.headers,
+      'Content-Length': fileSize,
+    },
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+  });
+
+  log.info(
+    `File "${props.file}" uploaded to "${key}" in bucket "${bucket}" on branch ${branchId}`,
   );
 };
 

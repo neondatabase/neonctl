@@ -101,6 +101,29 @@ export type BucketObjectsDeletePrefixResponse = {
   deleted: number;
 };
 
+/** Request body of the presign-upload endpoint. */
+export type PresignUploadRequest = {
+  /** The Content-Type to sign into the upload (echoed back in `headers`). */
+  content_type?: string;
+  /** How long the presigned URL stays valid. Server default applies when omitted. */
+  expires_in_seconds?: number;
+};
+
+/**
+ * Response body of the presign-upload endpoint. Mirrors B's
+ * `PresignUploadResponse` schema.
+ */
+export type PresignUploadResponse = {
+  /** The presigned URL to PUT the object bytes to. */
+  url: string;
+  /** Always `PUT` for the single-PUT upload path. */
+  method: 'PUT';
+  /** Headers that must be sent verbatim with the PUT for the signature to verify. */
+  headers: Record<string, string>;
+  /** When the presigned URL expires (RFC 3339). */
+  expires_at: string;
+};
+
 export type ListObjectsParams = {
   projectId: string;
   branchId: string;
@@ -305,3 +328,53 @@ export const deleteProjectBranchBucketObjectsByPrefix = (
     format: 'json',
     secure: true,
   });
+
+/**
+ * Request a presigned PUT URL for uploading an object to a bucket on a branch.
+ *
+ * Returns the URL, the headers that must accompany the PUT for the signature to
+ * verify, and the expiry. The actual upload (a `PUT` to the returned `url` with
+ * the returned `headers` and the file stream) is performed by the caller, NOT
+ * through this api-client, since it targets the branch S3 data-plane endpoint
+ * rather than the console API. No SigV4 or credential handling happens here.
+ *
+ * The object key may contain `/`; it is percent-encoded into a single path
+ * segment so nested keys are routed to the `{object_key}` parameter.
+ *
+ * @request POST /projects/{project_id}/branches/{branch_id}/buckets/{bucket_name}/objects/{object_key}/presign-upload
+ */
+export const presignUpload = (
+  apiClient: ApiClient,
+  {
+    projectId,
+    branchId,
+    bucketName,
+    objectKey,
+    contentType,
+    expiresInSeconds,
+  }: {
+    projectId: string;
+    branchId: string;
+    bucketName: string;
+    objectKey: string;
+    contentType?: string;
+    expiresInSeconds?: number;
+  },
+): Promise<ApiResponse<PresignUploadResponse>> => {
+  const body: PresignUploadRequest = {};
+  if (contentType !== undefined) {
+    body.content_type = contentType;
+  }
+  if (expiresInSeconds !== undefined) {
+    body.expires_in_seconds = expiresInSeconds;
+  }
+  return apiClient.request<PresignUploadResponse>({
+    path: `${bucketPath(projectId, branchId, bucketName)}/objects/${encodeURIComponent(
+      objectKey,
+    )}/presign-upload`,
+    method: 'POST',
+    body,
+    format: 'json',
+    secure: true,
+  });
+};
