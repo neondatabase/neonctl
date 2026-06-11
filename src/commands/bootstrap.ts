@@ -13,6 +13,7 @@ import {
 import { dirname, join, relative, resolve } from 'node:path';
 
 import prompts, { InitialReturnValue } from 'prompts';
+import which from 'which';
 import yargs from 'yargs';
 
 import { isCi } from '../env.js';
@@ -396,20 +397,28 @@ const runPostScaffoldSteps = async (
   targetDir: string,
   interactive: boolean,
 ): Promise<void> => {
-  const pm = detectPackageManager();
+  const detected = detectPackageManager();
 
   if (props.default) {
-    await runDefaultSteps(props, targetDir, pm);
+    await runDefaultSteps(props, targetDir, detected ?? 'npm');
     return;
   }
 
   if (!interactive) {
-    printNextSteps(targetDir, pm, { installed: false, suggestLink: true });
+    printNextSteps(targetDir, detected ?? 'npm', {
+      installed: false,
+      suggestLink: true,
+    });
     return;
   }
 
+  // The package manager used for the install (and shown in the closing hint).
+  // When we couldn't infer it from the invocation we ask, so a globally
+  // installed `neon` doesn't silently force npm on a bun/pnpm user.
+  let pm: PackageManager = detected ?? 'npm';
   let installed = false;
-  if (props.install && (await confirm(`Install dependencies with ${pm}?`))) {
+  if (props.install && (await confirm(installPrompt(detected)))) {
+    pm = detected ?? (await selectPackageManager());
     installed = await runCommand(pm, ['install'], targetDir);
   }
 
@@ -433,6 +442,9 @@ const runPostScaffoldSteps = async (
 
   printNextSteps(targetDir, pm, { installed, suggestLink: true });
 };
+
+const installPrompt = (detected: PackageManager | undefined): string =>
+  detected ? `Install dependencies with ${detected}?` : 'Install dependencies?';
 
 /**
  * `--default` quick start: run install + git init without prompting, honoring
@@ -478,21 +490,56 @@ const confirm = async (message: string): Promise<boolean> => {
   return value === true;
 };
 
-/**
- * The package manager to use for the suggested install. Inferred from the
- * `npm_config_user_agent` npm sets when the CLI is invoked via
- * `npm exec`/`npx`, `pnpm dlx`, `yarn dlx`, or `bunx`, so `pnpm dlx neonctl
- * bootstrap` offers a `pnpm install`. Defaults to npm — the safe universal
- * choice, and what a globally-installed `neon`/`neonctl` resolves to.
- */
 type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
 
-const detectPackageManager = (): PackageManager => {
+// npm first so it's the default/preselected choice; the rest follow in rough
+// popularity order.
+const PACKAGE_MANAGERS: PackageManager[] = ['npm', 'pnpm', 'yarn', 'bun'];
+
+/**
+ * The package manager the CLI was invoked through, read from the
+ * `npm_config_user_agent` npm sets for `npm exec`/`npx`, `pnpm dlx`, `yarn
+ * dlx`, and `bunx` (so `pnpm dlx neonctl bootstrap` installs with pnpm).
+ * Returns undefined when there's nothing to infer from — e.g. a
+ * globally-installed `neon`/`neonctl` — so the caller can ask instead of
+ * silently assuming npm.
+ */
+const detectPackageManager = (): PackageManager | undefined => {
   const ua = process.env.npm_config_user_agent ?? '';
   if (ua.startsWith('pnpm')) return 'pnpm';
   if (ua.startsWith('yarn')) return 'yarn';
   if (ua.startsWith('bun')) return 'bun';
-  return 'npm';
+  if (ua.startsWith('npm')) return 'npm';
+  return undefined;
+};
+
+/** The package managers actually on PATH, in {@link PACKAGE_MANAGERS} order. */
+const installedPackageManagers = (): PackageManager[] =>
+  PACKAGE_MANAGERS.filter((pm) => which.sync(pm, { nothrow: true }) !== null);
+
+/**
+ * Ask which package manager to install with when we couldn't infer one from the
+ * invocation. Offers the managers actually installed (npm preselected); with
+ * one or none installed there's nothing to choose, so it returns that one (or
+ * npm) without prompting. A cancelled prompt falls back to npm.
+ */
+const selectPackageManager = async (): Promise<PackageManager> => {
+  const installed = installedPackageManagers();
+  if (installed.length <= 1) {
+    return installed[0] ?? 'npm';
+  }
+  const { pm } = await prompts({
+    onState: onPromptState,
+    type: 'select',
+    name: 'pm',
+    message: 'Which package manager should we use?',
+    choices: installed.map((manager) => ({
+      title: manager,
+      value: manager,
+    })),
+    initial: Math.max(0, installed.indexOf('npm')),
+  });
+  return pm ?? 'npm';
 };
 
 /**
