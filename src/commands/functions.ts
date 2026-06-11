@@ -287,7 +287,11 @@ const deploy = async (props: DeployProps) => {
 
   if (interrupted) {
     log.info(statusHint(props.slug, props.projectId, branchId));
-    if (resolved) writer(props).end(resolved, { fields: DEPLOYMENT_FIELDS });
+    if (resolved)
+      writer(props).end(resolved, {
+        fields: DEPLOYMENT_FIELDS,
+        renderColumns: DEPLOYMENT_RENDER_COLUMNS,
+      });
     return;
   }
 
@@ -298,7 +302,10 @@ const deploy = async (props: DeployProps) => {
     );
   }
 
-  writer(props).end(resolved, { fields: DEPLOYMENT_FIELDS });
+  writer(props).end(resolved, {
+    fields: DEPLOYMENT_FIELDS,
+    renderColumns: DEPLOYMENT_RENDER_COLUMNS,
+  });
 
   if (!props.wait) {
     log.info(statusHint(props.slug, props.projectId, branchId));

@@ -245,6 +245,7 @@ describe('functions', () => {
       {
         mockDir: 'single_org',
         code: 1,
+        outputTable: true,
         env: {
           NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
           NEON_ESBUILD_PATH: esbuildBin,

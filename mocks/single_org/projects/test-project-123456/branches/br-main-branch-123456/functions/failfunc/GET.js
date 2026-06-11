@@ -13,6 +13,7 @@ const fn = () => ({
       memory_mib: 256,
       runtime: 'nodejs24',
       created_at: '2026-06-03T00:00:00Z',
+      error: 'Build failed: cannot resolve module left-pad',
     },
   },
 });
