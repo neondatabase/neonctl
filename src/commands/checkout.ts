@@ -112,6 +112,7 @@ export const handler = async (props: CheckoutProps) => {
       projectId,
       branchId,
       ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+      ...(props.apiHost ? { apiHost: props.apiHost } : {}),
     });
   }
 
@@ -225,6 +226,7 @@ const createCheckoutBranch = async (
     projectId,
     branchName: name,
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.apiHost ? { apiHost: props.apiHost } : {}),
   });
   if (fromPolicy) {
     return {

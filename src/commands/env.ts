@@ -95,6 +95,7 @@ export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
     projectId: props.projectId,
     branchId,
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.apiHost ? { apiHost: props.apiHost } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
   });
 

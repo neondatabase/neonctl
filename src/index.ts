@@ -59,6 +59,8 @@ const NO_SUBCOMMANDS_VERBS = [
 
   'deploy',
 
+  'bootstrap',
+
   // aliases
 ];
 

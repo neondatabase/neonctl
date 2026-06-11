@@ -91,6 +91,7 @@ const runSingleSource = async (props: DevProps): Promise<void> => {
     ...(props.projectId ? { projectId: props.projectId } : {}),
     ...(branchId ? { branchId } : {}),
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.apiHost ? { apiHost: props.apiHost } : {}),
   });
 
   const unit: ServedUnit = {
@@ -137,6 +138,7 @@ const runFromConfig = async (props: DevProps): Promise<void> => {
     ...(props.projectId ? { projectId: props.projectId } : {}),
     ...(branchId ? { branchId } : {}),
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+    ...(props.apiHost ? { apiHost: props.apiHost } : {}),
   });
 
   const units = planFunctionsToUnits(functions, neonEnv, DEFAULT_PORT_BASE);
