@@ -140,6 +140,75 @@ describe('bucket', () => {
     });
   });
 
+  // The default listing collapses folders like `aws s3 ls`: the CLI sends
+  // `delimiter=/` even though the user passed neither flag. The mock echoes the
+  // query, so the snapshot's `delimiter: /` proves the default is forwarded, and
+  // the response carries both folders and object keys.
+  test('object list defaults to the folder-collapsed view (delimiter "/")', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(['bucket', 'object', 'list', 'my-bucket', ...SCOPE], {
+      mockDir: 'single_org',
+    });
+  });
+
+  // --recursive flattens the listing: no delimiter is sent, so the backend
+  // returns every nested key. The snapshot's empty `delimiter` proves it.
+  test('object list --recursive sends no delimiter (flat listing)', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      ['bucket', 'object', 'list', 'my-bucket', '--recursive', ...SCOPE],
+      { mockDir: 'single_org' },
+    );
+  });
+
+  test('object list --recursive with --delimiter is rejected client-side', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'bucket',
+        'object',
+        'list',
+        'my-bucket',
+        '--recursive',
+        '--delimiter',
+        '/',
+        ...SCOPE,
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: --recursive and --delimiter cannot be used together. Use --recursive for a flat listing, or --delimiter to collapse on a separator.',
+      },
+    );
+  });
+
+  // An explicit empty delimiter overrides the default and lists flat without
+  // --recursive; the snapshot's empty `delimiter` proves the explicit value is
+  // honoured rather than falling back to "/".
+  test('object list with an explicit empty --delimiter lists flat', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      ['bucket', 'object', 'list', 'my-bucket', '--delimiter', '', ...SCOPE],
+      { mockDir: 'single_org' },
+    );
+  });
+
+  // --output json must surface the collapsed folders (CommonPrefixes) alongside
+  // the object keys, so a folder-collapsed default is machine-readable too.
+  test('object list --output json includes folders (prefixes) and keys', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(['bucket', 'object', 'list', 'my-bucket', ...SCOPE], {
+      mockDir: 'single_org',
+      output: 'json',
+    });
+  });
+
   test('object get downloads to the given file', async ({ testCliCommand }) => {
     const dest = join(TEST_TMP, 'downloaded.txt');
     await testCliCommand(
