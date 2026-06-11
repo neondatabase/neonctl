@@ -476,7 +476,9 @@ const list = async (props: BranchScopeProps) => {
       page.functions.length,
       page.next,
     );
-    if (!page.next) break;
+    // A server echoing the same cursor would loop forever; treat it as
+    // the end of the list.
+    if (!page.next || page.next === cursor) break;
     cursor = page.next;
   }
 

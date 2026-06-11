@@ -60,7 +60,7 @@ export const listFunctions = async (
     secure: true,
     format: 'json',
   });
-  return { functions: data.functions, next: data.pagination?.next };
+  return { functions: data.functions ?? [], next: data.pagination?.next };
 };
 
 export const getFunction = async (
