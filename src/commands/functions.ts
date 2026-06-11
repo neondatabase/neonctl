@@ -27,6 +27,18 @@ const FUNCTION_FIELDS = [
   'created_at',
 ] as const;
 
+const FUNCTIONS_LIST_LIMIT = 100;
+
+// Table columns for `functions list`. `status` is a derived field (the
+// table writer reads flat fields only): the current deployment's status.
+const LIST_TABLE_FIELDS = [
+  'slug',
+  'name',
+  'status',
+  'invocation_url',
+  'created_at',
+] as const;
+
 const DEPLOYMENT_FIELDS = [
   'id',
   'status',
@@ -449,19 +461,38 @@ const deleteFn = async (props: BranchScopeProps & { slug: string }) => {
 
 const list = async (props: BranchScopeProps) => {
   const branchId = await branchIdFromProps(props);
-  const functions = await listFunctions(
-    props.apiClient,
-    props.projectId,
-    branchId,
-  );
+  const functions: NeonFunction[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await listFunctions(
+      props.apiClient,
+      props.projectId,
+      branchId,
+      { cursor, limit: FUNCTIONS_LIST_LIMIT },
+    );
+    functions.push(...page.functions);
+    log.debug(
+      'Got %d functions, next cursor: %s',
+      page.functions.length,
+      page.next,
+    );
+    if (!page.next) break;
+    cursor = page.next;
+  }
 
   if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(functions, { fields: FUNCTION_FIELDS });
     return;
   }
 
-  writer(props).end(functions, {
-    fields: FUNCTION_FIELDS,
-    emptyMessage: 'No functions found on this branch.',
-  });
+  writer(props).end(
+    functions.map((fn) => ({
+      ...fn,
+      status: fn.current_deployment?.status ?? '',
+    })),
+    {
+      fields: LIST_TABLE_FIELDS,
+      emptyMessage: 'No functions found on this branch.',
+    },
+  );
 };
