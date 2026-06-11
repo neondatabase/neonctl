@@ -169,6 +169,12 @@ export const ensureAuth = async (
   // present, otherwise run with no API client (env injection is skipped).
   const isLocalDev = props._[0] === 'dev';
 
+  // `bootstrap` only copies a public template repo; it never calls the Neon
+  // API, so it must work without credentials and must never pop a browser
+  // login. It uses an API key / stored credentials when present (harmless),
+  // otherwise it proceeds with no API client.
+  const isBootstrap = props._[0] === 'bootstrap';
+
   // Use existing API key or handle auth command
   if (props.apiKey || props._[0] === 'auth') {
     if (props.apiKey) {
@@ -227,6 +233,11 @@ export const ensureAuth = async (
   // and the function still runs locally.
   if (isLocalDev) {
     log.debug('dev: no usable credentials; running without env injection');
+    return;
+  }
+
+  if (isBootstrap) {
+    log.debug('bootstrap: no usable credentials; continuing without auth');
     return;
   }
 

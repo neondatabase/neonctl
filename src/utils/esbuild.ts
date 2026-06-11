@@ -9,6 +9,14 @@ const NOT_FOUND =
   'this, install esbuild and ensure it is on your PATH (e.g. `npm i -g ' +
   'esbuild`), or set NEON_ESBUILD_PATH to an esbuild binary.';
 
+// Prepended to the ESM bundle. Bundled dependencies are frequently CommonJS, but an ESM
+// output (`--format=esm`) has no `require` / `__filename` / `__dirname` in scope — so any
+// bundled CJS code that calls `require(...)` would fail at load with
+// `Dynamic require of "x" is not supported`. Re-create those globals via `createRequire`
+// so CJS and ESM dependencies coexist in the single `index.mjs`.
+const ESM_CJS_INTEROP_BANNER =
+  "import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);";
+
 // esbuild's JS module, narrowed to the one call we use. Typed structurally so
 // we never statically import from 'esbuild' (see bundleViaModule for why).
 type EsbuildModule = {
@@ -80,7 +88,10 @@ const bundleViaModule = async (
       minify: true,
       format: 'esm',
       platform: 'node',
-      packages: 'external',
+      // Bundle dependencies into the entry so the deployed archive is self-contained (the
+      // Functions runtime has no node_modules). Node built-ins stay external on
+      // platform:'node'. The banner re-creates require/__filename/__dirname for bundled CJS.
+      banner: { js: ESM_CJS_INTEROP_BANNER },
       logLevel: 'silent',
     })
     .catch((err: unknown) => {
@@ -151,7 +162,7 @@ const bundleViaBinary = async (
       '--minify',
       '--format=esm',
       '--platform=node',
-      '--packages=external',
+      `--banner:js=${ESM_CJS_INTEROP_BANNER}`,
       '--log-level=error',
     ]);
     if (code !== 0) {

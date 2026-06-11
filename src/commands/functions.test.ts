@@ -122,6 +122,142 @@ describe('functions', () => {
     );
   });
 
+  test('get (table) shows the build failure reason', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'brokenfunc',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get (yaml) includes the build failure reason', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'brokenfunc',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
+
+  test('get (table) shows plain failed status when there is no error', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'failednoerr',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get --list-env-variables lists env variable names', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'envnames',
+        '--list-env-variables',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get -E with no env variables prints an empty message', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'my-func',
+        '-E',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get --list-env-variables with no active deployment prints an empty message', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'other-func',
+        '--list-env-variables',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get (yaml) includes environment names', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'envnames',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
+
+  test('get (yaml) -E is a no-op', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'envnames',
+        '-E',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
+
   test('deploy --wait until completed', async ({ testCliCommand }) => {
     await testCliCommand(
       [
@@ -194,6 +330,7 @@ describe('functions', () => {
       {
         mockDir: 'single_org',
         code: 1,
+        outputTable: true,
         env: {
           NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
           NEON_ESBUILD_PATH: esbuildBin,

@@ -46,7 +46,6 @@ beforeAll(() => {
     [
       'import { greet } from "./helper";',
       'import { readFileSync } from "node:fs";',
-      'import "neon-fake-external-pkg";',
       'export default { greet, readFileSync };',
       '',
     ].join('\n'),
@@ -67,13 +66,14 @@ describe('bundleEntry', () => {
     expect(out['index.mjs.map'].length).toBeGreaterThan(0);
   });
 
-  // packages=external leaves ALL bare imports external, not just built-ins.
-  test('leaves bare imports (node built-ins and npm packages) external', async () => {
+  // Node built-ins stay external on platform:'node'; the createRequire banner is injected
+  // so bundled CommonJS deps can `require(...)` inside the ESM output.
+  test('keeps node built-ins external and injects a createRequire banner', async () => {
     const js = strFromU8(
       (await bundleEntry(join(dir, 'index.ts'), npmDeps))['index.mjs'],
     );
     expect(js).toContain('node:fs');
-    expect(js).toContain('neon-fake-external-pkg');
+    expect(js).toContain('createRequire');
   });
 
   test('surfaces a bundle error without falling back to a binary search', async () => {

@@ -46,6 +46,20 @@ const DEPLOY_RESULT_FIELDS = [
   'created_at',
 ] as const;
 
+// In table mode a failed build's reason gets its own "deployment error"
+// section after the deployment table; json/yaml carry the raw `error` field.
+const writeDeploymentErrorSection = (
+  out: ReturnType<typeof writer>,
+  dep: NeonFunctionDeployment,
+) => {
+  if (dep.status === 'failed' && dep.error) {
+    out.write(
+      { reason: dep.error },
+      { fields: ['reason'], title: 'deployment error' },
+    );
+  }
+};
+
 const SLUG_PATTERN = /^[a-z0-9]{1,20}$/;
 const SLUG_HELP =
   'Use 1-20 lowercase letters and digits (no hyphens or other characters).';
@@ -124,11 +138,21 @@ export const builder = (argv: yargs.Argv) =>
       'get <slug>',
       "Show a function's details",
       (yargs) =>
-        yargs.positional('slug', {
-          describe: 'Function slug',
-          type: 'string',
-          demandOption: true,
-        }),
+        yargs
+          .positional('slug', {
+            describe: 'Function slug',
+            type: 'string',
+            demandOption: true,
+          })
+          .options({
+            'list-env-variables': {
+              describe:
+                'List the environment variable names of the active deployment',
+              type: 'boolean',
+              alias: 'E',
+              default: false,
+            },
+          }),
       (args) => get(args as any),
     )
     .command(
@@ -178,11 +202,16 @@ const emitDeployResult = (
   props: DeployProps,
   deployment: NeonFunctionDeployment,
   fn: NeonFunction | undefined,
-) =>
-  writer(props).end(
+) => {
+  const out = writer(props).write(
     { ...deployment, invocation_url: fn?.invocation_url },
     { fields: DEPLOY_RESULT_FIELDS },
   );
+  if (props.output !== 'json' && props.output !== 'yaml') {
+    writeDeploymentErrorSection(out, deployment);
+  }
+  out.end();
+};
 
 // A poll error worth retrying: a network error (no HTTP response), a 5xx, or a
 // 404 from eventual consistency. Anything else (e.g. 401/403) is surfaced.
@@ -336,7 +365,9 @@ const deploy = async (props: DeployProps) => {
   );
 };
 
-const get = async (props: BranchScopeProps & { slug: string }) => {
+const get = async (
+  props: BranchScopeProps & { slug: string; listEnvVariables: boolean },
+) => {
   const branchId = await branchIdFromProps(props);
   const fn = await getFunction(
     props.apiClient,
@@ -359,6 +390,17 @@ const get = async (props: BranchScopeProps & { slug: string }) => {
       fields: DEPLOYMENT_FIELDS,
       title: 'active deployment',
     });
+    writeDeploymentErrorSection(out, fn.active_deployment);
+  }
+  if (props.listEnvVariables) {
+    out.write(
+      (fn.active_deployment?.environment ?? []).map((name) => ({ name })),
+      {
+        fields: ['name'],
+        title: 'environment',
+        emptyMessage: 'No environment variables on the active deployment.',
+      },
+    );
   }
   out.end();
 };
