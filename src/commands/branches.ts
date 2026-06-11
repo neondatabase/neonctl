@@ -1,7 +1,7 @@
 import { Branch, EndpointType } from '@neondatabase/api-client';
 import yargs from 'yargs';
 
-import { readContextFile } from '../context.js';
+import { contextBranch, readContextFile } from '../context.js';
 import { IdOrNameProps, ProjectScopeProps } from '../types.js';
 import { writer } from '../writer.js';
 import { branchCreateRequest } from '../parameters.gen.js';
@@ -308,8 +308,9 @@ const list = async (props: ProjectScopeProps) => {
     projectId: props.projectId,
   });
   // The branch pinned in the local context (.neon), so we can flag it as `[current]` — the
-  // one commands target by default and that `neonctl env pull` would read.
-  const currentBranchId = readContextFile(props.contextFile).branchId;
+  // one commands target by default and that `neonctl env pull` would read. The context
+  // stores the branch by name (preferred) or id, so match against either.
+  const currentBranch = contextBranch(readContextFile(props.contextFile));
   writer(props).end(branches, {
     fields: BRANCH_FIELDS,
     renderColumns: {
@@ -328,7 +329,10 @@ const list = async (props: ProjectScopeProps) => {
         if (isAnon) {
           labels.push('[anon]');
         }
-        if (currentBranchId !== undefined && br.id === currentBranchId) {
+        if (
+          currentBranch !== undefined &&
+          (br.id === currentBranch || br.name === currentBranch)
+        ) {
           labels.push('[current]');
         }
         labels.push(br.name);

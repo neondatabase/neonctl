@@ -478,11 +478,11 @@ The organization ID has been saved in ${props.contextFile}
 
 If you'd like to change the default organization later, use
 
-    neonctl set-context --org-id <org_id>
+    neonctl link --org-id <org_id>
 
 Or to clear the context file and forget the default organization
 
-    neonctl set-context
+    neonctl link --clear
 
 `);
   }

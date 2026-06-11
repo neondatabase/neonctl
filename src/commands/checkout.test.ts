@@ -55,7 +55,7 @@ const parseContext = (raw: string) =>
   JSON.parse(raw) as Record<string, unknown>;
 
 describe('checkout', () => {
-  test('resolves a branch by name and writes branchId to a fresh .neon', async ({
+  test('resolves a branch by name and writes the branch name to a fresh .neon', async ({
     testCliCommand,
     readFile,
     tmpContext,
@@ -72,11 +72,11 @@ describe('checkout', () => {
     ]);
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test',
-      branchId: 'br-main-branch-123456',
+      branch: 'main',
     });
   });
 
-  test('resolves a branch by id and writes branchId to a fresh .neon', async ({
+  test('resolves a branch by id and writes the branch name to a fresh .neon', async ({
     testCliCommand,
     readFile,
     tmpContext,
@@ -93,7 +93,7 @@ describe('checkout', () => {
     ]);
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test',
-      branchId: 'br-sunny-branch-123456',
+      branch: 'test_branch',
     });
   });
 
@@ -116,7 +116,7 @@ describe('checkout', () => {
     expect(parseContext(readFile(ctx))).toEqual({
       orgId: 'org-keep',
       projectId: 'test',
-      branchId: 'br-sunny-branch-123456',
+      branch: 'test_branch',
     });
   });
 
@@ -137,7 +137,7 @@ describe('checkout', () => {
     expect(parseContext(readFile(ctx))).toEqual({
       orgId: 'org-healed-123',
       projectId: 'test',
-      branchId: 'br-main-branch-123456',
+      branch: 'main',
     });
   });
 
@@ -156,7 +156,7 @@ describe('checkout', () => {
     ]);
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test',
-      branchId: 'br-main-branch-123456',
+      branch: 'main',
     });
   });
 
@@ -176,7 +176,7 @@ describe('checkout', () => {
     );
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test-project-123456',
-      branchId: 'br-main-branch-123456',
+      branch: 'main',
     });
   });
 
