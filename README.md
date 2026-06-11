@@ -60,7 +60,29 @@ For information about obtaining an Neon API key, see [Authentication](https://ap
 
 ## Connect with psql
 
-Several commands accept a `--psql` flag that opens a psql session against the resolved endpoint:
+### The `psql` command
+
+`neonctl psql [branch]` opens a psql session against a branch. It builds the connection string for the branch and launches psql — a shortcut for `neonctl connection-string --psql`. See [Neon CLI commands — psql](https://neon.com/docs/reference/cli-psql) for the full reference.
+
+```bash
+neonctl psql                                    # default branch
+neonctl psql main                               # a specific branch
+neonctl psql main@2024-01-01T00:00:00Z          # point-in-time (branch@timestamp or branch@lsn)
+neonctl psql --pooled                           # use the pooled connection
+```
+
+Arguments after `--` are forwarded to psql:
+
+```bash
+neonctl psql main -- -c "SELECT version()"
+neonctl psql main -- -f script.sql --csv
+```
+
+Options: `--project-id`, `--role-name`, `--database-name`, `--pooled`, `--endpoint-type` (`read_only` | `read_write`), `--ssl`, plus the [global options](#global-options).
+
+### The `--psql` flag
+
+Several other commands accept a `--psql` flag that opens a psql session against the resolved endpoint:
 
 ```bash
 neonctl connection-string --psql --project-id <id>
@@ -386,7 +408,7 @@ The target directory must be empty unless you pass `--force` (a lone `.git` is i
 | [roles](https://neon.com/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                                     | Manage roles                       |
 | [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                         | Manage operations                  |
 | [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                                | Get connection string              |
-| psql                                                                       |                                                                                                | Connect to a database via psql     |
+| [psql](https://neon.com/docs/reference/cli-psql)                           |                                                                                                | Connect to a database via psql     |
 | [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                                | Set context for session            |
 | env                                                                        | `pull`                                                                                         | Manage a branch's env vars         |
 | checkout                                                                   |                                                                                                | Pin a branch in `.neon`            |
