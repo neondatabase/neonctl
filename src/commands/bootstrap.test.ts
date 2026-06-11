@@ -215,4 +215,11 @@ describe('bootstrap', () => {
     expect(code).toBe(1);
     expect(stderr).toContain('Unknown template');
   });
+
+  test('--list prints available templates from the remote manifest', async () => {
+    const { code, stderr } = await runBootstrap(server, ['--list']);
+    expect(code, stderr).toBe(0);
+    expect(stderr).toContain('hono');
+    expect(stderr).toContain('A Hono API using Drizzle ORM and Neon Postgres');
+  });
 });
