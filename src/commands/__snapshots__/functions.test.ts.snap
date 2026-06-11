@@ -32,11 +32,17 @@ created_at: 2026-06-03T00:00:00Z
 `;
 
 exports[`functions > deploy --wait exits 1 when the deployment fails 1`] = `
-"id: 1
-status: failed
-memory_mib: 256
-runtime: nodejs24
-created_at: 2026-06-03T00:00:00Z
+"┌────┬────────┬──────────┬────────────┬──────────────────────┐
+│ Id │ Status │ Runtime  │ Memory Mib │ Created At           │
+├────┼────────┼──────────┼────────────┼──────────────────────┤
+│ 1  │ failed │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
+└────┴────────┴──────────┴────────────┴──────────────────────┘
+deployment error
+┌──────────────────────────────────────────────┐
+│ Reason                                       │
+├──────────────────────────────────────────────┤
+│ Build failed: cannot resolve module left-pad │
+└──────────────────────────────────────────────┘
 "
 `;
 
@@ -108,6 +114,62 @@ active deployment
 "
 `;
 
+exports[`functions > get (table) shows plain failed status when there is no error 1`] = `
+"function
+┌─────────────┬─────────────┬─────────────────────────────────────────┬──────────────────────┐
+│ Slug        │ Name        │ Invocation Url                          │ Created At           │
+├─────────────┼─────────────┼─────────────────────────────────────────┼──────────────────────┤
+│ failednoerr │ Failednoerr │ https://failednoerr.functions.neon.tech │ 2026-06-03T00:00:00Z │
+└─────────────┴─────────────┴─────────────────────────────────────────┴──────────────────────┘
+active deployment
+┌────┬────────┬──────────┬────────────┬──────────────────────┐
+│ Id │ Status │ Runtime  │ Memory Mib │ Created At           │
+├────┼────────┼──────────┼────────────┼──────────────────────┤
+│ 2  │ failed │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
+└────┴────────┴──────────┴────────────┴──────────────────────┘
+"
+`;
+
+exports[`functions > get (table) shows the build failure reason 1`] = `
+"function
+┌────────────┬────────────┬────────────────────────────────────────┬──────────────────────┐
+│ Slug       │ Name       │ Invocation Url                         │ Created At           │
+├────────────┼────────────┼────────────────────────────────────────┼──────────────────────┤
+│ brokenfunc │ Brokenfunc │ https://brokenfunc.functions.neon.tech │ 2026-06-03T00:00:00Z │
+└────────────┴────────────┴────────────────────────────────────────┴──────────────────────┘
+active deployment
+┌────┬────────┬──────────┬────────────┬──────────────────────┐
+│ Id │ Status │ Runtime  │ Memory Mib │ Created At           │
+├────┼────────┼──────────┼────────────┼──────────────────────┤
+│ 3  │ failed │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
+└────┴────────┴──────────┴────────────┴──────────────────────┘
+deployment error
+┌──────────────────────────────────────────────┐
+│ Reason                                       │
+├──────────────────────────────────────────────┤
+│ Build failed: cannot resolve module left-pad │
+└──────────────────────────────────────────────┘
+"
+`;
+
+exports[`functions > get (yaml) -E is a no-op 1`] = `
+"id: fn-envnames
+slug: envnames
+name: Envnames
+invocation_url: https://envnames.functions.neon.tech
+created_at: 2026-06-03T00:00:00Z
+active_deployment:
+  id: 1
+  status: completed
+  memory_mib: 256
+  runtime: nodejs24
+  created_at: 2026-06-03T00:00:00Z
+  environment:
+    - DATABASE_URL
+    - LOG_LEVEL
+"
+`;
+
 exports[`functions > get (yaml) 1`] = `
 "id: fn-1
 slug: my-func
@@ -120,6 +182,94 @@ active_deployment:
   memory_mib: 256
   runtime: nodejs24
   created_at: 2026-06-03T00:00:00Z
+"
+`;
+
+exports[`functions > get (yaml) includes environment names 1`] = `
+"id: fn-envnames
+slug: envnames
+name: Envnames
+invocation_url: https://envnames.functions.neon.tech
+created_at: 2026-06-03T00:00:00Z
+active_deployment:
+  id: 1
+  status: completed
+  memory_mib: 256
+  runtime: nodejs24
+  created_at: 2026-06-03T00:00:00Z
+  environment:
+    - DATABASE_URL
+    - LOG_LEVEL
+"
+`;
+
+exports[`functions > get (yaml) includes the build failure reason 1`] = `
+"id: fn-brokenfunc
+slug: brokenfunc
+name: Brokenfunc
+invocation_url: https://brokenfunc.functions.neon.tech
+created_at: 2026-06-03T00:00:00Z
+active_deployment:
+  id: 3
+  status: failed
+  memory_mib: 256
+  runtime: nodejs24
+  created_at: 2026-06-03T00:00:00Z
+  error: "Build failed: cannot resolve module left-pad"
+"
+`;
+
+exports[`functions > get --list-env-variables lists env variable names 1`] = `
+"function
+┌──────────┬──────────┬──────────────────────────────────────┬──────────────────────┐
+│ Slug     │ Name     │ Invocation Url                       │ Created At           │
+├──────────┼──────────┼──────────────────────────────────────┼──────────────────────┤
+│ envnames │ Envnames │ https://envnames.functions.neon.tech │ 2026-06-03T00:00:00Z │
+└──────────┴──────────┴──────────────────────────────────────┴──────────────────────┘
+active deployment
+┌────┬───────────┬──────────┬────────────┬──────────────────────┐
+│ Id │ Status    │ Runtime  │ Memory Mib │ Created At           │
+├────┼───────────┼──────────┼────────────┼──────────────────────┤
+│ 1  │ completed │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
+└────┴───────────┴──────────┴────────────┴──────────────────────┘
+environment
+┌──────────────┐
+│ Name         │
+├──────────────┤
+│ DATABASE_URL │
+├──────────────┤
+│ LOG_LEVEL    │
+└──────────────┘
+"
+`;
+
+exports[`functions > get --list-env-variables with no active deployment prints an empty message 1`] = `
+"function
+┌────────────┬────────────┬────────────────────────────────────────┬──────────────────────┐
+│ Slug       │ Name       │ Invocation Url                         │ Created At           │
+├────────────┼────────────┼────────────────────────────────────────┼──────────────────────┤
+│ other-func │ Other Func │ https://other-func.functions.neon.tech │ 2026-06-02T00:00:00Z │
+└────────────┴────────────┴────────────────────────────────────────┴──────────────────────┘
+
+No environment variables on the active deployment.
+"
+`;
+
+exports[`functions > get -E with no env variables prints an empty message 1`] = `
+"function
+┌─────────┬─────────┬─────────────────────────────────────┬──────────────────────┐
+│ Slug    │ Name    │ Invocation Url                      │ Created At           │
+├─────────┼─────────┼─────────────────────────────────────┼──────────────────────┤
+│ my-func │ My Func │ https://my-func.functions.neon.tech │ 2026-06-03T00:00:00Z │
+└─────────┴─────────┴─────────────────────────────────────┴──────────────────────┘
+active deployment
+┌────┬───────────┬──────────┬────────────┬──────────────────────┐
+│ Id │ Status    │ Runtime  │ Memory Mib │ Created At           │
+├────┼───────────┼──────────┼────────────┼──────────────────────┤
+│ 1  │ completed │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
+└────┴───────────┴──────────┴────────────┴──────────────────────┘
+
+No environment variables on the active deployment.
 "
 `;
 

@@ -6,7 +6,7 @@ import { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../api.js';
 import { log } from '../log.js';
-import { BranchScopeProps } from '../types.js';
+import { BranchScopeProps, CommonProps } from '../types.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { zipBundle } from '../utils/zip.js';
 import { bundleEntry } from '../utils/esbuild.js';
@@ -33,6 +33,31 @@ const DEPLOYMENT_FIELDS = [
   'memory_mib',
   'created_at',
 ] as const;
+
+// In table mode a failed build's reason gets its own "deployment error"
+// section after the deployment table; json/yaml carry the raw `error` field.
+const writeDeploymentErrorSection = (
+  out: ReturnType<typeof writer>,
+  dep: NeonFunctionDeployment,
+) => {
+  if (dep.status === 'failed' && dep.error) {
+    out.write(
+      { reason: dep.error },
+      { fields: ['reason'], title: 'deployment error' },
+    );
+  }
+};
+
+const writeDeployment = (
+  props: Pick<CommonProps, 'output'>,
+  dep: NeonFunctionDeployment,
+) => {
+  const out = writer(props).write(dep, { fields: DEPLOYMENT_FIELDS });
+  if (props.output !== 'json' && props.output !== 'yaml') {
+    writeDeploymentErrorSection(out, dep);
+  }
+  out.end();
+};
 
 const SLUG_PATTERN = /^[a-z0-9]{1,20}$/;
 const SLUG_HELP =
@@ -112,11 +137,21 @@ export const builder = (argv: yargs.Argv) =>
       'get <slug>',
       "Show a function's details",
       (yargs) =>
-        yargs.positional('slug', {
-          describe: 'Function slug',
-          type: 'string',
-          demandOption: true,
-        }),
+        yargs
+          .positional('slug', {
+            describe: 'Function slug',
+            type: 'string',
+            demandOption: true,
+          })
+          .options({
+            'list-env-variables': {
+              describe:
+                'List the environment variable names of the active deployment',
+              type: 'boolean',
+              alias: 'E',
+              default: false,
+            },
+          }),
       (args) => get(args as any),
     )
     .command(
@@ -277,7 +312,7 @@ const deploy = async (props: DeployProps) => {
 
   if (interrupted) {
     log.info(statusHint(props.slug, props.projectId, branchId));
-    if (resolved) writer(props).end(resolved, { fields: DEPLOYMENT_FIELDS });
+    if (resolved) writeDeployment(props, resolved);
     return;
   }
 
@@ -288,7 +323,7 @@ const deploy = async (props: DeployProps) => {
     );
   }
 
-  writer(props).end(resolved, { fields: DEPLOYMENT_FIELDS });
+  writeDeployment(props, resolved);
 
   if (!props.wait) {
     log.info(statusHint(props.slug, props.projectId, branchId));
@@ -309,7 +344,9 @@ const deploy = async (props: DeployProps) => {
   );
 };
 
-const get = async (props: BranchScopeProps & { slug: string }) => {
+const get = async (
+  props: BranchScopeProps & { slug: string; listEnvVariables: boolean },
+) => {
   const branchId = await branchIdFromProps(props);
   const fn = await getFunction(
     props.apiClient,
@@ -332,6 +369,17 @@ const get = async (props: BranchScopeProps & { slug: string }) => {
       fields: DEPLOYMENT_FIELDS,
       title: 'active deployment',
     });
+    writeDeploymentErrorSection(out, fn.active_deployment);
+  }
+  if (props.listEnvVariables) {
+    out.write(
+      (fn.active_deployment?.environment ?? []).map((name) => ({ name })),
+      {
+        fields: ['name'],
+        title: 'environment',
+        emptyMessage: 'No environment variables on the active deployment.',
+      },
+    );
   }
   out.end();
 };
