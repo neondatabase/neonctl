@@ -22,6 +22,7 @@ import * as config from './config.js';
 import * as deploy from './deploy.js';
 import * as env from './env.js';
 import * as bucket from './bucket.js';
+import * as bootstrap from './bootstrap.js';
 
 export default [
   auth,
@@ -48,4 +49,5 @@ export default [
   deploy,
   env,
   bucket,
+  bootstrap,
 ];
