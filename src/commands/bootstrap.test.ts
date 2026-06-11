@@ -47,10 +47,26 @@ const FIXTURE: Record<string, FixtureFile> = {
 const COMMIT_SHA = 'commit0000000000000000000000000000000000';
 const TREE_SHA = 'tree00000000000000000000000000000000000000';
 
+const MANIFEST_YAML = `templates:
+  - id: hono
+    title: "Hono API (Drizzle, Neon Postgres) on Neon Functions"
+    description: "A Hono API using Drizzle ORM and Neon Postgres, ready to deploy as a Neon Function."
+    source:
+      owner: neondatabase
+      repo: examples
+      ref: main
+      subdir: with-hono
+`;
+
 // A real local HTTP server standing in for the GitHub API + raw host, so the
 // whole download/extract path runs end to end with no mocking of our own code.
 const startGithubFixtureServer = (): Promise<Server> => {
   const app = express();
+
+  // Serve the bootstrap manifest
+  app.get('/manifest/bootstrap.yaml', (_req, res) => {
+    res.type('text/yaml').send(MANIFEST_YAML);
+  });
 
   app.get('/repos/:owner/:repo/commits/:ref', (_req, res) => {
     res.json({ sha: COMMIT_SHA, commit: { tree: { sha: TREE_SHA } } });
@@ -88,7 +104,7 @@ const startGithubFixtureServer = (): Promise<Server> => {
 const runBootstrap = (
   server: Server,
   args: string[],
-): Promise<{ code: number; stderr: string }> => {
+): Promise<{ code: number; stdout: string; stderr: string }> => {
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return new Promise((resolve, reject) => {
     const cp = fork(
@@ -109,16 +125,21 @@ const runBootstrap = (
           CI: 'true',
           NEON_BOOTSTRAP_GITHUB_API: base,
           NEON_BOOTSTRAP_GITHUB_RAW: `${base}/raw`,
+          NEON_BOOTSTRAP_MANIFEST_URL: `${base}/manifest/bootstrap.yaml`,
         },
       },
     );
+    let stdout = '';
     let stderr = '';
+    cp.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
     cp.stderr?.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
     cp.on('error', reject);
     cp.on('close', (code) => {
-      resolve({ code: code ?? -1, stderr });
+      resolve({ code: code ?? -1, stdout, stderr });
     });
   });
 };
@@ -197,5 +218,12 @@ describe('bootstrap', () => {
     ]);
     expect(code).toBe(1);
     expect(stderr).toContain('Unknown template');
+  });
+
+  test('--list prints available templates to stdout from the remote manifest', async () => {
+    const { code, stdout, stderr } = await runBootstrap(server, ['--list']);
+    expect(code, stderr).toBe(0);
+    expect(stdout).toContain('hono');
+    expect(stdout).toContain('A Hono API using Drizzle ORM and Neon Postgres');
   });
 });

@@ -19,11 +19,12 @@ import { log } from '../log.js';
 import { CommonProps } from '../types.js';
 import {
   BootstrapTemplate,
+  FALLBACK_TEMPLATES,
   fetchFileBytes,
   fetchSymlinkTarget,
+  fetchTemplates,
   findTemplate,
   resolveTemplate,
-  TEMPLATES,
   templateIds,
 } from '../utils/bootstrap.js';
 
@@ -31,6 +32,7 @@ type BootstrapProps = CommonProps & {
   directory?: string;
   template?: string;
   force: boolean;
+  listTemplates: boolean;
 };
 
 // The directory positional is optional: omitting it in an interactive terminal
@@ -48,8 +50,15 @@ export const builder = (argv: yargs.Argv) =>
     })
     .options({
       template: {
-        describe: `Template to use (skips the interactive picker). One of: ${templateIds()}.`,
+        describe:
+          'Template to use (skips the interactive picker). Run with --list-templates to see available templates.',
         type: 'string',
+      },
+      'list-templates': {
+        alias: ['list', 'ls'],
+        describe: 'List available templates and exit.',
+        type: 'boolean',
+        default: false,
       },
       force: {
         describe:
@@ -69,8 +78,24 @@ export const builder = (argv: yargs.Argv) =>
     .strict();
 
 export const handler = async (props: BootstrapProps): Promise<void> => {
+  if (props.listTemplates) {
+    const templates = await fetchTemplates();
+    for (const t of templates) {
+      process.stdout.write(`${t.id} — ${t.description}\n`);
+    }
+    return;
+  }
+
+  // When --template is provided, try the fallback list first to avoid a
+  // network round-trip. Only fetch the remote manifest if the id isn't found.
+  const templates = props.template
+    ? findTemplate(FALLBACK_TEMPLATES, props.template)
+      ? FALLBACK_TEMPLATES
+      : await fetchTemplates()
+    : await fetchTemplates();
+
   const interactive = Boolean(process.stdout.isTTY) && !isCi();
-  const template = await resolveSelectedTemplate(props, interactive);
+  const template = await resolveSelectedTemplate(props, interactive, templates);
   const targetDir = await resolveTargetDir(props, interactive, template);
   ensureTargetUsable(targetDir, props.force);
   await scaffold(template, targetDir);
@@ -80,12 +105,13 @@ export const handler = async (props: BootstrapProps): Promise<void> => {
 const resolveSelectedTemplate = async (
   props: BootstrapProps,
   interactive: boolean,
+  templates: BootstrapTemplate[],
 ): Promise<BootstrapTemplate> => {
   if (props.template) {
-    const template = findTemplate(props.template);
+    const template = findTemplate(templates, props.template);
     if (!template) {
       throw new Error(
-        `Unknown template "${props.template}". Available templates: ${templateIds()}.`,
+        `Unknown template "${props.template}". Available templates: ${templateIds(templates)}.`,
       );
     }
     return template;
@@ -93,7 +119,7 @@ const resolveSelectedTemplate = async (
 
   if (!interactive) {
     throw new Error(
-      `No template selected. Re-run in an interactive terminal to pick one, or pass --template <id>. Available templates: ${templateIds()}.`,
+      `No template selected. Re-run in an interactive terminal to pick one, or pass --template <id>. Available templates: ${templateIds(templates)}.`,
     );
   }
 
@@ -102,14 +128,14 @@ const resolveSelectedTemplate = async (
     type: 'select',
     name: 'id',
     message: 'Which template would you like to use?',
-    choices: TEMPLATES.map((template) => ({
+    choices: templates.map((template) => ({
       title: template.title,
       description: template.description,
       value: template.id,
     })),
     initial: 0,
   });
-  const template = findTemplate(id);
+  const template = findTemplate(templates, id);
   if (!template) {
     throw new Error('No template selected.');
   }
