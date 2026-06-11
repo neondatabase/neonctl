@@ -61,6 +61,7 @@ describe('toNeonConfigView', () => {
       aiGatewayEnabled: true,
       functions: [{ slug: 'hello', name: 'Hello' }],
       buckets: [{ name: 'uploads', access: 'public_read' }],
+      credentials: [],
     };
     const view = toNeonConfigView(base, preview);
     expect(view.preview).toEqual({
@@ -70,11 +71,41 @@ describe('toNeonConfigView', () => {
     });
   });
 
+  it('projects issued credentials (secret-free) into the preview view', () => {
+    const preview: PulledBranchConfig['preview'] = {
+      aiGatewayEnabled: false,
+      functions: [],
+      buckets: [],
+      credentials: [
+        {
+          tokenId: 'dc52e816-839c-462d-a7d5-f26ed768f65a',
+          tokenIdShort: 'dc52e816839c',
+          name: 'app',
+          scopes: ['storage:read', 'storage:write'],
+          principalType: 'user',
+          createdAt: '2026-06-10T17:12:01Z',
+          lastUsedAt: '2026-06-10T18:00:00Z',
+        },
+      ],
+    };
+    expect(toNeonConfigView(base, preview).preview).toEqual({
+      credentials: [
+        {
+          id: 'dc52e816839c',
+          name: 'app',
+          scopes: ['storage:read', 'storage:write'],
+          lastUsedAt: '2026-06-10T18:00:00Z',
+        },
+      ],
+    });
+  });
+
   it('omits an all-empty preview', () => {
     const preview: PulledBranchConfig['preview'] = {
       aiGatewayEnabled: false,
       functions: [],
       buckets: [],
+      credentials: [],
     };
     expect(toNeonConfigView(base, preview).preview).toBeUndefined();
   });

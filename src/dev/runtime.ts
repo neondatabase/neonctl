@@ -72,7 +72,7 @@ export const withErrorBoundary = (handler: FetchHandler): FetchHandler => {
 /**
  * How the runtime picks its port:
  *   - `explicit`: bind this exact port and crash on conflict (an explicit choice
- *     — `--port` or portless's `PORT` — that is taken is an error).
+ *     — `--port` or an injected `PORT` — that is taken is an error).
  *   - `search`: walk upward from `from` until a free port is found; never crash.
  */
 export type PortSelection =
@@ -162,8 +162,8 @@ export const startRuntime = async ({
  * Build a {@link PortSelection} from the environment. Precedence:
  *   1. `NEON_DEV_PORT` -> explicit bind (crash if taken). Set by `neon dev` from an
  *      explicit `--port` / `dev.port`.
- *   2. `PORT`          -> explicit bind. This is what `portless` injects (and what a bare
- *      `PORT=3000 neon dev` sets), so the runtime binds the port chosen for it.
+ *   2. `PORT`          -> explicit bind. A bare `PORT=3000 neon dev` sets this, so the
+ *      runtime binds the port chosen for it.
  *   3. otherwise        -> search upward from `NEON_DEV_PORT_BASE` (or the default base).
  */
 export const portSelectionFromEnv = (env: NodeJS.ProcessEnv): PortSelection => {

@@ -11,10 +11,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { NeonApi } from '@neondatabase/config';
 import type {
+  CreateCredentialInput,
   GetConnectionUriInput,
   NeonAuthSnapshot,
   NeonBranchSnapshot,
+  NeonBranchStorageSnapshot,
   NeonBucketSnapshot,
+  NeonCredentialMeta,
+  NeonCredentialSecret,
   NeonDataApiSnapshot,
   NeonDatabaseSnapshot,
   NeonEndpointSnapshot,
@@ -144,9 +148,6 @@ class FakeNeonApi implements NeonApi {
   async listBranchFunctions(): Promise<NeonFunctionSnapshot[]> {
     return [];
   }
-  async createBranchFunction(): Promise<NeonFunctionSnapshot> {
-    throw new Error('not implemented');
-  }
   async deleteBranchFunction(): Promise<void> {
     throw new Error('not implemented');
   }
@@ -161,6 +162,34 @@ class FakeNeonApi implements NeonApi {
   }
   async disableAiGateway(): Promise<void> {
     throw new Error('not implemented');
+  }
+  async createCredential(
+    _projectId: string,
+    branchId: string,
+    input: CreateCredentialInput,
+  ): Promise<NeonCredentialSecret> {
+    return {
+      tokenId: 'cred-fake-0000',
+      tokenIdShort: 'credfake0000',
+      apiToken: 'nt_live_credfake0000_secret',
+      s3SecretAccessKey: 's3secret'.padEnd(64, '0'),
+      scopes: input.scopes,
+      branchId,
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+  }
+  async listCredentials(): Promise<NeonCredentialMeta[]> {
+    return [];
+  }
+  async revokeCredential(): Promise<void> {
+    return;
+  }
+  async getProjectBranchStorage(): Promise<NeonBranchStorageSnapshot | null> {
+    return {
+      s3Endpoint: 'https://fake.storage.neon.tech',
+      region: 'us-east-1',
+      forcePathStyle: true,
+    };
   }
 }
 

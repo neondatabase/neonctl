@@ -10,16 +10,14 @@ import {
 /**
  * A function from `neon.ts`, resolved into everything `neon dev` needs to serve it
  * locally. `source` is absolute (resolved against the `neon.ts` location). `port` is the
- * function's explicit `dev.port`, or `undefined` to let the supervisor find a free one
- * (only allowed when not `portless`). `env` is the function's own `neon.ts` env, layered
- * over the shared branch env per child.
+ * function's explicit `dev.port`, or `undefined` to let the supervisor find a free one.
+ * `env` is the function's own `neon.ts` env, layered over the shared branch env per child.
  */
 export type PlannedFunction = {
   slug: string;
   name: string;
   source: string;
   port?: number;
-  portless: boolean;
   env: Record<string, string>;
 };
 
@@ -71,7 +69,6 @@ export const resolveFunctionsFromConfig = async (
       slug: fn.slug,
       name: fn.name,
       source,
-      portless: fn.dev?.portless === true,
       ...(devPort(fn.dev) !== undefined
         ? { port: devPort(fn.dev) as number }
         : {}),
@@ -83,9 +80,8 @@ export const resolveFunctionsFromConfig = async (
 };
 
 /**
- * Read the `port` off a {@link FunctionDevConfig}. The discriminated union guarantees a
- * `port` is present whenever `portless` is true, so this is `undefined` only for the
- * non-portless, port-omitted case (the supervisor then searches for a free port).
+ * Read the `port` off a {@link FunctionDevConfig}. `undefined` when no `dev.port` is set
+ * (the supervisor then searches for a free port).
  */
 const devPort = (dev: FunctionDevConfig | undefined): number | undefined =>
   dev?.port;

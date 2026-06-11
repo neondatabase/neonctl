@@ -10,6 +10,7 @@ status: building
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://entryfunc.functions.neon.tech
 "
 `;
 
@@ -19,6 +20,7 @@ status: building
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://envfunc.functions.neon.tech
 "
 `;
 
@@ -28,15 +30,16 @@ status: building
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://nowaitfunc.functions.neon.tech
 "
 `;
 
 exports[`functions > deploy --wait exits 1 when the deployment fails 1`] = `
-"┌────┬────────┬──────────┬────────────┬──────────────────────┐
-│ Id │ Status │ Runtime  │ Memory Mib │ Created At           │
-├────┼────────┼──────────┼────────────┼──────────────────────┤
-│ 1  │ failed │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
-└────┴────────┴──────────┴────────────┴──────────────────────┘
+"┌────┬────────┬──────────────────────────────────────┬──────────┬────────────┬──────────────────────┐
+│ Id │ Status │ Invocation Url                       │ Runtime  │ Memory Mib │ Created At           │
+├────┼────────┼──────────────────────────────────────┼──────────┼────────────┼──────────────────────┤
+│ 1  │ failed │ https://failfunc.functions.neon.tech │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
+└────┴────────┴──────────────────────────────────────┴──────────┴────────────┴──────────────────────┘
 deployment error
 ┌──────────────────────────────────────────────┐
 │ Reason                                       │
@@ -52,6 +55,7 @@ status: completed
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://newfunc.functions.neon.tech
 "
 `;
 
@@ -61,6 +65,7 @@ status: completed
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://flaky.functions.neon.tech
 "
 `;
 
@@ -74,6 +79,7 @@ status: building
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://stuckbuild.functions.neon.tech
 "
 `;
 
@@ -83,6 +89,7 @@ status: completed
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://redeploy.functions.neon.tech
 "
 `;
 

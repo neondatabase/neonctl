@@ -6,7 +6,7 @@ import { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../api.js';
 import { log } from '../log.js';
-import { BranchScopeProps, CommonProps } from '../types.js';
+import { BranchScopeProps } from '../types.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { zipBundle } from '../utils/zip.js';
 import { bundleEntry } from '../utils/esbuild.js';
@@ -16,6 +16,7 @@ import {
   deleteFunction,
   getFunction,
   listFunctions,
+  NeonFunction,
   NeonFunctionDeployment,
 } from '../functions_api.js';
 
@@ -34,6 +35,17 @@ const DEPLOYMENT_FIELDS = [
   'created_at',
 ] as const;
 
+// Deploy emits the resolved deployment plus the function's invocation_url, so a
+// successful `functions deploy` tells the user exactly where to call the function.
+const DEPLOY_RESULT_FIELDS = [
+  'id',
+  'status',
+  'invocation_url',
+  'runtime',
+  'memory_mib',
+  'created_at',
+] as const;
+
 // In table mode a failed build's reason gets its own "deployment error"
 // section after the deployment table; json/yaml carry the raw `error` field.
 const writeDeploymentErrorSection = (
@@ -46,17 +58,6 @@ const writeDeploymentErrorSection = (
       { fields: ['reason'], title: 'deployment error' },
     );
   }
-};
-
-const writeDeployment = (
-  props: Pick<CommonProps, 'output'>,
-  dep: NeonFunctionDeployment,
-) => {
-  const out = writer(props).write(dep, { fields: DEPLOYMENT_FIELDS });
-  if (props.output !== 'json' && props.output !== 'yaml') {
-    writeDeploymentErrorSection(out, dep);
-  }
-  out.end();
 };
 
 const SLUG_PATTERN = /^[a-z0-9]{1,20}$/;
@@ -195,6 +196,23 @@ const parseEnv = (entries: string[] | undefined): string | undefined => {
 const statusHint = (slug: string, projectId: string, branchId: string) =>
   `Check status with: neonctl functions get ${slug} --project-id ${projectId} --branch ${branchId}`;
 
+// Emit the resolved deployment together with the function's invocation_url, so the
+// deploy output shows where the function is reachable (not just the deployment id).
+const emitDeployResult = (
+  props: DeployProps,
+  deployment: NeonFunctionDeployment,
+  fn: NeonFunction | undefined,
+) => {
+  const out = writer(props).write(
+    { ...deployment, invocation_url: fn?.invocation_url },
+    { fields: DEPLOY_RESULT_FIELDS },
+  );
+  if (props.output !== 'json' && props.output !== 'yaml') {
+    writeDeploymentErrorSection(out, deployment);
+  }
+  out.end();
+};
+
 // A poll error worth retrying: a network error (no HTTP response), a 5xx, or a
 // 404 from eventual consistency. Anything else (e.g. 401/403) is surfaced.
 const isTransient = (err: unknown): boolean =>
@@ -276,6 +294,9 @@ const deploy = async (props: DeployProps) => {
   // any version if there was none). --no-wait stops there; --wait stops at a
   // terminal status. Bounded by POLL_TIMEOUT_MS so it never hangs.
   let resolved: NeonFunctionDeployment | undefined;
+  // The function carries the invocation_url; keep the whole record (not just its
+  // active_deployment) so we can surface that URL on success.
+  let resolvedFn: NeonFunction | undefined;
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   try {
     while (!interrupted && Date.now() < deadline) {
@@ -283,24 +304,24 @@ const deploy = async (props: DeployProps) => {
       if (interrupted) break;
       // The deploy already succeeded server-side; tolerate transient poll
       // failures and retry on the next interval. Surface anything else.
-      let dep: NeonFunctionDeployment | undefined;
+      let fn: NeonFunction | undefined;
       try {
-        dep = (
-          await getFunction(
-            props.apiClient,
-            props.projectId,
-            branchId,
-            props.slug,
-          )
-        ).active_deployment;
+        fn = await getFunction(
+          props.apiClient,
+          props.projectId,
+          branchId,
+          props.slug,
+        );
       } catch (err: unknown) {
         if (isTransient(err)) continue;
         throw err;
       }
+      const dep = fn.active_deployment;
       const isNew =
         dep !== undefined && (before === undefined || dep.id > before);
       if (isNew && dep) {
         resolved = dep;
+        resolvedFn = fn;
         if (!props.wait) break;
         if (dep.status === 'completed' || dep.status === 'failed') break;
       }
@@ -312,7 +333,7 @@ const deploy = async (props: DeployProps) => {
 
   if (interrupted) {
     log.info(statusHint(props.slug, props.projectId, branchId));
-    if (resolved) writeDeployment(props, resolved);
+    if (resolved) emitDeployResult(props, resolved, resolvedFn);
     return;
   }
 
@@ -323,7 +344,7 @@ const deploy = async (props: DeployProps) => {
     );
   }
 
-  writeDeployment(props, resolved);
+  emitDeployResult(props, resolved, resolvedFn);
 
   if (!props.wait) {
     log.info(statusHint(props.slug, props.projectId, branchId));
