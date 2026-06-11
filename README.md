@@ -356,29 +356,46 @@ neon deploy --branch my-feature --update-existing
 
 Function deploys declared under `preview.functions` are bundled by neonctl's own esbuild helper and uploaded as part of `apply`, so the policy stays declarative and the packaged CLI never has to embed esbuild's native binary.
 
+## Scaffold a project (`bootstrap`)
+
+`neonctl bootstrap` copies a Neon starter template into a new (or current) directory — conceptually like `degit`, but it only pulls from a small set of templates we maintain in the public [`neondatabase/examples`](https://github.com/neondatabase/examples) repo. It requires no Neon login: it just downloads files from GitHub.
+
+Pass a target directory (or `.` for the current one). In an interactive terminal you pick the template from a list; in CI / non-interactive contexts pass `--template <id>`.
+
+```bash
+# Pick a template interactively and scaffold it into ./my-app
+$ neonctl bootstrap my-app
+
+# Scaffold a specific template into the current directory (no prompts)
+$ neonctl bootstrap . --template hono
+```
+
+The target directory must be empty unless you pass `--force` (a lone `.git` is ignored, so a freshly `git init`ed folder is fine). Symlinks and executable bits in the template are preserved.
+
 ## Commands
 
-| Command                                                                    | Subcommands                                                                                    | Description                      |
-| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------- |
-| [auth](https://neon.com/docs/reference/cli-auth)                           |                                                                                                | Authenticate                     |
-| [projects](https://neon.com/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                                                    | Manage projects                  |
-| [ip-allow](https://neon.com/docs/reference/cli-ip-allow)                   | `list`, `add`, `remove`, `reset`                                                               | Manage IP Allow                  |
-| [me](https://neon.com/docs/reference/cli-me)                               |                                                                                                | Show current user                |
-| [branches](https://neon.com/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-default`, `set-expiration`, `delete`, `get`    | Manage branches                  |
-| [databases](https://neon.com/docs/reference/cli-databases)                 | `list`, `create`, `delete`                                                                     | Manage databases                 |
-| functions                                                                  | `deploy`, `list`, `get`, `delete`                                                              | Manage Neon Functions            |
-| [roles](https://neon.com/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                                     | Manage roles                     |
-| [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                         | Manage operations                |
-| [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                                | Get connection string            |
-| psql                                                                       |                                                                                                | Connect to a database via psql   |
-| [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                                | Set context for session          |
-| env                                                                        | `pull`                                                                                         | Manage a branch's env vars       |
-| checkout                                                                   |                                                                                                | Pin a branch in `.neon`          |
-| [link](https://neon.com/docs/reference/cli-link)                           |                                                                                                | Link a directory to a project    |
-| config                                                                     | `status`, `plan`, `apply`                                                                      | Drive a branch from `neon.ts`    |
-| deploy                                                                     |                                                                                                | Alias for `config apply`         |
-| bucket                                                                     | `create`, `list`, `delete`, `object list`, `object get`, `object delete` (incl. `--recursive`) | Manage buckets and their objects |
-| [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                                | Generate a completion script     |
+| Command                                                                    | Subcommands                                                                                    | Description                        |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------- |
+| [auth](https://neon.com/docs/reference/cli-auth)                           |                                                                                                | Authenticate                       |
+| [projects](https://neon.com/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                                                    | Manage projects                    |
+| [ip-allow](https://neon.com/docs/reference/cli-ip-allow)                   | `list`, `add`, `remove`, `reset`                                                               | Manage IP Allow                    |
+| [me](https://neon.com/docs/reference/cli-me)                               |                                                                                                | Show current user                  |
+| [branches](https://neon.com/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-default`, `set-expiration`, `delete`, `get`    | Manage branches                    |
+| [databases](https://neon.com/docs/reference/cli-databases)                 | `list`, `create`, `delete`                                                                     | Manage databases                   |
+| functions                                                                  | `deploy`, `list`, `get`, `delete`                                                              | Manage Neon Functions              |
+| [roles](https://neon.com/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                                     | Manage roles                       |
+| [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                         | Manage operations                  |
+| [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                                | Get connection string              |
+| psql                                                                       |                                                                                                | Connect to a database via psql     |
+| [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                                | Set context for session            |
+| env                                                                        | `pull`                                                                                         | Manage a branch's env vars         |
+| checkout                                                                   |                                                                                                | Pin a branch in `.neon`            |
+| [link](https://neon.com/docs/reference/cli-link)                           |                                                                                                | Link a directory to a project      |
+| config                                                                     | `status`, `plan`, `apply`                                                                      | Drive a branch from `neon.ts`      |
+| deploy                                                                     |                                                                                                | Alias for `config apply`           |
+| bootstrap                                                                  |                                                                                                | Scaffold a project from a template |
+| bucket                                                                     | `create`, `list`, `delete`, `object list`, `object get`, `object delete` (incl. `--recursive`) | Manage buckets and their objects   |
+| [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                                | Generate a completion script       |
 
 ## Global options
 
