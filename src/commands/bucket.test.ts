@@ -25,6 +25,7 @@ afterAll(() => {
 afterEach(() => {
   delete process.env.NEONCTL_TEST_UPLOAD_SINK;
   delete process.env.NEONCTL_TEST_PRESIGN_SINK;
+  delete process.env.NEONCTL_TEST_UPLOAD_FAIL_STATUS;
 });
 
 const SCOPE = [
@@ -324,6 +325,21 @@ describe('bucket', () => {
     );
   });
 
+  test('object put without a bucket is rejected client-side', async ({
+    testCliCommand,
+  }) => {
+    const src = join(TEST_TMP, 'no-bucket.txt');
+    writeFileSync(src, 'x');
+    await testCliCommand(
+      ['bucket', 'object', 'put', '/upload.txt', '--file', src, ...SCOPE],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr: 'ERROR: Object target must be in the form <bucket>/<key>.',
+      },
+    );
+  });
+
   test('object put requires --file', async ({ testCliCommand }) => {
     await testCliCommand(
       ['bucket', 'object', 'put', 'my-bucket/upload.txt', ...SCOPE],
@@ -353,6 +369,36 @@ describe('bucket', () => {
         mockDir: 'single_org',
         code: 1,
         stderr: 'ERROR: Not Found',
+      },
+    );
+  });
+
+  test('object put surfaces a clean error when the presigned PUT fails', async ({
+    testCliCommand,
+  }) => {
+    // Presign succeeds, but the data-plane PUT answers 403 (e.g. an expired
+    // URL). The CLI must surface a clean error with the HTTP status and must
+    // NOT leak the raw axios error or the presigned URL.
+    const src = join(TEST_TMP, 'put-fails.txt');
+    writeFileSync(src, 'x');
+    process.env.NEONCTL_TEST_UPLOAD_FAIL_STATUS = '403';
+    await testCliCommand(
+      [
+        'bucket',
+        'object',
+        'put',
+        'my-bucket/upload.txt',
+        '--file',
+        src,
+        ...SCOPE,
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Failed to upload "' +
+          src +
+          '" to "upload.txt" in bucket "my-bucket" on branch br-main-branch-123456 (HTTP 403): Request failed with status code 403',
       },
     );
   });

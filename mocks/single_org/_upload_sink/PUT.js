@@ -22,6 +22,17 @@ export default function (req, res) {
         }),
       );
     }
+    // When the test asks for a failure, answer with an XML body like a real S3
+    // data plane would, so we can prove the CLI surfaces a clean error (with the
+    // HTTP status) rather than leaking the raw axios error or the presigned URL.
+    const failStatus = Number(process.env.NEONCTL_TEST_UPLOAD_FAIL_STATUS);
+    if (failStatus) {
+      res
+        .status(failStatus)
+        .type('application/xml')
+        .end('<Error><Code>AccessDenied</Code></Error>');
+      return;
+    }
     res.status(200).end();
   });
 }

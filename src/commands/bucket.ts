@@ -485,7 +485,7 @@ const putObject = async (
 ): Promise<void> => {
   const branchId = await branchIdFromProps(props);
   const { bucket, rest: key } = splitBucketTarget(props.target);
-  if (key === '') {
+  if (bucket === '' || key === '') {
     throw new Error('Object target must be in the form <bucket>/<key>.');
   }
 
@@ -534,14 +534,38 @@ const putObject = async (
   // Stream the file straight into the PUT body; never buffer the whole file.
   // The presigned URL targets the branch S3 data-plane endpoint directly, so
   // this PUT goes through a plain axios call rather than the console api-client.
-  await axios.put(presign.url, createReadStream(props.file), {
-    headers: {
-      ...presign.headers,
-      'Content-Length': fileSize,
-    },
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-  });
+  //
+  // `presign.headers` carries the signature-relevant headers (e.g. host,
+  // content-type); the server does not sign Content-Length, so we set it
+  // ourselves from the stat'd size to keep the upload streamed, not chunked.
+  // `maxRedirects: 0` ensures we never resend the file bytes and signed headers
+  // to a different host if the data-plane endpoint were to answer with a
+  // redirect.
+  try {
+    await axios.put(presign.url, createReadStream(props.file), {
+      headers: {
+        ...presign.headers,
+        'Content-Length': fileSize,
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      maxRedirects: 0,
+    });
+  } catch (err: unknown) {
+    // The upload targets the S3 data plane, whose error bodies are XML rather
+    // than the JSON `{ message }` the console returns, so surface the status
+    // (and axios message) rather than leaking a raw error. Never include the
+    // presigned URL, which carries the signature.
+    if (isAxiosError(err)) {
+      const status = err.response?.status;
+      throw new Error(
+        `Failed to upload "${props.file}" to "${key}" in bucket "${bucket}" on branch ${branchId}${
+          status !== undefined ? ` (HTTP ${status})` : ''
+        }: ${err.message}`,
+      );
+    }
+    throw err;
+  }
 
   log.info(
     `File "${props.file}" uploaded to "${key}" in bucket "${bucket}" on branch ${branchId}`,
