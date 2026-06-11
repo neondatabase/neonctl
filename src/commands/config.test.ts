@@ -180,21 +180,6 @@ class FakeNeonApi implements NeonApi {
     return [];
   }
 
-  async createBranchFunction(
-    projectId: string,
-    branchId: string,
-    input: { slug: string; name: string },
-  ): Promise<NeonFunctionSnapshot> {
-    void projectId;
-    void branchId;
-    return {
-      id: `fn-${input.slug}`,
-      slug: input.slug,
-      name: input.name,
-      invocationUrl: `https://${input.slug}.${BRANCH_ID}.fake.neon.tech`,
-    };
-  }
-
   async deleteBranchFunction(): Promise<void> {
     throw new Error('not implemented');
   }
