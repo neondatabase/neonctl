@@ -422,12 +422,30 @@ const get = async (
     fields: FUNCTION_FIELDS,
     title: 'function',
   });
-  if (fn.active_deployment) {
-    out.write(fn.active_deployment, {
+  const current = fn.current_deployment;
+  const active = fn.active_deployment;
+  if (current && active && current.id === active.id) {
+    out.write(current, {
       fields: DEPLOYMENT_FIELDS,
-      title: 'active deployment',
+      title: 'deployment (current, active)',
     });
-    writeDeploymentErrorSection(out, fn.active_deployment);
+    writeDeploymentErrorSection(out, current);
+  } else {
+    if (current) {
+      out.write(current, {
+        fields: DEPLOYMENT_FIELDS,
+        title: 'current deployment',
+      });
+      // The failure reason is shown only for the current deployment;
+      // the active one completed successfully by definition.
+      writeDeploymentErrorSection(out, current);
+    }
+    if (active) {
+      out.write(active, {
+        fields: DEPLOYMENT_FIELDS,
+        title: 'active deployment',
+      });
+    }
   }
   if (props.listEnvVariables) {
     out.write(
