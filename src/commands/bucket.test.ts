@@ -373,6 +373,59 @@ describe('bucket', () => {
     );
   });
 
+  test('object put surfaces the server message when presign fails with 403', async ({
+    testCliCommand,
+  }) => {
+    // The console rejects the presign with 403 (no write permission) and a
+    // structured `{ message }` body. The CLI must surface that message, not a
+    // bare `Request failed with status code 403`.
+    const src = join(TEST_TMP, 'forbidden.txt');
+    writeFileSync(src, 'x');
+    await testCliCommand(
+      [
+        'bucket',
+        'object',
+        'put',
+        'my-bucket/forbidden-key.txt',
+        '--file',
+        src,
+        ...SCOPE,
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr: 'ERROR: You do not have permission to write to this bucket.',
+      },
+    );
+  });
+
+  test('object put surfaces a clean status error when presign fails without a message body', async ({
+    testCliCommand,
+  }) => {
+    // A non-404 presign failure whose body carries no usable `{ message }`
+    // must still yield a clean, status-bearing error (never a bare axios
+    // string) and must not leak a signed URL.
+    const src = join(TEST_TMP, 'forbidden-nobody.txt');
+    writeFileSync(src, 'x');
+    await testCliCommand(
+      [
+        'bucket',
+        'object',
+        'put',
+        'my-bucket/forbidden-nobody.txt',
+        '--file',
+        src,
+        ...SCOPE,
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: Failed to presign upload for "forbidden-nobody.txt" in bucket "my-bucket" on branch br-main-branch-123456 (HTTP 403): Request failed with status code 403',
+      },
+    );
+  });
+
   test('object put surfaces a clean error when the presigned PUT fails', async ({
     testCliCommand,
   }) => {

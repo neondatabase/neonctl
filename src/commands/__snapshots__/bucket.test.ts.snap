@@ -172,7 +172,11 @@ exports[`bucket > object put streams the file to the presigned URL with the retu
 
 exports[`bucket > object put surfaces a clean error when the presigned PUT fails 1`] = `""`;
 
+exports[`bucket > object put surfaces a clean status error when presign fails without a message body 1`] = `""`;
+
 exports[`bucket > object put surfaces the server message when presign fails 1`] = `""`;
+
+exports[`bucket > object put surfaces the server message when presign fails with 403 1`] = `""`;
 
 exports[`bucket > object put without a bucket is rejected client-side 1`] = `""`;
 

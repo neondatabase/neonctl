@@ -525,8 +525,22 @@ const putObject = async (
       contentType: props.contentType,
     }));
   } catch (err: unknown) {
-    if (isAxiosError(err) && err.response?.status === 404) {
-      throw new Error(objectNotFoundMessage(err, key, bucket, branchId));
+    if (isAxiosError(err)) {
+      const status = err.response?.status;
+      if (status === 404) {
+        throw new Error(objectNotFoundMessage(err, key, bucket, branchId));
+      }
+      // Any other HTTP error from the console (e.g. 403 when the caller lacks
+      // write permission on the bucket) carries the same JSON `{ message }`
+      // body, so surface that rather than a bare axios message. When the body
+      // has no usable message, fall back to a clean status-bearing error.
+      const serverMessage = serverErrorMessage(err.response?.data);
+      throw new Error(
+        serverMessage ??
+          `Failed to presign upload for "${key}" in bucket "${bucket}" on branch ${branchId}${
+            status !== undefined ? ` (HTTP ${status})` : ''
+          }: ${err.message}`,
+      );
     }
     throw err;
   }
