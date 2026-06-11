@@ -9,7 +9,11 @@ export type NeonFunctionDeployment = {
   memory_mib: number;
   runtime: string;
   created_at: string;
-  environment?: Record<string, string>;
+  // Env variable NAMES, sorted by the server. Values are write-only and are
+  // never returned by the API.
+  environment?: string[];
+  // Build failure reason; present only when status is 'failed'.
+  error?: string;
 };
 
 export type NeonFunction = {
