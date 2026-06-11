@@ -442,7 +442,7 @@ The target directory must be empty unless you pass `--force` (a lone `.git` is i
 
 ## Commands
 
-| Command                                                                    | Subcommands                                                                                                   | Description                        |
+| Command                                                                    | Subcommands                                                                                                  | Description                        |
 | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
 | [auth](https://neon.com/docs/reference/cli-auth)                           |                                                                                                              | Authenticate                       |
 | [projects](https://neon.com/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                                                                  | Manage projects                    |
