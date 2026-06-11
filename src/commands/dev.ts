@@ -183,7 +183,7 @@ type SupervisorOptions = {
  * Map a list of {@link PlannedFunction}s to {@link ServedUnit}s, coordinating the search
  * base across them so search-mode functions don't all probe the same starting port.
  *
- * Each search-mode (no `dev.port`, non-portless) function gets a distinct base starting at
+ * Each search-mode (no `dev.port`) function gets a distinct base starting at
  * `searchBase`; the runtime still walks upward from its base, so an occupied base
  * self-resolves and this never fails — the offset just makes startup deterministic.
  */
@@ -195,7 +195,7 @@ const planFunctionsToUnits = (
   let searchOffset = 0;
   return functions.map((fn) => {
     const base = searchBase + searchOffset;
-    if (!fn.portless && fn.port === undefined) searchOffset += 1;
+    if (fn.port === undefined) searchOffset += 1;
     return plannedToUnit(fn, neonEnv, base);
   });
 };
@@ -231,9 +231,7 @@ type PortSpec =
   // Bind exactly this port (fail if taken) via NEON_DEV_PORT.
   | { mode: 'explicit'; port: number }
   // Search upward from `from` via NEON_DEV_PORT_BASE.
-  | { mode: 'search'; from: number }
-  // Set no port env at all — let an injected PORT (portless) drive the runtime.
-  | { mode: 'inherit' };
+  | { mode: 'search'; from: number };
 
 const portFromProps = (port: number | undefined): PortSpec => {
   if (port !== undefined) return { mode: 'explicit', port };
@@ -245,9 +243,6 @@ const portFromProps = (port: number | undefined): PortSpec => {
 
 /**
  * Translate a {@link PlannedFunction} into a {@link ServedUnit}. Port rules:
- *   - portless: portless assigns the port and injects PORT, which the runtime honors — so
- *     we set no port env (`inherit`) and `dev.port` is ignored. Wrapped with
- *     `portless <slug>` for a stable `slug.localhost` URL.
  *   - explicit `dev.port`: bind exactly, fail if taken.
  *   - no `dev.port`: search for a free port (base coordinated by the caller).
  * Per-function neon.ts env layers over the shared branch env.
@@ -257,9 +252,8 @@ const plannedToUnit = (
   branchEnv: Record<string, string>,
   searchBase: number,
 ): ServedUnit => {
-  const port: PortSpec = fn.portless
-    ? { mode: 'inherit' }
-    : fn.port !== undefined
+  const port: PortSpec =
+    fn.port !== undefined
       ? { mode: 'explicit', port: fn.port }
       : { mode: 'search', from: searchBase };
   const childEnv = buildChildEnv({ ...branchEnv, ...fn.env }, port);
@@ -277,10 +271,8 @@ const plannedToUnit = (
     configKey: JSON.stringify({
       source: fn.source,
       port: fn.port ?? null,
-      portless: fn.portless,
       env: fn.env,
     }),
-    ...(fn.portless ? { portless: { slug: fn.slug } } : {}),
   };
 };
 
@@ -302,13 +294,12 @@ const buildChildEnv = (
   } else if (port.mode === 'search') {
     env.NEON_DEV_PORT_BASE = String(port.from);
   }
-  // 'inherit': set neither, so an injected PORT (portless) drives the runtime.
   return env;
 };
 
 /**
  * One function being served locally. `slug`/`label` are null in single-source mode
- * (one unnamed server). `portless`, when set, wraps the child with `portless run`.
+ * (one unnamed server).
  */
 export type ServedUnit = {
   slug: string | null;
@@ -317,7 +308,7 @@ export type ServedUnit = {
   childEnv: NodeJS.ProcessEnv;
   label: string | null;
   /**
-   * Signature of the function's own neon.ts config (source/port/portless/env), used by the
+   * Signature of the function's own neon.ts config (source/port/env), used by the
    * config reconciler to detect a real change vs a no-op save. Independent of the dynamic
    * port search base. Absent in single-source mode (no reconcile there).
    */
@@ -328,7 +319,6 @@ export type ServedUnit = {
    * function's `neon.ts` `env` block. Values are intentionally omitted (secrets).
    */
   envSummary?: { neon: string[]; fn: string[] };
-  portless?: { slug: string };
 };
 
 export type RunningUnit = {
@@ -348,13 +338,12 @@ const READY_PATTERN = /neon-dev:ready (\d+)/;
  * its inputs for hot reload, and tear everything down cleanly on shutdown. Units are
  * independent — one crashing or failing to start does not stop the others (it is shown
  * as errored and recovered on the next edit). A single SIGINT/SIGTERM shuts all of them
- * down, tree-killing each child so no descendant (e.g. a portless-wrapped runtime) is
- * orphaned.
+ * down, tree-killing each child so no descendant it spawned is orphaned.
  *
  * In config mode, `reload` lets the supervisor watch `neon.ts` and reconcile the live set
  * of units when it changes: a newly-declared function is hot-added (its own child, watcher,
  * and port) and a removed one is torn down — all without disturbing the functions that
- * stayed the same. A function whose config (env/port/portless/source) changed is restarted
+ * stayed the same. A function whose config (env/port/source) changed is restarted
  * in place; siblings are untouched.
  */
 const runSupervisor = async (
@@ -362,9 +351,6 @@ const runSupervisor = async (
   options: SupervisorOptions = {},
 ): Promise<void> => {
   const { reload, envNote } = options;
-  if (hasPortlessUnit(units)) {
-    assertPortlessAvailable();
-  }
 
   const runtimePath = resolveRuntimePath();
   let shuttingDown = false;
@@ -549,7 +535,7 @@ export type ReconcilePlan = {
  * Pure slug-keyed diff of the live units against the freshly-resolved desired set:
  *   - a slug present now but not before → **add** (new child + watcher + port),
  *   - a slug gone from neon.ts → **remove** (torn down),
- *   - a slug whose config (source/port/portless/env) changed → **restart** in place,
+ *   - a slug whose config (source/port/env) changed → **restart** in place,
  *   - an unchanged slug → left out of the plan entirely (never touched).
  * Functions that stayed the same never die, so an edit that only adds a function is
  * non-disruptive. `desired === null` (neon.ts deleted) is treated as "no functions".
@@ -612,8 +598,6 @@ const reconcileOnce = async (
   }
   if (ops.isShuttingDown()) return;
 
-  if (hasPortlessUnit(desired ?? [])) assertPortlessAvailable();
-
   const plan = diffUnits(running, desired);
 
   for (const r of plan.remove) {
@@ -660,62 +644,21 @@ const nextSearchBase = (running: RunningUnit[]): number => {
   return max + 1;
 };
 
-const hasPortlessUnit = (units: ServedUnit[]): boolean =>
-  units.some((u) => u.portless !== undefined);
-
 /**
- * Spawn the child for a unit. A portless unit is wrapped as `portless <slug> node
- * <runtime> <bundle>`: portless assigns a port, injects it as PORT (which the runtime
- * honors), and exposes the server at `slug.localhost`. A plain unit runs the bundled
- * output directly under `node`.
+ * Spawn the child for a unit: the bundled output run directly under `node`.
  *
- * Spawned detached (own process group) so killTree can reap the whole group — important
- * for the portless case, where the tree is portless -> node runtime.
+ * Spawned detached (own process group) so killTree can reap the whole group.
  */
 const spawnChild = (
   unit: ServedUnit,
   runtimePath: string,
   bundlePath: string,
 ): ChildProcess => {
-  if (unit.portless) {
-    return spawn(
-      'portless',
-      [unit.portless.slug, process.execPath, runtimePath, bundlePath],
-      {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: unit.childEnv,
-        detached: true,
-      },
-    );
-  }
   return spawn(process.execPath, [runtimePath, bundlePath], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: unit.childEnv,
     detached: true,
   });
-};
-
-/** Fail early with an actionable message if a portless unit is requested but the binary is missing. */
-const assertPortlessAvailable = (): void => {
-  const result = spawnSyncCheck('portless');
-  if (!result) {
-    throw new Error(
-      'A function sets `dev.portless: true`, but the `portless` command was not ' +
-        'found on your PATH. Install it globally (e.g. `npm i -g portless`) or ' +
-        'remove `dev.portless` from the function in neon.ts.',
-    );
-  }
-};
-
-const spawnSyncCheck = (bin: string): boolean => {
-  try {
-    // Synchronous, no-side-effect probe: `which`/`where` resolves the binary.
-    const probe = process.platform === 'win32' ? 'where' : 'which';
-    const { status } = spawnSync(probe, [bin]);
-    return status === 0;
-  } catch {
-    return false;
-  }
 };
 
 const writeBundle = async (
@@ -924,7 +867,7 @@ const startDirectoryWatcher = async (
 /**
  * Terminate a child and every descendant it spawned. The child is started `detached`, so
  * on POSIX it leads its own process group and a negative-PID signal reaps the group
- * (covering portless -> neonctl -> node). On Windows there are no POSIX groups, so we
+ * (covering the runtime and anything it spawned). On Windows there are no POSIX groups, so we
  * shell out to `taskkill /T` to kill the tree. Escalates SIGTERM -> SIGKILL after 2s.
  */
 const killTree = (child: ChildProcess): Promise<void> => {
