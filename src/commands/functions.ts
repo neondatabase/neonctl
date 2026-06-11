@@ -6,11 +6,11 @@ import { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../api.js';
 import { log } from '../log.js';
-import { BranchScopeProps } from '../types.js';
+import { BranchScopeProps, CommonProps } from '../types.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { zipBundle } from '../utils/zip.js';
 import { bundleEntry } from '../utils/esbuild.js';
-import { writer, WriteOutConfig } from '../writer.js';
+import { writer } from '../writer.js';
 import {
   createDeployment,
   deleteFunction,
@@ -34,14 +34,29 @@ const DEPLOYMENT_FIELDS = [
   'created_at',
 ] as const;
 
-// Puts the build failure reason on a new line inside the Status cell.
-const DEPLOYMENT_RENDER_COLUMNS: NonNullable<
-  WriteOutConfig<NeonFunctionDeployment>['renderColumns']
-> = {
-  status: (dep) =>
-    dep.status === 'failed' && dep.error
-      ? `${dep.status}\n\nreason: ${dep.error}`
-      : dep.status,
+// In table mode a failed build's reason gets its own "deployment error"
+// section after the deployment table; json/yaml carry the raw `error` field.
+const writeDeploymentErrorSection = (
+  out: ReturnType<typeof writer>,
+  dep: NeonFunctionDeployment,
+) => {
+  if (dep.status === 'failed' && dep.error) {
+    out.write(
+      { reason: dep.error },
+      { fields: ['reason'], title: 'deployment error' },
+    );
+  }
+};
+
+const writeDeployment = (
+  props: Pick<CommonProps, 'output'>,
+  dep: NeonFunctionDeployment,
+) => {
+  const out = writer(props).write(dep, { fields: DEPLOYMENT_FIELDS });
+  if (props.output !== 'json' && props.output !== 'yaml') {
+    writeDeploymentErrorSection(out, dep);
+  }
+  out.end();
 };
 
 const SLUG_PATTERN = /^[a-z0-9]{1,20}$/;
@@ -297,11 +312,7 @@ const deploy = async (props: DeployProps) => {
 
   if (interrupted) {
     log.info(statusHint(props.slug, props.projectId, branchId));
-    if (resolved)
-      writer(props).end(resolved, {
-        fields: DEPLOYMENT_FIELDS,
-        renderColumns: DEPLOYMENT_RENDER_COLUMNS,
-      });
+    if (resolved) writeDeployment(props, resolved);
     return;
   }
 
@@ -312,10 +323,7 @@ const deploy = async (props: DeployProps) => {
     );
   }
 
-  writer(props).end(resolved, {
-    fields: DEPLOYMENT_FIELDS,
-    renderColumns: DEPLOYMENT_RENDER_COLUMNS,
-  });
+  writeDeployment(props, resolved);
 
   if (!props.wait) {
     log.info(statusHint(props.slug, props.projectId, branchId));
@@ -360,8 +368,8 @@ const get = async (
     out.write(fn.active_deployment, {
       fields: DEPLOYMENT_FIELDS,
       title: 'active deployment',
-      renderColumns: DEPLOYMENT_RENDER_COLUMNS,
     });
+    writeDeploymentErrorSection(out, fn.active_deployment);
   }
   if (props.listEnvVariables) {
     out.write(
