@@ -19,6 +19,7 @@ import { log } from '../log.js';
 import { CommonProps } from '../types.js';
 import {
   BootstrapTemplate,
+  FALLBACK_TEMPLATES,
   fetchFileBytes,
   fetchSymlinkTarget,
   fetchTemplates,
@@ -77,14 +78,21 @@ export const builder = (argv: yargs.Argv) =>
     .strict();
 
 export const handler = async (props: BootstrapProps): Promise<void> => {
-  const templates = await fetchTemplates();
-
   if (props.listTemplates) {
+    const templates = await fetchTemplates();
     for (const t of templates) {
-      log.info('%s — %s', t.id, t.description);
+      process.stdout.write(`${t.id} — ${t.description}\n`);
     }
     return;
   }
+
+  // When --template is provided, try the fallback list first to avoid a
+  // network round-trip. Only fetch the remote manifest if the id isn't found.
+  const templates = props.template
+    ? findTemplate(FALLBACK_TEMPLATES, props.template)
+      ? FALLBACK_TEMPLATES
+      : await fetchTemplates()
+    : await fetchTemplates();
 
   const interactive = Boolean(process.stdout.isTTY) && !isCi();
   const template = await resolveSelectedTemplate(props, interactive, templates);

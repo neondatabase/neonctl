@@ -43,77 +43,6 @@ export const FALLBACK_TEMPLATES: BootstrapTemplate[] = [
   },
 ];
 
-const manifestUrl = (): string =>
-  process.env.NEON_BOOTSTRAP_MANIFEST_URL ??
-  `${githubRawBase()}/neondatabase/examples/main/bootstrap.yaml`;
-
-const parseManifest = (text: string): BootstrapTemplate[] => {
-  const data: unknown = YAML.parse(text);
-  if (!isRecord(data) || !Array.isArray(data.templates)) {
-    throw new Error('Invalid bootstrap manifest: missing "templates" array.');
-  }
-  const templates: BootstrapTemplate[] = [];
-  for (const item of data.templates) {
-    if (
-      !isRecord(item) ||
-      typeof item.id !== 'string' ||
-      typeof item.title !== 'string' ||
-      typeof item.description !== 'string' ||
-      !isRecord(item.source) ||
-      typeof item.source.owner !== 'string' ||
-      typeof item.source.repo !== 'string' ||
-      typeof item.source.ref !== 'string' ||
-      typeof item.source.subdir !== 'string'
-    ) {
-      continue;
-    }
-    templates.push({
-      id: item.id,
-      title: item.title,
-      description: item.description,
-      source: {
-        owner: item.source.owner,
-        repo: item.source.repo,
-        ref: item.source.ref,
-        subdir: item.source.subdir,
-      },
-    });
-  }
-  return templates;
-};
-
-/**
- * Fetch the template manifest from the remote `bootstrap.yaml` in the
- * neondatabase/examples repo. Falls back to the hardcoded list on any error
- * so the command never fails just because GitHub is unreachable.
- */
-export const fetchTemplates = async (): Promise<BootstrapTemplate[]> => {
-  const url = manifestUrl();
-  try {
-    const res = await axios.get<string>(url, {
-      responseType: 'text',
-      headers: rawHeaders(),
-      timeout: 10_000,
-    });
-    const templates = parseManifest(res.data);
-    if (templates.length === 0) {
-      log.warning(
-        'Remote bootstrap manifest at %s contained no templates; using built-in defaults.',
-        url,
-      );
-      return FALLBACK_TEMPLATES;
-    }
-    return templates;
-  } catch (err) {
-    log.debug(
-      'bootstrap: failed to fetch manifest from %s: %s — using built-in defaults.',
-      url,
-      err instanceof Error ? err.message : String(err),
-    );
-    return FALLBACK_TEMPLATES;
-  }
-};
-
 export const templateIds = (templates: BootstrapTemplate[]): string =>
   templates.map((t) => t.id).join(', ');
 
@@ -170,6 +99,86 @@ const rawHeaders = (): Record<string, string> => ({
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
+
+// ---------------------------------------------------------------------------
+// Remote template manifest
+// ---------------------------------------------------------------------------
+
+const manifestUrl = (): string =>
+  process.env.NEON_BOOTSTRAP_MANIFEST_URL ??
+  `${githubRawBase()}/neondatabase/examples/main/bootstrap.yaml`;
+
+export const parseManifest = (text: string): BootstrapTemplate[] => {
+  const data: unknown = YAML.parse(text);
+  if (!isRecord(data) || !Array.isArray(data.templates)) {
+    throw new Error('Invalid bootstrap manifest: missing "templates" array.');
+  }
+  const templates: BootstrapTemplate[] = [];
+  for (let i = 0; i < data.templates.length; i++) {
+    const item: unknown = data.templates[i];
+    if (
+      !isRecord(item) ||
+      typeof item.id !== 'string' ||
+      typeof item.title !== 'string' ||
+      typeof item.description !== 'string' ||
+      !isRecord(item.source) ||
+      typeof item.source.owner !== 'string' ||
+      typeof item.source.repo !== 'string' ||
+      typeof item.source.ref !== 'string' ||
+      typeof item.source.subdir !== 'string'
+    ) {
+      log.warning(
+        'bootstrap: skipping malformed template entry at index %d in manifest.',
+        i,
+      );
+      continue;
+    }
+    templates.push({
+      id: item.id,
+      title: item.title,
+      description: item.description,
+      source: {
+        owner: item.source.owner,
+        repo: item.source.repo,
+        ref: item.source.ref,
+        subdir: item.source.subdir,
+      },
+    });
+  }
+  return templates;
+};
+
+/**
+ * Fetch the template manifest from the remote `bootstrap.yaml` in the
+ * neondatabase/examples repo. Falls back to the hardcoded list on any error
+ * so the command never fails just because GitHub is unreachable.
+ */
+export const fetchTemplates = async (): Promise<BootstrapTemplate[]> => {
+  const url = manifestUrl();
+  try {
+    const res = await axios.get<string>(url, {
+      responseType: 'text',
+      headers: rawHeaders(),
+      timeout: 10_000,
+    });
+    const templates = parseManifest(res.data);
+    if (templates.length === 0) {
+      log.warning(
+        'Remote bootstrap manifest at %s contained no templates; using built-in defaults.',
+        url,
+      );
+      return FALLBACK_TEMPLATES;
+    }
+    return templates;
+  } catch (err) {
+    log.debug(
+      'bootstrap: failed to fetch manifest from %s: %s — using built-in defaults.',
+      url,
+      err instanceof Error ? err.message : String(err),
+    );
+    return FALLBACK_TEMPLATES;
+  }
+};
 
 const malformed = (what: string): Error =>
   new Error(`Unexpected GitHub API response while resolving ${what}.`);

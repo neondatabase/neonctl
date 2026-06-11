@@ -104,7 +104,7 @@ const startGithubFixtureServer = (): Promise<Server> => {
 const runBootstrap = (
   server: Server,
   args: string[],
-): Promise<{ code: number; stderr: string }> => {
+): Promise<{ code: number; stdout: string; stderr: string }> => {
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return new Promise((resolve, reject) => {
     const cp = fork(
@@ -129,13 +129,17 @@ const runBootstrap = (
         },
       },
     );
+    let stdout = '';
     let stderr = '';
+    cp.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
     cp.stderr?.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
     cp.on('error', reject);
     cp.on('close', (code) => {
-      resolve({ code: code ?? -1, stderr });
+      resolve({ code: code ?? -1, stdout, stderr });
     });
   });
 };
@@ -216,10 +220,10 @@ describe('bootstrap', () => {
     expect(stderr).toContain('Unknown template');
   });
 
-  test('--list prints available templates from the remote manifest', async () => {
-    const { code, stderr } = await runBootstrap(server, ['--list']);
+  test('--list prints available templates to stdout from the remote manifest', async () => {
+    const { code, stdout, stderr } = await runBootstrap(server, ['--list']);
     expect(code, stderr).toBe(0);
-    expect(stderr).toContain('hono');
-    expect(stderr).toContain('A Hono API using Drizzle ORM and Neon Postgres');
+    expect(stdout).toContain('hono');
+    expect(stdout).toContain('A Hono API using Drizzle ORM and Neon Postgres');
   });
 });
