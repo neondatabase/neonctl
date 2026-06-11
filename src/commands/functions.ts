@@ -122,11 +122,21 @@ export const builder = (argv: yargs.Argv) =>
       'get <slug>',
       "Show a function's details",
       (yargs) =>
-        yargs.positional('slug', {
-          describe: 'Function slug',
-          type: 'string',
-          demandOption: true,
-        }),
+        yargs
+          .positional('slug', {
+            describe: 'Function slug',
+            type: 'string',
+            demandOption: true,
+          })
+          .options({
+            'list-env-variables': {
+              describe:
+                'List the environment variable names of the active deployment',
+              type: 'boolean',
+              alias: 'E',
+              default: false,
+            },
+          }),
       (args) => get(args as any),
     )
     .command(
@@ -326,7 +336,9 @@ const deploy = async (props: DeployProps) => {
   );
 };
 
-const get = async (props: BranchScopeProps & { slug: string }) => {
+const get = async (
+  props: BranchScopeProps & { slug: string; listEnvVariables: boolean },
+) => {
   const branchId = await branchIdFromProps(props);
   const fn = await getFunction(
     props.apiClient,
@@ -350,6 +362,16 @@ const get = async (props: BranchScopeProps & { slug: string }) => {
       title: 'active deployment',
       renderColumns: DEPLOYMENT_RENDER_COLUMNS,
     });
+  }
+  if (props.listEnvVariables) {
+    out.write(
+      (fn.active_deployment?.environment ?? []).map((name) => ({ name })),
+      {
+        fields: ['name'],
+        title: 'environment',
+        emptyMessage: 'No environment variables on the active deployment.',
+      },
+    );
   }
   out.end();
 };
