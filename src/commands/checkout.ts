@@ -77,21 +77,20 @@ export const handler = async (props: CheckoutProps) => {
   // nothing resolves, fall back to an interactive `neonctl link`.
   const projectId = await resolveProjectId(props);
 
-  const { branchId, created, policyApplied } = await resolveBranchId(
-    props,
-    projectId,
-  );
+  const { branchId, branchName, created, policyApplied } =
+    await resolveBranchId(props, projectId);
 
   const orgId = await resolveOrgId(props, projectId);
 
-  // `checkout` is a thin helper over `set-context`. It fully "heals" the
-  // context file: it always (re)writes `projectId`, `branchId`, and `orgId`
-  // (when the project has one) so a `.neon` that drifted or was missing fields
-  // ends up complete and consistent after checkout.
+  // `checkout` is a thin helper over `link`. It fully "heals" the context file:
+  // it always (re)writes `projectId`, `branch`, and `orgId` (when the project
+  // has one) so a `.neon` that drifted or was missing fields ends up complete
+  // and consistent after checkout. The branch is stored as its name when known
+  // (see `link`'s `branch` field), matching what `link` writes.
   applyContext(props.contextFile, {
     projectId,
     ...(orgId ? { orgId } : {}),
-    branchId,
+    branch: branchName,
   });
 
   log.info(
@@ -140,6 +139,8 @@ export const handler = async (props: CheckoutProps) => {
  */
 type ResolvedBranch = {
   branchId: string;
+  /** Value to persist in `.neon` (the branch name when known, else its id). */
+  branchName: string;
   /** True only when this checkout created a new branch (vs. selecting an existing one). */
   created: boolean;
   /**
@@ -165,8 +166,10 @@ const resolveBranchId = async (
         'or run interactively to pick one from a list.',
     });
     if (picked.kind === 'existing') {
+      const existing = branches.find((b: Branch) => b.id === picked.branchId);
       return {
         branchId: picked.branchId,
+        branchName: existing?.name ?? picked.branchId,
         created: false,
         policyApplied: false,
       };
@@ -181,14 +184,24 @@ const resolveBranchId = async (
   if (looksLikeBranchId(ref)) {
     const byId = branches.find((b: Branch) => b.id === ref);
     if (byId) {
-      return { branchId: byId.id, created: false, policyApplied: false };
+      return {
+        branchId: byId.id,
+        branchName: byId.name ?? byId.id,
+        created: false,
+        policyApplied: false,
+      };
     }
     throw new Error(notFoundMessage(ref, branches));
   }
 
   const byName = branches.find((b: Branch) => b.name === ref);
   if (byName) {
-    return { branchId: byName.id, created: false, policyApplied: false };
+    return {
+      branchId: byName.id,
+      branchName: byName.name ?? byName.id,
+      created: false,
+      policyApplied: false,
+    };
   }
 
   // Name not found: offer to create it interactively, mirroring `branch create`.
@@ -231,12 +244,14 @@ const createCheckoutBranch = async (
   if (fromPolicy) {
     return {
       branchId: fromPolicy.branchId,
+      branchName: name,
       created: true,
       policyApplied: true,
     };
   }
   return {
     branchId: await createBranch(props.apiClient, projectId, name, branches),
+    branchName: name,
     created: true,
     policyApplied: false,
   };
@@ -329,6 +344,8 @@ const resolveProjectId = async (props: CheckoutProps): Promise<string> => {
     ...props,
     agent: false,
     yes: false,
+    clear: false,
+    checks: true,
   });
 
   const linked = readContextFile(props.contextFile);

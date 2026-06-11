@@ -8,8 +8,27 @@ import { log } from './log.js';
 export type Context = {
   orgId?: string;
   projectId?: string;
+  /**
+   * The pinned branch, stored as its **name** when known (nicer to read in
+   * `.neon`) or its id otherwise. Resolved to an id by the usual name-or-id
+   * resolution wherever a branch id is needed.
+   */
+  branch?: string;
+  /**
+   * Legacy field. Still read via {@link contextBranch} so older `.neon` files
+   * keep working, but new writes use {@link Context.branch}; the legacy field is
+   * dropped the next time the context is written.
+   */
   branchId?: string;
 };
+
+/**
+ * The branch pinned in a context, reading the current `branch` field and
+ * falling back to the legacy `branchId` so pre-migration `.neon` files keep
+ * working.
+ */
+export const contextBranch = (context: Context): string | undefined =>
+  context.branch ?? context.branchId;
 
 const CONTEXT_FILE = '.neon';
 const GITIGNORE_FILE = '.gitignore';
@@ -62,7 +81,11 @@ export const readContextFile = (file: string): Context => {
 export const enrichFromContext = (
   args: yargs.Arguments<{ contextFile: string }>,
 ) => {
-  if (args._[0] === 'set-context' || args._[0] === 'link') {
+  // `link` (and its `set-context` alias) manage the context file themselves and
+  // must see the raw flags rather than values pre-filled from an existing
+  // `.neon`, so skip enrichment for them. Both names are checked because yargs
+  // may surface either the canonical command or the alias in `_[0]`.
+  if (args._[0] === 'link' || args._[0] === 'set-context') {
     return;
   }
   const context = readContextFile(args.contextFile);
@@ -78,7 +101,7 @@ export const enrichFromContext = (
     !args.name &&
     context.projectId === args.projectId
   ) {
-    args.branch = context.branchId;
+    args.branch = contextBranch(context);
   }
 };
 
@@ -87,9 +110,10 @@ export const updateContextFile = (file: string, context: Context) => {
 };
 
 /**
- * Shared primitive used by `set-context`, `link`, and `checkout` to persist
- * context. Mirrors the destructive write semantics of `updateContextFile` —
- * any field not present in `context` is dropped from the file.
+ * Shared primitive used by `link` (and its `set-context` alias) and `checkout`
+ * to persist context. Mirrors the destructive write semantics of
+ * `updateContextFile` — any field not present in `context` is dropped from the
+ * file.
  *
  * `.gitignore` scaffolding only happens when the context file is being
  * *created* (it didn't exist before this write). On updates to an existing
@@ -103,6 +127,36 @@ export const applyContext = (file: string, context: Context) => {
   if (isNewFile) {
     ensureGitignored(file);
   }
+};
+
+/**
+ * A fully-resolved project context: the org and project are always known, the
+ * branch optionally so (pin one later with `neonctl checkout`).
+ */
+export type ResolvedContext = {
+  orgId: string;
+  projectId: string;
+  /** Branch name (preferred) or id. Optional. */
+  branch?: string;
+};
+
+/**
+ * Low-level writer for callers that already hold the resolved identifiers and
+ * just need to record them — e.g. `init` or `projects create`, which create a
+ * project and want to link it without the resolution, verification, prompting,
+ * or env-pull that `link` performs.
+ *
+ * Unlike the loose {@link applyContext}, this enforces at the type level that
+ * `orgId` and `projectId` are present, so the `.neon` file never ends up with a
+ * dangling project that has no org. The branch stays optional. It writes through
+ * {@link applyContext}, so the same `.gitignore` scaffolding applies.
+ */
+export const setContext = (file: string, context: ResolvedContext) => {
+  applyContext(file, {
+    orgId: context.orgId,
+    projectId: context.projectId,
+    branch: context.branch,
+  });
 };
 
 /**

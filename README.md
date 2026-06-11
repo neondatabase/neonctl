@@ -160,9 +160,17 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 
 ## Linking a project
 
-`neonctl link` is a Vercel-style command that binds the current directory to a Neon project. It picks (or creates) an organization, picks (or creates) a project, resolves the project's default branch, and writes a `.neon` file with `{ "orgId", "projectId", "branchId" }`. Subsequent commands run in this directory (or any sub-directory) automatically pick up that context.
+`neonctl link` is a Vercel-style command that binds the current directory to a Neon project. It picks (or creates) an organization and a project and writes a `.neon` file (`{ "orgId", "projectId", "branch" }`) that subsequent commands run in this directory (or any sub-directory) pick up automatically.
 
-Once the branch is pinned, `link` also runs [`env pull`](#env-pull) for you so the branch's Neon env vars (`DATABASE_URL`, …) land in a local `.env` and the project is immediately ready for local dev. Pass `--no-env-pull` to skip it (for example when injecting env at runtime with `neon-env run` or `neonctl dev`).
+`link` resolves what it can and **verifies every identifier you pass** before writing, so a `.neon` is never left half-written or pointing at something that doesn't exist:
+
+- **org** is inferred from the project (so `--project-id` alone is enough); it's omitted only when the project has no organization (personal account).
+- **project** is taken from `--project-id` (or chosen interactively / via `--agent`).
+- **branch** is left to an explicit [`neonctl checkout <branch>`](#checkout) — `link` never silently pins a project's default branch (that would make later commands quietly target, say, production). It only records a branch when you pass `--branch`, when one is already pinned for the same project (preserved), when you pick one in the interactive picker, or for a freshly **created** project (whose single branch is unambiguous).
+
+When a branch ends up pinned, `link` also runs [`env pull`](#env-pull) so the branch's Neon env vars (`DATABASE_URL`, …) land in a local `.env`. With no branch pinned there is nothing to pull, so `link` instead nudges you to run `neonctl checkout`. Pass `--no-env-pull` to skip the pull (for example when injecting env at runtime with `neon-env run` or `neonctl dev`).
+
+> **Migrating from `set-context`?** `set-context` is now a deprecated alias of `link` (see [below](#set-context-is-now-an-alias-of-link)). The `.neon` `branchId` field is also superseded by `branch` (which stores the branch **name** when known); old `branchId` files are still read and are upgraded to `branch` the next time the context is written.
 
 There are three modes:
 
@@ -176,14 +184,16 @@ $ neonctl link
 ? Which region should the new project run in? › AWS US East (Ohio) (aws-us-east-2)
 Created project polished-snowflake-12345678 ("my-app") in aws-us-east-2.
 Linked .neon:
-  orgId:    org-abc123
+  orgId:     org-abc123
   projectId: polished-snowflake-12345678
-  branchId:  br-main-branch-87654321
+  branch:    main
 ```
 
-When you link an **existing** project that has more than one branch, `link` adds a final
-step to pick which branch to pin — the same `＋ Create a new branch…` + list selector used by
-`neonctl checkout` (a single-branch project is pinned automatically, no prompt):
+When you link an **existing** project that has more than one branch, the interactive flow adds a
+final step to pick which branch to pin — the same `＋ Create a new branch…` + list selector used by
+`neonctl checkout` (a single-branch project is pinned automatically, no prompt). Non-interactive
+`link --project-id …` does **not** prompt or default a branch; it links org + project and leaves
+branch selection to `neonctl checkout`:
 
 ```bash
 ? Which organization would you like to link? › Personal Org (org-abc123)
@@ -194,15 +204,32 @@ step to pick which branch to pin — the same `＋ Create a new branch…` + lis
 **Non-interactive (flags or `--params` JSON)** — for scripts and CI:
 
 ```bash
-# Link to an existing project
-neonctl link --org-id org-abc123 --project-id polished-snowflake-12345678
+# Link to an existing project (org is inferred from the project; no branch pinned)
+neonctl link --project-id polished-snowflake-12345678
 
-# Create a new project and link
+# Same, but also pin a branch (name or id — resolved and stored as its name)
+neonctl link --project-id polished-snowflake-12345678 --branch main
+
+# Pin/switch the branch in the already-linked project
+neonctl link --branch main          # alias: --branch-id
+
+# Create a new project and link it (pins the new project's default branch)
 neonctl link --org-id org-abc123 --project-name my-app --region-id aws-us-east-2
 
 # Same payload, one JSON blob
 neonctl link --params '{"orgId":"org-abc123","projectName":"my-app","regionId":"aws-us-east-2"}'
+
+# Record just the default org (preserves any existing project/branch)
+neonctl link --org-id org-abc123
+
+# Forget the current context
+neonctl link --clear
+
+# Offline write — no API calls, no verification (see --no-checks below)
+neonctl link --no-checks --org-id org-abc123 --project-id polished-snowflake-12345678
 ```
+
+Every supplied identifier is checked before anything is written, with actionable errors — e.g. `Project '…' not found`, `You don't have access to project '…'`, `Organization '…' not found, or your API key doesn't have access to it`, `Project '…' belongs to organization 'A', not 'B'`, or `Branch '…' not found in project '…'. Available branches: …`.
 
 **Agent mode (`--agent`)** — a JSON state machine designed for AI coding assistants. Each invocation returns a single JSON object with a `status` discriminator describing the next step, the available options, and the exact follow-up command to run.
 
@@ -238,15 +265,14 @@ $ neonctl link --agent --org-id org-abc123 --project-id polished-snowflake-12345
   "context_file": "/path/to/cwd/.neon",
   "context": {
     "orgId": "org-abc123",
-    "projectId": "polished-snowflake-12345678",
-    "branchId": "br-main-branch-87654321"
+    "projectId": "polished-snowflake-12345678"
   },
   "project": { "id": "polished-snowflake-12345678" },
-  "message": "Linked /path/to/cwd/.neon to project polished-snowflake-12345678 (org org-abc123) on branch br-main-branch-87654321."
+  "message": "Linked /path/to/cwd/.neon to project polished-snowflake-12345678 (org org-abc123). No branch pinned — run `neonctl checkout <branch>` (omit the branch to list options) to pin one and pull its env vars."
 }
 ```
 
-The agent flow also handles project creation. If the agent sends `--project-name` without `--region-id`, the next response is `needs_project_details` with the list of supported regions.
+The `linked` response omits `branch` unless one was pinned (via `--branch`, an existing pin, or project creation); pass `--branch <name|id>` to include it. The agent flow also handles project creation: if the agent sends `--project-name` without `--region-id`, the next response is `needs_project_details` with the list of supported regions.
 
 **Organization-scoped API keys** (those created at the organization level rather than the user level) cannot list user organizations or call the regions endpoint. `link` handles this transparently:
 
@@ -264,11 +290,27 @@ The agent flow also handles project creation. If the agent sends `--project-name
 }
 ```
 
-`link` is a thin wrapper around `set-context`: both write to the same `.neon` file via a shared `applyContext` helper, so anything `link` can write, `set-context` can write too (including the newly-supported `--branch-id` flag).
+**Offline writes (`--no-checks`)** — write the `.neon` with no API calls at all: no org inference, no existence/access verification, no env pull. Because nothing can be resolved offline, it requires both `--org-id` and `--project-id` (`--branch` optional, stored verbatim). Handy for scripted/CI setups or re-creating a `.neon` from values you already trust:
+
+```bash
+neonctl link --no-checks --org-id org-abc123 --project-id polished-snowflake-12345678 --branch main
+```
+
+#### `set-context` is now an alias of `link`
+
+`set-context` is **deprecated** and forwards to `link` (identical flags and behavior); it prints a deprecation warning to stderr and will be removed in a future major release. Use `neonctl link` going forward. This is a **breaking change**: the old `set-context` wrote whatever subset of fields you passed (and bare `set-context` cleared the file). The unified command instead resolves/verifies and writes a complete context — clear the file with `neonctl link --clear`.
+
+| Old                                     | New                                                                         |
+| --------------------------------------- | --------------------------------------------------------------------------- |
+| `neonctl set-context --project-id <id>` | `neonctl link --project-id <id>` (infers org; pin a branch with `checkout`) |
+| `neonctl set-context --org-id <id>`     | `neonctl link --org-id <id>`                                                |
+| `neonctl set-context --branch-id <id>`  | `neonctl link --branch <name\|id>`                                          |
+| `neonctl set-context` (clear)           | `neonctl link --clear`                                                      |
+| a dumb local write (no network)         | `neonctl link --no-checks --org-id <id> --project-id <id>`                  |
 
 ### checkout
 
-`checkout [id|name]` pins a branch in the local context so subsequent commands target it — it's a focused helper over `set-context` for the common "switch the branch I'm working on" case. It resolves the branch (by name or id) against the project, then **heals** the `.neon` file: it always (re)writes `projectId`, `branchId`, and `orgId` (when the project has one), so a `.neon` that was missing fields or drifted ends up complete and consistent. When `orgId` isn't already known (from `--org-id` or the existing `.neon`), it's looked up from the project itself.
+`checkout [id|name]` pins a branch in the local context so subsequent commands target it — it's the focused companion to `link` for the common "switch the branch I'm working on" case (`link` resolves org + project; `checkout` pins the branch). It resolves the branch (by name or id) against the project, then **heals** the `.neon` file: it always (re)writes `projectId`, `branch`, and `orgId` (when the project has one), so a `.neon` that was missing fields or drifted ends up complete and consistent. The branch is stored as its **name** when known (matching `link`). When `orgId` isn't already known (from `--org-id` or the existing `.neon`), it's looked up from the project itself.
 
 The branch argument is **optional**: run `neonctl checkout` with no branch in an interactive terminal to fetch the project's branches and pick one from a list. In a non-interactive context (CI or no TTY), a branch must be passed explicitly.
 
@@ -285,7 +327,7 @@ The project is resolved through the standard neonctl chain, each entry winning o
 
 If none of those resolve a project, `checkout` prints a telling error explaining the chain above. In an interactive terminal it then offers to run `neonctl link` in the current folder so you can pick (or create) a project on the spot; once linked, it continues and pins the requested branch. In non-interactive contexts (CI or no TTY) it exits with a non-zero code and the same guidance instead of prompting.
 
-The resolved branch id is then written to the same `.neon` file that `link` and `set-context` use:
+The resolved branch is then written (by name) to the same `.neon` file `link` uses:
 
 ```bash
 $ neonctl checkout main --project-id polished-snowflake-12345678
@@ -295,7 +337,7 @@ $ cat .neon
 {
   "orgId": "org-abc123",
   "projectId": "polished-snowflake-12345678",
-  "branchId": "br-main-branch-87654321"
+  "branch": "main"
 }
 ```
 
@@ -317,7 +359,7 @@ neonctl env pull --branch preview --file .env.preview
 
 If you'd rather not keep env vars on disk, inject them at runtime instead with `neon-env run -- <your dev command>` (from `@neondatabase/env`) or `neonctl dev`, and pass `--no-env-pull` to `link` / `checkout`.
 
-**Where `.neon` lives**: `link` (and `set-context`) write `.neon` into the **current working directory** by default. If an existing `.neon` is found in any parent directory, that file is reused — so commands run from a sub-directory of a linked project still pick up the project's context. To pin the location explicitly, pass `--context-file <path>`.
+**Where `.neon` lives**: `link` writes `.neon` into the **current working directory** by default. If an existing `.neon` is found in any parent directory, that file is reused — so commands run from a sub-directory of a linked project still pick up the project's context. To pin the location explicitly, pass `--context-file <path>`.
 
 **`.gitignore` scaffolding**: when `.neon` is **created** for the first time, the CLI also makes sure a `.gitignore` sits alongside it listing `.neon`. If `.gitignore` doesn't exist it's created with a single `.neon` line; if it does exist, `.neon` is appended only when missing (no duplicates, your other entries are left alone). On subsequent updates to an existing `.neon`, `.gitignore` is left untouched — so if you deliberately un-ignore `.neon` (e.g. to commit shared context), the entry is not re-added on every command.
 
@@ -409,7 +451,7 @@ The target directory must be empty unless you pass `--force` (a lone `.git` is i
 | [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                         | Manage operations                  |
 | [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                                | Get connection string              |
 | [psql](https://neon.com/docs/reference/cli-psql)                           |                                                                                                | Connect to a database via psql     |
-| [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                                | Set context for session            |
+| set-context                                                                |                                                                                                | Deprecated alias of `link`         |
 | env                                                                        | `pull`                                                                                         | Manage a branch's env vars         |
 | checkout                                                                   |                                                                                                | Pin a branch in `.neon`            |
 | [link](https://neon.com/docs/reference/cli-link)                           |                                                                                                | Link a directory to a project      |

@@ -1,11 +1,28 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rmSync, writeFileSync, readFileSync } from 'node:fs';
-import { describe, expect } from 'vitest';
+import { beforeAll, describe, expect } from 'vitest';
 
 import { test as originalTest } from '../test_utils/fixtures';
 
 const CONTEXT_FILE = join(tmpdir(), `neon_${Date.now()}`);
+
+// `set-context` is now an alias of `link`, whose summary echoes the absolute
+// context-file path. CONTEXT_FILE embeds a per-run timestamp, so normalize it to
+// a stable token to keep the stdout snapshots deterministic across runs.
+beforeAll(() => {
+  expect.addSnapshotSerializer({
+    test: (val) => typeof val === 'string' && val.includes(CONTEXT_FILE),
+    serialize: (val, config, indentation, depth, refs, printer) =>
+      printer(
+        (val as string).split(CONTEXT_FILE).join('<CTX>'),
+        config,
+        indentation,
+        depth,
+        refs,
+      ),
+  });
+});
 
 const test = originalTest.extend<{
   cleanupFile: (name: string) => void;
@@ -192,7 +209,7 @@ describe('set_context', () => {
       await testCliCommand([
         'set-context',
         '--project-id',
-        'test_project',
+        'test',
         '--org-id',
         'org-2',
         '--context-file',

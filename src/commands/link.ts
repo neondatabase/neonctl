@@ -9,7 +9,14 @@ import { isAxiosError } from 'axios';
 import prompts, { InitialReturnValue } from 'prompts';
 import yargs from 'yargs';
 
-import { applyContext, readContextFile } from '../context.js';
+import {
+  applyContext,
+  Context,
+  contextBranch,
+  readContextFile,
+  setContext,
+  updateContextFile,
+} from '../context.js';
 import { isCi } from '../env.js';
 import { log } from '../log.js';
 import { CommonProps } from '../types.js';
@@ -29,9 +36,12 @@ type LinkProps = CommonProps & {
   projectId?: string;
   projectName?: string;
   regionId?: string;
+  branch?: string;
   params?: string;
   agent: boolean;
   yes: boolean;
+  clear: boolean;
+  checks: boolean;
   envPull: boolean;
 };
 
@@ -40,12 +50,14 @@ type Inputs = {
   projectId?: string;
   projectName?: string;
   regionId?: string;
+  /** Branch name or ID as supplied by the user; resolved to an ID before persisting. */
+  branch?: string;
 };
 
 type AgentOrgOption = { id: string; name: string };
 type AgentProjectOption = { id: string; name: string; region_id?: string };
 type AgentRegionOption = { id: string; name: string; default: boolean };
-type AgentContext = { orgId: string; projectId: string; branchId: string };
+type AgentContext = { orgId?: string; projectId: string; branch?: string };
 type AgentProject = { id: string; name?: string; region_id?: string };
 
 type AgentResponse =
@@ -81,53 +93,107 @@ export const command = 'link';
 export const describe = 'Link the current directory to a Neon project';
 
 export const builder = (argv: yargs.Argv) =>
-  argv.usage('$0 link [options]').options({
-    'org-id': {
-      describe: 'Organization ID to link to',
-      type: 'string',
-    },
-    'project-id': {
-      describe: 'Existing project ID to link to',
-      type: 'string',
-    },
-    'project-name': {
-      describe: 'Name for a new project to create and link to',
-      type: 'string',
-    },
-    'region-id': {
-      describe:
-        'Region ID for a new project (e.g. aws-us-east-2). Required with --project-name.',
-      type: 'string',
-    },
-    params: {
-      describe:
-        'JSON object with link parameters, e.g. \'{"orgId":"...","projectId":"..."}\' or \'{"orgId":"...","projectName":"...","regionId":"..."}\'. Flags take precedence over fields in --params.',
-      type: 'string',
-    },
-    agent: {
-      describe:
-        'Emit a JSON state-machine response designed for AI agents instead of prompting. The output is a single JSON object with a discriminated `status` field describing the next step.',
-      type: 'boolean',
-      default: false,
-    },
-    yes: {
-      alias: 'y',
-      describe:
-        'Skip the "already linked" confirmation in interactive mode and re-link anyway.',
-      type: 'boolean',
-      default: false,
-    },
-    'env-pull': {
-      describe:
-        "Pull the linked branch's Neon env vars (DATABASE_URL, …) into a local .env after " +
-        'linking. On by default; use --no-env-pull to skip (e.g. when injecting env at ' +
-        'runtime with `neon-env run` / `neon dev`).',
-      type: 'boolean',
-      default: true,
-    },
-  });
+  argv
+    .usage('$0 link [options]')
+    .options({
+      'org-id': {
+        describe: 'Organization ID to link to',
+        type: 'string',
+      },
+      'project-id': {
+        describe: 'Existing project ID to link to',
+        type: 'string',
+      },
+      'project-name': {
+        describe: 'Name for a new project to create and link to',
+        type: 'string',
+      },
+      'region-id': {
+        describe:
+          'Region ID for a new project (e.g. aws-us-east-2). Required with --project-name.',
+        type: 'string',
+      },
+      branch: {
+        alias: 'branch-id',
+        describe:
+          'Branch name or ID to pin in the context (resolved to its ID before writing). ' +
+          'Without it, link only resolves the org and project — pin a branch with ' +
+          '`neonctl checkout <branch>` (link never guesses a default).',
+        type: 'string',
+      },
+      params: {
+        describe:
+          'JSON object with link parameters, e.g. \'{"orgId":"...","projectId":"..."}\' or \'{"orgId":"...","projectName":"...","regionId":"..."}\'. Flags take precedence over fields in --params.',
+        type: 'string',
+      },
+      agent: {
+        describe:
+          'Emit a JSON state-machine response designed for AI agents instead of prompting. The output is a single JSON object with a discriminated `status` field describing the next step.',
+        type: 'boolean',
+        default: false,
+      },
+      yes: {
+        alias: 'y',
+        describe:
+          'Skip the "already linked" confirmation in interactive mode and re-link anyway.',
+        type: 'boolean',
+        default: false,
+      },
+      clear: {
+        describe:
+          'Remove the org/project/branch context (writes an empty context file) instead of linking.',
+        type: 'boolean',
+        default: false,
+      },
+      checks: {
+        describe:
+          'Verify the org/project/branch exist (and resolve the org from the project) before ' +
+          'writing. On by default; use --no-checks to write the context offline with no API ' +
+          'calls — it then requires --org-id and --project-id (--branch optional) and skips ' +
+          'env pull.',
+        type: 'boolean',
+        default: true,
+      },
+      'env-pull': {
+        describe:
+          "Pull the linked branch's Neon env vars (DATABASE_URL, …) into a local .env after " +
+          'linking. On by default; use --no-env-pull to skip (e.g. when injecting env at ' +
+          'runtime with `neon-env run` / `neon dev`). Only runs when a branch is pinned.',
+        type: 'boolean',
+        default: true,
+      },
+    })
+    .example([
+      [
+        '$0 link --project-id polished-snowflake-12345678',
+        "Link an existing project (org is inferred); pin a branch later with 'neonctl checkout'",
+      ],
+      [
+        '$0 link --org-id org-… --project-name my-app --region-id aws-us-east-2',
+        'Create a new project and link it',
+      ],
+      [
+        '$0 link --branch-id br-…',
+        'Pin a branch in the already-linked project',
+      ],
+      [
+        '$0 link --no-checks --org-id org-… --project-id polished-snowflake-12345678',
+        'Write the context offline (no API calls, no verification)',
+      ],
+      ['$0 link --clear', 'Forget the current org/project/branch context'],
+    ]);
 
 export const handler = async (props: LinkProps) => {
+  if (props.clear) {
+    clearContext(props.contextFile);
+    return;
+  }
+
+  if (!props.checks) {
+    runWithoutChecks(props);
+    return;
+  }
+
   if (props.agent) {
     await runAgentSafely(props);
     return;
@@ -135,9 +201,10 @@ export const handler = async (props: LinkProps) => {
 
   const inputs = parseInputs(props);
   validateInputs(inputs);
+  const existing = readContextFile(props.contextFile);
 
-  if (hasEnoughForNonInteractive(inputs)) {
-    await runNonInteractive(props, inputs);
+  if (canResolveNonInteractively(inputs, existing)) {
+    await runNonInteractive(props, inputs, existing);
     return;
   }
 
@@ -148,7 +215,7 @@ export const handler = async (props: LinkProps) => {
         '',
         'Use one of:',
         '  neonctl link --agent                                                    (JSON state machine for agents)',
-        '  neonctl link --org-id <org> --project-id <project>                      (link to an existing project)',
+        '  neonctl link --project-id <project>                                     (link to an existing project; org is inferred)',
         '  neonctl link --org-id <org> --project-name <name> --region-id <region>  (create a new project and link)',
       ].join('\n'),
     );
@@ -180,6 +247,7 @@ const parseInputs = (props: LinkProps): Inputs => {
     projectId: props.projectId ?? fromParams.projectId,
     projectName: props.projectName ?? fromParams.projectName,
     regionId: props.regionId ?? fromParams.regionId,
+    branch: props.branch ?? fromParams.branch,
   };
 };
 
@@ -201,6 +269,7 @@ const extractParams = (raw: unknown): Inputs => {
     projectId: pickString('projectId'),
     projectName: pickString('projectName'),
     regionId: pickString('regionId'),
+    branch: pickString('branch') ?? pickString('branchId'),
   };
 };
 
@@ -210,55 +279,391 @@ const validateInputs = (inputs: Inputs): void => {
       'Conflicting inputs: --project-id selects an existing project; --project-name and --region-id describe a new one. Pass only one set.',
     );
   }
+  if (inputs.projectName && inputs.branch) {
+    throw new Error(
+      'Conflicting inputs: --branch pins a branch of an existing project, but --project-name creates a new one. Create the project first, then `neonctl checkout <branch>`.',
+    );
+  }
 };
 
-const hasEnoughForNonInteractive = (inputs: Inputs): boolean => {
-  if (inputs.orgId && inputs.projectId) return true;
+/**
+ * Whether the inputs (combined with the existing `.neon`) fully determine what
+ * to write without prompting the user. Everything else falls back to the
+ * interactive picker (TTY) or the CI guard.
+ *
+ * - `--project-id` is always enough: the org is inferred from the project and
+ *   the branch is left to an explicit `checkout` (never auto-defaulted).
+ * - `--org-id --project-name --region-id` fully describes a project to create.
+ * - `--branch-id` needs a project, which it takes from the existing `.neon`.
+ * - `--org-id` on its own just records the default org (merged into any
+ *   existing context).
+ */
+const canResolveNonInteractively = (
+  inputs: Inputs,
+  existing: Context,
+): boolean => {
+  if (inputs.projectId) return true;
   if (inputs.orgId && inputs.projectName && inputs.regionId) return true;
+  if (inputs.branch && existing.projectId) return true;
+  if (inputs.orgId && !inputs.projectName && !inputs.branch) return true;
   return false;
+};
+
+// ----------------------------------------------------------------------------
+// Context helpers
+// ----------------------------------------------------------------------------
+
+const clearContext = (contextFile: string): void => {
+  updateContextFile(contextFile, {});
+  process.stdout.write(
+    `Cleared ${contextFile}. The directory is no longer linked to a Neon org/project/branch.\n`,
+  );
+};
+
+/**
+ * `--no-checks`: write the context offline. Makes no API calls — so no org
+ * inference, no existence/access verification, and no env pull — which means
+ * the caller must supply both `--org-id` and `--project-id` (the org can't be
+ * inferred without the network). `--branch` stays optional. This is the CLI
+ * surface over {@link setContext}, useful for scripted/offline setups and for
+ * re-creating a `.neon` from values you already trust.
+ */
+const runWithoutChecks = (props: LinkProps): void => {
+  const inputs = parseInputs(props);
+  validateInputs(inputs);
+  if (inputs.projectName) {
+    throw new Error(
+      "--no-checks can't create a project (that needs API access). Pass --org-id and --project-id for an existing project, or drop --no-checks.",
+    );
+  }
+  if (!inputs.orgId || !inputs.projectId) {
+    throw new Error(
+      '--no-checks writes the context with no API calls, so it needs both --org-id and --project-id (--branch is optional).',
+    );
+  }
+  setContext(props.contextFile, {
+    orgId: inputs.orgId,
+    projectId: inputs.projectId,
+    branch: inputs.branch,
+  });
+  if (props.agent) {
+    emitAgent({
+      status: 'linked',
+      context_file: props.contextFile,
+      context: {
+        orgId: inputs.orgId,
+        projectId: inputs.projectId,
+        branch: inputs.branch,
+      },
+      project: { id: inputs.projectId },
+      message: `Wrote ${props.contextFile} without checks (org ${inputs.orgId}, project ${inputs.projectId}${inputs.branch ? `, branch ${inputs.branch}` : ''}). No verification or env pull was performed.`,
+    });
+    return;
+  }
+  printSummary(props, {
+    contextFile: props.contextFile,
+    orgId: inputs.orgId,
+    projectId: inputs.projectId,
+    branch: inputs.branch,
+    created: false,
+    noChecks: true,
+  });
+};
+
+/**
+ * A bad user-supplied identifier (project/org/branch that doesn't exist or
+ * isn't accessible). Carries an `agentCode` so `--agent` mode can report a
+ * precise `status: error` code instead of a generic INTERNAL_ERROR, while the
+ * human path just prints the clear `message`.
+ */
+class LinkInputError extends Error {
+  readonly agentCode: string;
+  constructor(message: string, agentCode: string) {
+    super(message);
+    this.name = 'LinkInputError';
+    this.agentCode = agentCode;
+  }
+}
+
+const httpStatus = (err: unknown): number | undefined =>
+  isAxiosError(err) ? err.response?.status : undefined;
+
+/**
+ * Fetch a project, turning the common failure modes into clear, actionable
+ * errors. 401 is rethrown so the global handler can refresh credentials;
+ * everything else surfaces as a `LinkInputError` the user (or agent) can act on.
+ */
+const fetchProjectOrThrow = async (props: CommonProps, projectId: string) => {
+  try {
+    const { data } = await props.apiClient.getProject(projectId);
+    return data.project;
+  } catch (err) {
+    const status = httpStatus(err);
+    if (status === 401) {
+      throw err;
+    }
+    if (status === 403) {
+      throw new LinkInputError(
+        `You don't have access to project '${projectId}'. Check that your API key's account or organization can see it.`,
+        'NO_ACCESS',
+      );
+    }
+    if (status === 404) {
+      throw new LinkInputError(
+        `Project '${projectId}' not found. Double-check the project ID — or that your API key has access to it.`,
+        'NOT_FOUND',
+      );
+    }
+    throw err;
+  }
+};
+
+/**
+ * Confirm the org exists and is reachable with the current API key by listing
+ * its projects (allowed for both user and org-scoped keys). Maps 403/404 to a
+ * clear message; 401 is rethrown for credential refresh.
+ */
+const verifyOrgAccess = async (
+  props: CommonProps,
+  orgId: string,
+): Promise<void> => {
+  try {
+    await props.apiClient.listProjects({
+      org_id: orgId,
+      limit: PROJECTS_LIST_LIMIT,
+    });
+  } catch (err) {
+    const status = httpStatus(err);
+    if (status === 401) {
+      throw err;
+    }
+    if (status === 403 || status === 404) {
+      throw new LinkInputError(
+        `Organization '${orgId}' not found, or your API key doesn't have access to it. Find your org ID in the Neon Console under Settings.`,
+        status === 403 ? 'NO_ACCESS' : 'NOT_FOUND',
+      );
+    }
+    throw err;
+  }
+};
+
+/**
+ * Resolve a branch reference (name *or* id) to the matching branch, while
+ * confirming it actually exists in the project. Unlike the shared
+ * `branchIdResolve`, this also verifies references that already look like ids
+ * (so a typo'd `br-…` doesn't silently get written), and surfaces the available
+ * branches when nothing matches so the user can correct it (or run `checkout`).
+ */
+const resolveBranchRef = async (
+  props: CommonProps,
+  projectId: string,
+  branchRef: string,
+): Promise<Branch> => {
+  const { data } = await props.apiClient.listProjectBranches({ projectId });
+  const match =
+    data.branches.find((b: Branch) => b.id === branchRef) ??
+    data.branches.find((b: Branch) => b.name === branchRef);
+  if (match) {
+    return match;
+  }
+  const available =
+    data.branches.length > 0
+      ? data.branches
+          .map((b: Branch) => `${b.id}${b.name ? ` (${b.name})` : ''}`)
+          .join(', ')
+      : '(none)';
+  throw new LinkInputError(
+    `Branch '${branchRef}' not found in project '${projectId}'. Available branches: ${available}. Pin one with \`neonctl checkout <branch>\`.`,
+    'NOT_FOUND',
+  );
+};
+
+/**
+ * The value to persist for a branch: prefer its human-readable **name** (nicer
+ * to read in `.neon`, and still resolvable by every command), falling back to
+ * the id when the branch has no name.
+ */
+const branchPersistValue = (branch: Branch): string => branch.name ?? branch.id;
+
+/**
+ * Verify the project (and the org, when supplied) and resolve the org id to
+ * persist.
+ *
+ * The project is always fetched, which both validates it and yields its
+ * `org_id`. When `--org-id` is passed too: if the project reports an org it must
+ * match (else a clear mismatch error); if it reports none, the supplied org is
+ * verified on its own. Without `--org-id` the project's own org is used, falling
+ * back to the org already recorded for the *same* project in `.neon`. Projects
+ * on a personal account have no org, so `undefined` is a valid result — the
+ * field is simply omitted.
+ */
+const resolveOrgForProject = async (
+  props: CommonProps,
+  inputs: Inputs,
+  existing: Context,
+  projectId: string,
+): Promise<string | undefined> => {
+  const project = await fetchProjectOrThrow(props, projectId);
+  const projectOrg = project.org_id ?? undefined;
+
+  if (inputs.orgId) {
+    if (projectOrg && projectOrg !== inputs.orgId) {
+      throw new LinkInputError(
+        `Project '${projectId}' belongs to organization '${projectOrg}', not '${inputs.orgId}'. Omit --org-id to use the project's own org, or pass the matching ID.`,
+        'ORG_MISMATCH',
+      );
+    }
+    if (!projectOrg) {
+      await verifyOrgAccess(props, inputs.orgId);
+    }
+    return inputs.orgId;
+  }
+
+  if (projectOrg) {
+    return projectOrg;
+  }
+  if (projectId === existing.projectId && existing.orgId) {
+    return existing.orgId;
+  }
+  return undefined;
+};
+
+/**
+ * Resolve the branch to persist alongside a project in non-interactive mode.
+ *
+ * `link` never guesses the project's default branch — that's `checkout`'s job —
+ * so the only sources are an explicit `--branch` (name or id, verified and
+ * normalized to its name) or a branch already pinned for the *same* project (so
+ * re-linking it doesn't drop your checked-out branch). Reading the existing
+ * branch via {@link contextBranch} also recovers a legacy `branchId` field.
+ */
+const resolvePinnedBranch = async (
+  props: CommonProps,
+  inputs: Inputs,
+  existing: Context,
+  projectId: string,
+): Promise<string | undefined> => {
+  if (inputs.branch) {
+    const branch = await resolveBranchRef(props, projectId, inputs.branch);
+    return branchPersistValue(branch);
+  }
+  if (projectId === existing.projectId) {
+    return contextBranch(existing);
+  }
+  return undefined;
 };
 
 // ----------------------------------------------------------------------------
 // Non-interactive flag-driven mode
 // ----------------------------------------------------------------------------
 
-const runNonInteractive = async (props: LinkProps, inputs: Inputs) => {
-  const orgId = mustString(inputs.orgId, 'orgId');
+const runNonInteractive = async (
+  props: LinkProps,
+  inputs: Inputs,
+  existing: Context,
+) => {
+  // Create a new project and link it.
+  if (inputs.projectName) {
+    const orgId = mustString(inputs.orgId, 'orgId');
+    await verifyOrgAccess(props, orgId);
+    const created = await createProject(props, {
+      orgId,
+      name: inputs.projectName,
+      regionId: mustString(inputs.regionId, 'regionId'),
+    });
+    applyContext(props.contextFile, {
+      orgId,
+      projectId: created.project.id,
+      branch: created.branchName,
+    });
+    await finalizeLink(props, {
+      contextFile: props.contextFile,
+      orgId,
+      projectId: created.project.id,
+      branch: created.branchName,
+      created: true,
+      projectName: created.project.name,
+      regionId: created.project.region_id,
+    });
+    return;
+  }
+
+  // Link an explicitly named existing project.
   if (inputs.projectId) {
-    const branchId = await resolveDefaultBranchId(props, inputs.projectId);
+    const orgId = await resolveOrgForProject(
+      props,
+      inputs,
+      existing,
+      inputs.projectId,
+    );
+    const branch = await resolvePinnedBranch(
+      props,
+      inputs,
+      existing,
+      inputs.projectId,
+    );
     applyContext(props.contextFile, {
       orgId,
       projectId: inputs.projectId,
-      branchId,
+      branch,
     });
-    await finalizeHumanLink(props, {
+    await finalizeLink(props, {
       contextFile: props.contextFile,
       orgId,
       projectId: inputs.projectId,
-      branchId,
+      branch,
       created: false,
     });
     return;
   }
-  const created = await createProject(props, {
-    orgId,
-    name: mustString(inputs.projectName, 'projectName'),
-    regionId: mustString(inputs.regionId, 'regionId'),
-  });
-  applyContext(props.contextFile, {
-    orgId,
-    projectId: created.project.id,
-    branchId: created.branchId,
-  });
-  await finalizeHumanLink(props, {
-    contextFile: props.contextFile,
-    orgId,
-    projectId: created.project.id,
-    branchId: created.branchId,
-    created: true,
-    projectName: created.project.name,
-    regionId: created.project.region_id,
-  });
+
+  // Pin a branch in the already-linked project.
+  if (inputs.branch && existing.projectId) {
+    const projectId = existing.projectId;
+    const orgId = await resolveOrgForProject(
+      props,
+      inputs,
+      existing,
+      projectId,
+    );
+    const branch = await resolvePinnedBranch(
+      props,
+      inputs,
+      existing,
+      projectId,
+    );
+    applyContext(props.contextFile, {
+      orgId,
+      projectId,
+      branch,
+    });
+    await finalizeLink(props, {
+      contextFile: props.contextFile,
+      orgId,
+      projectId,
+      branch,
+      created: false,
+    });
+    return;
+  }
+
+  // Record the default org, preserving any existing project/branch.
+  if (inputs.orgId) {
+    const orgId = inputs.orgId;
+    await verifyOrgAccess(props, orgId);
+    const projectId = existing.projectId;
+    const branch = projectId ? contextBranch(existing) : undefined;
+    applyContext(props.contextFile, { orgId, projectId, branch });
+    printSummary(props, {
+      contextFile: props.contextFile,
+      orgId,
+      projectId,
+      branch,
+      created: false,
+      orgOnly: true,
+    });
+    return;
+  }
 };
 
 // ----------------------------------------------------------------------------
@@ -289,23 +694,6 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
     orgId = await promptOrgFromList(orgResolution.orgs);
   }
 
-  if (inputs.projectId) {
-    const branchId = await resolveInteractiveBranchId(props, inputs.projectId);
-    applyContext(props.contextFile, {
-      orgId,
-      projectId: inputs.projectId,
-      branchId,
-    });
-    await finalizeHumanLink(props, {
-      contextFile: props.contextFile,
-      orgId,
-      projectId: inputs.projectId,
-      branchId,
-      created: false,
-    });
-    return;
-  }
-
   if (inputs.projectName && inputs.regionId) {
     const created = await createProject(props, {
       orgId,
@@ -315,13 +703,13 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
     applyContext(props.contextFile, {
       orgId,
       projectId: created.project.id,
-      branchId: created.branchId,
+      branch: created.branchName,
     });
-    await finalizeHumanLink(props, {
+    await finalizeLink(props, {
       contextFile: props.contextFile,
       orgId,
       projectId: created.project.id,
-      branchId: created.branchId,
+      branch: created.branchName,
       created: true,
       projectName: created.project.name,
       regionId: created.project.region_id,
@@ -334,17 +722,17 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
   const action = await promptProjectChoice(projects, inputs.projectName);
 
   if (action.type === 'existing') {
-    const branchId = await resolveInteractiveBranchId(props, action.projectId);
+    const branch = await resolveInteractiveBranch(props, action.projectId);
     applyContext(props.contextFile, {
       orgId,
       projectId: action.projectId,
-      branchId,
+      branch,
     });
-    await finalizeHumanLink(props, {
+    await finalizeLink(props, {
       contextFile: props.contextFile,
       orgId,
       projectId: action.projectId,
-      branchId,
+      branch,
       created: false,
       projectName: action.name,
       regionId: action.regionId,
@@ -363,13 +751,13 @@ const runInteractive = async (props: LinkProps, inputs: Inputs) => {
   applyContext(props.contextFile, {
     orgId,
     projectId: created.project.id,
-    branchId: created.branchId,
+    branch: created.branchName,
   });
-  await finalizeHumanLink(props, {
+  await finalizeLink(props, {
     contextFile: props.contextFile,
     orgId,
     projectId: created.project.id,
-    branchId: created.branchId,
+    branch: created.branchName,
     created: true,
     projectName: created.project.name,
     regionId: created.project.region_id,
@@ -507,7 +895,57 @@ const runAgentSafely = async (props: LinkProps) => {
 };
 
 const runAgent = async (props: LinkProps, inputs: Inputs) => {
-  const { projectId, projectName, regionId } = inputs;
+  const { projectId, projectName, regionId, branch } = inputs;
+  const existing = readContextFile(props.contextFile);
+
+  // Existing project: infer the org and link it. The branch is left to an
+  // explicit `checkout` unless one was passed or is already pinned.
+  if (projectId) {
+    const orgId = await resolveOrgForProject(
+      props,
+      inputs,
+      existing,
+      projectId,
+    );
+    const pinnedBranch = await resolvePinnedBranch(
+      props,
+      inputs,
+      existing,
+      projectId,
+    );
+    applyContext(props.contextFile, {
+      orgId,
+      projectId,
+      branch: pinnedBranch,
+    });
+    const orgSuffix = orgId ? ` (org ${orgId})` : '';
+    if (pinnedBranch) {
+      const pullNote = renderAgentPullNote(
+        await autoPullEnvAfterPin({
+          ...props,
+          projectId,
+          branch: pinnedBranch,
+          envPull: props.envPull,
+        }),
+      );
+      emitAgent({
+        status: 'linked',
+        context_file: props.contextFile,
+        context: { orgId, projectId, branch: pinnedBranch },
+        project: { id: projectId },
+        message: `Linked ${props.contextFile} to project ${projectId}${orgSuffix} on branch ${pinnedBranch}.${pullNote}`,
+      });
+      return;
+    }
+    emitAgent({
+      status: 'linked',
+      context_file: props.contextFile,
+      context: { orgId, projectId },
+      project: { id: projectId },
+      message: `Linked ${props.contextFile} to project ${projectId}${orgSuffix}. No branch pinned — run \`neonctl checkout <branch>\` (omit the branch to list options) to pin one and pull its env vars.`,
+    });
+    return;
+  }
 
   const orgResolution = await resolveOrg(props, inputs.orgId);
   if (orgResolution.kind === 'needs_selection') {
@@ -515,27 +953,6 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
     return;
   }
   const orgId = orgResolution.orgId;
-
-  if (projectId) {
-    const branchId = await resolveDefaultBranchId(props, projectId);
-    applyContext(props.contextFile, { orgId, projectId, branchId });
-    const pullNote = renderAgentPullNote(
-      await autoPullEnvAfterPin({
-        ...props,
-        projectId,
-        branch: branchId,
-        envPull: props.envPull,
-      }),
-    );
-    emitAgent({
-      status: 'linked',
-      context_file: props.contextFile,
-      context: { orgId, projectId, branchId },
-      project: { id: projectId },
-      message: `Linked ${props.contextFile} to project ${projectId} (org ${orgId}) on branch ${branchId}.${pullNote}`,
-    });
-    return;
-  }
 
   if (projectName && !regionId) {
     const regions = await fetchRegions(props);
@@ -553,6 +970,7 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
   }
 
   if (projectName && regionId) {
+    await verifyOrgAccess(props, orgId);
     const created = await createProject(props, {
       orgId,
       name: projectName,
@@ -561,13 +979,13 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
     applyContext(props.contextFile, {
       orgId,
       projectId: created.project.id,
-      branchId: created.branchId,
+      branch: created.branchName,
     });
     const pullNote = renderAgentPullNote(
       await autoPullEnvAfterPin({
         ...props,
         projectId: created.project.id,
-        branch: created.branchId,
+        branch: created.branchName,
         envPull: props.envPull,
       }),
     );
@@ -577,26 +995,32 @@ const runAgent = async (props: LinkProps, inputs: Inputs) => {
       context: {
         orgId,
         projectId: created.project.id,
-        branchId: created.branchId,
+        branch: created.branchName,
       },
       project: {
         id: created.project.id,
         name: created.project.name,
         region_id: created.project.region_id,
       },
-      message: `Created project ${created.project.id} ("${created.project.name ?? projectName}") in ${created.project.region_id ?? regionId} and linked ${props.contextFile}.${pullNote}`,
+      message: `Created project ${created.project.id} ("${created.project.name ?? projectName}") in ${created.project.region_id ?? regionId} and linked ${props.contextFile} on branch ${created.branchName}.${pullNote}`,
     });
     return;
   }
 
-  // orgId is set but no project info — list projects to choose from.
+  // orgId is set but no project info — list projects to choose from. A pending
+  // --branch can't be applied until a project is chosen, so it's surfaced in
+  // the instruction rather than silently dropped.
   const projects = await listAllProjects(props, orgId);
+  const branchNote = branch
+    ? ` A branch was requested (--branch ${branch}) but a branch can only be pinned once a project is chosen — re-run with --project-id first, then \`neonctl checkout ${branch}\`.`
+    : '';
   emitAgent({
     status: 'needs_project',
     instruction:
-      projects.length === 0
+      (projects.length === 0
         ? `Organization ${orgId} has no projects yet. Ask the user for a name for the new project, then re-run the create_option.next_command_template.`
-        : `Ask the user whether to link to one of these ${projects.length} existing projects (use next_command_template with --project-id) or create a new project (use create_option.next_command_template).`,
+        : `Ask the user whether to link to one of these ${projects.length} existing projects (use next_command_template with --project-id) or create a new project (use create_option.next_command_template).`) +
+      branchNote,
     options: projects.map((project) => ({
       id: project.id,
       name: project.name,
@@ -722,6 +1146,9 @@ const buildNeedsOrgResponse = (
 const toAgentError = (
   err: unknown,
 ): Extract<AgentResponse, { status: 'error' }> => {
+  if (err instanceof LinkInputError) {
+    return { status: 'error', code: err.agentCode, message: err.message };
+  }
   if (isAxiosError(err)) {
     const status = err.response?.status;
     const data = err.response?.data;
@@ -776,28 +1203,15 @@ const listAllProjects = async (
   return result;
 };
 
-const resolveDefaultBranchId = async (
-  props: CommonProps,
-  projectId: string,
-): Promise<string> => {
-  const { data } = await props.apiClient.listProjectBranches({ projectId });
-  const branch = data.branches.find((b: Branch) => b.default);
-  if (!branch) {
-    throw new Error(
-      `Could not find a default branch for project ${projectId}.`,
-    );
-  }
-  return branch.id;
-};
-
 /**
- * Resolve which branch to pin for an interactively-chosen project. When the project has a
+ * Resolve which branch to pin for an interactively-chosen project, returned as the value to
+ * persist (its name when known, see {@link branchPersistValue}). When the project has a
  * single branch there is nothing to choose, so we pin it silently. Otherwise we offer the
  * shared branch picker (the same "＋ Create a new branch…" + list as `neonctl checkout`),
- * creating the branch when the user opts to. This makes `link` a full org → project →
- * branch flow instead of always pinning the default branch.
+ * creating the branch when the user opts to. This makes interactive `link` a full org →
+ * project → branch flow; non-interactive `link` instead defers the branch to `checkout`.
  */
-const resolveInteractiveBranchId = async (
+const resolveInteractiveBranch = async (
   props: CommonProps,
   projectId: string,
 ): Promise<string> => {
@@ -810,7 +1224,7 @@ const resolveInteractiveBranchId = async (
         `Could not find a default branch for project ${projectId}.`,
       );
     }
-    return only.id;
+    return branchPersistValue(only);
   }
   const picked = await pickBranchInteractively(branches, {
     message: 'Which branch would you like to link?',
@@ -819,9 +1233,12 @@ const resolveInteractiveBranchId = async (
       'Re-run `neonctl link` interactively, or `neonctl checkout <branch>` to pin one.',
   });
   if (picked.kind === 'existing') {
-    return picked.branchId;
+    const existing = branches.find((b: Branch) => b.id === picked.branchId);
+    return existing ? branchPersistValue(existing) : picked.branchId;
   }
-  return createBranch(props.apiClient, projectId, picked.name, branches);
+  // A freshly-created branch: we already know the name the user typed.
+  await createBranch(props.apiClient, projectId, picked.name, branches);
+  return picked.name;
 };
 
 const fetchRegions = async (props: CommonProps): Promise<RegionResponse[]> => {
@@ -859,6 +1276,8 @@ const staticRegionsFallback = (): RegionResponse[] =>
 type CreatedProject = {
   project: { id: string; name?: string; region_id?: string };
   branchId: string;
+  /** Value to persist for the new project's sole branch (its name when present, else id). */
+  branchName: string;
 };
 
 const createProject = async (
@@ -884,6 +1303,7 @@ const createProject = async (
       region_id: data.project.region_id,
     },
     branchId: data.branch.id,
+    branchName: data.branch.name ?? data.branch.id,
   };
 };
 
@@ -893,43 +1313,68 @@ const createProject = async (
 
 type HumanSummary = {
   contextFile: string;
-  orgId: string;
-  projectId: string;
-  branchId: string;
+  orgId?: string;
+  projectId?: string;
+  branch?: string;
   created: boolean;
   projectName?: string;
   regionId?: string;
+  /** True for the `--org-id`-only path: records the default org without nudging checkout. */
+  orgOnly?: boolean;
+  /** True for the `--no-checks` path: written offline, so suppress the checkout nudge. */
+  noChecks?: boolean;
 };
 
-const printHumanSummary = (_props: LinkProps, summary: HumanSummary): void => {
+const printSummary = (_props: LinkProps, summary: HumanSummary): void => {
   const lines: string[] = [];
   if (summary.created) {
     lines.push(
       `Created project ${summary.projectId}${summary.projectName ? ` ("${summary.projectName}")` : ''}${summary.regionId ? ` in ${summary.regionId}` : ''}.`,
     );
   }
-  lines.push(`Linked ${summary.contextFile}:`);
-  lines.push(`  orgId:    ${summary.orgId}`);
-  lines.push(`  projectId: ${summary.projectId}`);
-  lines.push(`  branchId:  ${summary.branchId}`);
+  lines.push(
+    `${summary.orgOnly ? 'Updated' : 'Linked'} ${summary.contextFile}:`,
+  );
+  if (summary.orgId) {
+    lines.push(`  orgId:     ${summary.orgId}`);
+  }
+  if (summary.projectId) {
+    lines.push(`  projectId: ${summary.projectId}`);
+  }
+  if (summary.branch) {
+    lines.push(`  branch:    ${summary.branch}`);
+  }
+  if (summary.noChecks) {
+    lines.push('');
+    lines.push('Written offline (--no-checks): nothing was verified.');
+  } else if (summary.projectId && !summary.branch && !summary.orgOnly) {
+    lines.push('');
+    lines.push(
+      'No branch pinned. Run `neonctl checkout <branch>` to pin a branch and pull its env vars.',
+    );
+  }
   lines.push('');
   process.stdout.write(`${lines.join('\n')}\n`);
 };
 
 /**
- * Print the link summary, then run the bundled `env pull` so a human `link` ends with the
- * branch's connection string already on disk — the branch-first loop is just link + checkout.
+ * Print the link summary, then run the bundled `env pull` so a human `link` that pinned a
+ * branch ends with the branch's connection string already on disk. When no branch was pinned
+ * there is nothing to pull, so env pull is skipped and the summary nudges `checkout` instead.
  * `--no-env-pull` opts out (env pull's own status / skip hint is logged to stderr).
  */
-const finalizeHumanLink = async (
+const finalizeLink = async (
   props: LinkProps,
   summary: HumanSummary,
 ): Promise<void> => {
-  printHumanSummary(props, summary);
+  printSummary(props, summary);
+  if (!summary.branch || !summary.projectId) {
+    return;
+  }
   await autoPullEnvAfterPin({
     ...props,
     projectId: summary.projectId,
-    branch: summary.branchId,
+    branch: summary.branch,
     envPull: props.envPull,
   });
 };

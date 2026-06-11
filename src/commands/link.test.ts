@@ -131,7 +131,7 @@ const test = originalTest.extend<{
 
 describe('link', () => {
   describe('non-interactive flag mode', () => {
-    test('link to existing project writes .neon with default branch id', async ({
+    test('link to existing project writes org+project, deferring the branch to checkout', async ({
       testCliCommand,
       readFile,
       tmpContext,
@@ -150,7 +150,68 @@ describe('link', () => {
       expect(readFile(ctx)).toMatchSnapshot();
     });
 
-    test('link with --params JSON behaves like flags', async ({
+    test('link --project-id alone infers the org from the project', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('flag_infer_org');
+      await testCliCommand([
+        'link',
+        '--project-id',
+        'proj-in-org',
+        '--no-env-pull',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('link --branch-id pins the branch in an existing project', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('flag_branch');
+      await testCliCommand([
+        'link',
+        '--project-id',
+        'test',
+        '--branch-id',
+        'br-main-branch-123456',
+        '--no-env-pull',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('re-linking the same project keeps the already-pinned branch', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('flag_keep_branch');
+      writeFileSync(
+        ctx,
+        JSON.stringify({
+          orgId: 'org-2',
+          projectId: 'test',
+          branchId: 'br-sunny-branch-123456',
+        }),
+      );
+      await testCliCommand([
+        'link',
+        '--project-id',
+        'test',
+        '--no-env-pull',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('link --params JSON behaves like flags', async ({
       testCliCommand,
       readFile,
       tmpContext,
@@ -164,6 +225,40 @@ describe('link', () => {
         '--context-file',
         ctx,
       ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('link --org-id alone records the default org', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('flag_org_only');
+      await testCliCommand([
+        'link',
+        '--org-id',
+        'org-2',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('link --clear empties the context file', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('flag_clear');
+      writeFileSync(
+        ctx,
+        JSON.stringify({
+          orgId: 'org-2',
+          projectId: 'test',
+          branchId: 'br-main-branch-123456',
+        }),
+      );
+      await testCliCommand(['link', '--clear', '--context-file', ctx]);
       expect(readFile(ctx)).toMatchSnapshot();
     });
 
@@ -211,6 +306,100 @@ describe('link', () => {
         },
       );
     });
+
+    test('conflicting inputs (--project-name with --branch-id) fails', async ({
+      testCliCommand,
+      tmpContext,
+    }) => {
+      await testCliCommand(
+        [
+          'link',
+          '--org-id',
+          'org-2',
+          '--project-name',
+          'test_project',
+          '--branch-id',
+          'br-main-branch-123456',
+          '--context-file',
+          tmpContext('flag_conflict_branch'),
+        ],
+        {
+          code: 1,
+          stderr:
+            'ERROR: Conflicting inputs: --branch pins a branch of an existing project, but --project-name creates a new one. Create the project first, then `neonctl checkout <branch>`.',
+        },
+      );
+    });
+  });
+
+  describe('input verification', () => {
+    test('unknown --project-id fails with a clear error', async ({
+      testCliCommand,
+      tmpContext,
+    }) => {
+      await testCliCommand(
+        [
+          'link',
+          '--project-id',
+          'ghost-project',
+          '--no-env-pull',
+          '--context-file',
+          tmpContext('verify_no_project'),
+        ],
+        {
+          code: 1,
+          stderr:
+            "ERROR: Project 'ghost-project' not found. Double-check the project ID — or that your API key has access to it.",
+        },
+      );
+    });
+
+    test('--org-id that does not match the project fails with a mismatch error', async ({
+      testCliCommand,
+      tmpContext,
+    }) => {
+      await testCliCommand(
+        [
+          'link',
+          '--project-id',
+          'proj-in-org',
+          '--org-id',
+          'org-2',
+          '--no-env-pull',
+          '--context-file',
+          tmpContext('verify_org_mismatch'),
+        ],
+        {
+          code: 1,
+          stderr:
+            "ERROR: Project 'proj-in-org' belongs to organization 'org-7', not 'org-2'. Omit --org-id to use the project's own org, or pass the matching ID.",
+        },
+      );
+    });
+
+    test('unknown --branch-id fails listing the available branches', async ({
+      testCliCommand,
+      tmpContext,
+    }) => {
+      await testCliCommand(
+        [
+          'link',
+          '--project-id',
+          'test',
+          '--branch-id',
+          'br-ghost-99999999',
+          '--no-env-pull',
+          '--context-file',
+          tmpContext('verify_no_branch'),
+        ],
+        {
+          code: 1,
+          stderr: expect.stringContaining(
+            "Branch 'br-ghost-99999999' not found in project 'test'.",
+          ),
+        },
+      );
+    });
   });
 
   describe('--agent mode', () => {
@@ -241,7 +430,7 @@ describe('link', () => {
       removeFile(ctx);
     });
 
-    test('with org+project emits linked JSON and writes .neon', async ({
+    test('with org+project emits linked JSON (no branch) and writes .neon', async ({
       testCliCommand,
       readFile,
       tmpContext,
@@ -259,6 +448,48 @@ describe('link', () => {
         ctx,
       ]);
       expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('with only --project-id infers the org and emits linked JSON', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('agent_linked_infer');
+      await testCliCommand([
+        'link',
+        '--agent',
+        '--project-id',
+        'proj-in-org',
+        '--no-env-pull',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('with an unknown --project-id emits an error JSON, exit 1', async ({
+      runLinkInCi,
+      tmpContext,
+    }) => {
+      const result = await runLinkInCi([
+        'link',
+        '--agent',
+        '--project-id',
+        'ghost-project',
+        '--no-env-pull',
+        '--context-file',
+        tmpContext('agent_bad_project'),
+      ]);
+      expect(result.code).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        status: string;
+        code: string;
+        message: string;
+      };
+      expect(parsed.status).toBe('error');
+      expect(parsed.code).toBe('NOT_FOUND');
+      expect(parsed.message).toContain("Project 'ghost-project' not found");
     });
 
     test('with org+projectName but no region emits needs_project_details JSON', async ({
@@ -418,8 +649,97 @@ describe('link', () => {
     });
   });
 
-  describe('set-context regression', () => {
-    test('set-context --branch-id writes branchId to .neon', async ({
+  describe('--no-checks (offline write)', () => {
+    test('writes org+project with no API verification', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('nochecks_basic');
+      await testCliCommand([
+        'link',
+        '--no-checks',
+        '--org-id',
+        'org-anything',
+        '--project-id',
+        'ghost-project',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('writes org+project+branch when a branch is given', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('nochecks_branch');
+      await testCliCommand([
+        'link',
+        '--no-checks',
+        '--org-id',
+        'org-anything',
+        '--project-id',
+        'ghost-project',
+        '--branch-id',
+        'br-anything',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('fails when org-id or project-id is missing', async ({
+      testCliCommand,
+      tmpContext,
+    }) => {
+      await testCliCommand(
+        [
+          'link',
+          '--no-checks',
+          '--project-id',
+          'ghost-project',
+          '--context-file',
+          tmpContext('nochecks_missing'),
+        ],
+        {
+          code: 1,
+          stderr:
+            'ERROR: --no-checks writes the context with no API calls, so it needs both --org-id and --project-id (--branch is optional).',
+        },
+      );
+    });
+  });
+
+  describe('set-context alias', () => {
+    test('set-context prints a deprecation warning and forwards to link', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('sc_deprecation');
+      await testCliCommand(
+        [
+          'set-context',
+          '--no-checks',
+          '--org-id',
+          'org-2',
+          '--project-id',
+          'test',
+          '--context-file',
+          ctx,
+        ],
+        {
+          stderr: expect.stringContaining(
+            '`neonctl set-context` is deprecated',
+          ),
+        },
+      );
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('set-context --project-id --branch-id pins both via the link code path', async ({
       testCliCommand,
       readFile,
       tmpContext,
@@ -428,9 +748,27 @@ describe('link', () => {
       await testCliCommand([
         'set-context',
         '--project-id',
-        'test_project',
+        'test',
         '--branch-id',
         'br-main-branch-123456',
+        '--no-env-pull',
+        '--context-file',
+        ctx,
+      ]);
+      expect(readFile(ctx)).toMatchSnapshot();
+    });
+
+    test('set-context --project-id heals org+project (alias of link)', async ({
+      testCliCommand,
+      readFile,
+      tmpContext,
+    }) => {
+      const ctx = tmpContext('sc_alias_project');
+      await testCliCommand([
+        'set-context',
+        '--project-id',
+        'proj-in-org',
+        '--no-env-pull',
         '--context-file',
         ctx,
       ]);

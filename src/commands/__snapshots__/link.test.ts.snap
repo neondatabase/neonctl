@@ -7,13 +7,13 @@ exports[`link > --agent mode > with full project details creates project and emi
   "context": {
     "orgId": "org-2",
     "projectId": "new-project-789012",
-    "branchId": "br-test-branch-789012"
+    "branch": "test_branch"
   },
   "project": {
     "id": "new-project-789012",
     "name": "test_project"
   },
-  "message": "Created project new-project-789012 (\\"test_project\\") in aws-us-east-2 and linked <TMP>/agent_linked_create/.neon. Skipped env pull (--no-env-pull); run \`neonctl env pull\` later, or inject env at runtime with \`neon-env run -- <your dev command>\`."
+  "message": "Created project new-project-789012 (\\"test_project\\") in aws-us-east-2 and linked <TMP>/agent_linked_create/.neon on branch test_branch. Skipped env pull (--no-env-pull); run \`neonctl env pull\` later, or inject env at runtime with \`neon-env run -- <your dev command>\`."
 }
 "
 `;
@@ -22,7 +22,7 @@ exports[`link > --agent mode > with full project details creates project and emi
 "{
   "orgId": "org-2",
   "projectId": "new-project-789012",
-  "branchId": "br-test-branch-789012"
+  "branch": "test_branch"
 }"
 `;
 
@@ -76,28 +76,49 @@ exports[`link > --agent mode > with only --org-id emits needs_project JSON 1`] =
 "
 `;
 
-exports[`link > --agent mode > with org+project emits linked JSON and writes .neon 1`] = `
+exports[`link > --agent mode > with only --project-id infers the org and emits linked JSON 1`] = `
+"{
+  "status": "linked",
+  "context_file": "<TMP>/agent_linked_infer/.neon",
+  "context": {
+    "orgId": "org-7",
+    "projectId": "proj-in-org"
+  },
+  "project": {
+    "id": "proj-in-org"
+  },
+  "message": "Linked <TMP>/agent_linked_infer/.neon to project proj-in-org (org org-7). No branch pinned — run \`neonctl checkout <branch>\` (omit the branch to list options) to pin one and pull its env vars."
+}
+"
+`;
+
+exports[`link > --agent mode > with only --project-id infers the org and emits linked JSON 2`] = `
+"{
+  "orgId": "org-7",
+  "projectId": "proj-in-org"
+}"
+`;
+
+exports[`link > --agent mode > with org+project emits linked JSON (no branch) and writes .neon 1`] = `
 "{
   "status": "linked",
   "context_file": "<TMP>/agent_linked_existing/.neon",
   "context": {
     "orgId": "org-2",
-    "projectId": "test",
-    "branchId": "br-main-branch-123456"
+    "projectId": "test"
   },
   "project": {
     "id": "test"
   },
-  "message": "Linked <TMP>/agent_linked_existing/.neon to project test (org org-2) on branch br-main-branch-123456. Skipped env pull (--no-env-pull); run \`neonctl env pull\` later, or inject env at runtime with \`neon-env run -- <your dev command>\`."
+  "message": "Linked <TMP>/agent_linked_existing/.neon to project test (org org-2). No branch pinned — run \`neonctl checkout <branch>\` (omit the branch to list options) to pin one and pull its env vars."
 }
 "
 `;
 
-exports[`link > --agent mode > with org+project emits linked JSON and writes .neon 2`] = `
+exports[`link > --agent mode > with org+project emits linked JSON (no branch) and writes .neon 2`] = `
 "{
   "orgId": "org-2",
-  "projectId": "test",
-  "branchId": "br-main-branch-123456"
+  "projectId": "test"
 }"
 `;
 
@@ -132,43 +153,168 @@ exports[`link > --agent mode > with org+projectName but no region emits needs_pr
 "
 `;
 
+exports[`link > --no-checks (offline write) > fails when org-id or project-id is missing 1`] = `""`;
+
+exports[`link > --no-checks (offline write) > writes org+project with no API verification 1`] = `
+"Linked <TMP>/nochecks_basic/.neon:
+  orgId:     org-anything
+  projectId: ghost-project
+
+Written offline (--no-checks): nothing was verified.
+
+"
+`;
+
+exports[`link > --no-checks (offline write) > writes org+project with no API verification 2`] = `
+"{
+  "orgId": "org-anything",
+  "projectId": "ghost-project"
+}"
+`;
+
+exports[`link > --no-checks (offline write) > writes org+project+branch when a branch is given 1`] = `
+"Linked <TMP>/nochecks_branch/.neon:
+  orgId:     org-anything
+  projectId: ghost-project
+  branch:    br-anything
+
+Written offline (--no-checks): nothing was verified.
+
+"
+`;
+
+exports[`link > --no-checks (offline write) > writes org+project+branch when a branch is given 2`] = `
+"{
+  "orgId": "org-anything",
+  "projectId": "ghost-project",
+  "branch": "br-anything"
+}"
+`;
+
 exports[`link > gitignore scaffolding > appends .neon to an existing .gitignore without duplicating 1`] = `
 "Linked <TMP>/gi_appends/.neon:
-  orgId:    org-2
+  orgId:     org-2
   projectId: test
-  branchId:  br-main-branch-123456
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
 
 "
 `;
 
 exports[`link > gitignore scaffolding > appends .neon to an existing .gitignore without duplicating 2`] = `
 "Linked <TMP>/gi_appends/.neon:
-  orgId:    org-2
+  orgId:     org-2
   projectId: test
-  branchId:  br-main-branch-123456
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
 
 "
 `;
 
 exports[`link > gitignore scaffolding > creates a .gitignore listing .neon next to the context file 1`] = `
 "Linked <TMP>/gi_creates/.neon:
-  orgId:    org-2
+  orgId:     org-2
   projectId: test
-  branchId:  br-main-branch-123456
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
 
 "
 `;
 
-exports[`link > gitignore scaffolding > set-context also scaffolds .gitignore via the shared applyContext 1`] = `""`;
+exports[`link > gitignore scaffolding > set-context also scaffolds .gitignore via the shared applyContext 1`] = `
+"Linked <TMP>/gi_set_context/.neon:
+  projectId: test
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
+
+"
+`;
+
+exports[`link > input verification > --org-id that does not match the project fails with a mismatch error 1`] = `""`;
+
+exports[`link > input verification > unknown --branch-id fails listing the available branches 1`] = `""`;
+
+exports[`link > input verification > unknown --project-id fails with a clear error 1`] = `""`;
 
 exports[`link > non-interactive flag mode > conflicting inputs (--project-id with --project-name) fails 1`] = `""`;
+
+exports[`link > non-interactive flag mode > conflicting inputs (--project-name with --branch-id) fails 1`] = `""`;
+
+exports[`link > non-interactive flag mode > link --branch-id pins the branch in an existing project 1`] = `
+"Linked <TMP>/flag_branch/.neon:
+  projectId: test
+  branch:    main
+
+"
+`;
+
+exports[`link > non-interactive flag mode > link --branch-id pins the branch in an existing project 2`] = `
+"{
+  "projectId": "test",
+  "branch": "main"
+}"
+`;
+
+exports[`link > non-interactive flag mode > link --clear empties the context file 1`] = `
+"Cleared <TMP>/flag_clear/.neon. The directory is no longer linked to a Neon org/project/branch.
+"
+`;
+
+exports[`link > non-interactive flag mode > link --clear empties the context file 2`] = `"{}"`;
+
+exports[`link > non-interactive flag mode > link --org-id alone records the default org 1`] = `
+"Updated <TMP>/flag_org_only/.neon:
+  orgId:     org-2
+
+"
+`;
+
+exports[`link > non-interactive flag mode > link --org-id alone records the default org 2`] = `
+"{
+  "orgId": "org-2"
+}"
+`;
+
+exports[`link > non-interactive flag mode > link --params JSON behaves like flags 1`] = `
+"Linked <TMP>/flag_params/.neon:
+  orgId:     org-2
+  projectId: test
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
+
+"
+`;
+
+exports[`link > non-interactive flag mode > link --params JSON behaves like flags 2`] = `
+"{
+  "orgId": "org-2",
+  "projectId": "test"
+}"
+`;
+
+exports[`link > non-interactive flag mode > link --project-id alone infers the org from the project 1`] = `
+"Linked <TMP>/flag_infer_org/.neon:
+  orgId:     org-7
+  projectId: proj-in-org
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
+
+"
+`;
+
+exports[`link > non-interactive flag mode > link --project-id alone infers the org from the project 2`] = `
+"{
+  "orgId": "org-7",
+  "projectId": "proj-in-org"
+}"
+`;
 
 exports[`link > non-interactive flag mode > link creates a new project and writes .neon 1`] = `
 "Created project new-project-789012 ("test_project").
 Linked <TMP>/flag_create/.neon:
-  orgId:    org-2
+  orgId:     org-2
   projectId: new-project-789012
-  branchId:  br-test-branch-789012
+  branch:    test_branch
 
 "
 `;
@@ -177,41 +323,41 @@ exports[`link > non-interactive flag mode > link creates a new project and write
 "{
   "orgId": "org-2",
   "projectId": "new-project-789012",
-  "branchId": "br-test-branch-789012"
+  "branch": "test_branch"
 }"
 `;
 
-exports[`link > non-interactive flag mode > link to existing project writes .neon with default branch id 1`] = `
+exports[`link > non-interactive flag mode > link to existing project writes org+project, deferring the branch to checkout 1`] = `
 "Linked <TMP>/flag_existing/.neon:
-  orgId:    org-2
+  orgId:     org-2
   projectId: test
-  branchId:  br-main-branch-123456
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
 
 "
 `;
 
-exports[`link > non-interactive flag mode > link to existing project writes .neon with default branch id 2`] = `
+exports[`link > non-interactive flag mode > link to existing project writes org+project, deferring the branch to checkout 2`] = `
 "{
   "orgId": "org-2",
-  "projectId": "test",
-  "branchId": "br-main-branch-123456"
+  "projectId": "test"
 }"
 `;
 
-exports[`link > non-interactive flag mode > link with --params JSON behaves like flags 1`] = `
-"Linked <TMP>/flag_params/.neon:
-  orgId:    org-2
+exports[`link > non-interactive flag mode > re-linking the same project keeps the already-pinned branch 1`] = `
+"Linked <TMP>/flag_keep_branch/.neon:
+  orgId:     org-2
   projectId: test
-  branchId:  br-main-branch-123456
+  branch:    br-sunny-branch-123456
 
 "
 `;
 
-exports[`link > non-interactive flag mode > link with --params JSON behaves like flags 2`] = `
+exports[`link > non-interactive flag mode > re-linking the same project keeps the already-pinned branch 2`] = `
 "{
   "orgId": "org-2",
   "projectId": "test",
-  "branchId": "br-main-branch-123456"
+  "branch": "br-sunny-branch-123456"
 }"
 `;
 
@@ -293,9 +439,10 @@ exports[`link > org-scoped API key behavior > agent mode with no orgs available 
 
 exports[`link > overwrites an existing .neon when re-linking non-interactively 1`] = `
 "Linked <TMP>/overwrite/.neon:
-  orgId:    org-2
+  orgId:     org-2
   projectId: test
-  branchId:  br-main-branch-123456
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
 
 "
 `;
@@ -303,16 +450,55 @@ exports[`link > overwrites an existing .neon when re-linking non-interactively 1
 exports[`link > overwrites an existing .neon when re-linking non-interactively 2`] = `
 "{
   "orgId": "org-2",
-  "projectId": "test",
-  "branchId": "br-main-branch-123456"
+  "projectId": "test"
 }"
 `;
 
-exports[`link > set-context regression > set-context --branch-id writes branchId to .neon 1`] = `""`;
+exports[`link > set-context alias > set-context --project-id --branch-id pins both via the link code path 1`] = `
+"Linked <TMP>/sc_branch/.neon:
+  projectId: test
+  branch:    main
 
-exports[`link > set-context regression > set-context --branch-id writes branchId to .neon 2`] = `
+"
+`;
+
+exports[`link > set-context alias > set-context --project-id --branch-id pins both via the link code path 2`] = `
 "{
-  "projectId": "test_project",
-  "branchId": "br-main-branch-123456"
+  "projectId": "test",
+  "branch": "main"
+}"
+`;
+
+exports[`link > set-context alias > set-context --project-id heals org+project (alias of link) 1`] = `
+"Linked <TMP>/sc_alias_project/.neon:
+  orgId:     org-7
+  projectId: proj-in-org
+
+No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
+
+"
+`;
+
+exports[`link > set-context alias > set-context --project-id heals org+project (alias of link) 2`] = `
+"{
+  "orgId": "org-7",
+  "projectId": "proj-in-org"
+}"
+`;
+
+exports[`link > set-context alias > set-context prints a deprecation warning and forwards to link 1`] = `
+"Linked <TMP>/sc_deprecation/.neon:
+  orgId:     org-2
+  projectId: test
+
+Written offline (--no-checks): nothing was verified.
+
+"
+`;
+
+exports[`link > set-context alias > set-context prints a deprecation warning and forwards to link 2`] = `
+"{
+  "orgId": "org-2",
+  "projectId": "test"
 }"
 `;

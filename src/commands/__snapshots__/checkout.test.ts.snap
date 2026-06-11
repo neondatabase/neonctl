@@ -16,6 +16,10 @@ exports[`checkout > preserves orgId/projectId already present in the .neon file 
 
 exports[`checkout > resolves a branch by id and writes branchId to a fresh .neon 1`] = `""`;
 
+exports[`checkout > resolves a branch by id and writes the branch name to a fresh .neon 1`] = `""`;
+
 exports[`checkout > resolves a branch by name and writes branchId to a fresh .neon 1`] = `""`;
+
+exports[`checkout > resolves a branch by name and writes the branch name to a fresh .neon 1`] = `""`;
 
 exports[`checkout > resolves projectId from the .neon file when no flag is passed 1`] = `""`;
