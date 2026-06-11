@@ -1,28 +1,11 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rmSync, writeFileSync, readFileSync } from 'node:fs';
-import { beforeAll, describe, expect } from 'vitest';
+import { describe, expect } from 'vitest';
 
 import { test as originalTest } from '../test_utils/fixtures';
 
 const CONTEXT_FILE = join(tmpdir(), `neon_${Date.now()}`);
-
-// `set-context` is now an alias of `link`, whose summary echoes the absolute
-// context-file path. CONTEXT_FILE embeds a per-run timestamp, so normalize it to
-// a stable token to keep the stdout snapshots deterministic across runs.
-beforeAll(() => {
-  expect.addSnapshotSerializer({
-    test: (val) => typeof val === 'string' && val.includes(CONTEXT_FILE),
-    serialize: (val, config, indentation, depth, refs, printer) =>
-      printer(
-        (val as string).split(CONTEXT_FILE).join('<CTX>'),
-        config,
-        indentation,
-        depth,
-        refs,
-      ),
-  });
-});
 
 const test = originalTest.extend<{
   cleanupFile: (name: string) => void;
@@ -53,6 +36,10 @@ const test = originalTest.extend<{
 });
 
 describe('set_context', () => {
+  // `set-context` is deprecated but intentionally unchanged: a raw, offline write
+  // of exactly the fields passed (no org inference / verification / env pull).
+  // The deprecation warning goes to stderr, so these stdout/file snapshots are
+  // identical to the pre-deprecation behavior.
   describe('should set the context to project', () => {
     test('set-context', async ({ testCliCommand, readFile }) => {
       await testCliCommand([
@@ -209,12 +196,29 @@ describe('set_context', () => {
       await testCliCommand([
         'set-context',
         '--project-id',
-        'test',
+        'test_project',
         '--org-id',
         'org-2',
         '--context-file',
         CONTEXT_FILE,
       ]);
+      expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
+    });
+  });
+
+  describe('deprecation', () => {
+    test('warns (to stderr) and still performs the raw write', async ({
+      testCliCommand,
+      readFile,
+    }) => {
+      await testCliCommand(
+        ['set-context', '--project-id', 'test', '--context-file', CONTEXT_FILE],
+        {
+          stderr: expect.stringContaining(
+            '`neonctl set-context` is deprecated',
+          ),
+        },
+      );
       expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
     });
   });

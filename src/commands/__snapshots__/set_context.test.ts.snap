@@ -1,18 +1,18 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`set_context > can set the context to project and organization at the same time > set-context 1`] = `
-"Linked <CTX>:
-  orgId:     org-2
-  projectId: test
-
-No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
-
-"
-`;
+exports[`set_context > can set the context to project and organization at the same time > set-context 1`] = `""`;
 
 exports[`set_context > can set the context to project and organization at the same time > set-context 2`] = `
 "{
-  "orgId": "org-2",
+  "projectId": "test_project",
+  "orgId": "org-2"
+}"
+`;
+
+exports[`set_context > deprecation > warns (to stderr) and still performs the raw write 1`] = `""`;
+
+exports[`set_context > deprecation > warns (to stderr) and still performs the raw write 2`] = `
+"{
   "projectId": "test"
 }"
 `;
@@ -56,12 +56,7 @@ exports[`set_context > should set the context to organization > list projects wi
 "
 `;
 
-exports[`set_context > should set the context to organization > set-context 1`] = `
-"Updated <CTX>:
-  orgId:     org-2
-
-"
-`;
+exports[`set_context > should set the context to organization > set-context 1`] = `""`;
 
 exports[`set_context > should set the context to organization > set-context 2`] = `
 "{
@@ -135,14 +130,7 @@ exports[`set_context > should set the context to project > set the branchId and 
 
 exports[`set_context > should set the context to project > set the branchId and projectId is from context 2`] = `""`;
 
-exports[`set_context > should set the context to project > set-context 1`] = `
-"Linked <CTX>:
-  projectId: test
-
-No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
-
-"
-`;
+exports[`set_context > should set the context to project > set-context 1`] = `""`;
 
 exports[`set_context > should set the context to project > set-context 2`] = `
 "{

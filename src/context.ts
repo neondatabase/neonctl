@@ -81,10 +81,9 @@ export const readContextFile = (file: string): Context => {
 export const enrichFromContext = (
   args: yargs.Arguments<{ contextFile: string }>,
 ) => {
-  // `link` (and its `set-context` alias) manage the context file themselves and
-  // must see the raw flags rather than values pre-filled from an existing
-  // `.neon`, so skip enrichment for them. Both names are checked because yargs
-  // may surface either the canonical command or the alias in `_[0]`.
+  // `link` and the deprecated `set-context` manage the context file themselves
+  // and must see the raw flags rather than values pre-filled from an existing
+  // `.neon`, so skip enrichment for both.
   if (args._[0] === 'link' || args._[0] === 'set-context') {
     return;
   }
@@ -110,7 +109,7 @@ export const updateContextFile = (file: string, context: Context) => {
 };
 
 /**
- * Shared primitive used by `link` (and its `set-context` alias) and `checkout`
+ * Shared primitive used by `link`, the deprecated `set-context`, and `checkout`
  * to persist context. Mirrors the destructive write semantics of
  * `updateContextFile` — any field not present in `context` is dropped from the
  * file.

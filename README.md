@@ -170,7 +170,7 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 
 When a branch ends up pinned, `link` also runs [`env pull`](#env-pull) so the branch's Neon env vars (`DATABASE_URL`, …) land in a local `.env`. With no branch pinned there is nothing to pull, so `link` instead nudges you to run `neonctl checkout`. Pass `--no-env-pull` to skip the pull (for example when injecting env at runtime with `neon-env run` or `neonctl dev`).
 
-> **Migrating from `set-context`?** `set-context` is now a deprecated alias of `link` (see [below](#set-context-is-now-an-alias-of-link)). The `.neon` `branchId` field is also superseded by `branch` (which stores the branch **name** when known); old `branchId` files are still read and are upgraded to `branch` the next time the context is written.
+> **Migrating from `set-context`?** `set-context` is **deprecated** in favor of `link` (see [below](#set-context-is-deprecated)). It still works exactly as before for now (a raw write), it just prints a deprecation warning. The `.neon` `branchId` field is also superseded by `branch` (which stores the branch **name** when known); old `branchId` files are still read and are upgraded to `branch` the next time `link`/`checkout` writes the context.
 
 There are three modes:
 
@@ -296,17 +296,21 @@ The `linked` response omits `branch` unless one was pinned (via `--branch`, an e
 neonctl link --no-checks --org-id org-abc123 --project-id polished-snowflake-12345678 --branch main
 ```
 
-#### `set-context` is now an alias of `link`
+#### `set-context` is deprecated
 
-`set-context` is **deprecated** and forwards to `link` (identical flags and behavior); it prints a deprecation warning to stderr and will be removed in a future major release. Use `neonctl link` going forward. This is a **breaking change**: the old `set-context` wrote whatever subset of fields you passed (and bare `set-context` cleared the file). The unified command instead resolves/verifies and writes a complete context — clear the file with `neonctl link --clear`.
+`set-context` is **deprecated** in favor of `link` and prints a deprecation warning (to stderr, so it never pollutes stdout or scripts). For backward compatibility its behavior is **unchanged**: it's still a raw, offline write of exactly the fields you pass (no org inference, no verification, no env pull), and bare `set-context` still clears the file. Nothing breaks today — but new work should use `link`, and `set-context` will be removed in a future major release.
 
-| Old                                     | New                                                                         |
-| --------------------------------------- | --------------------------------------------------------------------------- |
-| `neonctl set-context --project-id <id>` | `neonctl link --project-id <id>` (infers org; pin a branch with `checkout`) |
-| `neonctl set-context --org-id <id>`     | `neonctl link --org-id <id>`                                                |
-| `neonctl set-context --branch-id <id>`  | `neonctl link --branch <name\|id>`                                          |
-| `neonctl set-context` (clear)           | `neonctl link --clear`                                                      |
-| a dumb local write (no network)         | `neonctl link --no-checks --org-id <id> --project-id <id>`                  |
+How today's `set-context` uses map onto `link`:
+
+| `set-context` (deprecated)              | Recommended `link` equivalent                                                 |
+| --------------------------------------- | ----------------------------------------------------------------------------- |
+| `neonctl set-context --project-id <id>` | `neonctl link --project-id <id>` (infers org + verifies; branch via checkout) |
+| `neonctl set-context --org-id <id>`     | `neonctl link --org-id <id>`                                                  |
+| `neonctl set-context --branch-id <id>`  | `neonctl link --branch <name\|id>`                                            |
+| `neonctl set-context` (clear)           | `neonctl link --clear`                                                        |
+| a raw local write (no network)          | `neonctl link --no-checks --org-id <id> --project-id <id>`                    |
+
+The key difference: `link` resolves and **verifies** before writing (so you never get a half-written or stale `.neon`), whereas `set-context` writes whatever you give it verbatim. The closest like-for-like replacement for the old raw write is `link --no-checks`.
 
 ### checkout
 
@@ -451,7 +455,7 @@ The target directory must be empty unless you pass `--force` (a lone `.git` is i
 | [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                         | Manage operations                  |
 | [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                                | Get connection string              |
 | [psql](https://neon.com/docs/reference/cli-psql)                           |                                                                                                | Connect to a database via psql     |
-| set-context                                                                |                                                                                                | Deprecated alias of `link`         |
+| set-context                                                                |                                                                                                | Deprecated; use `link`             |
 | env                                                                        | `pull`                                                                                         | Manage a branch's env vars         |
 | checkout                                                                   |                                                                                                | Pin a branch in `.neon`            |
 | [link](https://neon.com/docs/reference/cli-link)                           |                                                                                                | Link a directory to a project      |

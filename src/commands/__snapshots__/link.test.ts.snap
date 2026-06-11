@@ -221,14 +221,7 @@ No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its
 "
 `;
 
-exports[`link > gitignore scaffolding > set-context also scaffolds .gitignore via the shared applyContext 1`] = `
-"Linked <TMP>/gi_set_context/.neon:
-  projectId: test
-
-No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
-
-"
-`;
+exports[`link > gitignore scaffolding > set-context also scaffolds .gitignore via the shared applyContext 1`] = `""`;
 
 exports[`link > input verification > --org-id that does not match the project fails with a mismatch error 1`] = `""`;
 
@@ -448,55 +441,6 @@ No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its
 `;
 
 exports[`link > overwrites an existing .neon when re-linking non-interactively 2`] = `
-"{
-  "orgId": "org-2",
-  "projectId": "test"
-}"
-`;
-
-exports[`link > set-context alias > set-context --project-id --branch-id pins both via the link code path 1`] = `
-"Linked <TMP>/sc_branch/.neon:
-  projectId: test
-  branch:    main
-
-"
-`;
-
-exports[`link > set-context alias > set-context --project-id --branch-id pins both via the link code path 2`] = `
-"{
-  "projectId": "test",
-  "branch": "main"
-}"
-`;
-
-exports[`link > set-context alias > set-context --project-id heals org+project (alias of link) 1`] = `
-"Linked <TMP>/sc_alias_project/.neon:
-  orgId:     org-7
-  projectId: proj-in-org
-
-No branch pinned. Run \`neonctl checkout <branch>\` to pin a branch and pull its env vars.
-
-"
-`;
-
-exports[`link > set-context alias > set-context --project-id heals org+project (alias of link) 2`] = `
-"{
-  "orgId": "org-7",
-  "projectId": "proj-in-org"
-}"
-`;
-
-exports[`link > set-context alias > set-context prints a deprecation warning and forwards to link 1`] = `
-"Linked <TMP>/sc_deprecation/.neon:
-  orgId:     org-2
-  projectId: test
-
-Written offline (--no-checks): nothing was verified.
-
-"
-`;
-
-exports[`link > set-context alias > set-context prints a deprecation warning and forwards to link 2`] = `
 "{
   "orgId": "org-2",
   "projectId": "test"
