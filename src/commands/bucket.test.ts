@@ -24,6 +24,7 @@ afterAll(() => {
 // in the (parent) mock-server process. Cleared after each test.
 afterEach(() => {
   delete process.env.NEONCTL_TEST_UPLOAD_SINK;
+  delete process.env.NEONCTL_TEST_PRESIGN_SINK;
 });
 
 const SCOPE = [
@@ -234,6 +235,8 @@ describe('bucket', () => {
     writeFileSync(src, 'upload me\n');
     const sink = join(TEST_TMP, 'put-sink.json');
     process.env.NEONCTL_TEST_UPLOAD_SINK = sink;
+    const presignSink = join(TEST_TMP, 'presign-sink.json');
+    process.env.NEONCTL_TEST_PRESIGN_SINK = presignSink;
 
     await testCliCommand(
       [
@@ -255,6 +258,11 @@ describe('bucket', () => {
           '" uploaded to "upload.txt" in bucket "my-bucket" on branch br-main-branch-123456',
       },
     );
+
+    // The presign request hit the unified `/presign` endpoint with the
+    // upload discriminator in the body.
+    const presigned = JSON.parse(readFileSync(presignSink, 'utf8'));
+    expect(presigned.operation).toEqual('upload');
 
     const captured = JSON.parse(readFileSync(sink, 'utf8'));
     // The exact file bytes reached the presigned URL...

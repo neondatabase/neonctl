@@ -101,8 +101,13 @@ export type BucketObjectsDeletePrefixResponse = {
   deleted: number;
 };
 
-/** Request body of the presign-upload endpoint. */
-export type PresignUploadRequest = {
+/** Request body of the unified presign endpoint. */
+export type PresignRequest = {
+  /**
+   * The operation to presign. neonctl only ever uploads, so this is always
+   * `upload`; the backend also supports `download`, which is API-only.
+   */
+  operation: 'upload';
   /** The Content-Type to sign into the upload (echoed back in `headers`). */
   content_type?: string;
   /** How long the presigned URL stays valid. Server default applies when omitted. */
@@ -110,10 +115,10 @@ export type PresignUploadRequest = {
 };
 
 /**
- * Response body of the presign-upload endpoint. Mirrors B's
- * `PresignUploadResponse` schema.
+ * Response body of the unified presign endpoint. Mirrors B's `PresignResponse`
+ * schema.
  */
-export type PresignUploadResponse = {
+export type PresignResponse = {
   /** The presigned URL to PUT the object bytes to. */
   url: string;
   /** Always `PUT` for the single-PUT upload path. */
@@ -341,7 +346,11 @@ export const deleteProjectBranchBucketObjectsByPrefix = (
  * The object key may contain `/`; it is percent-encoded into a single path
  * segment so nested keys are routed to the `{object_key}` parameter.
  *
- * @request POST /projects/{project_id}/branches/{branch_id}/buckets/{bucket_name}/objects/{object_key}/presign-upload
+ * This targets the unified presign endpoint, passing `operation: "upload"` to
+ * request a presigned PUT. (The same endpoint also serves `download`, but that
+ * path is API-only and has no neonctl command.)
+ *
+ * @request POST /projects/{project_id}/branches/{branch_id}/buckets/{bucket_name}/objects/{object_key}/presign
  */
 export const presignUpload = (
   apiClient: ApiClient,
@@ -360,18 +369,18 @@ export const presignUpload = (
     contentType?: string;
     expiresInSeconds?: number;
   },
-): Promise<ApiResponse<PresignUploadResponse>> => {
-  const body: PresignUploadRequest = {};
+): Promise<ApiResponse<PresignResponse>> => {
+  const body: PresignRequest = { operation: 'upload' };
   if (contentType !== undefined) {
     body.content_type = contentType;
   }
   if (expiresInSeconds !== undefined) {
     body.expires_in_seconds = expiresInSeconds;
   }
-  return apiClient.request<PresignUploadResponse>({
+  return apiClient.request<PresignResponse>({
     path: `${bucketPath(projectId, branchId, bucketName)}/objects/${encodeURIComponent(
       objectKey,
-    )}/presign-upload`,
+    )}/presign`,
     method: 'POST',
     body,
     format: 'json',
