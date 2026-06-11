@@ -144,9 +144,6 @@ class FakeNeonApi implements NeonApi {
   async listBranchFunctions(): Promise<NeonFunctionSnapshot[]> {
     return [];
   }
-  async createBranchFunction(): Promise<NeonFunctionSnapshot> {
-    throw new Error('not implemented');
-  }
   async deleteBranchFunction(): Promise<void> {
     throw new Error('not implemented');
   }
