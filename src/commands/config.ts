@@ -33,6 +33,7 @@ const neonctlBundler: FunctionBundler = async (fn) =>
 
 const INSPECT_FIELDS = ['project', 'branch', 'config'] as const;
 const APPLIED_FIELDS = ['action', 'kind', 'identifier', 'details'] as const;
+const FUNCTION_FIELDS = ['slug', 'invocation_url'] as const;
 const CONFLICT_FIELDS = [
   'identifier',
   'field',
@@ -275,6 +276,23 @@ const reportPushResult = (
     reason: conflict.reason,
   }));
 
+  // Deployed functions carry their invocation URL in the change details — pull them into a
+  // dedicated table so users can see where to call each function without digging through the
+  // raw details blob. Keyed by slug so a function never shows twice.
+  const functionUrlBySlug = new Map<string, string>();
+  for (const change of result.applied) {
+    if (change.action === 'noop') continue;
+    const slug = change.details?.slug;
+    const invocationUrl = change.details?.invocationUrl;
+    if (typeof slug === 'string' && typeof invocationUrl === 'string') {
+      functionUrlBySlug.set(slug, invocationUrl);
+    }
+  }
+  const functions = [...functionUrlBySlug].map(([slug, invocation_url]) => ({
+    slug,
+    invocation_url,
+  }));
+
   if (changes.length === 0 && conflicts.length === 0) {
     log.info(
       `No changes — branch ${result.branchName} already matches the policy.`,
@@ -287,6 +305,12 @@ const reportPushResult = (
     out.write(changes, {
       fields: APPLIED_FIELDS,
       title: mode === 'plan' ? 'Planned changes' : 'Applied changes',
+    });
+  }
+  if (functions.length > 0) {
+    out.write(functions, {
+      fields: FUNCTION_FIELDS,
+      title: mode === 'plan' ? 'Function URLs (after apply)' : 'Function URLs',
     });
   }
   if (conflicts.length > 0) {

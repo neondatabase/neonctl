@@ -47,6 +47,8 @@ class FakeNeonApi implements NeonApi {
     slug: string;
     input: DeployFunctionInput;
   }[] = [];
+  /** Functions materialized by a deploy, keyed by slug (Neon creates on first deploy). */
+  private readonly functions = new Map<string, NeonFunctionSnapshot>();
 
   async listProjects(): Promise<NeonProjectSnapshot[]> {
     throw new Error('not implemented');
@@ -177,7 +179,7 @@ class FakeNeonApi implements NeonApi {
   }
 
   async listBranchFunctions(): Promise<NeonFunctionSnapshot[]> {
-    return [];
+    return [...this.functions.values()];
   }
 
   async deleteBranchFunction(): Promise<void> {
@@ -191,6 +193,16 @@ class FakeNeonApi implements NeonApi {
     input: DeployFunctionInput,
   ): Promise<NeonFunctionDeploymentSnapshot> {
     this.deployBranchFunctionCalls.push({ projectId, branchId, slug, input });
+    // Neon creates the function on its first deployment — mirror that so a later
+    // `listBranchFunctions` (used to resolve the invocation URL) sees it.
+    if (!this.functions.has(slug)) {
+      this.functions.set(slug, {
+        id: `fn-${slug}`,
+        slug,
+        name: slug,
+        invocationUrl: `https://${branchId}.fake.neon.tech/functions/${slug}`,
+      });
+    }
     return { id: 1, status: 'completed' };
   }
 
@@ -448,6 +460,32 @@ describe('config commands', () => {
     expect(api.deployBranchFunctionCalls[0].input.environment).toEqual({
       resendApiKey: 're_from_file',
     });
+  });
+
+  it('apply surfaces each deployed function invocation URL in the output', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+
+    const source = join(cwd, 'hello.ts');
+    writeFileSync(
+      source,
+      "export default { fetch() { return new Response('ok'); } };\n",
+    );
+    const config = writeConfig(
+      `export default { preview: { functions: { hello: { name: 'Hello', source: ${JSON.stringify(
+        source,
+      )} } } } };\n`,
+    );
+
+    // Human-readable (table) output so we exercise the dedicated Function URLs table; the
+    // JSON path already carries the URL inside the raw applied-change details.
+    await applyCmd({ ...baseProps(api, stream), output: 'table', config });
+
+    const out = read();
+    expect(out).toContain('Function URLs');
+    expect(out).toContain(
+      `https://${BRANCH_ID}.fake.neon.tech/functions/hello`,
+    );
   });
 });
 
