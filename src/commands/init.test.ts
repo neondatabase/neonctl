@@ -10,6 +10,7 @@ vi.mock('../analytics.js', () => ({
 // Mock neon-init
 vi.mock('neon-init', () => ({
   init: vi.fn().mockResolvedValue(undefined),
+  interactiveInit: vi.fn().mockResolvedValue(undefined),
   orchestrate: vi.fn().mockResolvedValue({
     phase: 'setup',
     status: 'complete',
@@ -30,32 +31,42 @@ describe('init', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Interactive mode (v1) — no --json, no --agent
+  // Interactive mode — no --json, no --agent
   // -------------------------------------------------------------------------
 
-  test('should call init() with no options when agent is omitted', async () => {
+  test('should call interactiveInit() when no flags', async () => {
     const { handler } = await import('./init.js');
-    const { init } = await import('neon-init');
+    const { interactiveInit } = await import('neon-init');
 
     await handler({});
 
-    expect(init).toHaveBeenCalledTimes(1);
-    expect(init).toHaveBeenCalledWith();
+    expect(interactiveInit).toHaveBeenCalledTimes(1);
+    expect(interactiveInit).toHaveBeenCalledWith({ preview: undefined });
   });
 
-  test('should log error and exit 1 when --agent is invalid (interactive mode)', async () => {
+  test('should pass --preview to interactiveInit()', async () => {
     const { handler } = await import('./init.js');
-    const { init, orchestrate } = await import('neon-init');
+    const { interactiveInit } = await import('neon-init');
+
+    await handler({ preview: true });
+
+    expect(interactiveInit).toHaveBeenCalledWith({ preview: true });
+  });
+
+  test('should use orchestrate when --agent is provided (not interactive)', async () => {
+    const { handler } = await import('./init.js');
+    const { interactiveInit, orchestrate } = await import('neon-init');
 
     await handler({ agent: 'invalid-agent' });
 
-    // When --agent is provided, jsonMode is true, so orchestrate is called with the raw agent string
+    // When --agent is provided, jsonMode is true, so orchestrate is called
     expect(orchestrate).toHaveBeenCalledWith({
       agent: 'invalid-agent',
       skipNeonAuth: undefined,
       skipMigrations: undefined,
+      preview: undefined,
     });
-    expect(init).not.toHaveBeenCalled();
+    expect(interactiveInit).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------
@@ -73,6 +84,7 @@ describe('init', () => {
       agent: undefined,
       skipNeonAuth: undefined,
       skipMigrations: undefined,
+      preview: undefined,
     });
   });
 
@@ -87,10 +99,11 @@ describe('init', () => {
       agent: 'cursor',
       skipNeonAuth: undefined,
       skipMigrations: undefined,
+      preview: undefined,
     });
   });
 
-  test('should pass skip flags to orchestrate()', async () => {
+  test('should pass skip flags and preview to orchestrate()', async () => {
     const { handler } = await import('./init.js');
     const { orchestrate } = await import('neon-init');
 
@@ -98,12 +111,14 @@ describe('init', () => {
       json: true,
       skipNeonAuth: true,
       skipMigrations: true,
+      preview: true,
     });
 
     expect(orchestrate).toHaveBeenCalledWith({
       agent: undefined,
       skipNeonAuth: true,
       skipMigrations: true,
+      preview: true,
     });
   });
 
@@ -141,12 +156,12 @@ describe('init', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  test('should exit 1 when init() throws in interactive mode', async () => {
+  test('should exit 1 when interactiveInit() throws', async () => {
     const { handler } = await import('./init.js');
-    const { init } = await import('neon-init');
+    const { interactiveInit } = await import('neon-init');
     const { sendError } = await import('../analytics.js');
 
-    vi.mocked(init).mockRejectedValueOnce(new Error('boom'));
+    vi.mocked(interactiveInit).mockRejectedValueOnce(new Error('boom'));
 
     await handler({});
 

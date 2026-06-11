@@ -1,4 +1,4 @@
-import { init, orchestrate } from 'neon-init';
+import { interactiveInit, orchestrate } from 'neon-init';
 import type { OrchestratorOptions } from 'neon-init';
 import yargs from 'yargs';
 import { sendError } from '../analytics.js';
@@ -32,6 +32,12 @@ export const builder = (yargs: yargs.Argv) =>
       default: false,
       describe: 'Skip the migrations phase.',
     })
+    .option('preview', {
+      type: 'boolean',
+      default: false,
+      describe:
+        'Enable preview features (e.g. project bootstrapping from templates).',
+    })
     .strict(false);
 
 export const handler = async (argv: {
@@ -39,6 +45,7 @@ export const handler = async (argv: {
   json?: boolean;
   skipNeonAuth?: boolean;
   skipMigrations?: boolean;
+  preview?: boolean;
 }) => {
   const agentArg = argv.agent;
   const jsonMode = argv.json === true || agentArg !== undefined;
@@ -50,6 +57,7 @@ export const handler = async (argv: {
         agent: agentArg,
         skipNeonAuth: argv.skipNeonAuth,
         skipMigrations: argv.skipMigrations,
+        preview: argv.preview,
       };
       const result = await orchestrate(options);
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
@@ -61,9 +69,9 @@ export const handler = async (argv: {
     return;
   }
 
-  // v1: interactive mode (agentArg is always undefined here since --agent triggers jsonMode)
+  // v2: interactive mode with preview support
   try {
-    await init();
+    await interactiveInit({ preview: argv.preview });
   } catch {
     const exitError = new Error(`failed to run neon-init`);
     sendError(exitError, 'NEON_INIT_FAILED');
