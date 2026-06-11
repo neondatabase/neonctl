@@ -201,6 +201,22 @@ active deployment
 "
 `;
 
+exports[`functions > get (table) with only an active deployment (old server) 1`] = `
+"function
+┌────────────┬────────────┬────────────────────────────────────────┬──────────────────────┐
+│ Slug       │ Name       │ Invocation Url                         │ Created At           │
+├────────────┼────────────┼────────────────────────────────────────┼──────────────────────┤
+│ activeonly │ Activeonly │ https://activeonly.functions.neon.tech │ 2026-06-03T00:00:00Z │
+└────────────┴────────────┴────────────────────────────────────────┴──────────────────────┘
+active deployment
+┌────┬───────────┬──────────┬────────────┬──────────────────────┐
+│ Id │ Status    │ Runtime  │ Memory Mib │ Created At           │
+├────┼───────────┼──────────┼────────────┼──────────────────────┤
+│ 1  │ completed │ nodejs24 │ 256        │ 2026-06-03T00:00:00Z │
+└────┴───────────┴──────────┴────────────┴──────────────────────┘
+"
+`;
+
 exports[`functions > get (yaml) -E is a no-op 1`] = `
 "id: fn-envnames
 slug: envnames
