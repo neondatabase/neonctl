@@ -47,10 +47,26 @@ const FIXTURE: Record<string, FixtureFile> = {
 const COMMIT_SHA = 'commit0000000000000000000000000000000000';
 const TREE_SHA = 'tree00000000000000000000000000000000000000';
 
+const MANIFEST_YAML = `templates:
+  - id: hono
+    title: "Hono API (Drizzle, Neon Postgres) on Neon Functions"
+    description: "A Hono API using Drizzle ORM and Neon Postgres, ready to deploy as a Neon Function."
+    source:
+      owner: neondatabase
+      repo: examples
+      ref: main
+      subdir: with-hono
+`;
+
 // A real local HTTP server standing in for the GitHub API + raw host, so the
 // whole download/extract path runs end to end with no mocking of our own code.
 const startGithubFixtureServer = (): Promise<Server> => {
   const app = express();
+
+  // Serve the bootstrap manifest
+  app.get('/manifest/bootstrap.yaml', (_req, res) => {
+    res.type('text/yaml').send(MANIFEST_YAML);
+  });
 
   app.get('/repos/:owner/:repo/commits/:ref', (_req, res) => {
     res.json({ sha: COMMIT_SHA, commit: { tree: { sha: TREE_SHA } } });
@@ -109,6 +125,7 @@ const runBootstrap = (
           CI: 'true',
           NEON_BOOTSTRAP_GITHUB_API: base,
           NEON_BOOTSTRAP_GITHUB_RAW: `${base}/raw`,
+          NEON_BOOTSTRAP_MANIFEST_URL: `${base}/manifest/bootstrap.yaml`,
         },
       },
     );

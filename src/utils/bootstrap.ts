@@ -1,4 +1,5 @@
 import axios, { isAxiosError } from 'axios';
+import YAML from 'yaml';
 
 import { log } from '../log.js';
 
@@ -26,7 +27,8 @@ export type BootstrapTemplate = {
   };
 };
 
-export const TEMPLATES: BootstrapTemplate[] = [
+/** Hardcoded fallback used when the remote manifest cannot be fetched. */
+export const FALLBACK_TEMPLATES: BootstrapTemplate[] = [
   {
     id: 'hono',
     title: 'Hono API (Drizzle, Neon Postgres) on Neon Functions',
@@ -41,10 +43,84 @@ export const TEMPLATES: BootstrapTemplate[] = [
   },
 ];
 
-export const templateIds = (): string => TEMPLATES.map((t) => t.id).join(', ');
+const manifestUrl = (): string =>
+  process.env.NEON_BOOTSTRAP_MANIFEST_URL ??
+  `${githubRawBase()}/neondatabase/examples/main/bootstrap.yaml`;
 
-export const findTemplate = (id: string): BootstrapTemplate | undefined =>
-  TEMPLATES.find((t) => t.id === id);
+const parseManifest = (text: string): BootstrapTemplate[] => {
+  const data: unknown = YAML.parse(text);
+  if (!isRecord(data) || !Array.isArray(data.templates)) {
+    throw new Error('Invalid bootstrap manifest: missing "templates" array.');
+  }
+  const templates: BootstrapTemplate[] = [];
+  for (const item of data.templates) {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== 'string' ||
+      typeof item.title !== 'string' ||
+      typeof item.description !== 'string' ||
+      !isRecord(item.source) ||
+      typeof item.source.owner !== 'string' ||
+      typeof item.source.repo !== 'string' ||
+      typeof item.source.ref !== 'string' ||
+      typeof item.source.subdir !== 'string'
+    ) {
+      continue;
+    }
+    templates.push({
+      id: item.id,
+      title: item.title,
+      description: item.description,
+      source: {
+        owner: item.source.owner,
+        repo: item.source.repo,
+        ref: item.source.ref,
+        subdir: item.source.subdir,
+      },
+    });
+  }
+  return templates;
+};
+
+/**
+ * Fetch the template manifest from the remote `bootstrap.yaml` in the
+ * neondatabase/examples repo. Falls back to the hardcoded list on any error
+ * so the command never fails just because GitHub is unreachable.
+ */
+export const fetchTemplates = async (): Promise<BootstrapTemplate[]> => {
+  const url = manifestUrl();
+  try {
+    const res = await axios.get<string>(url, {
+      responseType: 'text',
+      headers: rawHeaders(),
+      timeout: 10_000,
+    });
+    const templates = parseManifest(res.data);
+    if (templates.length === 0) {
+      log.warning(
+        'Remote bootstrap manifest at %s contained no templates; using built-in defaults.',
+        url,
+      );
+      return FALLBACK_TEMPLATES;
+    }
+    return templates;
+  } catch (err) {
+    log.debug(
+      'bootstrap: failed to fetch manifest from %s: %s — using built-in defaults.',
+      url,
+      err instanceof Error ? err.message : String(err),
+    );
+    return FALLBACK_TEMPLATES;
+  }
+};
+
+export const templateIds = (templates: BootstrapTemplate[]): string =>
+  templates.map((t) => t.id).join(', ');
+
+export const findTemplate = (
+  templates: BootstrapTemplate[],
+  id: string,
+): BootstrapTemplate | undefined => templates.find((t) => t.id === id);
 
 /** A single file or symlink to materialize, resolved from the repo tree. */
 export type TemplateEntry =

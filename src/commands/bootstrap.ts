@@ -21,9 +21,9 @@ import {
   BootstrapTemplate,
   fetchFileBytes,
   fetchSymlinkTarget,
+  fetchTemplates,
   findTemplate,
   resolveTemplate,
-  TEMPLATES,
   templateIds,
 } from '../utils/bootstrap.js';
 
@@ -31,6 +31,7 @@ type BootstrapProps = CommonProps & {
   directory?: string;
   template?: string;
   force: boolean;
+  list: boolean;
 };
 
 // The directory positional is optional: omitting it in an interactive terminal
@@ -48,8 +49,14 @@ export const builder = (argv: yargs.Argv) =>
     })
     .options({
       template: {
-        describe: `Template to use (skips the interactive picker). One of: ${templateIds()}.`,
+        describe:
+          'Template to use (skips the interactive picker). Run with --list to see available templates.',
         type: 'string',
+      },
+      list: {
+        describe: 'List available templates and exit.',
+        type: 'boolean',
+        default: false,
       },
       force: {
         describe:
@@ -69,8 +76,17 @@ export const builder = (argv: yargs.Argv) =>
     .strict();
 
 export const handler = async (props: BootstrapProps): Promise<void> => {
+  const templates = await fetchTemplates();
+
+  if (props.list) {
+    for (const t of templates) {
+      log.info('%s — %s', t.id, t.description);
+    }
+    return;
+  }
+
   const interactive = Boolean(process.stdout.isTTY) && !isCi();
-  const template = await resolveSelectedTemplate(props, interactive);
+  const template = await resolveSelectedTemplate(props, interactive, templates);
   const targetDir = await resolveTargetDir(props, interactive, template);
   ensureTargetUsable(targetDir, props.force);
   await scaffold(template, targetDir);
@@ -80,12 +96,13 @@ export const handler = async (props: BootstrapProps): Promise<void> => {
 const resolveSelectedTemplate = async (
   props: BootstrapProps,
   interactive: boolean,
+  templates: BootstrapTemplate[],
 ): Promise<BootstrapTemplate> => {
   if (props.template) {
-    const template = findTemplate(props.template);
+    const template = findTemplate(templates, props.template);
     if (!template) {
       throw new Error(
-        `Unknown template "${props.template}". Available templates: ${templateIds()}.`,
+        `Unknown template "${props.template}". Available templates: ${templateIds(templates)}.`,
       );
     }
     return template;
@@ -93,7 +110,7 @@ const resolveSelectedTemplate = async (
 
   if (!interactive) {
     throw new Error(
-      `No template selected. Re-run in an interactive terminal to pick one, or pass --template <id>. Available templates: ${templateIds()}.`,
+      `No template selected. Re-run in an interactive terminal to pick one, or pass --template <id>. Available templates: ${templateIds(templates)}.`,
     );
   }
 
@@ -102,14 +119,14 @@ const resolveSelectedTemplate = async (
     type: 'select',
     name: 'id',
     message: 'Which template would you like to use?',
-    choices: TEMPLATES.map((template) => ({
+    choices: templates.map((template) => ({
       title: template.title,
       description: template.description,
       value: template.id,
     })),
     initial: 0,
   });
-  const template = findTemplate(id);
+  const template = findTemplate(templates, id);
   if (!template) {
     throw new Error('No template selected.');
   }
