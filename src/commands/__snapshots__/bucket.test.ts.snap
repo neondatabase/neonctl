@@ -164,6 +164,24 @@ is_truncated: false
 "
 `;
 
+exports[`bucket > object put rejects a file over the 100 MB limit before any HTTP 1`] = `""`;
+
+exports[`bucket > object put requires --file 1`] = `""`;
+
+exports[`bucket > object put streams the file to the presigned URL with the returned headers 1`] = `""`;
+
+exports[`bucket > object put surfaces a clean error when the presigned PUT fails 1`] = `""`;
+
+exports[`bucket > object put surfaces a clean status error when presign fails without a message body 1`] = `""`;
+
+exports[`bucket > object put surfaces the server message when presign fails 1`] = `""`;
+
+exports[`bucket > object put surfaces the server message when presign fails with 403 1`] = `""`;
+
+exports[`bucket > object put without a bucket is rejected client-side 1`] = `""`;
+
+exports[`bucket > object put without a key is rejected client-side 1`] = `""`;
+
 exports[`bucket > object rm alias 1`] = `""`;
 
 exports[`bucket > rm alias deletes a bucket 1`] = `""`;
