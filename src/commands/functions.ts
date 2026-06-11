@@ -10,7 +10,7 @@ import { BranchScopeProps } from '../types.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { zipBundle } from '../utils/zip.js';
 import { bundleEntry } from '../utils/esbuild.js';
-import { writer } from '../writer.js';
+import { writer, WriteOutConfig } from '../writer.js';
 import {
   createDeployment,
   deleteFunction,
@@ -33,6 +33,16 @@ const DEPLOYMENT_FIELDS = [
   'memory_mib',
   'created_at',
 ] as const;
+
+// Puts the build failure reason on a new line inside the Status cell.
+const DEPLOYMENT_RENDER_COLUMNS: NonNullable<
+  WriteOutConfig<NeonFunctionDeployment>['renderColumns']
+> = {
+  status: (dep) =>
+    dep.status === 'failed' && dep.error
+      ? `${dep.status}\n\nreason: ${dep.error}`
+      : dep.status,
+};
 
 const SLUG_PATTERN = /^[a-z0-9]{1,20}$/;
 const SLUG_HELP =
@@ -331,6 +341,7 @@ const get = async (props: BranchScopeProps & { slug: string }) => {
     out.write(fn.active_deployment, {
       fields: DEPLOYMENT_FIELDS,
       title: 'active deployment',
+      renderColumns: DEPLOYMENT_RENDER_COLUMNS,
     });
   }
   out.end();

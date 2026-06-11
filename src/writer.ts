@@ -10,7 +10,7 @@ type ExtractFromArray<T> = T extends (infer R)[] ? R : T;
 type OnlyStrings<T> = T extends string ? T : never;
 type FullExtract<T> = OnlyStrings<keyof ExtractFromArray<T>>;
 
-type WriteOutConfig<T> = {
+export type WriteOutConfig<T> = {
   // Fields to output in human-readable format
   fields: readonly FullExtract<T>[];
   // Title of the output

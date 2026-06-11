@@ -122,6 +122,57 @@ describe('functions', () => {
     );
   });
 
+  test('get (table) shows the build failure reason', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'brokenfunc',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get (yaml) includes the build failure reason', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'brokenfunc',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
+
+  test('get (table) shows plain failed status when there is no error', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'failednoerr',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
   test('deploy --wait until completed', async ({ testCliCommand }) => {
     await testCliCommand(
       [
