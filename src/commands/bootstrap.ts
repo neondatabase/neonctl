@@ -31,7 +31,7 @@ type BootstrapProps = CommonProps & {
   directory?: string;
   template?: string;
   force: boolean;
-  list: boolean;
+  listTemplates: boolean;
 };
 
 // The directory positional is optional: omitting it in an interactive terminal
@@ -50,10 +50,11 @@ export const builder = (argv: yargs.Argv) =>
     .options({
       template: {
         describe:
-          'Template to use (skips the interactive picker). Run with --list to see available templates.',
+          'Template to use (skips the interactive picker). Run with --list-templates to see available templates.',
         type: 'string',
       },
-      list: {
+      'list-templates': {
+        alias: ['list', 'ls'],
         describe: 'List available templates and exit.',
         type: 'boolean',
         default: false,
@@ -78,7 +79,7 @@ export const builder = (argv: yargs.Argv) =>
 export const handler = async (props: BootstrapProps): Promise<void> => {
   const templates = await fetchTemplates();
 
-  if (props.list) {
+  if (props.listTemplates) {
     for (const t of templates) {
       log.info('%s — %s', t.id, t.description);
     }
