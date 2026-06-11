@@ -430,14 +430,25 @@ const runPostScaffoldSteps = async (
     await initGitRepo(targetDir);
   }
 
-  if (
-    props.link &&
-    (await confirm('Link this project to a Neon project now? (runs neon link)'))
-  ) {
-    await runNeonLink(props, targetDir);
-    // link prints its own summary (and pulls env), so end with just the run hint.
-    printNextSteps(targetDir, pm, { installed, suggestLink: false });
-    return;
+  // `neon link` pulls env vars, which loads this project's neon.ts — and that
+  // evaluation needs the dependencies installed. So when deps weren't installed
+  // and the scaffold ships a neon.ts, skip the link prompt (it would just fail)
+  // and tell the user how to finish by hand.
+  if (props.link) {
+    if (!installed && hasNeonConfig(targetDir)) {
+      log.info(
+        "Skipping the Neon link step: `neon link` reads this project's neon.ts " +
+          `to pull env vars, which needs its dependencies. Run \`${pm} install\`, ` +
+          'then `neon link`.',
+      );
+    } else if (
+      await confirm('Link this project to a Neon project now? (runs neon link)')
+    ) {
+      await runNeonLink(props, targetDir);
+      // link prints its own summary (and pulls env), so end with just the run hint.
+      printNextSteps(targetDir, pm, { installed, suggestLink: false });
+      return;
+    }
   }
 
   printNextSteps(targetDir, pm, { installed, suggestLink: true });
@@ -469,6 +480,13 @@ const runDefaultSteps = async (
 };
 
 const isGitRepo = (dir: string): boolean => existsSync(join(dir, '.git'));
+
+// Config filenames the runtime loads (mirrors @neondatabase/config). A scaffold
+// that ships one makes `neon link`'s env pull evaluate it — which needs deps.
+const NEON_CONFIG_FILENAMES = ['neon.ts', 'neon.mts', 'neon.js', 'neon.mjs'];
+
+const hasNeonConfig = (dir: string): boolean =>
+  NEON_CONFIG_FILENAMES.some((name) => existsSync(join(dir, name)));
 
 /**
  * Initialize a git repository in the scaffolded directory. Just `git init` — we

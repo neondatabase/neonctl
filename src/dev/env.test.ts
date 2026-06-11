@@ -22,7 +22,11 @@ import type {
   NeonRoleSnapshot,
 } from '@neondatabase/config';
 
-import { DevEnvMismatchError, resolveDevEnv } from './env.js';
+import {
+  DevEnvMismatchError,
+  resolveDevEnv,
+  resolveNeonEnvVars,
+} from './env.js';
 
 const PROJECT_ID = 'patient-art-12345';
 const BRANCH_ID = 'br-main-00000001';
@@ -454,6 +458,26 @@ describe('resolveDevEnv', () => {
     expect(result.vars.DATABASE_URL).toBeDefined();
     expect(api.listBranchFunctionsCalled).toBe(false);
   });
+
+  it('neon.ts importing an uninstalled package -> a clear "did you run npm install" error', async () => {
+    // A neon.ts that imports a package which isn't installed (no node_modules in
+    // the temp dir) fails to load with a cryptic "Cannot find module". We expect
+    // that turned into an actionable "did you run npm install" message — this is
+    // exactly what `neon link`'s env pull hits in a freshly-scaffolded project.
+    writeFileSync(
+      join(cwd, 'neon.ts'),
+      "import 'neon-bootstrap-missing-dependency-xyz';\nexport default { auth: {} };\n",
+    );
+
+    await expect(
+      resolveNeonEnvVars({
+        cwd,
+        projectId: PROJECT_ID,
+        branchId: BRANCH_ID,
+        api: new FakeNeonApi(),
+      }),
+    ).rejects.toThrow(/npm install/i);
+  }, 30_000);
 
   it('tier 1 functions + auth mismatch: a missing secret-bearing service still hard-stops', async () => {
     // Stripping functions must NOT weaken the guard for services that DO carry secrets: a
