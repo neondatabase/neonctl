@@ -15,14 +15,14 @@ importers:
         specifier: 2.7.1
         version: 2.7.1
       '@neondatabase/config':
-        specifier: 0.4.1
-        version: 0.4.1
+        specifier: 0.4.2
+        version: 0.4.2
       '@neondatabase/config-runtime':
-        specifier: 0.4.1
-        version: 0.4.1
+        specifier: 0.4.2
+        version: 0.4.2
       '@neondatabase/env':
-        specifier: 0.3.1
-        version: 0.3.1
+        specifier: 0.3.2
+        version: 0.3.2
       '@segment/analytics-node':
         specifier: 1.3.0
         version: 1.3.0
@@ -884,16 +884,16 @@ packages:
   '@neondatabase/api-client@2.7.1':
     resolution: {integrity: sha512-hEYOJ89xIa2eEXBu9HRKYTJc9lrmszhNc0SIxzJvNE/3Av4xK7vkXWQ3LWy0DTTFY4Kn6wfM2wAjRIjf/jOu6w==}
 
-  '@neondatabase/config-runtime@0.4.1':
-    resolution: {integrity: sha512-vdiO2tNLwuejCp300nDcWDYztG0sMuAd0Fr+JiFLzJO0KVKIAyloOCpv7HPtfrdFyPadHKUSTZyG3rew35DS7w==}
+  '@neondatabase/config-runtime@0.4.2':
+    resolution: {integrity: sha512-WFD7iHAB0L5l6g32BZ94jJMssSdMZ8ZSrPN1cSYqFDYp/EelHE/DR/KGXs7r3eWfsBc3Qq8kKnB/3hkVE5C2cA==}
     engines: {node: '>=22'}
 
-  '@neondatabase/config@0.4.1':
-    resolution: {integrity: sha512-PpB5dmBYmr+6O1uo5XIQeoZfXZvYz/NlLBwrPiWGZJQc+/NcXDHFrKG7LvDpoIsFurxF7hwd/HX3royCUIGN5g==}
+  '@neondatabase/config@0.4.2':
+    resolution: {integrity: sha512-hZEcPcE5KOaovu4LssHLPESgsJF61aV2xmrA/e78VXfoI8CS4xU3dzeNil2cP1KknjIqzwN7BWyiyqKIn2daxQ==}
     engines: {node: '>=22'}
 
-  '@neondatabase/env@0.3.1':
-    resolution: {integrity: sha512-r0u1b5JH3ML1rXPSG4myI+q6eaM/GVKhwDhpBxrdv5y/sDOQRw2M7BsOUHQoDMaMp/V0MdFC5hNuTLUy7oIXiQ==}
+  '@neondatabase/env@0.3.2':
+    resolution: {integrity: sha512-Jsgc+vcyXhkXt4KFPj3C+qvAlDD4wkZT5OTICj6hNiHLLSKOjJkxZQGOQOCHMBgfP2L41m+T2vKQkomG0XL45g==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -3882,7 +3882,7 @@ snapshots:
       '@types/node': 20.5.1
       chalk: 4.1.2
       cosmiconfig: 8.3.6(typescript@5.8.3)
-      cosmiconfig-typescript-loader: 4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@20.5.1)(typescript@5.8.3))(typescript@5.8.3)
+      cosmiconfig-typescript-loader: 4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@18.19.41)(typescript@5.8.3))(typescript@5.8.3)
       lodash.isplainobject: 4.0.6
       lodash.merge: 4.6.2
       lodash.uniq: 4.5.0
@@ -4311,16 +4311,16 @@ snapshots:
       - debug
       - supports-color
 
-  '@neondatabase/config-runtime@0.4.1':
+  '@neondatabase/config-runtime@0.4.2':
     dependencies:
-      '@neondatabase/config': 0.4.1
+      '@neondatabase/config': 0.4.2
       esbuild: 0.25.12
       fflate: 0.8.3
     transitivePeerDependencies:
       - debug
       - supports-color
 
-  '@neondatabase/config@0.4.1':
+  '@neondatabase/config@0.4.2':
     dependencies:
       '@neondatabase/api-client': 2.7.1
       jiti: 2.7.0
@@ -4329,9 +4329,9 @@ snapshots:
       - debug
       - supports-color
 
-  '@neondatabase/env@0.3.1':
+  '@neondatabase/env@0.3.2':
     dependencies:
-      '@neondatabase/config': 0.4.1
+      '@neondatabase/config': 0.4.2
       yargs: 18.0.0
       zod: 4.4.3
     transitivePeerDependencies:
@@ -5225,7 +5225,7 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  cosmiconfig-typescript-loader@4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@20.5.1)(typescript@5.8.3))(typescript@5.8.3):
+  cosmiconfig-typescript-loader@4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@18.19.41)(typescript@5.8.3))(typescript@5.8.3):
     dependencies:
       '@types/node': 20.5.1
       cosmiconfig: 8.3.6(typescript@5.8.3)
