@@ -10,6 +10,7 @@ status: building
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://entryfunc.functions.neon.tech
 "
 `;
 
@@ -19,6 +20,7 @@ status: building
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://envfunc.functions.neon.tech
 "
 `;
 
@@ -28,6 +30,7 @@ status: building
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://nowaitfunc.functions.neon.tech
 "
 `;
 
@@ -37,6 +40,7 @@ status: failed
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://failfunc.functions.neon.tech
 "
 `;
 
@@ -46,6 +50,7 @@ status: completed
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://newfunc.functions.neon.tech
 "
 `;
 
@@ -55,6 +60,7 @@ status: completed
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://flaky.functions.neon.tech
 "
 `;
 
@@ -68,6 +74,7 @@ status: building
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://stuckbuild.functions.neon.tech
 "
 `;
 
@@ -77,6 +84,7 @@ status: completed
 memory_mib: 256
 runtime: nodejs24
 created_at: 2026-06-03T00:00:00Z
+invocation_url: https://redeploy.functions.neon.tech
 "
 `;
 
