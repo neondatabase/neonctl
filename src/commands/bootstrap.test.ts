@@ -1,5 +1,6 @@
 import { fork } from 'node:child_process';
 import {
+  existsSync,
   lstatSync,
   mkdtempSync,
   readFileSync,
@@ -144,6 +145,16 @@ const runBootstrap = (
   });
 };
 
+// `--agent` writes a single JSON state-machine object to stdout (logs go to
+// stderr), so the structured output stays machine-parseable.
+const parseAgentOutput = (stdout: string): Record<string, unknown> => {
+  const parsed: unknown = JSON.parse(stdout.trim());
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error(`Expected a JSON object, got: ${stdout}`);
+  }
+  return parsed as Record<string, unknown>;
+};
+
 describe('bootstrap', () => {
   let server: Server;
   let dest: string;
@@ -225,5 +236,115 @@ describe('bootstrap', () => {
     expect(code, stderr).toBe(0);
     expect(stdout).toContain('hono');
     expect(stdout).toContain('A Hono API using Drizzle ORM and Neon Postgres');
+  });
+
+  test('--default scaffolds and inits git without prompting', async () => {
+    // --no-install keeps the test offline/fast; git init still runs.
+    const { code, stderr } = await runBootstrap(server, [
+      dest,
+      '--default',
+      '--no-install',
+      '--force',
+    ]);
+    expect(code, stderr).toBe(0);
+
+    // The default template was scaffolded with no template/dir prompt.
+    expect(readFileSync(join(dest, 'package.json'), 'utf8')).toBe(
+      '{\n  "name": "with-hono"\n}\n',
+    );
+    // git init ran as part of the quick start.
+    expect(existsSync(join(dest, '.git'))).toBe(true);
+  });
+
+  describe('--agent (JSON state machine)', () => {
+    test('asks for a template when none is given', async () => {
+      const { code, stdout, stderr } = await runBootstrap(server, ['--agent']);
+      expect(code, stderr).toBe(0);
+      const res = parseAgentOutput(stdout);
+      expect(res.status).toBe('needs_template');
+      // Options come from the remote manifest.
+      expect(res.options).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: 'hono' })]),
+      );
+      expect(res.next_command_template).toContain('--template <template_id>');
+    });
+
+    test('asks for a directory when only the template is given', async () => {
+      const { code, stdout, stderr } = await runBootstrap(server, [
+        '--agent',
+        '--template',
+        'hono',
+      ]);
+      expect(code, stderr).toBe(0);
+      const res = parseAgentOutput(stdout);
+      expect(res.status).toBe('needs_directory');
+      expect(res.next_command_template).toContain('<directory>');
+      expect(res.next_command_template).toContain('--template hono');
+    });
+
+    test('scaffolds and returns the install + git + link next steps', async () => {
+      const { code, stdout, stderr } = await runBootstrap(server, [
+        '--agent',
+        dest,
+        '--template',
+        'hono',
+        '--force',
+      ]);
+      expect(code, stderr).toBe(0);
+      const res = parseAgentOutput(stdout);
+      expect(res.status).toBe('scaffolded');
+      expect(res.template).toEqual({
+        id: 'hono',
+        title: expect.any(String),
+      });
+      expect(res.files_written).toBeGreaterThan(0);
+
+      // The files really landed on disk (end to end, no mocks).
+      expect(readFileSync(join(dest, 'package.json'), 'utf8')).toBe(
+        '{\n  "name": "with-hono"\n}\n',
+      );
+
+      // All follow-ups come back as structured, runnable next steps.
+      const steps = res.next_steps as Record<string, unknown>[];
+      const actions = steps.map((step) => step.action);
+      expect(actions).toEqual([
+        'install_dependencies',
+        'initialize_git',
+        'link_neon_project',
+      ]);
+      expect(steps[0].command).toContain('npm install');
+      expect(steps[1].command).toContain('git init');
+      expect(steps[2].command).toContain('neon link --agent');
+    });
+
+    test('errors with UNKNOWN_TEMPLATE for a bad template id', async () => {
+      const { code, stdout } = await runBootstrap(server, [
+        '--agent',
+        dest,
+        '--template',
+        'does-not-exist',
+        '--force',
+      ]);
+      expect(code).toBe(1);
+      const res = parseAgentOutput(stdout);
+      expect(res.status).toBe('error');
+      expect(res.code).toBe('UNKNOWN_TEMPLATE');
+    });
+
+    test('errors with TARGET_NOT_EMPTY when the directory is not empty', async () => {
+      writeFileSync(join(dest, 'keep.txt'), 'mine\n');
+      const { code, stdout } = await runBootstrap(server, [
+        '--agent',
+        dest,
+        '--template',
+        'hono',
+      ]);
+      expect(code).toBe(1);
+      const res = parseAgentOutput(stdout);
+      expect(res.status).toBe('error');
+      expect(res.code).toBe('TARGET_NOT_EMPTY');
+      // Nothing was scaffolded over the existing contents.
+      expect(readFileSync(join(dest, 'keep.txt'), 'utf8')).toBe('mine\n');
+    });
   });
 });
