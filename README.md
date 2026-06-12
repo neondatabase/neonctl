@@ -369,17 +369,22 @@ If you'd rather not keep env vars on disk, inject them at runtime instead with `
 
 ## Config as code (`config` / `deploy`)
 
-Describe a branch's desired state in a `neon.ts` policy and reconcile it from the CLI — the Neon equivalent of `terraform status` / `plan` / `apply`. The policy is a function of the branch it's being evaluated for; you switch on the branch (`name`, `isDefault`, …) and return the config you want (auth, Data API, compute settings, TTL, protection, and Preview features like Functions and buckets):
+Describe a branch's desired state in a `neon.ts` policy and reconcile it from the CLI — the Neon equivalent of `terraform status` / `plan` / `apply`. A policy splits into a **static** existential set — top-level `auth` / `dataApi` toggles and the beta `preview` block (Functions, buckets, AI Gateway) that decide what *exists* — and a **dynamic** `branch` closure that tunes each branch (compute settings, TTL, protection, `parent`) based on the branch it's evaluated for (`name`, `isDefault`, …):
 
 ```ts
 // neon.ts
 import { defineConfig } from '@neondatabase/config/v1';
 
-export default defineConfig((branch) => {
-  if (branch.isDefault) {
-    return { protected: true, auth: {} };
-  }
-  return { parent: 'main', ttl: '7d' };
+export default defineConfig({
+  // Static: what exists on every branch (drives the typed env).
+  auth: true,
+  // Dynamic: per-branch tuning only — cannot add/remove services.
+  branch: (branch) => {
+    if (branch.isDefault) {
+      return { protected: true };
+    }
+    return { parent: 'main', ttl: '7d' };
+  },
 });
 ```
 
