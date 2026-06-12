@@ -1,32 +1,7 @@
-import { init } from 'neon-init';
+import { interactiveInit, orchestrate } from 'neon-init';
 import yargs from 'yargs';
 import { sendError } from '../analytics.js';
 import { log } from '../log.js';
-
-const AGENT_FLAG_VALUES = ['cursor', 'copilot', 'claude'] as const;
-
-type Editor = 'Cursor' | 'VS Code' | 'Claude CLI';
-
-function parseAgentToEditor(value: string): Editor | null {
-  const normalized = value.trim().toLowerCase();
-  switch (normalized) {
-    case 'cursor':
-      return 'Cursor';
-    case 'github-copilot':
-    case 'copilot':
-    case 'vs code':
-    case 'vscode':
-    case 'vs-code':
-      return 'VS Code';
-    case 'claude-code':
-    case 'claude cli':
-    case 'claude-cli':
-    case 'claude':
-      return 'Claude CLI';
-    default:
-      return null;
-  }
-}
 
 export const command = 'init';
 export const describe =
@@ -39,26 +14,44 @@ export const builder = (yargs: yargs.Argv) =>
     .option('agent', {
       alias: 'a',
       type: 'string',
-      describe: 'Agent to configure (cursor, copilot, code).',
+      describe: 'Agent to configure (cursor, copilot, claude, etc.).',
+    })
+    .option('skip-neon-auth', {
+      type: 'boolean',
+      default: false,
+      describe: 'Skip the Neon Auth setup phase.',
+    })
+    .option('skip-migrations', {
+      type: 'boolean',
+      default: false,
+      describe: 'Skip the migrations phase.',
+    })
+    .option('preview', {
+      type: 'boolean',
+      default: false,
+      describe:
+        'Enable preview features (e.g. project bootstrapping from templates).',
     })
     .strict(false);
 
-export const handler = async (argv: { agent?: string }) => {
-  let options: { agent: Editor } | undefined;
-  const agentArg = argv.agent;
-  if (agentArg !== undefined) {
-    const editor = parseAgentToEditor(agentArg);
-    if (editor === null) {
-      log.error(
-        `Invalid --agent value: "${agentArg}". Supported: ${AGENT_FLAG_VALUES.join(', ')}`,
-      );
-      process.exit(1);
-      return;
-    }
-    options = { agent: editor };
-  }
+export const handler = async (argv: {
+  agent?: string;
+  skipNeonAuth?: boolean;
+  skipMigrations?: boolean;
+  preview?: boolean;
+}) => {
   try {
-    await init(options);
+    if (argv.agent !== undefined) {
+      const result = await orchestrate({
+        agent: argv.agent || undefined,
+        skipNeonAuth: argv.skipNeonAuth,
+        skipMigrations: argv.skipMigrations,
+        preview: argv.preview,
+      });
+      log.info(JSON.stringify(result, null, 2));
+    } else {
+      await interactiveInit({ preview: argv.preview });
+    }
   } catch {
     const exitError = new Error(`failed to run neon-init`);
     sendError(exitError, 'NEON_INIT_FAILED');
