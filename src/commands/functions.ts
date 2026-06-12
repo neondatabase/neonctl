@@ -64,6 +64,9 @@ const SLUG_PATTERN = /^[a-z0-9]{1,20}$/;
 const SLUG_HELP =
   'Use 1-20 lowercase letters and digits (no hyphens or other characters).';
 
+// Entry-point discovery order inside --src.
+const ENTRY_CANDIDATES = ['index.ts', 'index.mjs', 'index.js'] as const;
+
 // Overridable so tests can poll fast; defaults to 2s in real use.
 const POLL_INTERVAL_MS =
   Number(process.env.NEON_FUNCTIONS_POLL_INTERVAL_MS) || 2000;
@@ -102,13 +105,20 @@ export const builder = (argv: yargs.Argv) =>
             demandOption: true,
           })
           .options({
-            path: {
-              describe: 'Base directory for the function (resolves --entry)',
+            src: {
+              describe:
+                'Directory containing the function source (entry point: index.ts, index.mjs, or index.js)',
               type: 'string',
             },
-            entry: {
-              describe: 'Entry file to bundle, relative to --path',
+            // Removed flags, kept hidden so old invocations fail loudly instead
+            // of being silently ignored (the CLI has no .strictOptions()).
+            path: {
               type: 'string',
+              hidden: true,
+            },
+            entry: {
+              type: 'string',
+              hidden: true,
             },
             runtime: {
               describe: 'Function runtime',
@@ -173,6 +183,7 @@ export const handler = (args: yargs.Argv) => {
 
 type DeployProps = BranchScopeProps & {
   slug: string;
+  src?: string;
   path?: string;
   entry?: string;
   runtime?: string;
@@ -222,16 +233,22 @@ const isTransient = (err: unknown): boolean =>
     err.response.status >= 500);
 
 const deploy = async (props: DeployProps) => {
+  if (props.path !== undefined || props.entry !== undefined) {
+    throw new Error(
+      '--path and --entry were removed. Use --src <dir>; the entry point ' +
+        'is discovered as index.ts, index.mjs, or index.js in that directory.',
+    );
+  }
+
   // At least one deploy option must be passed (--wait is excluded: it controls
   // output, not what gets deployed).
   const hasOption =
-    props.path !== undefined ||
-    props.entry !== undefined ||
+    props.src !== undefined ||
     props.env !== undefined ||
     props.runtime !== undefined;
   if (!hasOption) {
     throw new Error(
-      'Provide at least one option to deploy, e.g. --path, --entry, or --env. ' +
+      'Provide at least one option to deploy, e.g. --src or --env. ' +
         'See: neonctl functions deploy --help.',
     );
   }
@@ -241,15 +258,16 @@ const deploy = async (props: DeployProps) => {
     throw new Error(`Invalid function slug "${props.slug}". ${SLUG_HELP}`);
   }
 
-  const path = props.path ?? '.';
-  const entry = props.entry ?? 'index.ts';
+  const src = props.src ?? '.';
   const runtime = props.runtime ?? 'nodejs24';
 
   const environment = parseEnv(props.env);
-  const source = join(path, entry);
-  if (!existsSync(source)) {
+  const source = ENTRY_CANDIDATES.map((name) => join(src, name)).find((p) =>
+    existsSync(p),
+  );
+  if (source === undefined) {
     throw new Error(
-      `Entry file not found: ${source}. Pass --entry to point at your function's entry file (defaults to index.ts).`,
+      `No entry file found in ${src}. Expected one of: ${ENTRY_CANDIDATES.join(', ')}.`,
     );
   }
 
