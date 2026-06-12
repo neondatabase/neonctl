@@ -2,10 +2,10 @@ let calls = 0;
 
 const fn = () => ({
   function: {
-    id: 'fn-entryfunc',
-    slug: 'entryfunc',
-    name: 'Entryfunc',
-    invocation_url: 'https://entryfunc.functions.neon.tech',
+    id: 'fn-srcfile',
+    slug: 'srcfile',
+    name: 'Srcfile',
+    invocation_url: 'https://srcfile.functions.neon.tech',
     created_at: '2026-06-03T00:00:00Z',
     active_deployment: {
       id: 1,

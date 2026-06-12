@@ -369,7 +369,7 @@ If you'd rather not keep env vars on disk, inject them at runtime instead with `
 
 ## Config as code (`config` / `deploy`)
 
-Describe a branch's desired state in a `neon.ts` policy and reconcile it from the CLI — the Neon equivalent of `terraform status` / `plan` / `apply`. A policy splits into a **static** existential set — top-level `auth` / `dataApi` toggles and the beta `preview` block (Functions, buckets, AI Gateway) that decide what *exists* — and a **dynamic** `branch` closure that tunes each branch (compute settings, TTL, protection, `parent`) based on the branch it's evaluated for (`name`, `isDefault`, …):
+Describe a branch's desired state in a `neon.ts` policy and reconcile it from the CLI — the Neon equivalent of `terraform status` / `plan` / `apply`. A policy splits into a **static** existential set — top-level `auth` / `dataApi` toggles and the beta `preview` block (Functions, buckets, AI Gateway) that decide what _exists_ — and a **dynamic** `branch` closure that tunes each branch (compute settings, TTL, protection, `parent`) based on the branch it's evaluated for (`name`, `isDefault`, …):
 
 ```ts
 // neon.ts
