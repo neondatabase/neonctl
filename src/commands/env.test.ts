@@ -136,6 +136,9 @@ class FakeNeonApi implements NeonApi {
   async enableProjectBranchDataApi(): Promise<NeonDataApiSnapshot> {
     throw new Error('not implemented');
   }
+  async updateProjectBranchDataApi(): Promise<NeonDataApiSnapshot> {
+    throw new Error('not implemented');
+  }
   async listBranchBuckets(): Promise<NeonBucketSnapshot[]> {
     return [];
   }
