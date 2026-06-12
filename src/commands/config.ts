@@ -21,6 +21,7 @@ import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { bundleEntry } from '../utils/esbuild.js';
 import { zipBundle } from '../utils/zip.js';
 import { writer } from '../writer.js';
+import { autoPullEnvAfterPin } from './env.js';
 
 /**
  * Bundle a function with neonctl's OWN bundler (the shared esbuild helper) so the
@@ -58,6 +59,17 @@ export type ConfigProps = BranchScopeProps & {
   allowProtected?: boolean;
   /** `status` only: print just the neon.ts-shaped config JSON to stdout. */
   configJson?: boolean;
+  /**
+   * After a successful `config apply` / `deploy`, pull the branch's Neon env vars into a
+   * local `.env` (DATABASE_URL, AI Gateway, object storage, …) — the same convenience as
+   * `link` / `checkout`. On by default; `--no-env-pull` sets this `false`.
+   */
+  envPull?: boolean;
+  /**
+   * Working directory used to resolve `neon.ts` and write the `.env` during the bundled env
+   * pull. Defaults to `process.cwd()`; set by tests to redirect the write to a temp dir.
+   */
+  cwd?: string;
   /** Injected NeonApi adapter (tests). Production omits it so the real adapter is built from credentials. */
   runtimeApi?: NeonApi;
 };
@@ -86,6 +98,22 @@ export const applyFlags = {
     describe: 'Auto-confirm applying to a branch marked protected on Neon',
     type: 'boolean',
     default: false,
+  },
+} as const;
+
+/**
+ * `--env-pull` for `config apply` / `deploy` (shared so both expose the identical surface).
+ * After a successful apply, the branch's Neon env vars are written to a local `.env` — the
+ * same bundled convenience as `link` / `checkout`. On by default; `--no-env-pull` opts out.
+ */
+export const envPullFlag = {
+  'env-pull': {
+    describe:
+      "Pull the branch's Neon env vars (DATABASE_URL, …) into a local .env after a " +
+      'successful apply. On by default; use --no-env-pull to skip (e.g. when injecting ' +
+      'env at runtime with `neon-env run` / `neon dev`).',
+    type: 'boolean',
+    default: true,
   },
 } as const;
 
@@ -147,6 +175,7 @@ export const builder = (argv: yargs.Argv) =>
           },
           ...envFlag,
           ...applyFlags,
+          ...envPullFlag,
         }),
       (args) => applyCmd(args as any),
     );
@@ -224,7 +253,7 @@ export const planCmd = async (props: ConfigProps): Promise<void> => {
     ...(props.apiHost ? { apiHost: props.apiHost } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
   });
-  reportPushResult(props, result, 'plan');
+  reportPushResult(props, result, 'plan', utilizedServices(config));
 };
 
 export const applyCmd = async (props: ConfigProps): Promise<void> => {
@@ -240,23 +269,70 @@ export const applyCmd = async (props: ConfigProps): Promise<void> => {
     ...(props.allowProtected ? { allowProtectedBranch: true } : {}),
     bundleFunction: neonctlBundler,
   });
-  reportPushResult(props, result, 'apply');
+  reportPushResult(props, result, 'apply', utilizedServices(config));
+
+  // After a successful apply/deploy, write the branch's Neon env vars to a local .env —
+  // the same bundled convenience as `link` / `checkout`, so the branch is immediately
+  // usable for local dev. `--no-env-pull` opts out; a pull failure degrades to a warning
+  // (the apply already succeeded). See autoPullEnvAfterPin.
+  await autoPullEnvAfterPin({ ...props, envPull: props.envPull !== false });
 };
 
 type ReportMode = 'plan' | 'apply';
 
 /**
- * Render a {@link PushResult}. JSON/YAML output emits the raw result verbatim so it
- * can be piped; the human-readable path renders the actual changes (dropping noops)
- * and any blocking conflicts as tables, or a "nothing to do" line when both are empty.
+ * A static service toggle (`auth` / `dataApi` / `preview.aiGateway`) is "on" unless
+ * explicitly disabled: `true` / `{}` / `{ enabled: true }` enable it; `false` /
+ * `{ enabled: false }` / absent leave it off. Mirrors the runtime's `isServiceEnabled`
+ * (which isn't exported), kept tiny and pure so it can be read straight off the policy.
+ */
+const isToggleEnabled = (
+  toggle: boolean | { enabled?: boolean } | undefined,
+): boolean => {
+  if (toggle === undefined) return false;
+  if (typeof toggle === 'boolean') return toggle;
+  return toggle.enabled !== false;
+};
+
+/**
+ * Human-readable list of the services a `neon.ts` policy utilizes on the branch, shown under
+ * the plan/apply table. Postgres is always present (every branch has it); the rest are listed
+ * only when the policy declares them. This deliberately surfaces services that produce **no**
+ * plan step — notably the AI Gateway, which is always available and only needs a scoped branch
+ * credential (not a provisioning step) — so adding `preview.aiGateway` to a neon.ts isn't
+ * mistaken for being silently dropped. Service enablement is static top-level config (it never
+ * lives in the per-branch closure), so reading it straight off `config` is accurate.
+ */
+const utilizedServices = (config: Config): string[] => {
+  const services = ['Postgres'];
+  if (isToggleEnabled(config.auth)) services.push('Neon Auth');
+  if (isToggleEnabled(config.dataApi)) services.push('Data API');
+  if (Object.keys(config.preview?.buckets ?? {}).length > 0) {
+    services.push('Object Storage');
+  }
+  if (Object.keys(config.preview?.functions ?? {}).length > 0) {
+    services.push('Functions');
+  }
+  if (isToggleEnabled(config.preview?.aiGateway)) services.push('AI Gateway');
+  return services;
+};
+
+/**
+ * Render a {@link PushResult}. JSON/YAML output emits the raw result (plus a `services`
+ * summary) verbatim so it can be piped; the human-readable path renders the actual changes
+ * (dropping noops) and any blocking conflicts as tables, or a "nothing to do" line when both
+ * are empty — and always closes with the list of services the policy utilizes so a service
+ * that produces no plan step (Postgres, or the credential-gated AI Gateway) isn't mistaken
+ * for being missing from the plan above.
  */
 const reportPushResult = (
   props: ConfigProps,
   result: PushResult,
   mode: ReportMode,
+  services: string[],
 ): void => {
   if (props.output === 'json' || props.output === 'yaml') {
-    writer(props).end(result, { fields: [] });
+    writer(props).end({ ...result, services }, { fields: [] });
     return;
   }
 
@@ -293,14 +369,8 @@ const reportPushResult = (
     invocation_url,
   }));
 
-  if (changes.length === 0 && conflicts.length === 0) {
-    log.info(
-      `No changes — branch ${result.branchName} already matches the policy.`,
-    );
-    return;
-  }
-
   const out = writer(props);
+  const noChanges = changes.length === 0 && conflicts.length === 0;
   if (changes.length > 0) {
     out.write(changes, {
       fields: APPLIED_FIELDS,
@@ -316,7 +386,15 @@ const reportPushResult = (
   if (conflicts.length > 0) {
     out.write(conflicts, { fields: CONFLICT_FIELDS, title: 'Conflicts' });
   }
+  // Flush any tables, then append the summary so it reads directly below them.
   out.end();
+
+  if (noChanges) {
+    log.info(
+      `No changes — branch ${result.branchName} already matches the policy.`,
+    );
+  }
+  out.text(`\nUtilized services: ${services.join(', ')}\n`);
 
   if (conflicts.length > 0) {
     log.info(
