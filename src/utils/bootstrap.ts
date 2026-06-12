@@ -17,6 +17,11 @@ export type BootstrapTemplate = {
   title: string;
   /** One-line description shown under the title in the selector. */
   description: string;
+  /**
+   * Neon services the template uses (e.g. "Postgres", "Functions"). Shown as a
+   * badge next to the title in the picker. Optional — older manifests omit it.
+   */
+  services?: string[];
   source: {
     owner: string;
     repo: string;
@@ -34,6 +39,7 @@ export const FALLBACK_TEMPLATES: BootstrapTemplate[] = [
     title: 'Hono API (Drizzle, Neon Postgres) on Neon Functions',
     description:
       'A Hono API using Drizzle ORM and Neon Postgres, ready to deploy as a Neon Function.',
+    services: ['Postgres', 'Functions'],
     source: {
       owner: 'neondatabase',
       repo: 'examples',
@@ -100,6 +106,22 @@ const rawHeaders = (): Record<string, string> => ({
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+/**
+ * Normalize a manifest entry's `services` into a clean string list. Tolerant by
+ * design: a missing or non-array value yields `undefined`, and non-string items
+ * are dropped, so a malformed `services` never sinks an otherwise-valid
+ * template (it just renders without its badge).
+ */
+const parseServices = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const services = value.filter(
+    (item): item is string => typeof item === 'string' && item.trim() !== '',
+  );
+  return services.length > 0 ? services : undefined;
+};
+
 // ---------------------------------------------------------------------------
 // Remote template manifest
 // ---------------------------------------------------------------------------
@@ -133,10 +155,12 @@ export const parseManifest = (text: string): BootstrapTemplate[] => {
       );
       continue;
     }
+    const services = parseServices(item.services);
     templates.push({
       id: item.id,
       title: item.title,
       description: item.description,
+      ...(services ? { services } : {}),
       source: {
         owner: item.source.owner,
         repo: item.source.repo,

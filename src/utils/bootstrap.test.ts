@@ -88,6 +88,69 @@ describe('parseManifest', () => {
     });
   });
 
+  it('parses the optional services list', () => {
+    const yaml = `templates:
+  - id: hono
+    title: Hono API
+    description: A Hono template.
+    services:
+      - Postgres
+      - Functions
+    source:
+      owner: neondatabase
+      repo: examples
+      ref: main
+      subdir: with-hono
+`;
+    expect(parseManifest(yaml)[0].services).toEqual(['Postgres', 'Functions']);
+  });
+
+  it('drops non-string and blank service entries', () => {
+    const yaml = `templates:
+  - id: hono
+    title: Hono API
+    description: A Hono template.
+    services:
+      - Postgres
+      - ""
+      - 42
+      - Functions
+    source:
+      owner: neondatabase
+      repo: examples
+      ref: main
+      subdir: with-hono
+`;
+    expect(parseManifest(yaml)[0].services).toEqual(['Postgres', 'Functions']);
+  });
+
+  it('omits services when the field is absent or not a list', () => {
+    const withoutServices = `templates:
+  - id: hono
+    title: Hono API
+    description: A Hono template.
+    source:
+      owner: neondatabase
+      repo: examples
+      ref: main
+      subdir: with-hono
+`;
+    expect(parseManifest(withoutServices)[0]).not.toHaveProperty('services');
+
+    const badServices = `templates:
+  - id: hono
+    title: Hono API
+    description: A Hono template.
+    services: nope
+    source:
+      owner: neondatabase
+      repo: examples
+      ref: main
+      subdir: with-hono
+`;
+    expect(parseManifest(badServices)[0]).not.toHaveProperty('services');
+  });
+
   it('skips malformed entries and keeps valid ones', () => {
     const yaml = `templates:
   - id: good

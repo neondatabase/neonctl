@@ -52,6 +52,9 @@ const MANIFEST_YAML = `templates:
   - id: hono
     title: "Hono API (Drizzle, Neon Postgres) on Neon Functions"
     description: "A Hono API using Drizzle ORM and Neon Postgres, ready to deploy as a Neon Function."
+    services:
+      - Postgres
+      - Functions
     source:
       owner: neondatabase
       repo: examples
@@ -236,6 +239,8 @@ describe('bootstrap', () => {
     expect(code, stderr).toBe(0);
     expect(stdout).toContain('hono');
     expect(stdout).toContain('A Hono API using Drizzle ORM and Neon Postgres');
+    // The services from the manifest are surfaced alongside each template.
+    expect(stdout).toContain('[Postgres · Functions]');
   });
 
   test('--default scaffolds and inits git without prompting', async () => {
@@ -262,9 +267,14 @@ describe('bootstrap', () => {
       expect(code, stderr).toBe(0);
       const res = parseAgentOutput(stdout);
       expect(res.status).toBe('needs_template');
-      // Options come from the remote manifest.
+      // Options come from the remote manifest, including the services list.
       expect(res.options).toEqual(
-        expect.arrayContaining([expect.objectContaining({ id: 'hono' })]),
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'hono',
+            services: ['Postgres', 'Functions'],
+          }),
+        ]),
       );
       expect(res.next_command_template).toContain('--template <template_id>');
     });
