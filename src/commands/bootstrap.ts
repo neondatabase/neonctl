@@ -214,18 +214,18 @@ const resolveTemplateList = async (
     : fetchTemplates();
 
 /**
- * The picker label for a template: the title prefixed with the Neon services it
- * uses as a dim badge, e.g. "[Postgres · Functions] Hono API …". The badge is
- * styled with chalk.dim only (never a foreground color) so it survives the
- * cyan/underline `prompts` paints over the focused row — dim resets with the
- * intensity SGR, leaving the row's color and underline intact. The one-line
- * description renders under the title on focus (handled by `prompts`).
+ * The picker label for a template: the title first, then the Neon services it
+ * uses as a dim, italic suffix, e.g. "Hono API …  Postgres · Functions". The
+ * suffix is styled with chalk.dim (and italic) only — never a foreground color —
+ * so it survives the cyan/underline `prompts` paints over the focused row: dim
+ * and italic reset with their own SGRs, leaving the row's color and underline
+ * intact. Descriptions are intentionally omitted to keep the picker uncluttered.
  */
 const formatTemplateTitle = (template: BootstrapTemplate): string => {
   if (!template.services || template.services.length === 0) {
     return template.title;
   }
-  return `${chalk.dim(`[${template.services.join(' · ')}]`)} ${template.title}`;
+  return `${template.title}  ${chalk.dim.italic(template.services.join(' · '))}`;
 };
 
 const resolveSelectedTemplate = async (
@@ -266,7 +266,6 @@ const resolveSelectedTemplate = async (
     message: 'Which template would you like to use?',
     choices: templates.map((template) => ({
       title: formatTemplateTitle(template),
-      description: template.description,
       value: template.id,
     })),
     initial: 0,
