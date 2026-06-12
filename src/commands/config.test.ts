@@ -1,5 +1,11 @@
 /* eslint-disable @typescript-eslint/require-await */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -292,6 +298,9 @@ const baseProps = (
   projectId: PROJECT_ID,
   branch: BRANCH_NAME,
   runtimeApi: api,
+  // Off by default in tests so the apply/plan assertions don't trigger the bundled env
+  // pull (which writes a .env to cwd). The dedicated env-pull tests opt back in.
+  envPull: false,
   out,
 });
 
@@ -486,6 +495,91 @@ describe('config commands', () => {
     expect(out).toContain(
       `https://${BRANCH_ID}.fake.neon.tech/functions/hello`,
     );
+  });
+
+  it('reports the services a policy utilizes (Postgres always on) in the plan output', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+    const config = writeConfig(
+      'export default { auth: {}, dataApi: true, preview: { aiGateway: true, buckets: { uploads: {} } } };\n',
+    );
+
+    await planCmd({ ...baseProps(api, stream), config });
+
+    const result = JSON.parse(read());
+    // Postgres is always first; each declared service follows in a stable order. The AI
+    // Gateway is listed even though it never produces a plan step (it's credential-gated).
+    expect(result.services).toEqual([
+      'Postgres',
+      'Neon Auth',
+      'Data API',
+      'Object Storage',
+      'AI Gateway',
+    ]);
+  });
+
+  it('prints a "Utilized services" summary below the plan table (human output)', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+    const config = writeConfig(
+      'export default { auth: {}, preview: { aiGateway: true } };\n',
+    );
+
+    await planCmd({ ...baseProps(api, stream), output: 'table', config });
+
+    const out = read();
+    expect(out).toContain('Planned changes');
+    expect(out).toContain('Utilized services: Postgres, Neon Auth, AI Gateway');
+  });
+
+  it('still lists utilized services when the branch already matches (no changes)', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+    // Empty policy: nothing to apply, so the plan table is empty — but the summary still
+    // shows Postgres so the command never looks like it did nothing meaningful.
+    const config = writeConfig('export default {};\n');
+
+    await applyCmd({ ...baseProps(api, stream), output: 'table', config });
+
+    expect(read()).toContain('Utilized services: Postgres');
+  });
+
+  it('pulls the branch env into a local .env after a successful apply (like link/checkout)', async () => {
+    const api = new FakeNeonApi();
+    const { stream } = captureOut();
+    // Empty policy: apply provisions nothing, but the bundled env pull still writes the
+    // branch's connection strings to a local .env so the branch is usable for local dev.
+    const config = writeConfig('export default {};\n');
+
+    await applyCmd({
+      ...baseProps(api, stream),
+      output: 'table',
+      config,
+      cwd,
+      envPull: true,
+    });
+
+    const envPath = join(cwd, '.env.local');
+    expect(existsSync(envPath)).toBe(true);
+    expect(readFileSync(envPath, 'utf8')).toContain('DATABASE_URL=');
+  });
+
+  it('skips the env pull after apply when --no-env-pull is set', async () => {
+    const api = new FakeNeonApi();
+    const { stream } = captureOut();
+    const config = writeConfig('export default {};\n');
+
+    await applyCmd({
+      ...baseProps(api, stream),
+      output: 'table',
+      config,
+      cwd,
+      envPull: false,
+    });
+
+    // Nothing written: --no-env-pull leaves the working tree untouched.
+    expect(existsSync(join(cwd, '.env.local'))).toBe(false);
+    expect(existsSync(join(cwd, '.env'))).toBe(false);
   });
 });
 
