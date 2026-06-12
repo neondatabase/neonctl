@@ -701,6 +701,67 @@ describe('functions', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test('deploy --src pointing at a file uses it as the entry', async ({
+    testCliCommand,
+  }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'neonctl-srcfile-'));
+    writeFileSync(join(dir, 'custom.ts'), 'export default {};\n');
+    // Broken decoy: if --src=<file> still ran directory discovery, index.ts
+    // would win, bundling would fail, and so would the test.
+    writeFileSync(join(dir, 'index.ts'), 'export default {\n');
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'srcfile',
+        '--src',
+        join(dir, 'custom.ts'),
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Function deployment triggered for function srcfile. ' +
+          'INFO: Check status with: neonctl functions get srcfile ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('deploy errors when the --src path does not exist', async ({
+    testCliCommand,
+  }) => {
+    const missing = join(tmpdir(), 'neonctl-no-such-path');
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'myfunc',
+        '--src',
+        missing,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr: `ERROR: --src path not found: ${missing}.`,
+      },
+    );
+  });
+
   // Passes ONLY --path (no --src/--env): also pins that the removal error fires
   // before the at-least-one-option guard.
   test('deploy rejects the removed --path flag', async ({ testCliCommand }) => {

@@ -24,6 +24,16 @@ invocation_url: https://nowaitfunc.functions.neon.tech
 "
 `;
 
+exports[`functions > deploy --src pointing at a file uses it as the entry 1`] = `
+"id: 1
+status: building
+memory_mib: 256
+runtime: nodejs24
+created_at: 2026-06-03T00:00:00Z
+invocation_url: https://srcfile.functions.neon.tech
+"
+`;
+
 exports[`functions > deploy --wait exits 1 when the deployment fails 1`] = `
 "┌────┬────────┬──────────────────────────────────────┬──────────┬────────────┬──────────────────────┐
 │ Id │ Status │ Invocation Url                       │ Runtime  │ Memory Mib │ Created At           │
@@ -92,6 +102,8 @@ created_at: 2026-06-03T00:00:00Z
 invocation_url: https://jsonly.functions.neon.tech
 "
 `;
+
+exports[`functions > deploy errors when the --src path does not exist 1`] = `""`;
 
 exports[`functions > deploy errors when the entry file is missing 1`] = `""`;
 
