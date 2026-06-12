@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
+import chalk from 'chalk';
 import prompts, { InitialReturnValue } from 'prompts';
 import which from 'which';
 import yargs from 'yargs';
@@ -46,7 +47,12 @@ type BootstrapProps = CommonProps & {
 // Agent mode (JSON state machine)
 // ----------------------------------------------------------------------------
 
-type AgentTemplateOption = { id: string; title: string; description: string };
+type AgentTemplateOption = {
+  id: string;
+  title: string;
+  description: string;
+  services?: string[];
+};
 
 /**
  * One follow-up the caller should offer the user after scaffolding. The agent
@@ -167,7 +173,11 @@ export const handler = async (props: BootstrapProps): Promise<void> => {
   if (props.listTemplates) {
     const templates = await fetchTemplates();
     for (const t of templates) {
-      process.stdout.write(`${t.id} — ${t.description}\n`);
+      const services =
+        t.services && t.services.length > 0
+          ? ` [${t.services.join(' · ')}]`
+          : '';
+      process.stdout.write(`${t.id} — ${t.description}${services}\n`);
     }
     return;
   }
@@ -202,6 +212,21 @@ const resolveTemplateList = async (
   props.template && findTemplate(FALLBACK_TEMPLATES, props.template)
     ? FALLBACK_TEMPLATES
     : fetchTemplates();
+
+/**
+ * The picker label for a template: the title prefixed with the Neon services it
+ * uses as a dim badge, e.g. "[Postgres · Functions] Hono API …". The badge is
+ * styled with chalk.dim only (never a foreground color) so it survives the
+ * cyan/underline `prompts` paints over the focused row — dim resets with the
+ * intensity SGR, leaving the row's color and underline intact. The one-line
+ * description renders under the title on focus (handled by `prompts`).
+ */
+const formatTemplateTitle = (template: BootstrapTemplate): string => {
+  if (!template.services || template.services.length === 0) {
+    return template.title;
+  }
+  return `${chalk.dim(`[${template.services.join(' · ')}]`)} ${template.title}`;
+};
 
 const resolveSelectedTemplate = async (
   props: BootstrapProps,
@@ -240,7 +265,7 @@ const resolveSelectedTemplate = async (
     name: 'id',
     message: 'Which template would you like to use?',
     choices: templates.map((template) => ({
-      title: template.title,
+      title: formatTemplateTitle(template),
       description: template.description,
       value: template.id,
     })),
@@ -680,6 +705,7 @@ const runAgent = async (props: BootstrapProps): Promise<void> => {
         id: template.id,
         title: template.title,
         description: template.description,
+        ...(template.services ? { services: template.services } : {}),
       })),
       next_command_template: `neon bootstrap --agent ${
         props.directory ? shellArg(props.directory) : '<directory>'
