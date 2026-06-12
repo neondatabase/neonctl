@@ -31,7 +31,6 @@ export type NeonConfigView = {
   auth?: true;
   dataApi?: true;
   preview?: {
-    aiGateway?: true;
     functions?: Record<string, { name: string }>;
     buckets?: Record<string, { access: string }>;
     /**
@@ -93,7 +92,6 @@ const toPreviewView = (
 ): NeonConfigView['preview'] | undefined => {
   if (!preview) return undefined;
   const out: NonNullable<NeonConfigView['preview']> = {};
-  if (preview.aiGatewayEnabled) out.aiGateway = true;
   if (preview.functions.length > 0) {
     out.functions = Object.fromEntries(
       preview.functions.map((fn) => [fn.slug, { name: fn.name }]),
