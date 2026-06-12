@@ -58,14 +58,12 @@ describe('toNeonConfigView', () => {
 
   it('projects preview functions/buckets into slug/name-keyed records', () => {
     const preview: PulledBranchConfig['preview'] = {
-      aiGatewayEnabled: true,
       functions: [{ slug: 'hello', name: 'Hello' }],
       buckets: [{ name: 'uploads', access: 'public_read' }],
       credentials: [],
     };
     const view = toNeonConfigView(base, preview);
     expect(view.preview).toEqual({
-      aiGateway: true,
       functions: { hello: { name: 'Hello' } },
       buckets: { uploads: { access: 'public_read' } },
     });
@@ -73,7 +71,6 @@ describe('toNeonConfigView', () => {
 
   it('projects issued credentials (secret-free) into the preview view', () => {
     const preview: PulledBranchConfig['preview'] = {
-      aiGatewayEnabled: false,
       functions: [],
       buckets: [],
       credentials: [
@@ -102,7 +99,6 @@ describe('toNeonConfigView', () => {
 
   it('omits an all-empty preview', () => {
     const preview: PulledBranchConfig['preview'] = {
-      aiGatewayEnabled: false,
       functions: [],
       buckets: [],
       credentials: [],
