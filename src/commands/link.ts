@@ -788,6 +788,13 @@ const promptOrgFromList = async (orgs: Organization[]): Promise<string> => {
       `You don't belong to any organizations. Create one in the Neon Console first: https://console.neon.tech/`,
     );
   }
+  // A single organization leaves nothing to choose, so skip the prompt and link
+  // it directly — go straight on to the project step.
+  if (orgs.length === 1) {
+    const [only] = orgs;
+    log.info(`Linking organization ${only.name} (${only.id}).`);
+    return only.id;
+  }
   const { orgId } = await prompts({
     onState: onPromptState,
     type: 'select',
