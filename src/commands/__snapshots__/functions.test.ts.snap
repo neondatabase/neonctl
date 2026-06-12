@@ -103,6 +103,10 @@ exports[`functions > deploy rejects an invalid slug 1`] = `""`;
 
 exports[`functions > deploy rejects malformed --env 1`] = `""`;
 
+exports[`functions > deploy rejects the removed --entry flag 1`] = `""`;
+
+exports[`functions > deploy rejects the removed --path flag 1`] = `""`;
+
 exports[`functions > deploy requires at least one option 1`] = `""`;
 
 exports[`functions > get (table) 1`] = `
