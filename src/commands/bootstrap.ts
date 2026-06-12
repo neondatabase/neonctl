@@ -23,11 +23,9 @@ import { CommonProps } from '../types.js';
 import {
   BootstrapTemplate,
   FALLBACK_TEMPLATES,
-  fetchFileBytes,
-  fetchSymlinkTarget,
+  downloadTemplate,
   fetchTemplates,
   findTemplate,
-  resolveTemplate,
   templateIds,
 } from '../utils/bootstrap.js';
 
@@ -354,30 +352,24 @@ const scaffold = async (
   targetDir: string,
 ): Promise<number> => {
   log.info('Fetching template "%s" from GitHub…', template.id);
-  const { commitSha, entries } = await resolveTemplate(template);
+  const files = await downloadTemplate(template);
 
   mkdirSync(targetDir, { recursive: true });
-  log.info('Scaffolding %d files into %s…', entries.length, targetDir);
+  log.info('Scaffolding %d files into %s…', files.length, targetDir);
 
-  await mapWithConcurrency(entries, 8, async (entry) => {
-    const dest = join(targetDir, entry.path);
+  for (const file of files) {
+    const dest = join(targetDir, file.path);
     mkdirSync(dirname(dest), { recursive: true });
-    if (entry.kind === 'symlink') {
-      const target = await fetchSymlinkTarget(
-        template,
-        commitSha,
-        entry.repoPath,
-      );
-      writeSymlink(dest, target);
+    if (file.kind === 'symlink') {
+      writeSymlink(dest, file.target);
     } else {
-      const bytes = await fetchFileBytes(template, commitSha, entry.repoPath);
-      writeFileSync(dest, bytes);
-      if (entry.executable) {
+      writeFileSync(dest, file.bytes);
+      if (file.executable) {
         chmodSync(dest, 0o755);
       }
     }
-  });
-  return entries.length;
+  }
+  return files.length;
 };
 
 const writeSymlink = (dest: string, target: string): void => {
@@ -806,24 +798,6 @@ const displayDir = (targetDir: string): string => {
     return '.';
   }
   return rel.startsWith('..') ? targetDir : rel;
-};
-
-const mapWithConcurrency = async <T>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<void>,
-): Promise<void> => {
-  const queue = [...items];
-  const worker = async (): Promise<void> => {
-    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
-      await fn(next);
-    }
-  };
-  const workers = Array.from(
-    { length: Math.max(1, Math.min(limit, items.length)) },
-    () => worker(),
-  );
-  await Promise.all(workers);
 };
 
 const isSymlink = (path: string): boolean => {
