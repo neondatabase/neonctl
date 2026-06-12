@@ -38,7 +38,7 @@
     "@types/yargs": "17.0.32",
     "@yao-pkg/pkg": "6.10.0",
     "emocks": "3.0.4",
-    "esbuild": "0.28.0",
+    "esbuild": "0.28.1",
     "eslint": "9.29.0",
     "express": "4.19.2",
     "husky": "8.0.3",
@@ -54,11 +54,11 @@
     "vitest": "1.6.1"
   },
   "optionalDependencies": {
-    "esbuild": "0.28.0"
+    "esbuild": "0.28.1"
   },
   "dependencies": {
     "@hono/node-server": "2.0.4",
-    "@neondatabase/api-client": "2.7.1",
+    "@neondatabase/api-client": "2.7.2",
     "@neondatabase/config": "0.7.0",
     "@neondatabase/config-runtime": "0.7.0",
     "@neondatabase/env": "0.5.0",
@@ -73,7 +73,7 @@
     "fflate": "^0.8.3",
     "neon-init": "0.15.0",
     "open": "10.1.0",
-    "openid-client": "6.8.1",
+    "openid-client": "6.8.4",
     "pg-protocol": "^1.14.0",
     "prompts": "2.4.2",
     "which": "3.0.1",
