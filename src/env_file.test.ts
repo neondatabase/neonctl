@@ -86,6 +86,64 @@ describe('mergeEnvContent', () => {
     const second = mergeEnvContent(first, { B: '2' }).content;
     expect(second).toBe('A=1\nB=2\n');
   });
+
+  it('prunes managed keys absent from updates, keeping unmanaged lines', () => {
+    const original = [
+      '# app',
+      'APP_NAME=demo',
+      'DATABASE_URL=postgres://old',
+      'NEON_AUTH_BASE_URL=https://stale-auth',
+      'NEON_AUTH_JWKS_URL=https://stale-auth/jwks',
+      'NEON_DATA_API_URL=https://stale-data-api',
+      '',
+    ].join('\n');
+    const { content, written, removed } = mergeEnvContent(
+      original,
+      { DATABASE_URL: 'postgres://new' },
+      {
+        managedKeys: [
+          'DATABASE_URL',
+          'NEON_AUTH_BASE_URL',
+          'NEON_AUTH_JWKS_URL',
+          'NEON_DATA_API_URL',
+        ],
+      },
+    );
+    // The owned auth / data-api vars not in the pull are dropped; the user's own lines stay.
+    expect(content).toBe(
+      ['# app', 'APP_NAME=demo', 'DATABASE_URL=postgres://new'].join('\n') +
+        '\n',
+    );
+    expect(written).toEqual(['DATABASE_URL']);
+    expect(removed).toEqual([
+      'NEON_AUTH_BASE_URL',
+      'NEON_AUTH_JWKS_URL',
+      'NEON_DATA_API_URL',
+    ]);
+  });
+
+  it('never prunes a key outside managedKeys even when absent from updates', () => {
+    const original =
+      'OPENAI_API_KEY=user-own-key\nDATABASE_URL=postgres://old\n';
+    const { content, removed } = mergeEnvContent(
+      original,
+      { DATABASE_URL: 'postgres://new' },
+      // OPENAI_API_KEY is intentionally NOT owned (it collides with the user's own key).
+      { managedKeys: ['DATABASE_URL', 'NEON_AUTH_BASE_URL'] },
+    );
+    expect(content).toContain('OPENAI_API_KEY=user-own-key');
+    expect(removed).toEqual([]);
+  });
+
+  it('prunes managed keys even when updates is empty', () => {
+    const { content, removed } = mergeEnvContent(
+      'KEEP=1\nNEON_DATA_API_URL=https://stale\n',
+      {},
+      { managedKeys: ['NEON_DATA_API_URL'] },
+    );
+    expect(content).toBe('KEEP=1\n');
+    expect(removed).toEqual(['NEON_DATA_API_URL']);
+  });
 });
 
 describe('resolveEnvFilePath', () => {
