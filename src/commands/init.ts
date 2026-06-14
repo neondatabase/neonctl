@@ -1,4 +1,10 @@
-import { interactiveInit, orchestrate } from 'neon-init';
+import {
+  detectAgent,
+  enrichResponse,
+  interactiveInit,
+  orchestrate,
+  routeDataStep,
+} from 'neon-init';
 import yargs from 'yargs';
 import { sendError } from '../analytics.js';
 import { log } from '../log.js';
@@ -15,6 +21,11 @@ export const builder = (yargs: yargs.Argv) =>
       alias: 'a',
       type: 'string',
       describe: 'Agent to configure (cursor, copilot, claude, etc.).',
+    })
+    .option('data', {
+      type: 'string',
+      describe:
+        'JSON object with a "step" field to route to a specific phase and phase-specific options.',
     })
     .option('skip-neon-auth', {
       type: 'boolean',
@@ -36,19 +47,44 @@ export const builder = (yargs: yargs.Argv) =>
 
 export const handler = async (argv: {
   agent?: string;
+  data?: string;
   skipNeonAuth?: boolean;
   skipMigrations?: boolean;
   preview?: boolean;
 }) => {
   try {
-    if (argv.agent !== undefined) {
+    // Auto-detect agent from environment if --agent not explicitly provided.
+    // For IDE-based detection (Cursor, VS Code, Windsurf), require non-TTY stdin
+    // to distinguish "agent spawned this" from "human typed this in terminal".
+    const agent =
+      argv.agent || (!process.stdin.isTTY ? detectAgent() : null) || undefined;
+    const isAgentMode = agent !== undefined;
+
+    // --data with a "step" field routes to the appropriate phase
+    if (argv.data && isAgentMode) {
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(argv.data);
+      } catch {
+        log.error('Invalid JSON in --data flag. Expected a JSON object.');
+        process.exit(1);
+        return;
+      }
+      if (typeof data.step === 'string') {
+        const result = await routeDataStep(data, agent);
+        log.info(JSON.stringify(enrichResponse(result), null, 2));
+        return;
+      }
+    }
+
+    if (isAgentMode) {
       const result = await orchestrate({
-        agent: argv.agent || undefined,
+        agent,
         skipNeonAuth: argv.skipNeonAuth,
         skipMigrations: argv.skipMigrations,
         preview: argv.preview,
       });
-      log.info(JSON.stringify(result, null, 2));
+      log.info(JSON.stringify(enrichResponse(result), null, 2));
     } else {
       await interactiveInit({ preview: argv.preview });
     }
