@@ -1,4 +1,5 @@
 import {
+  detectAgent,
   enrichResponse,
   interactiveInit,
   orchestrate,
@@ -52,8 +53,12 @@ export const handler = async (argv: {
   preview?: boolean;
 }) => {
   try {
+    // Auto-detect agent from environment if --agent not explicitly provided
+    const agent = argv.agent || detectAgent() || undefined;
+    const isAgentMode = agent !== undefined;
+
     // --data with a "step" field routes to the appropriate phase
-    if (argv.data && argv.agent !== undefined) {
+    if (argv.data && isAgentMode) {
       let data: Record<string, unknown>;
       try {
         data = JSON.parse(argv.data);
@@ -63,15 +68,15 @@ export const handler = async (argv: {
         return;
       }
       if (typeof data.step === 'string') {
-        const result = await routeDataStep(data, argv.agent || undefined);
+        const result = await routeDataStep(data, agent);
         log.info(JSON.stringify(enrichResponse(result), null, 2));
         return;
       }
     }
 
-    if (argv.agent !== undefined) {
+    if (isAgentMode) {
       const result = await orchestrate({
-        agent: argv.agent || undefined,
+        agent,
         skipNeonAuth: argv.skipNeonAuth,
         skipMigrations: argv.skipMigrations,
         preview: argv.preview,
