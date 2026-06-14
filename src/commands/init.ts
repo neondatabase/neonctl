@@ -53,8 +53,11 @@ export const handler = async (argv: {
   preview?: boolean;
 }) => {
   try {
-    // Auto-detect agent from environment if --agent not explicitly provided
-    const agent = argv.agent || detectAgent() || undefined;
+    // Auto-detect agent from environment if --agent not explicitly provided.
+    // For IDE-based detection (Cursor, VS Code, Windsurf), require non-TTY stdin
+    // to distinguish "agent spawned this" from "human typed this in terminal".
+    const agent =
+      argv.agent || (!process.stdin.isTTY ? detectAgent() : null) || undefined;
     const isAgentMode = agent !== undefined;
 
     // --data with a "step" field routes to the appropriate phase
