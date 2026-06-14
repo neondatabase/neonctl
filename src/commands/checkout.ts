@@ -1,9 +1,10 @@
 import { Branch } from '@neondatabase/api-client';
 import { isAxiosError } from 'axios';
+import chalk from 'chalk';
 import prompts from 'prompts';
 import yargs from 'yargs';
 
-import { applyContext, readContextFile } from '../context.js';
+import { applyContext, contextBranch, readContextFile } from '../context.js';
 import { isCi } from '../env.js';
 import { log } from '../log.js';
 import { CommonProps } from '../types.js';
@@ -71,6 +72,18 @@ export const builder = (argv: yargs.Argv) =>
     ]);
 
 export const handler = async (props: CheckoutProps) => {
+  // Show where the context is pinned *before* we switch it, so the user sees the move
+  // ("currently on X" → "checked out Y") and can catch a checkout they didn't mean to make.
+  // Read straight from `.neon` (a name, no API call); silent when nothing is pinned yet.
+  const previousBranch = contextBranch(readContextFile(props.contextFile));
+  if (previousBranch) {
+    log.info(
+      '%s Currently on branch %s',
+      chalk.dim('→'),
+      chalk.cyan.bold(previousBranch),
+    );
+  }
+
   // Branch listing is project-scoped, so `projectId` is the only thing
   // `checkout` actually needs. Resolve it through the standard chain
   // (--project-id flag > .neon file > single-project auto-detect); when

@@ -62,6 +62,75 @@ export const branchIdFromProps = async (props: BranchScopeProps) => {
   return (props as any).branchId;
 };
 
+/**
+ * The branch a command is about to act on, resolved to **both** its id and its
+ * human-readable name so callers can confirm the target to the user (see
+ * {@link announceTargetBranch}) before mutating it.
+ *
+ * Resolution mirrors {@link branchIdFromProps}: an explicit `branch`/`id`
+ * (name or `br-…` id) wins, otherwise the project's default branch is used. The
+ * difference is that this always carries the name back, so it lists the
+ * project's branches even for a `br-…` id (to look up the name). A `br-…` id the
+ * listing doesn't return is still trusted as an id (matching `branchIdResolve`),
+ * just with no friendlier name to show; a *name* that doesn't resolve is the
+ * same hard error as before.
+ */
+export type ResolvedBranchRef = {
+  branchId: string;
+  /** Friendly branch name when known, otherwise the id. */
+  branchName: string;
+  /** True when no branch was specified and the project's default was used. */
+  usedDefault: boolean;
+};
+
+export const resolveBranchRef = async (
+  props: BranchScopeProps,
+): Promise<ResolvedBranchRef> => {
+  const branch =
+    'branch' in props && typeof props.branch === 'string'
+      ? props.branch
+      : (props as any).id;
+
+  const { data } = await props.apiClient.listProjectBranches({
+    projectId: props.projectId,
+  });
+  const branches = data.branches;
+
+  if (branch) {
+    const ref = branch.toString();
+    const found = looksLikeBranchId(ref)
+      ? branches.find((b: Branch) => b.id === ref)
+      : branches.find((b: Branch) => b.name === ref);
+    if (found) {
+      return {
+        branchId: found.id,
+        branchName: found.name ?? found.id,
+        usedDefault: false,
+      };
+    }
+    // A `br-…` id absent from the listing is still usable as an id (trust it like
+    // branchIdResolve does); only an unresolved *name* is a genuine error.
+    if (looksLikeBranchId(ref)) {
+      return { branchId: ref, branchName: ref, usedDefault: false };
+    }
+    throw new Error(
+      `Branch ${ref} not found.\nAvailable branches: ${branches
+        .map((b: Branch) => b.name)
+        .join(', ')}`,
+    );
+  }
+
+  const defaultBranch = branches.find((b: Branch) => b.default);
+  if (!defaultBranch) {
+    throw new Error('No default branch found');
+  }
+  return {
+    branchId: defaultBranch.id,
+    branchName: defaultBranch.name ?? defaultBranch.id,
+    usedDefault: true,
+  };
+};
+
 export const resolveSingleDatabase = async (props: {
   apiClient: CommonProps['apiClient'];
   projectId: string;
