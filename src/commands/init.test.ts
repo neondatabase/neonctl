@@ -13,8 +13,11 @@ vi.mock('../log.js', () => ({
 
 // Mock neon-init
 vi.mock('neon-init', () => ({
+  detectAgent: vi.fn().mockReturnValue(null),
+  enrichResponse: vi.fn().mockImplementation((v) => v),
   interactiveInit: vi.fn().mockResolvedValue(undefined),
   orchestrate: vi.fn().mockResolvedValue({ phase: 'complete', status: 'ok' }),
+  routeDataStep: vi.fn().mockResolvedValue({ phase: 'complete', status: 'ok' }),
 }));
 
 describe('init', () => {
@@ -32,19 +35,14 @@ describe('init', () => {
     expect(orchestrate).not.toHaveBeenCalled();
   });
 
-  test('should call orchestrate when --agent is passed without a value', async () => {
+  test('should fall through to interactiveInit when --agent is empty and detectAgent returns null', async () => {
     const { handler } = await import('./init.js');
     const { interactiveInit, orchestrate } = await import('neon-init');
 
     await handler({ agent: '' });
 
-    expect(orchestrate).toHaveBeenCalledWith({
-      agent: undefined,
-      skipNeonAuth: undefined,
-      skipMigrations: undefined,
-      preview: undefined,
-    });
-    expect(interactiveInit).not.toHaveBeenCalled();
+    expect(interactiveInit).toHaveBeenCalledTimes(1);
+    expect(orchestrate).not.toHaveBeenCalled();
   });
 
   test('should call orchestrate with agent "cursor"', async () => {
