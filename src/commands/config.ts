@@ -353,7 +353,7 @@ const reportPushResult = (
       action: change.action,
       kind: change.kind,
       identifier: change.identifier,
-      details: change.details ? JSON.stringify(change.details) : '',
+      details: summarizeChangeDetails(change.details),
     }));
   const conflicts = result.conflicts.map((conflict: ConflictReport) => ({
     identifier: conflict.identifier,
@@ -420,6 +420,45 @@ const stringify = (value: unknown): string =>
     : typeof value === 'string'
       ? value
       : JSON.stringify(value);
+
+/**
+ * Longest individual detail value we inline into the changes table. Anything longer
+ * (notably a function's `invocationUrl`, which can run ~70+ chars) is elided so a single
+ * value can never widen the ASCII table past a terminal. The full value is still available
+ * via `--output json` and, for functions, in the dedicated "Function URLs" table.
+ */
+const MAX_DETAIL_VALUE = 40;
+
+/**
+ * Render an {@link AppliedChange}'s `details` as a compact, single-line, table-safe summary
+ * — never raw JSON. Earlier we `JSON.stringify`'d the whole object into the `Details` column,
+ * but a deployed function's details carry its `invocationUrl`, so the serialized blob blew the
+ * ASCII table out to ~190 columns and the borders no longer lined up in a normal terminal.
+ *
+ * The fix keeps the table narrow by:
+ *  - only inlining scalar fields (objects/arrays are never serialized into a cell),
+ *  - eliding long values (URLs, long paths) — they live in `--output json` / the Function
+ *    URLs table — rather than letting one value dictate the table width.
+ *
+ * Example: `{slug, source, runtime, deploymentId, invocationUrl}` becomes
+ * `slug=hello, source=./hello.ts, runtime=nodejs24, deploymentId=3` (the long URL dropped).
+ */
+const summarizeChangeDetails = (
+  details: Record<string, unknown> | undefined,
+): string => {
+  if (!details) return '';
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(details)) {
+    if (value === undefined || value === null) continue;
+    // Never inline nested JSON into a cell — that's exactly what blew up the table.
+    if (typeof value === 'object') continue;
+    const rendered = typeof value === 'string' ? value : JSON.stringify(value);
+    // Drop values too long to fit (URLs, long paths). They remain in --output json.
+    if (rendered.length > MAX_DETAIL_VALUE) continue;
+    parts.push(`${key}=${rendered}`);
+  }
+  return parts.join(', ');
+};
 
 /**
  * Apply a `neon.ts` policy to a **freshly created** branch (used by `neonctl checkout`
