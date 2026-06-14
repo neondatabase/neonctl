@@ -667,9 +667,8 @@ const writeBundle = async (
 ): Promise<string> => {
   const files = await bundleEntry(source);
   mkdirSync(bundleDir, { recursive: true });
-  // bundleEntry emits `index.mjs` (+ `index.mjs.map`). The `.mjs` extension makes Node load
-  // it as ESM directly, so no `package.json` `"type": "module"` marker is needed, and esbuild
-  // points the sourcemap link at `index.mjs.map` for us.
+  // bundleEntry emits a single `index.mjs` (no source map). The `.mjs` extension makes Node
+  // load it as ESM directly, so no `package.json` `"type": "module"` marker is needed.
   for (const [name, contents] of Object.entries(files)) {
     writeFileSync(join(bundleDir, name), contents);
   }
