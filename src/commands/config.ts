@@ -17,7 +17,8 @@ import { toNeonConfigView } from '../config_format.js';
 import { log } from '../log.js';
 import { BranchScopeProps } from '../types.js';
 import { loadEnvFileIntoProcess } from '../env_file.js';
-import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
+import { fillSingleProject, resolveBranchRef } from '../utils/enrichers.js';
+import { announceTargetBranch } from '../utils/branch_notice.js';
 import { bundleEntry } from '../utils/esbuild.js';
 import { zipBundle } from '../utils/zip.js';
 import { writer } from '../writer.js';
@@ -203,7 +204,13 @@ const loadConfig = async (props: ConfigProps): Promise<Config> => {
 };
 
 export const status = async (props: ConfigProps): Promise<void> => {
-  const branchId = await branchIdFromProps(props);
+  const branch = await resolveBranchRef(props);
+  // `--config-json` is a script-friendly mode that emits only JSON to stdout, so keep it
+  // pristine; the regular human view gets the "which branch am I inspecting" guardrail.
+  if (!props.configJson) {
+    announceTargetBranch(props, branch, 'Inspecting branch');
+  }
+  const branchId = branch.branchId;
   const live = await inspect({
     projectId: props.projectId,
     branchId,
@@ -243,7 +250,9 @@ export const status = async (props: ConfigProps): Promise<void> => {
 
 export const planCmd = async (props: ConfigProps): Promise<void> => {
   const config = await loadConfig(props);
-  const branchId = await branchIdFromProps(props);
+  const branch = await resolveBranchRef(props);
+  announceTargetBranch(props, branch, 'Planning against branch');
+  const branchId = branch.branchId;
   // `plan` is a dry run that never bundles, so its options don't accept (or need)
   // an injected bundler — only `apply` does (it uses neonctlBundler).
   const result = await plan(config, {
@@ -258,7 +267,9 @@ export const planCmd = async (props: ConfigProps): Promise<void> => {
 
 export const applyCmd = async (props: ConfigProps): Promise<void> => {
   const config = await loadConfig(props);
-  const branchId = await branchIdFromProps(props);
+  const branch = await resolveBranchRef(props);
+  announceTargetBranch(props, branch, 'Applying to branch');
+  const branchId = branch.branchId;
   const result = await apply(config, {
     projectId: props.projectId,
     branchId,

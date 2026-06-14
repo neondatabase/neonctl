@@ -10,7 +10,8 @@ import { log } from '../log.js';
 import { BranchScopeProps } from '../types.js';
 import { resolveNeonEnvVars } from '../dev/env.js';
 import { mergeEnvFile, readEnvFile, resolveEnvFilePath } from '../env_file.js';
-import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
+import { fillSingleProject, resolveBranchRef } from '../utils/enrichers.js';
+import { announceTargetBranch } from '../utils/branch_notice.js';
 
 export type EnvPullProps = BranchScopeProps & {
   /** Target dotenv file. Defaults to an existing `.env`, else `.env.local`. */
@@ -64,7 +65,11 @@ export const builder = (argv: yargs.Argv) =>
             'Pull a specific branch into a specific file',
           ),
       async (args) => {
-        await pull(args as any);
+        // Explicit `env pull` announces the branch it's reading from up front so the user
+        // can catch "pulled env from the wrong branch" before it overwrites their .env. The
+        // bundled auto-pull (link / checkout / apply) stays quiet — those already report the
+        // branch they pinned/applied to.
+        await pull(args as any, { announce: true });
       },
     )
     .demandCommand(1);
@@ -85,9 +90,16 @@ export type PullOutcome =
   | { status: 'written'; written: string[]; file: string }
   | { status: 'empty' };
 
-export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
+export const pull = async (
+  props: EnvPullProps,
+  opts: { announce?: boolean } = {},
+): Promise<PullOutcome> => {
   const cwd = props.cwd ?? process.cwd();
-  const branchId = await branchIdFromProps(props);
+  const branch = await resolveBranchRef(props);
+  if (opts.announce) {
+    announceTargetBranch(props, branch, 'Pulling env from branch');
+  }
+  const branchId = branch.branchId;
 
   // Resolve the target file first and layer its current contents under the resolver's env
   // source. This lets `fetchEnv` reuse one-time secrets that are already on disk — Neon Auth

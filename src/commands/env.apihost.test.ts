@@ -16,6 +16,13 @@ vi.mock('../utils/enrichers.js', async (importOriginal) => {
   return {
     ...actual,
     branchIdFromProps: vi.fn(() => Promise.resolve('br-test')),
+    resolveBranchRef: vi.fn(() =>
+      Promise.resolve({
+        branchId: 'br-test',
+        branchName: 'main',
+        usedDefault: false,
+      }),
+    ),
   };
 });
 

@@ -1,5 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`checkout > announces the branch currently pinned before switching to a new one 1`] = `""`;
+
 exports[`checkout > auto-detects the project when the API key maps to a single project 1`] = `""`;
 
 exports[`checkout > errors when a branch id is not found (ids are never auto-created) 1`] = `""`;
