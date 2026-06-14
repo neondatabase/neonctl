@@ -502,13 +502,12 @@ describe('config commands', () => {
     );
   });
 
-  it('keeps the changes table narrow: function details are summarized, never raw JSON with the invocation URL (regression)', async () => {
-    // Regression: the deployed-function change details carry a long `invocationUrl`.
-    // We used to JSON.stringify the whole details object into the changes table's
-    // "Details" column, which blew the ASCII table out to ~190 columns so its borders
-    // wrapped and misaligned in a normal terminal. The URL is already surfaced in the
-    // dedicated "Function URLs" table, so the changes table must show a compact summary
-    // (and never the raw JSON / URL).
+  it('keeps the changes table minimal and lists function URLs out of the table (regression)', async () => {
+    // Regression: a deployed function's change details carry a long `invocationUrl`. We used
+    // to JSON.stringify the whole details object into a "Details" table column, which blew the
+    // ASCII table out to ~190 columns so its borders wrapped and misaligned in a normal
+    // terminal. The changes table is now minimal (action/kind/identifier only) and the URLs
+    // are printed as a plain list below it, so nothing long ever lands in a table cell.
     const api = new FakeNeonApi();
     const { stream, read } = captureOut();
 
@@ -525,28 +524,22 @@ describe('config commands', () => {
 
     await applyCmd({ ...baseProps(api, stream), output: 'table', config });
 
-    const out = read();
+    const out = stripAnsi(read());
     const invocationUrl = `https://${BRANCH_ID}.fake.neon.tech/functions/hello`;
 
-    // The compact summary is present in the changes table…
-    expect(out).toContain('runtime=nodejs24');
-    // …but never the raw JSON blob that caused the blow-up…
-    expect(out).not.toContain('{"slug"');
-    expect(out).not.toContain('"invocationUrl"');
-
-    // The URL lives only in the dedicated Function URLs table, not in the changes table.
+    // The changes table never carries a Details column or the raw details blob.
     const [appliedSection, functionSection = ''] = out.split('Function URLs');
     expect(appliedSection).toContain('Applied changes');
+    expect(appliedSection).not.toContain('Details');
+    expect(appliedSection).not.toContain('{"slug"');
     expect(appliedSection).not.toContain(invocationUrl);
-    expect(functionSection).toContain(invocationUrl);
+
+    // The URL is listed (not tabulated) below, as a copy-pasteable bullet.
+    expect(functionSection).toContain(`• hello: ${invocationUrl}`);
 
     // No rendered line is absurdly wide. Pre-fix the function detail row was ~190 cols;
     // a 120-col ceiling fails loudly if a long value ever leaks back into a table cell.
-    const widest = Math.max(
-      ...stripAnsi(out)
-        .split('\n')
-        .map((line) => line.length),
-    );
+    const widest = Math.max(...out.split('\n').map((line) => line.length));
     expect(widest).toBeLessThan(120);
   });
 

@@ -1,4 +1,5 @@
 import yargs from 'yargs';
+import chalk from 'chalk';
 import { resolveConfig } from '@neondatabase/config';
 import {
   apply,
@@ -15,6 +16,7 @@ import {
 import { toNeonConfigView } from '../config_format.js';
 
 import { log } from '../log.js';
+import { isCi } from '../env.js';
 import { BranchScopeProps } from '../types.js';
 import { loadEnvFileIntoProcess } from '../env_file.js';
 import { fillSingleProject, resolveBranchRef } from '../utils/enrichers.js';
@@ -34,8 +36,12 @@ const neonctlBundler: FunctionBundler = async (fn) =>
   zipBundle(await bundleEntry(fn.source));
 
 const INSPECT_FIELDS = ['project', 'branch', 'config'] as const;
-const APPLIED_FIELDS = ['action', 'kind', 'identifier', 'details'] as const;
-const FUNCTION_FIELDS = ['slug', 'invocation_url'] as const;
+// Deliberately minimal: action/kind/identifier are short and fixed-ish, so the table can
+// never overflow. Per-change `details` (a function's long invocationUrl in particular) are
+// intentionally NOT a column — they used to be JSON-stringified into a cell and blew the
+// table past 190 cols. Function URLs are printed below as a plain list (see reportPushResult),
+// and the full details are still available via `--output json`.
+const APPLIED_FIELDS = ['action', 'kind', 'identifier'] as const;
 const CONFLICT_FIELDS = [
   'identifier',
   'field',
@@ -353,7 +359,6 @@ const reportPushResult = (
       action: change.action,
       kind: change.kind,
       identifier: change.identifier,
-      details: summarizeChangeDetails(change.details),
     }));
   const conflicts = result.conflicts.map((conflict: ConflictReport) => ({
     identifier: conflict.identifier,
@@ -363,9 +368,9 @@ const reportPushResult = (
     reason: conflict.reason,
   }));
 
-  // Deployed functions carry their invocation URL in the change details — pull them into a
-  // dedicated table so users can see where to call each function without digging through the
-  // raw details blob. Keyed by slug so a function never shows twice.
+  // Deployed functions carry their invocation URL in the change details — collect them so
+  // we can list where to call each function without digging through the raw details blob.
+  // Keyed by slug so a function never shows twice.
   const functionUrlBySlug = new Map<string, string>();
   for (const change of result.applied) {
     if (change.action === 'noop') continue;
@@ -375,10 +380,6 @@ const reportPushResult = (
       functionUrlBySlug.set(slug, invocationUrl);
     }
   }
-  const functions = [...functionUrlBySlug].map(([slug, invocation_url]) => ({
-    slug,
-    invocation_url,
-  }));
 
   const out = writer(props);
   const noChanges = changes.length === 0 && conflicts.length === 0;
@@ -388,17 +389,23 @@ const reportPushResult = (
       title: mode === 'plan' ? 'Planned changes' : 'Applied changes',
     });
   }
-  if (functions.length > 0) {
-    out.write(functions, {
-      fields: FUNCTION_FIELDS,
-      title: mode === 'plan' ? 'Function URLs (after apply)' : 'Function URLs',
-    });
-  }
   if (conflicts.length > 0) {
     out.write(conflicts, { fields: CONFLICT_FIELDS, title: 'Conflicts' });
   }
-  // Flush any tables, then append the summary so it reads directly below them.
+  // Flush any tables, then append the lists/summary so they read directly below them.
   out.end();
+
+  // Function URLs are a plain list rather than a table: an invocation URL can be 70+ chars,
+  // which makes any bordered table overflow and wrap awkwardly in a normal terminal. A list
+  // lets each URL reflow on its own line, and stays copy-pasteable.
+  if (functionUrlBySlug.size > 0) {
+    const heading =
+      mode === 'plan' ? 'Function URLs (after apply)' : 'Function URLs';
+    out.text(`\n${isCi() ? heading : chalk.bold(heading)}\n`);
+    for (const [slug, invocationUrl] of functionUrlBySlug) {
+      out.text(`  • ${slug}: ${invocationUrl}\n`);
+    }
+  }
 
   if (noChanges) {
     log.info(
@@ -420,45 +427,6 @@ const stringify = (value: unknown): string =>
     : typeof value === 'string'
       ? value
       : JSON.stringify(value);
-
-/**
- * Longest individual detail value we inline into the changes table. Anything longer
- * (notably a function's `invocationUrl`, which can run ~70+ chars) is elided so a single
- * value can never widen the ASCII table past a terminal. The full value is still available
- * via `--output json` and, for functions, in the dedicated "Function URLs" table.
- */
-const MAX_DETAIL_VALUE = 40;
-
-/**
- * Render an {@link AppliedChange}'s `details` as a compact, single-line, table-safe summary
- * — never raw JSON. Earlier we `JSON.stringify`'d the whole object into the `Details` column,
- * but a deployed function's details carry its `invocationUrl`, so the serialized blob blew the
- * ASCII table out to ~190 columns and the borders no longer lined up in a normal terminal.
- *
- * The fix keeps the table narrow by:
- *  - only inlining scalar fields (objects/arrays are never serialized into a cell),
- *  - eliding long values (URLs, long paths) — they live in `--output json` / the Function
- *    URLs table — rather than letting one value dictate the table width.
- *
- * Example: `{slug, source, runtime, deploymentId, invocationUrl}` becomes
- * `slug=hello, source=./hello.ts, runtime=nodejs24, deploymentId=3` (the long URL dropped).
- */
-const summarizeChangeDetails = (
-  details: Record<string, unknown> | undefined,
-): string => {
-  if (!details) return '';
-  const parts: string[] = [];
-  for (const [key, value] of Object.entries(details)) {
-    if (value === undefined || value === null) continue;
-    // Never inline nested JSON into a cell — that's exactly what blew up the table.
-    if (typeof value === 'object') continue;
-    const rendered = typeof value === 'string' ? value : JSON.stringify(value);
-    // Drop values too long to fit (URLs, long paths). They remain in --output json.
-    if (rendered.length > MAX_DETAIL_VALUE) continue;
-    parts.push(`${key}=${rendered}`);
-  }
-  return parts.join(', ');
-};
 
 /**
  * Apply a `neon.ts` policy to a **freshly created** branch (used by `neonctl checkout`
