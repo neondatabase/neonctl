@@ -51,8 +51,8 @@ importers:
         specifier: ^0.8.3
         version: 0.8.3
       neon-init:
-        specifier: 0.17.0
-        version: 0.17.0
+        specifier: 0.17.1
+        version: 0.17.1
       open:
         specifier: 10.1.0
         version: 10.1.0
@@ -2781,8 +2781,8 @@ packages:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
     engines: {node: '>= 0.6'}
 
-  neon-init@0.17.0:
-    resolution: {integrity: sha512-yuN7gCLcVKlv96axzn4zR0X8w8a+Ib4NthMQR33LLApZFbYvjIVeygaG+2tG1mgtUNNOuNGAWy1F9+6QXM1I0A==}
+  neon-init@0.17.1:
+    resolution: {integrity: sha512-axY+oy4dFFlehM5uPm+vVWJkPRJsMsjc+s496gjJYfv0alHYOVP9wIlEkmbjb2L9GGZfO+FBFoJHE3n+IO8p5w==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -3887,7 +3887,7 @@ snapshots:
       '@types/node': 20.5.1
       chalk: 4.1.2
       cosmiconfig: 8.3.6(typescript@5.8.3)
-      cosmiconfig-typescript-loader: 4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@18.19.41)(typescript@5.8.3))(typescript@5.8.3)
+      cosmiconfig-typescript-loader: 4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@20.5.1)(typescript@5.8.3))(typescript@5.8.3)
       lodash.isplainobject: 4.0.6
       lodash.merge: 4.6.2
       lodash.uniq: 4.5.0
@@ -5230,7 +5230,7 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  cosmiconfig-typescript-loader@4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@18.19.41)(typescript@5.8.3))(typescript@5.8.3):
+  cosmiconfig-typescript-loader@4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@20.5.1)(typescript@5.8.3))(typescript@5.8.3):
     dependencies:
       '@types/node': 20.5.1
       cosmiconfig: 8.3.6(typescript@5.8.3)
@@ -6339,7 +6339,7 @@ snapshots:
 
   negotiator@1.0.0: {}
 
-  neon-init@0.17.0:
+  neon-init@0.17.1:
     dependencies:
       '@clack/prompts': 0.10.1
       add-mcp: 1.8.0
