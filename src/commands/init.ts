@@ -48,11 +48,12 @@ export const handler = async (argv: {
   preview?: boolean;
 }) => {
   try {
-    // Auto-detect agent from environment. For IDE-based detection (Cursor,
-    // VS Code, Windsurf), require non-TTY stdin to distinguish "agent spawned
-    // this" from "human typed this in terminal".
-    const agent = (!process.stdin.isTTY ? detectAgent() : null) || undefined;
-    const isAgentMode = argv.agent || false;
+    // Auto-detect agent from environment. --agent flag explicitly enables
+    // agent mode. Without it, require non-TTY stdin to auto-detect (agents
+    // spawning subprocesses typically don't allocate a TTY).
+    const agent =
+      (argv.agent || !process.stdin.isTTY ? detectAgent() : null) || undefined;
+    const isAgentMode = argv.agent || agent !== undefined;
 
     // --data with a "step" field routes to the appropriate phase
     if (argv.data && isAgentMode) {
