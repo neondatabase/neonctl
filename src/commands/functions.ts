@@ -27,6 +27,18 @@ const FUNCTION_FIELDS = [
   'created_at',
 ] as const;
 
+const FUNCTIONS_LIST_LIMIT = 100;
+
+// Table columns for `functions list`. `status` is a derived field (the
+// table writer reads flat fields only): the current deployment's status.
+const LIST_TABLE_FIELDS = [
+  'slug',
+  'name',
+  'status',
+  'invocation_url',
+  'created_at',
+] as const;
+
 const DEPLOYMENT_FIELDS = [
   'id',
   'status',
@@ -72,7 +84,7 @@ const POLL_INTERVAL_MS =
   Number(process.env.NEON_FUNCTIONS_POLL_INTERVAL_MS) || 2000;
 
 // Upper bound on --wait polling so the CLI never hangs (e.g. if our deployment
-// never becomes active_deployment). Overridable so tests can time out fast;
+// never shows up as current_deployment). Overridable so tests can time out fast;
 // defaults to 10 minutes in real use.
 const POLL_TIMEOUT_MS =
   Number(process.env.NEON_FUNCTIONS_POLL_TIMEOUT_MS) || 600_000;
@@ -282,8 +294,8 @@ const deploy = async (props: DeployProps) => {
   const zip = zipBundle(await bundleEntry(source));
   const branchId = await branchIdFromProps(props);
 
-  // Snapshot the active version before deploy so we can detect the new one
-  // afterward. A missing function (404) or no active version → undefined.
+  // Snapshot the current version before deploy so we can detect the new one
+  // afterward. A missing function (404) or no deployment yet → undefined.
   let before: number | undefined;
   try {
     const fn = await getFunction(
@@ -292,7 +304,7 @@ const deploy = async (props: DeployProps) => {
       branchId,
       props.slug,
     );
-    before = fn.active_deployment?.id;
+    before = fn.current_deployment?.id;
   } catch (err: unknown) {
     if (!(isAxiosError(err) && err.response?.status === 404)) throw err;
   }
@@ -315,12 +327,12 @@ const deploy = async (props: DeployProps) => {
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
 
-  // Poll until a NEW active version appears (id greater than the snapshot, or
+  // Poll until a NEW version appears (id greater than the snapshot, or
   // any version if there was none). --no-wait stops there; --wait stops at a
   // terminal status. Bounded by POLL_TIMEOUT_MS so it never hangs.
   let resolved: NeonFunctionDeployment | undefined;
   // The function carries the invocation_url; keep the whole record (not just its
-  // active_deployment) so we can surface that URL on success.
+  // current_deployment) so we can surface that URL on success.
   let resolvedFn: NeonFunction | undefined;
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   try {
@@ -341,7 +353,7 @@ const deploy = async (props: DeployProps) => {
         if (isTransient(err)) continue;
         throw err;
       }
-      const dep = fn.active_deployment;
+      const dep = fn.current_deployment;
       const isNew =
         dep !== undefined && (before === undefined || dep.id > before);
       if (isNew && dep) {
@@ -410,12 +422,30 @@ const get = async (
     fields: FUNCTION_FIELDS,
     title: 'function',
   });
-  if (fn.active_deployment) {
-    out.write(fn.active_deployment, {
+  const current = fn.current_deployment;
+  const active = fn.active_deployment;
+  if (current && active && current.id === active.id) {
+    out.write(current, {
       fields: DEPLOYMENT_FIELDS,
-      title: 'active deployment',
+      title: 'deployment (current, active)',
     });
-    writeDeploymentErrorSection(out, fn.active_deployment);
+    writeDeploymentErrorSection(out, current);
+  } else {
+    if (current) {
+      out.write(current, {
+        fields: DEPLOYMENT_FIELDS,
+        title: 'current deployment',
+      });
+      // The failure reason is shown only for the current deployment;
+      // the active one completed successfully by definition.
+      writeDeploymentErrorSection(out, current);
+    }
+    if (active) {
+      out.write(active, {
+        fields: DEPLOYMENT_FIELDS,
+        title: 'active deployment',
+      });
+    }
   }
   if (props.listEnvVariables) {
     out.write(
@@ -449,19 +479,40 @@ const deleteFn = async (props: BranchScopeProps & { slug: string }) => {
 
 const list = async (props: BranchScopeProps) => {
   const branchId = await branchIdFromProps(props);
-  const functions = await listFunctions(
-    props.apiClient,
-    props.projectId,
-    branchId,
-  );
+  const functions: NeonFunction[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await listFunctions(
+      props.apiClient,
+      props.projectId,
+      branchId,
+      { cursor, limit: FUNCTIONS_LIST_LIMIT },
+    );
+    functions.push(...page.functions);
+    log.debug(
+      'Got %d functions, next cursor: %s',
+      page.functions.length,
+      page.next,
+    );
+    // A server echoing the same cursor would loop forever; treat it as
+    // the end of the list.
+    if (!page.next || page.next === cursor) break;
+    cursor = page.next;
+  }
 
   if (props.output === 'json' || props.output === 'yaml') {
     writer(props).end(functions, { fields: FUNCTION_FIELDS });
     return;
   }
 
-  writer(props).end(functions, {
-    fields: FUNCTION_FIELDS,
-    emptyMessage: 'No functions found on this branch.',
-  });
+  writer(props).end(
+    functions.map((fn) => ({
+      ...fn,
+      status: fn.current_deployment?.status ?? '',
+    })),
+    {
+      fields: LIST_TABLE_FIELDS,
+      emptyMessage: 'No functions found on this branch.',
+    },
+  );
 };

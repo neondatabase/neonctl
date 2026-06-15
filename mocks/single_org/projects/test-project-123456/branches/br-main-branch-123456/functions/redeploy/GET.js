@@ -8,14 +8,14 @@ const version = (id, status) => ({
   created_at: '2026-06-03T00:00:00Z',
 });
 
-const fn = (active_deployment) => ({
+const fn = (current_deployment) => ({
   function: {
     id: 'fn-redeploy',
     slug: 'redeploy',
     name: 'Redeploy',
     invocation_url: 'https://redeploy.functions.neon.tech',
     created_at: '2026-06-03T00:00:00Z',
-    active_deployment,
+    current_deployment,
   },
 });
 

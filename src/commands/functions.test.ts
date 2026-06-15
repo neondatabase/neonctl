@@ -121,6 +121,23 @@ describe('functions', () => {
     );
   });
 
+  test('get (table) with only an active deployment (old server)', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'activeonly',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
   test('get (table) shows the build failure reason', async ({
     testCliCommand,
   }) => {

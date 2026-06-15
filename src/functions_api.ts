@@ -22,6 +22,11 @@ export type NeonFunction = {
   name: string;
   invocation_url: string;
   created_at: string;
+  // The most recent deployment, any build status (may be building or
+  // failed). Absent until the first deployment is created.
+  current_deployment?: NeonFunctionDeployment;
+  // The most recent deployment whose build succeeded; the one serving
+  // invocations. A failed build never appears here.
   active_deployment?: NeonFunctionDeployment;
 };
 
@@ -32,18 +37,30 @@ const functionsPath = (projectId: string, branchId: string) =>
     branchId,
   )}/functions`;
 
+export type ListFunctionsPage = {
+  functions: NeonFunction[];
+  // Cursor of the next page; absent on the last page and on servers
+  // that do not paginate.
+  next?: string;
+};
+
 export const listFunctions = async (
   apiClient: ApiClient,
   projectId: string,
   branchId: string,
-): Promise<NeonFunction[]> => {
-  const { data } = await apiClient.request<{ functions: NeonFunction[] }>({
+  { cursor, limit }: { cursor?: string; limit?: number } = {},
+): Promise<ListFunctionsPage> => {
+  const { data } = await apiClient.request<{
+    functions: NeonFunction[];
+    pagination?: { next?: string };
+  }>({
     path: functionsPath(projectId, branchId),
     method: 'GET',
+    query: { cursor, limit },
     secure: true,
     format: 'json',
   });
-  return data.functions;
+  return { functions: data.functions ?? [], next: data.pagination?.next };
 };
 
 export const getFunction = async (

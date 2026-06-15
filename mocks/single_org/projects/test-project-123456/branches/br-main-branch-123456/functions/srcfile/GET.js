@@ -7,7 +7,7 @@ const fn = () => ({
     name: 'Srcfile',
     invocation_url: 'https://srcfile.functions.neon.tech',
     created_at: '2026-06-03T00:00:00Z',
-    active_deployment: {
+    current_deployment: {
       id: 1,
       status: 'building',
       memory_mib: 256,
