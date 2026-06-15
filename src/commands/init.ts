@@ -19,8 +19,9 @@ export const builder = (yargs: yargs.Argv) =>
     })
     .option('agent', {
       alias: 'a',
-      type: 'string',
-      describe: 'Agent to configure (cursor, copilot, claude, etc.).',
+      type: 'boolean',
+      default: false,
+      describe: 'Enable agent/JSON mode (agent type is auto-detected).',
     })
     .option('data', {
       type: 'string',
@@ -41,19 +42,18 @@ export const builder = (yargs: yargs.Argv) =>
     .strict(false);
 
 export const handler = async (argv: {
-  agent?: string;
+  agent?: boolean;
   data?: string;
-  skipNeonAuth?: boolean;
   skipMigrations?: boolean;
   preview?: boolean;
 }) => {
   try {
-    // Auto-detect agent from environment if --agent not explicitly provided.
-    // For IDE-based detection (Cursor, VS Code, Windsurf), require non-TTY stdin
-    // to distinguish "agent spawned this" from "human typed this in terminal".
+    // Auto-detect agent from environment. When --agent is explicitly passed,
+    // always detect (the user asked for agent mode). Otherwise, require
+    // non-TTY stdin to distinguish agent from human in terminal.
     const agent =
-      argv.agent || (!process.stdin.isTTY ? detectAgent() : null) || undefined;
-    const isAgentMode = agent !== undefined;
+      (argv.agent || !process.stdin.isTTY ? detectAgent() : null) || undefined;
+    const isAgentMode = argv.agent || agent !== undefined;
 
     // --data with a "step" field routes to the appropriate phase
     if (argv.data && isAgentMode) {
