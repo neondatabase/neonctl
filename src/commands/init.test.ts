@@ -53,26 +53,23 @@ describe('init', () => {
 
     expect(orchestrate).toHaveBeenCalledWith({
       agent: 'cursor',
-      skipNeonAuth: undefined,
       skipMigrations: undefined,
       preview: undefined,
     });
     expect(interactiveInit).not.toHaveBeenCalled();
   });
 
-  test('should pass skipNeonAuth and skipMigrations to orchestrate', async () => {
+  test('should pass skipMigrations to orchestrate', async () => {
     const { handler } = await import('./init.js');
     const { orchestrate } = await import('neon-init');
 
     await handler({
       agent: 'claude',
-      skipNeonAuth: true,
       skipMigrations: true,
     });
 
     expect(orchestrate).toHaveBeenCalledWith({
       agent: 'claude',
-      skipNeonAuth: true,
       skipMigrations: true,
       preview: undefined,
     });

@@ -27,11 +27,6 @@ export const builder = (yargs: yargs.Argv) =>
       describe:
         'JSON object with a "step" field to route to a specific phase and phase-specific options.',
     })
-    .option('skip-neon-auth', {
-      type: 'boolean',
-      default: false,
-      describe: 'Skip the Neon Auth setup phase.',
-    })
     .option('skip-migrations', {
       type: 'boolean',
       default: false,
@@ -80,7 +75,6 @@ export const handler = async (argv: {
     if (isAgentMode) {
       const result = await orchestrate({
         agent,
-        skipNeonAuth: argv.skipNeonAuth,
         skipMigrations: argv.skipMigrations,
         preview: argv.preview,
       });
