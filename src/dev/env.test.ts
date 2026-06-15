@@ -317,7 +317,9 @@ describe('resolveDevEnv', () => {
       'DATABASE_URL_UNPOOLED',
       'NEON_AUTH_BASE_URL',
       'NEON_AUTH_JWKS_URL',
+      'NEON_BRANCH',
     ]);
+    expect(result.vars.NEON_BRANCH).toBe('main');
     expect(result.vars.NEON_AUTH_BASE_URL).toBe('https://auth.fake.neon.tech');
     expect(result.vars.NEON_AUTH_JWKS_URL).toBe(
       'https://auth.fake.neon.tech/.well-known/jwks.json',
