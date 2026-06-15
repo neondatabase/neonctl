@@ -13,46 +13,83 @@ export const resolveEnvFilePath = (cwd: string, file?: string): string => {
 };
 
 /**
+ * Options for {@link mergeEnvFile} / {@link mergeEnvContent}.
+ */
+export type MergeEnvOptions = {
+  /**
+   * Keys the writer *owns*, so any that appear on disk but are absent from `updates` are
+   * removed (rather than preserved). Used by `env pull` to prune Neon-managed vars the
+   * branch no longer has — e.g. `NEON_AUTH_*` / `NEON_DATA_API_*` left behind after the
+   * working directory is pointed at a project/branch without those features. Keys outside
+   * this set are always preserved, so a user's own lines are never touched.
+   */
+  managedKeys?: Iterable<string>;
+};
+
+/**
  * Merge `updates` into the dotenv content at `path`, preserving every other line
  * (comments, blank lines, unrelated keys) and the file's existing order. Keys present in
  * both are updated in place; keys only in `updates` are appended. A non-existent file is
- * treated as empty. Returns the list of keys that were written (for reporting).
+ * treated as empty. When `managedKeys` is given, any owned key on disk that is absent from
+ * `updates` is removed. Returns the keys written and the (managed) keys removed.
  */
 export const mergeEnvFile = (
   path: string,
   updates: Record<string, string>,
-): { written: string[] } => {
+  options: MergeEnvOptions = {},
+): { written: string[]; removed: string[] } => {
   const original = existsSync(path) ? readFileSync(path, 'utf8') : '';
-  const { content, written } = mergeEnvContent(original, updates);
+  const { content, written, removed } = mergeEnvContent(
+    original,
+    updates,
+    options,
+  );
   writeFileSync(path, content);
-  return { written };
+  return { written, removed };
 };
 
 /**
  * Pure core of {@link mergeEnvFile}: takes the current file content and the updates, and
- * returns the new content plus which keys were written. Kept side-effect-free so it can be
- * unit-tested without touching the filesystem.
+ * returns the new content plus which keys were written / removed. Kept side-effect-free so
+ * it can be unit-tested without touching the filesystem.
  */
 export const mergeEnvContent = (
   original: string,
   updates: Record<string, string>,
-): { content: string; written: string[] } => {
+  options: MergeEnvOptions = {},
+): { content: string; written: string[]; removed: string[] } => {
   const keys = Object.keys(updates);
-  if (keys.length === 0) return { content: original, written: [] };
+
+  // Owned keys the current pull did not produce: stale Neon-managed vars to prune. Anything
+  // not in `managedKeys` is always kept, so a user's own lines are never removed.
+  const stale = new Set(
+    [...(options.managedKeys ?? [])].filter((key) => !(key in updates)),
+  );
+
+  if (keys.length === 0 && stale.size === 0) {
+    return { content: original, written: [], removed: [] };
+  }
 
   const remaining = new Set(keys);
+  const removed: string[] = [];
   const lines = original === '' ? [] : original.split('\n');
 
-  // Update keys in place where they already appear, so their position and any surrounding
-  // comments are preserved.
-  const updatedLines = lines.map((line) => {
+  // Walk the file: drop stale owned lines, update existing keys in place (so their position
+  // and any surrounding comments are preserved), and pass everything else through untouched.
+  const updatedLines: string[] = [];
+  for (const line of lines) {
     const key = parseKey(line);
+    if (key !== null && stale.has(key)) {
+      removed.push(key);
+      continue;
+    }
     if (key !== null && remaining.has(key)) {
       remaining.delete(key);
-      return formatLine(key, updates[key]);
+      updatedLines.push(formatLine(key, updates[key]));
+      continue;
     }
-    return line;
-  });
+    updatedLines.push(line);
+  }
 
   // Append keys that weren't already present, in the order they were given.
   const appended = keys
@@ -65,6 +102,7 @@ export const mergeEnvContent = (
     // A dotenv file ends with a trailing newline.
     content: content === '' ? '' : `${content}\n`,
     written: keys,
+    removed,
   };
 };
 

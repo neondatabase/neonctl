@@ -277,6 +277,39 @@ describe('env pull', () => {
     const content = readFileSync(join(cwd, '.env.preview'), 'utf8');
     expect(content).toMatch(/^DATABASE_URL=/m);
   });
+
+  it('prunes stale NEON_AUTH_* / NEON_DATA_API_* left from a prior project (Auth/Data API off)', async () => {
+    // A .env.local carried over from a project/branch that *had* Auth + the Data API
+    // enabled. The current branch (FakeNeonApi default) has neither, so a pull must drop the
+    // now-stale vars instead of leaving credentials for features that aren't enabled.
+    writeFileSync(
+      join(cwd, '.env.local'),
+      [
+        'APP_NAME=demo',
+        'DATABASE_URL=postgres://stale',
+        'NEON_AUTH_BASE_URL=https://stale.neonauth.example/db/auth',
+        'NEON_AUTH_JWKS_URL=https://stale.neonauth.example/db/auth/.well-known/jwks.json',
+        'NEON_DATA_API_URL=https://stale.apirest.example/db/rest/v1',
+        '',
+      ].join('\n'),
+    );
+
+    const result = await pull(baseProps(new FakeNeonApi(), cwd));
+
+    const content = readFileSync(join(cwd, '.env.local'), 'utf8');
+    // The user's own line and the (refreshed) Postgres URLs survive…
+    expect(content).toContain('APP_NAME=demo');
+    expect(content).toMatch(/^DATABASE_URL=/m);
+    expect(content).not.toContain('postgres://stale');
+    // …but the stale Auth / Data API vars are gone.
+    expect(content).not.toContain('NEON_AUTH_BASE_URL');
+    expect(content).not.toContain('NEON_AUTH_JWKS_URL');
+    expect(content).not.toContain('NEON_DATA_API_URL');
+    expect(result.status).toBe('written');
+    if (result.status === 'written') {
+      expect(result.written).toContain('DATABASE_URL');
+    }
+  });
 });
 
 /**

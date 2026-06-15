@@ -82,6 +82,29 @@ const NEON_VAR_NAMES = Object.values(NEON_ENV_VAR_KEYS).flatMap((group) =>
 );
 
 /**
+ * The Neon env vars `env pull` *owns*, so it removes any that the branch no longer has when
+ * it reconciles the local `.env` (see {@link pull}). Scoped to the unambiguously Neon-named
+ * vars — the `NEON_*` aliases plus `DATABASE_URL[_UNPOOLED]` — so switching a working
+ * directory to a project/branch without Auth / the Data API drops the now-stale
+ * `NEON_AUTH_*` / `NEON_DATA_API_*` lines instead of leaving credentials for features that
+ * aren't enabled.
+ *
+ * Deliberately **excludes** the storage / AI Gateway vars Neon projects onto third-party SDK
+ * names (`AWS_*`, `OPENAI_*`): those collide with credentials a user may set by hand, so
+ * `env pull` only ever writes them, never prunes them. (Their Neon-branded siblings —
+ * `NEON_STORAGE_*` / `NEON_AI_GATEWAY_*` — are owned and pruned.)
+ */
+const NEON_OWNED_ENV_KEYS: readonly string[] = [
+  ...Object.values(NEON_ENV_VAR_KEYS.postgres),
+  ...Object.values(NEON_ENV_VAR_KEYS.auth),
+  ...Object.values(NEON_ENV_VAR_KEYS.dataApi),
+  NEON_ENV_VAR_KEYS.storage.regionNeon,
+  NEON_ENV_VAR_KEYS.storage.forcePathStyle,
+  NEON_ENV_VAR_KEYS.aiGateway.neonToken,
+  NEON_ENV_VAR_KEYS.aiGateway.neonBaseUrl,
+];
+
+/**
  * What an env pull actually did, so callers (notably `link --agent`) can report it precisely
  * instead of guessing. `written` lists the keys merged into `file`; `empty` means the branch
  * has no Neon vars to pull yet (no DATABASE_URL / Auth / Data API).
@@ -130,7 +153,12 @@ export const pull = async (
     return { status: 'empty' };
   }
 
-  const { written } = mergeEnvFile(targetPath, neonVars);
+  // Reconcile rather than blindly merge: write the branch's current Neon vars and prune any
+  // Neon-owned vars the branch no longer has (e.g. NEON_AUTH_* / NEON_DATA_API_* carried over
+  // from a previous project/branch). Non-Neon lines are always preserved.
+  const { written, removed } = mergeEnvFile(targetPath, neonVars, {
+    managedKeys: NEON_OWNED_ENV_KEYS,
+  });
   log.info(
     'Pulled %d Neon variable%s into %s: %s',
     written.length,
@@ -138,6 +166,14 @@ export const pull = async (
     targetPath,
     written.join(', '),
   );
+  if (removed.length > 0) {
+    log.info(
+      'Removed %d stale Neon variable%s not enabled on this branch: %s',
+      removed.length,
+      removed.length === 1 ? '' : 's',
+      removed.join(', '),
+    );
+  }
   return { status: 'written', written, file: targetPath };
 };
 
