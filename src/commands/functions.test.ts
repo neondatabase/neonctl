@@ -38,7 +38,7 @@ describe('functions', () => {
         },
         stderr:
           'INFO: Function deployment triggered for function nowaitfunc. ' +
-          'INFO: Check status with: neonctl functions get nowaitfunc ' +
+          'INFO: Check status with: neonctl function get nowaitfunc ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );
@@ -74,6 +74,12 @@ describe('functions', () => {
 
   test('list with implicit project and branch', async ({ testCliCommand }) => {
     await testCliCommand(['functions', 'list'], { mockDir: 'single_org' });
+  });
+
+  test('list resolves via the primary "function" command', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(['function', 'list'], { mockDir: 'single_org' });
   });
 
   test('get (yaml)', async ({ testCliCommand }) => {
@@ -383,7 +389,7 @@ describe('functions', () => {
         },
         stderr:
           'INFO: Function deployment triggered for function stuckstart. ' +
-          'INFO: Check status with: neonctl functions get stuckstart ' +
+          'INFO: Check status with: neonctl function get stuckstart ' +
           '--project-id test-project-123456 --branch br-main-branch-123456 ' +
           'ERROR: Timed out waiting for the deployment of stuckstart to start. ' +
           'It may still be in progress.',
@@ -416,7 +422,7 @@ describe('functions', () => {
         },
         stderr:
           'INFO: Function deployment triggered for function stuckbuild. ' +
-          'INFO: Check status with: neonctl functions get stuckbuild ' +
+          'INFO: Check status with: neonctl function get stuckbuild ' +
           '--project-id test-project-123456 --branch br-main-branch-123456 ' +
           'ERROR: Timed out waiting for function deployment stuckbuild/1 to finish. ' +
           'It may still be building.',
@@ -452,7 +458,7 @@ describe('functions', () => {
         },
         stderr:
           'INFO: Function deployment triggered for function envfunc. ' +
-          'INFO: Check status with: neonctl functions get envfunc ' +
+          'INFO: Check status with: neonctl function get envfunc ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );
@@ -611,7 +617,7 @@ describe('functions', () => {
         code: 1,
         stderr:
           'ERROR: Provide at least one option to deploy, e.g. --src or --env. ' +
-          'See: neonctl functions deploy --help.',
+          'See: neonctl function deploy --help.',
       },
     );
   });
@@ -645,7 +651,7 @@ describe('functions', () => {
         },
         stderr:
           'INFO: Function deployment triggered for function tsoverjs. ' +
-          'INFO: Check status with: neonctl functions get tsoverjs ' +
+          'INFO: Check status with: neonctl function get tsoverjs ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );
@@ -678,7 +684,7 @@ describe('functions', () => {
         },
         stderr:
           'INFO: Function deployment triggered for function mjsoverjs. ' +
-          'INFO: Check status with: neonctl functions get mjsoverjs ' +
+          'INFO: Check status with: neonctl function get mjsoverjs ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );
@@ -711,7 +717,7 @@ describe('functions', () => {
         },
         stderr:
           'INFO: Function deployment triggered for function jsonly. ' +
-          'INFO: Check status with: neonctl functions get jsonly ' +
+          'INFO: Check status with: neonctl function get jsonly ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );
@@ -747,7 +753,7 @@ describe('functions', () => {
         },
         stderr:
           'INFO: Function deployment triggered for function srcfile. ' +
-          'INFO: Check status with: neonctl functions get srcfile ' +
+          'INFO: Check status with: neonctl function get srcfile ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
       },
     );

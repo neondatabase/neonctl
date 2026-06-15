@@ -89,12 +89,12 @@ const POLL_INTERVAL_MS =
 const POLL_TIMEOUT_MS =
   Number(process.env.NEON_FUNCTIONS_POLL_TIMEOUT_MS) || 600_000;
 
-export const command = 'functions';
+export const command = 'function';
 export const describe = 'Manage Neon Functions';
-export const aliases = ['function'];
+export const aliases = ['functions'];
 export const builder = (argv: yargs.Argv) =>
   argv
-    .usage('$0 functions <sub-command> [options]')
+    .usage('$0 function <sub-command> [options]')
     .options({
       'project-id': {
         describe: 'Project ID',
@@ -217,7 +217,7 @@ const parseEnv = (entries: string[] | undefined): string | undefined => {
 };
 
 const statusHint = (slug: string, projectId: string, branchId: string) =>
-  `Check status with: neonctl functions get ${slug} --project-id ${projectId} --branch ${branchId}`;
+  `Check status with: neonctl function get ${slug} --project-id ${projectId} --branch ${branchId}`;
 
 // Emit the resolved deployment together with the function's invocation_url, so the
 // deploy output shows where the function is reachable (not just the deployment id).
@@ -261,7 +261,7 @@ const deploy = async (props: DeployProps) => {
   if (!hasOption) {
     throw new Error(
       'Provide at least one option to deploy, e.g. --src or --env. ' +
-        'See: neonctl functions deploy --help.',
+        'See: neonctl function deploy --help.',
     );
   }
 
