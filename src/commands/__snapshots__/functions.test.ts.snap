@@ -415,6 +415,32 @@ exports[`functions > list (yaml) 1`] = `
 "
 `;
 
+exports[`functions > list resolves via the primary "function" command 1`] = `
+"- id: fn-1
+  slug: my-func
+  name: My Func
+  invocation_url: https://my-func.functions.neon.tech
+  created_at: 2026-06-03T00:00:00Z
+  current_deployment:
+    id: 1
+    status: completed
+    memory_mib: 256
+    runtime: nodejs24
+    created_at: 2026-06-03T00:00:00Z
+  active_deployment:
+    id: 1
+    status: completed
+    memory_mib: 256
+    runtime: nodejs24
+    created_at: 2026-06-03T00:00:00Z
+- id: fn-2
+  slug: other-func
+  name: Other Func
+  invocation_url: https://other-func.functions.neon.tech
+  created_at: 2026-06-02T00:00:00Z
+"
+`;
+
 exports[`functions > list with implicit project and branch 1`] = `
 "- id: fn-1
   slug: my-func
