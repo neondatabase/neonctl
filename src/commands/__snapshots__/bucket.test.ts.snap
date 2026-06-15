@@ -56,7 +56,36 @@ exports[`bucket > object get surfaces the server message when the object is miss
 
 exports[`bucket > object get without a key is rejected client-side 1`] = `""`;
 
-exports[`bucket > object list 1`] = `
+exports[`bucket > object list --output json includes folders (prefixes) and keys 1`] = `
+"{
+  "folders": [
+    "images/",
+    "logs/"
+  ],
+  "objects": [
+    {
+      "key": "hello.txt",
+      "size": 12,
+      "last_modified": "2021-01-01T00:00:00.000Z",
+      "etag": "\\"abc123\\""
+    },
+    {
+      "key": "readme.md",
+      "size": 2048,
+      "last_modified": "2021-02-02T00:00:00.000Z",
+      "etag": "\\"def456\\""
+    }
+  ],
+  "prefix": "",
+  "delimiter": "/",
+  "limit": "",
+  "cursor": "",
+  "next_cursor": "",
+  "is_truncated": false
+}"
+`;
+
+exports[`bucket > object list --recursive sends no delimiter (flat listing) 1`] = `
 "folders:
   - images/
   - logs/
@@ -71,6 +100,52 @@ objects:
     etag: '"def456"'
 prefix: ""
 delimiter: ""
+limit: ""
+cursor: ""
+next_cursor: ""
+is_truncated: false
+"
+`;
+
+exports[`bucket > object list --recursive with --delimiter is rejected client-side 1`] = `""`;
+
+exports[`bucket > object list 1`] = `
+"folders:
+  - images/
+  - logs/
+objects:
+  - key: hello.txt
+    size: 12
+    last_modified: 2021-01-01T00:00:00.000Z
+    etag: '"abc123"'
+  - key: readme.md
+    size: 2048
+    last_modified: 2021-02-02T00:00:00.000Z
+    etag: '"def456"'
+prefix: ""
+delimiter: /
+limit: ""
+cursor: ""
+next_cursor: ""
+is_truncated: false
+"
+`;
+
+exports[`bucket > object list defaults to the folder-collapsed view (delimiter "/") 1`] = `
+"folders:
+  - images/
+  - logs/
+objects:
+  - key: hello.txt
+    size: 12
+    last_modified: 2021-01-01T00:00:00.000Z
+    etag: '"abc123"'
+  - key: readme.md
+    size: 2048
+    last_modified: 2021-02-02T00:00:00.000Z
+    etag: '"def456"'
+prefix: ""
+delimiter: /
 limit: ""
 cursor: ""
 next_cursor: ""
@@ -100,7 +175,7 @@ is_truncated: false
 "
 `;
 
-exports[`bucket > object list with fully implicit project/branch resolution 1`] = `
+exports[`bucket > object list with an explicit empty --delimiter lists flat 1`] = `
 "folders:
   - images/
   - logs/
@@ -115,6 +190,28 @@ objects:
     etag: '"def456"'
 prefix: ""
 delimiter: ""
+limit: ""
+cursor: ""
+next_cursor: ""
+is_truncated: false
+"
+`;
+
+exports[`bucket > object list with fully implicit project/branch resolution 1`] = `
+"folders:
+  - images/
+  - logs/
+objects:
+  - key: hello.txt
+    size: 12
+    last_modified: 2021-01-01T00:00:00.000Z
+    etag: '"abc123"'
+  - key: readme.md
+    size: 2048
+    last_modified: 2021-02-02T00:00:00.000Z
+    etag: '"def456"'
+prefix: ""
+delimiter: /
 limit: ""
 cursor: ""
 next_cursor: ""
@@ -156,7 +253,7 @@ objects:
     last_modified: 2021-02-02T00:00:00.000Z
     etag: '"def456"'
 prefix: ""
-delimiter: ""
+delimiter: /
 limit: ""
 cursor: ""
 next_cursor: ""

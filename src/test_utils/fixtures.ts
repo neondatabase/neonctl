@@ -18,6 +18,7 @@ type Fixtures = {
       stderr?: string;
       code?: number;
       outputTable?: boolean;
+      output?: 'json' | 'yaml' | 'table';
       env?: Record<string, string>;
     },
   ) => Promise<void>;
@@ -71,7 +72,7 @@ export const test = originalTest.extend<Fixtures>({
           '--api-host',
           `http://localhost:${(server.address() as AddressInfo).port}`,
           '--output',
-          options.outputTable ? 'table' : 'yaml',
+          options.output ?? (options.outputTable ? 'table' : 'yaml'),
           '--api-key',
           'test-key',
           '--no-analytics',

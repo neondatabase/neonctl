@@ -129,7 +129,8 @@ export const builder = (argv: yargs.Argv) =>
           .command({
             command: 'list <target>',
             aliases: ['ls'],
-            describe: 'List objects in a bucket',
+            describe:
+              'List objects in a bucket. By default folders are collapsed (like "aws s3 ls"); pass --recursive for a flat listing of every key',
             builder: (yargs) =>
               yargs
                 .usage('$0 bucket object list <bucket>[/<prefix>] [options]')
@@ -141,9 +142,15 @@ export const builder = (argv: yargs.Argv) =>
                 })
                 .options({
                   ...scopeOptions,
+                  recursive: {
+                    describe:
+                      'List every key flat, descending into nested folders (no delimiter). Mutually exclusive with --delimiter. Mirrors "aws s3 ls --recursive"',
+                    type: 'boolean',
+                    default: false,
+                  },
                   delimiter: {
                     describe:
-                      'Collapse keys sharing a common prefix (e.g. "/") into folders',
+                      'Collapse keys sharing this prefix separator into folders. Defaults to "/" (folder view); ignored when --recursive is set',
                     type: 'string',
                   },
                   cursor: {
@@ -298,14 +305,40 @@ const deleteBucket = async (
   log.info(`Bucket "${props.name}" deleted from branch ${branchId}`);
 };
 
+// Resolve the delimiter to send to the backend, mirroring `aws s3 ls`:
+//   - default (neither flag): "/" so the listing is folder-collapsed;
+//   - --recursive: no delimiter, so every nested key is returned flat;
+//   - explicit --delimiter <x>: that value (an empty string lists flat too).
+// `--recursive` together with an explicit `--delimiter` is nonsensical and is
+// rejected client-side before any HTTP request is made.
+export const resolveListDelimiter = (props: {
+  recursive?: boolean;
+  delimiter?: string;
+}): string | undefined => {
+  if (props.recursive && props.delimiter !== undefined) {
+    throw new Error(
+      '--recursive and --delimiter cannot be used together. Use --recursive for a flat listing, or --delimiter to collapse on a separator.',
+    );
+  }
+  if (props.recursive) {
+    return undefined;
+  }
+  if (props.delimiter !== undefined) {
+    return props.delimiter;
+  }
+  return '/';
+};
+
 const listObjects = async (
   props: BranchScopeProps & {
     target: string;
+    recursive?: boolean;
     delimiter?: string;
     cursor?: string;
     limit?: number;
   },
 ): Promise<void> => {
+  const delimiter = resolveListDelimiter(props);
   const branchId = await branchIdFromProps(props);
   const { bucket, rest } = splitBucketTarget(props.target);
   const { data } = await listProjectBranchBucketObjects(props.apiClient, {
@@ -313,7 +346,7 @@ const listObjects = async (
     branchId,
     bucketName: bucket,
     prefix: rest === '' ? undefined : rest,
-    delimiter: props.delimiter,
+    delimiter,
     cursor: props.cursor,
     limit: props.limit,
   });
