@@ -84,7 +84,7 @@ const POLL_INTERVAL_MS =
   Number(process.env.NEON_FUNCTIONS_POLL_INTERVAL_MS) || 2000;
 
 // Upper bound on --wait polling so the CLI never hangs (e.g. if our deployment
-// never becomes active_deployment). Overridable so tests can time out fast;
+// never shows up as current_deployment). Overridable so tests can time out fast;
 // defaults to 10 minutes in real use.
 const POLL_TIMEOUT_MS =
   Number(process.env.NEON_FUNCTIONS_POLL_TIMEOUT_MS) || 600_000;
@@ -294,8 +294,8 @@ const deploy = async (props: DeployProps) => {
   const zip = zipBundle(await bundleEntry(source));
   const branchId = await branchIdFromProps(props);
 
-  // Snapshot the active version before deploy so we can detect the new one
-  // afterward. A missing function (404) or no active version → undefined.
+  // Snapshot the current version before deploy so we can detect the new one
+  // afterward. A missing function (404) or no deployment yet → undefined.
   let before: number | undefined;
   try {
     const fn = await getFunction(
@@ -304,7 +304,7 @@ const deploy = async (props: DeployProps) => {
       branchId,
       props.slug,
     );
-    before = fn.active_deployment?.id;
+    before = fn.current_deployment?.id;
   } catch (err: unknown) {
     if (!(isAxiosError(err) && err.response?.status === 404)) throw err;
   }
@@ -327,12 +327,12 @@ const deploy = async (props: DeployProps) => {
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
 
-  // Poll until a NEW active version appears (id greater than the snapshot, or
+  // Poll until a NEW version appears (id greater than the snapshot, or
   // any version if there was none). --no-wait stops there; --wait stops at a
   // terminal status. Bounded by POLL_TIMEOUT_MS so it never hangs.
   let resolved: NeonFunctionDeployment | undefined;
   // The function carries the invocation_url; keep the whole record (not just its
-  // active_deployment) so we can surface that URL on success.
+  // current_deployment) so we can surface that URL on success.
   let resolvedFn: NeonFunction | undefined;
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   try {
@@ -353,7 +353,7 @@ const deploy = async (props: DeployProps) => {
         if (isTransient(err)) continue;
         throw err;
       }
-      const dep = fn.active_deployment;
+      const dep = fn.current_deployment;
       const isNew =
         dep !== undefined && (before === undefined || dep.id > before);
       if (isNew && dep) {
