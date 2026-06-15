@@ -57,13 +57,15 @@ afterAll(() => {
 });
 
 describe('bundleEntry', () => {
-  test('inlines local imports and emits a linked sourcemap', async () => {
+  test('inlines local imports and emits no sourcemap', async () => {
     const out = await bundleEntry(join(dir, 'index.ts'), npmDeps);
     const js = strFromU8(out['index.mjs']);
     expect(js).toContain('hi from helper');
     expect(js).not.toContain('./helper');
-    expect(js).toContain('sourceMappingURL=index.mjs.map');
-    expect(out['index.mjs.map'].length).toBeGreaterThan(0);
+    // No source map is generated — the Functions runtime never consumes it, so we neither
+    // emit `index.mjs.map` nor leave a dangling `sourceMappingURL` link in the bundle.
+    expect(js).not.toContain('sourceMappingURL');
+    expect(out['index.mjs.map']).toBeUndefined();
   });
 
   // Node built-ins stay external on platform:'node'; the createRequire banner is injected

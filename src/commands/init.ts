@@ -1,32 +1,13 @@
-import { init } from 'neon-init';
+import {
+  detectAgent,
+  enrichResponse,
+  interactiveInit,
+  orchestrate,
+  routeDataStep,
+} from 'neon-init';
 import yargs from 'yargs';
 import { sendError } from '../analytics.js';
 import { log } from '../log.js';
-
-const AGENT_FLAG_VALUES = ['cursor', 'copilot', 'claude'] as const;
-
-type Editor = 'Cursor' | 'VS Code' | 'Claude CLI';
-
-function parseAgentToEditor(value: string): Editor | null {
-  const normalized = value.trim().toLowerCase();
-  switch (normalized) {
-    case 'cursor':
-      return 'Cursor';
-    case 'github-copilot':
-    case 'copilot':
-    case 'vs code':
-    case 'vscode':
-    case 'vs-code':
-      return 'VS Code';
-    case 'claude-code':
-    case 'claude cli':
-    case 'claude-cli':
-    case 'claude':
-      return 'Claude CLI';
-    default:
-      return null;
-  }
-}
 
 export const command = 'init';
 export const describe =
@@ -39,26 +20,74 @@ export const builder = (yargs: yargs.Argv) =>
     .option('agent', {
       alias: 'a',
       type: 'string',
-      describe: 'Agent to configure (cursor, copilot, code).',
+      describe: 'Agent to configure (cursor, copilot, claude, etc.).',
+    })
+    .option('data', {
+      type: 'string',
+      describe:
+        'JSON object with a "step" field to route to a specific phase and phase-specific options.',
+    })
+    .option('skip-neon-auth', {
+      type: 'boolean',
+      default: false,
+      describe: 'Skip the Neon Auth setup phase.',
+    })
+    .option('skip-migrations', {
+      type: 'boolean',
+      default: false,
+      describe: 'Skip the migrations phase.',
+    })
+    .option('preview', {
+      type: 'boolean',
+      default: false,
+      describe:
+        'Enable preview features (e.g. project bootstrapping from templates).',
     })
     .strict(false);
 
-export const handler = async (argv: { agent?: string }) => {
-  let options: { agent: Editor } | undefined;
-  const agentArg = argv.agent;
-  if (agentArg !== undefined) {
-    const editor = parseAgentToEditor(agentArg);
-    if (editor === null) {
-      log.error(
-        `Invalid --agent value: "${agentArg}". Supported: ${AGENT_FLAG_VALUES.join(', ')}`,
-      );
-      process.exit(1);
-      return;
-    }
-    options = { agent: editor };
-  }
+export const handler = async (argv: {
+  agent?: string;
+  data?: string;
+  skipNeonAuth?: boolean;
+  skipMigrations?: boolean;
+  preview?: boolean;
+}) => {
   try {
-    await init(options);
+    // Auto-detect agent from environment if --agent not explicitly provided.
+    // For IDE-based detection (Cursor, VS Code, Windsurf), require non-TTY stdin
+    // to distinguish "agent spawned this" from "human typed this in terminal".
+    const agent =
+      argv.agent || (!process.stdin.isTTY ? detectAgent() : null) || undefined;
+    const isAgentMode = agent !== undefined;
+
+    // --data with a "step" field routes to the appropriate phase
+    if (argv.data && isAgentMode) {
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(argv.data);
+      } catch {
+        log.error('Invalid JSON in --data flag. Expected a JSON object.');
+        process.exit(1);
+        return;
+      }
+      if (typeof data.step === 'string') {
+        const result = await routeDataStep(data, agent);
+        log.info(JSON.stringify(enrichResponse(result), null, 2));
+        return;
+      }
+    }
+
+    if (isAgentMode) {
+      const result = await orchestrate({
+        agent,
+        skipNeonAuth: argv.skipNeonAuth,
+        skipMigrations: argv.skipMigrations,
+        preview: argv.preview,
+      });
+      log.info(JSON.stringify(enrichResponse(result), null, 2));
+    } else {
+      await interactiveInit({ preview: argv.preview });
+    }
   } catch {
     const exitError = new Error(`failed to run neon-init`);
     sendError(exitError, 'NEON_INIT_FAILED');

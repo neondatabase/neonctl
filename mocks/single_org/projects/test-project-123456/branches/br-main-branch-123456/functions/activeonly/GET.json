@@ -1,0 +1,16 @@
+{
+  "function": {
+    "id": "fn-activeonly",
+    "slug": "activeonly",
+    "name": "Activeonly",
+    "invocation_url": "https://activeonly.functions.neon.tech",
+    "created_at": "2026-06-03T00:00:00Z",
+    "active_deployment": {
+      "id": 1,
+      "status": "completed",
+      "memory_mib": 256,
+      "runtime": "nodejs24",
+      "created_at": "2026-06-03T00:00:00Z"
+    }
+  }
+}

@@ -11,10 +11,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { NeonApi } from '@neondatabase/config';
 import type {
+  CreateCredentialInput,
   GetConnectionUriInput,
   NeonAuthSnapshot,
   NeonBranchSnapshot,
+  NeonBranchStorageSnapshot,
   NeonBucketSnapshot,
+  NeonCredentialMeta,
+  NeonCredentialSecret,
   NeonDataApiSnapshot,
   NeonDatabaseSnapshot,
   NeonEndpointSnapshot,
@@ -132,6 +136,9 @@ class FakeNeonApi implements NeonApi {
   async enableProjectBranchDataApi(): Promise<NeonDataApiSnapshot> {
     throw new Error('not implemented');
   }
+  async updateProjectBranchDataApi(): Promise<NeonDataApiSnapshot> {
+    throw new Error('not implemented');
+  }
   async listBranchBuckets(): Promise<NeonBucketSnapshot[]> {
     return [];
   }
@@ -143,9 +150,6 @@ class FakeNeonApi implements NeonApi {
   }
   async listBranchFunctions(): Promise<NeonFunctionSnapshot[]> {
     return [];
-  }
-  async createBranchFunction(): Promise<NeonFunctionSnapshot> {
-    throw new Error('not implemented');
   }
   async deleteBranchFunction(): Promise<void> {
     throw new Error('not implemented');
@@ -161,6 +165,34 @@ class FakeNeonApi implements NeonApi {
   }
   async disableAiGateway(): Promise<void> {
     throw new Error('not implemented');
+  }
+  async createCredential(
+    _projectId: string,
+    branchId: string,
+    input: CreateCredentialInput,
+  ): Promise<NeonCredentialSecret> {
+    return {
+      tokenId: 'cred-fake-0000',
+      tokenIdShort: 'credfake0000',
+      apiToken: 'nt_live_credfake0000_secret',
+      s3SecretAccessKey: 's3secret'.padEnd(64, '0'),
+      scopes: input.scopes,
+      branchId,
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+  }
+  async listCredentials(): Promise<NeonCredentialMeta[]> {
+    return [];
+  }
+  async revokeCredential(): Promise<void> {
+    return;
+  }
+  async getProjectBranchStorage(): Promise<NeonBranchStorageSnapshot | null> {
+    return {
+      s3Endpoint: 'https://fake.storage.neon.tech',
+      region: 'us-east-1',
+      forcePathStyle: true,
+    };
   }
 }
 
@@ -244,6 +276,39 @@ describe('env pull', () => {
     await pull({ ...baseProps(new FakeNeonApi(), cwd), file: '.env.preview' });
     const content = readFileSync(join(cwd, '.env.preview'), 'utf8');
     expect(content).toMatch(/^DATABASE_URL=/m);
+  });
+
+  it('prunes stale NEON_AUTH_* / NEON_DATA_API_* left from a prior project (Auth/Data API off)', async () => {
+    // A .env.local carried over from a project/branch that *had* Auth + the Data API
+    // enabled. The current branch (FakeNeonApi default) has neither, so a pull must drop the
+    // now-stale vars instead of leaving credentials for features that aren't enabled.
+    writeFileSync(
+      join(cwd, '.env.local'),
+      [
+        'APP_NAME=demo',
+        'DATABASE_URL=postgres://stale',
+        'NEON_AUTH_BASE_URL=https://stale.neonauth.example/db/auth',
+        'NEON_AUTH_JWKS_URL=https://stale.neonauth.example/db/auth/.well-known/jwks.json',
+        'NEON_DATA_API_URL=https://stale.apirest.example/db/rest/v1',
+        '',
+      ].join('\n'),
+    );
+
+    const result = await pull(baseProps(new FakeNeonApi(), cwd));
+
+    const content = readFileSync(join(cwd, '.env.local'), 'utf8');
+    // The user's own line and the (refreshed) Postgres URLs survive…
+    expect(content).toContain('APP_NAME=demo');
+    expect(content).toMatch(/^DATABASE_URL=/m);
+    expect(content).not.toContain('postgres://stale');
+    // …but the stale Auth / Data API vars are gone.
+    expect(content).not.toContain('NEON_AUTH_BASE_URL');
+    expect(content).not.toContain('NEON_AUTH_JWKS_URL');
+    expect(content).not.toContain('NEON_DATA_API_URL');
+    expect(result.status).toBe('written');
+    if (result.status === 'written') {
+      expect(result.written).toContain('DATABASE_URL');
+    }
   });
 });
 

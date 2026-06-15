@@ -4,11 +4,14 @@ import yargs from 'yargs';
 import { type NeonApi } from '@neondatabase/config';
 import { NEON_ENV_VAR_KEYS } from '@neondatabase/env';
 
+import { existsSync } from 'node:fs';
+
 import { log } from '../log.js';
 import { BranchScopeProps } from '../types.js';
 import { resolveNeonEnvVars } from '../dev/env.js';
-import { mergeEnvFile, resolveEnvFilePath } from '../env_file.js';
-import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
+import { mergeEnvFile, readEnvFile, resolveEnvFilePath } from '../env_file.js';
+import { fillSingleProject, resolveBranchRef } from '../utils/enrichers.js';
+import { announceTargetBranch } from '../utils/branch_notice.js';
 
 export type EnvPullProps = BranchScopeProps & {
   /** Target dotenv file. Defaults to an existing `.env`, else `.env.local`. */
@@ -62,7 +65,11 @@ export const builder = (argv: yargs.Argv) =>
             'Pull a specific branch into a specific file',
           ),
       async (args) => {
-        await pull(args as any);
+        // Explicit `env pull` announces the branch it's reading from up front so the user
+        // can catch "pulled env from the wrong branch" before it overwrites their .env. The
+        // bundled auto-pull (link / checkout / apply) stays quiet — those already report the
+        // branch they pinned/applied to.
+        await pull(args as any, { announce: true });
       },
     )
     .demandCommand(1);
@@ -75,6 +82,29 @@ const NEON_VAR_NAMES = Object.values(NEON_ENV_VAR_KEYS).flatMap((group) =>
 );
 
 /**
+ * The Neon env vars `env pull` *owns*, so it removes any that the branch no longer has when
+ * it reconciles the local `.env` (see {@link pull}). Scoped to the unambiguously Neon-named
+ * vars — the `NEON_*` aliases plus `DATABASE_URL[_UNPOOLED]` — so switching a working
+ * directory to a project/branch without Auth / the Data API drops the now-stale
+ * `NEON_AUTH_*` / `NEON_DATA_API_*` lines instead of leaving credentials for features that
+ * aren't enabled.
+ *
+ * Deliberately **excludes** the storage / AI Gateway vars Neon projects onto third-party SDK
+ * names (`AWS_*`, `OPENAI_*`): those collide with credentials a user may set by hand, so
+ * `env pull` only ever writes them, never prunes them. (Their Neon-branded siblings —
+ * `NEON_STORAGE_*` / `NEON_AI_GATEWAY_*` — are owned and pruned.)
+ */
+const NEON_OWNED_ENV_KEYS: readonly string[] = [
+  ...Object.values(NEON_ENV_VAR_KEYS.postgres),
+  ...Object.values(NEON_ENV_VAR_KEYS.auth),
+  ...Object.values(NEON_ENV_VAR_KEYS.dataApi),
+  NEON_ENV_VAR_KEYS.storage.regionNeon,
+  NEON_ENV_VAR_KEYS.storage.forcePathStyle,
+  NEON_ENV_VAR_KEYS.aiGateway.neonToken,
+  NEON_ENV_VAR_KEYS.aiGateway.neonBaseUrl,
+];
+
+/**
  * What an env pull actually did, so callers (notably `link --agent`) can report it precisely
  * instead of guessing. `written` lists the keys merged into `file`; `empty` means the branch
  * has no Neon vars to pull yet (no DATABASE_URL / Auth / Data API).
@@ -83,9 +113,23 @@ export type PullOutcome =
   | { status: 'written'; written: string[]; file: string }
   | { status: 'empty' };
 
-export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
+export const pull = async (
+  props: EnvPullProps,
+  opts: { announce?: boolean } = {},
+): Promise<PullOutcome> => {
   const cwd = props.cwd ?? process.cwd();
-  const branchId = await branchIdFromProps(props);
+  const branch = await resolveBranchRef(props);
+  if (opts.announce) {
+    announceTargetBranch(props, branch, 'Pulling env from branch');
+  }
+  const branchId = branch.branchId;
+
+  // Resolve the target file first and layer its current contents under the resolver's env
+  // source. This lets `fetchEnv` reuse one-time secrets that are already on disk — Neon Auth
+  // keys and the unified branch credential's `api_token` / `s3_secret_access_key`, which the
+  // API returns exactly once — instead of minting a fresh credential on every pull.
+  const targetPath = resolveEnvFilePath(cwd, props.file);
+  const existingEnv = existsSync(targetPath) ? readEnvFile(targetPath) : {};
 
   // Reuse `neon dev`'s tiered resolver (neon.ts policy -> plan gate -> fetchEnv, else
   // pullConfig -> fetchEnv). Unlike dev, an unresolved context or failure is surfaced —
@@ -94,6 +138,7 @@ export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
     cwd,
     projectId: props.projectId,
     branchId,
+    env: { ...process.env, ...existingEnv },
     ...(props.apiKey ? { apiKey: props.apiKey } : {}),
     ...(props.apiHost ? { apiHost: props.apiHost } : {}),
     ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
@@ -108,8 +153,12 @@ export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
     return { status: 'empty' };
   }
 
-  const targetPath = resolveEnvFilePath(cwd, props.file);
-  const { written } = mergeEnvFile(targetPath, neonVars);
+  // Reconcile rather than blindly merge: write the branch's current Neon vars and prune any
+  // Neon-owned vars the branch no longer has (e.g. NEON_AUTH_* / NEON_DATA_API_* carried over
+  // from a previous project/branch). Non-Neon lines are always preserved.
+  const { written, removed } = mergeEnvFile(targetPath, neonVars, {
+    managedKeys: NEON_OWNED_ENV_KEYS,
+  });
   log.info(
     'Pulled %d Neon variable%s into %s: %s',
     written.length,
@@ -117,6 +166,14 @@ export const pull = async (props: EnvPullProps): Promise<PullOutcome> => {
     targetPath,
     written.join(', '),
   );
+  if (removed.length > 0) {
+    log.info(
+      'Removed %d stale Neon variable%s not enabled on this branch: %s',
+      removed.length,
+      removed.length === 1 ? '' : 's',
+      removed.join(', '),
+    );
+  }
   return { status: 'written', written, file: targetPath };
 };
 

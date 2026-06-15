@@ -60,7 +60,29 @@ For information about obtaining an Neon API key, see [Authentication](https://ap
 
 ## Connect with psql
 
-Several commands accept a `--psql` flag that opens a psql session against the resolved endpoint:
+### The `psql` command
+
+`neonctl psql [branch]` opens a psql session against a branch. It builds the connection string for the branch and launches psql — a shortcut for `neonctl connection-string --psql`. See [Neon CLI commands — psql](https://neon.com/docs/reference/cli-psql) for the full reference.
+
+```bash
+neonctl psql                                    # default branch
+neonctl psql main                               # a specific branch
+neonctl psql main@2024-01-01T00:00:00Z          # point-in-time (branch@timestamp or branch@lsn)
+neonctl psql --pooled                           # use the pooled connection
+```
+
+Arguments after `--` are forwarded to psql:
+
+```bash
+neonctl psql main -- -c "SELECT version()"
+neonctl psql main -- -f script.sql --csv
+```
+
+Options: `--project-id`, `--role-name`, `--database-name`, `--pooled`, `--endpoint-type` (`read_only` | `read_write`), `--ssl`, plus the [global options](#global-options).
+
+### The `--psql` flag
+
+Several other commands accept a `--psql` flag that opens a psql session against the resolved endpoint:
 
 ```bash
 neonctl connection-string --psql --project-id <id>
@@ -138,9 +160,17 @@ The Neon CLI supports autocompletion, which you can configure in a few easy step
 
 ## Linking a project
 
-`neonctl link` is a Vercel-style command that binds the current directory to a Neon project. It picks (or creates) an organization, picks (or creates) a project, resolves the project's default branch, and writes a `.neon` file with `{ "orgId", "projectId", "branchId" }`. Subsequent commands run in this directory (or any sub-directory) automatically pick up that context.
+`neonctl link` is a Vercel-style command that binds the current directory to a Neon project. It picks (or creates) an organization and a project and writes a `.neon` file (`{ "orgId", "projectId", "branch" }`) that subsequent commands run in this directory (or any sub-directory) pick up automatically.
 
-Once the branch is pinned, `link` also runs [`env pull`](#env-pull) for you so the branch's Neon env vars (`DATABASE_URL`, …) land in a local `.env` and the project is immediately ready for local dev. Pass `--no-env-pull` to skip it (for example when injecting env at runtime with `neon-env run` or `neonctl dev`).
+`link` resolves what it can and **verifies every identifier you pass** before writing, so a `.neon` is never left half-written or pointing at something that doesn't exist:
+
+- **org** is inferred from the project (so `--project-id` alone is enough); it's omitted only when the project has no organization (personal account).
+- **project** is taken from `--project-id` (or chosen interactively / via `--agent`).
+- **branch** is left to an explicit [`neonctl checkout <branch>`](#checkout) — `link` never silently pins a project's default branch (that would make later commands quietly target, say, production). It only records a branch when you pass `--branch`, when one is already pinned for the same project (preserved), when you pick one in the interactive picker, or for a freshly **created** project (whose single branch is unambiguous).
+
+When a branch ends up pinned, `link` also runs [`env pull`](#env-pull) so the branch's Neon env vars (`DATABASE_URL`, …) land in a local `.env`. With no branch pinned there is nothing to pull, so `link` instead nudges you to run `neonctl checkout`. Pass `--no-env-pull` to skip the pull (for example when injecting env at runtime with `neon-env run` or `neonctl dev`).
+
+> **Migrating from `set-context`?** `set-context` is **deprecated** in favor of `link` (see [below](#set-context-is-deprecated)). It still works exactly as before for now (a raw write), it just prints a deprecation warning. The `.neon` `branchId` field is also superseded by `branch` (which stores the branch **name** when known); old `branchId` files are still read and are upgraded to `branch` the next time `link`/`checkout` writes the context.
 
 There are three modes:
 
@@ -154,14 +184,16 @@ $ neonctl link
 ? Which region should the new project run in? › AWS US East (Ohio) (aws-us-east-2)
 Created project polished-snowflake-12345678 ("my-app") in aws-us-east-2.
 Linked .neon:
-  orgId:    org-abc123
+  orgId:     org-abc123
   projectId: polished-snowflake-12345678
-  branchId:  br-main-branch-87654321
+  branch:    main
 ```
 
-When you link an **existing** project that has more than one branch, `link` adds a final
-step to pick which branch to pin — the same `＋ Create a new branch…` + list selector used by
-`neonctl checkout` (a single-branch project is pinned automatically, no prompt):
+When you link an **existing** project that has more than one branch, the interactive flow adds a
+final step to pick which branch to pin — the same `＋ Create a new branch…` + list selector used by
+`neonctl checkout` (a single-branch project is pinned automatically, no prompt). Non-interactive
+`link --project-id …` does **not** prompt or default a branch; it links org + project and leaves
+branch selection to `neonctl checkout`:
 
 ```bash
 ? Which organization would you like to link? › Personal Org (org-abc123)
@@ -172,15 +204,32 @@ step to pick which branch to pin — the same `＋ Create a new branch…` + lis
 **Non-interactive (flags or `--params` JSON)** — for scripts and CI:
 
 ```bash
-# Link to an existing project
-neonctl link --org-id org-abc123 --project-id polished-snowflake-12345678
+# Link to an existing project (org is inferred from the project; no branch pinned)
+neonctl link --project-id polished-snowflake-12345678
 
-# Create a new project and link
+# Same, but also pin a branch (name or id — resolved and stored as its name)
+neonctl link --project-id polished-snowflake-12345678 --branch main
+
+# Pin/switch the branch in the already-linked project
+neonctl link --branch main          # alias: --branch-id
+
+# Create a new project and link it (pins the new project's default branch)
 neonctl link --org-id org-abc123 --project-name my-app --region-id aws-us-east-2
 
 # Same payload, one JSON blob
 neonctl link --params '{"orgId":"org-abc123","projectName":"my-app","regionId":"aws-us-east-2"}'
+
+# Record just the default org (preserves any existing project/branch)
+neonctl link --org-id org-abc123
+
+# Forget the current context
+neonctl link --clear
+
+# Offline write — no API calls, no verification (see --no-checks below)
+neonctl link --no-checks --org-id org-abc123 --project-id polished-snowflake-12345678
 ```
+
+Every supplied identifier is checked before anything is written, with actionable errors — e.g. `Project '…' not found`, `You don't have access to project '…'`, `Organization '…' not found, or your API key doesn't have access to it`, `Project '…' belongs to organization 'A', not 'B'`, or `Branch '…' not found in project '…'. Available branches: …`.
 
 **Agent mode (`--agent`)** — a JSON state machine designed for AI coding assistants. Each invocation returns a single JSON object with a `status` discriminator describing the next step, the available options, and the exact follow-up command to run.
 
@@ -216,15 +265,14 @@ $ neonctl link --agent --org-id org-abc123 --project-id polished-snowflake-12345
   "context_file": "/path/to/cwd/.neon",
   "context": {
     "orgId": "org-abc123",
-    "projectId": "polished-snowflake-12345678",
-    "branchId": "br-main-branch-87654321"
+    "projectId": "polished-snowflake-12345678"
   },
   "project": { "id": "polished-snowflake-12345678" },
-  "message": "Linked /path/to/cwd/.neon to project polished-snowflake-12345678 (org org-abc123) on branch br-main-branch-87654321."
+  "message": "Linked /path/to/cwd/.neon to project polished-snowflake-12345678 (org org-abc123). No branch pinned — run `neonctl checkout <branch>` (omit the branch to list options) to pin one and pull its env vars."
 }
 ```
 
-The agent flow also handles project creation. If the agent sends `--project-name` without `--region-id`, the next response is `needs_project_details` with the list of supported regions.
+The `linked` response omits `branch` unless one was pinned (via `--branch`, an existing pin, or project creation); pass `--branch <name|id>` to include it. The agent flow also handles project creation: if the agent sends `--project-name` without `--region-id`, the next response is `needs_project_details` with the list of supported regions.
 
 **Organization-scoped API keys** (those created at the organization level rather than the user level) cannot list user organizations or call the regions endpoint. `link` handles this transparently:
 
@@ -242,11 +290,31 @@ The agent flow also handles project creation. If the agent sends `--project-name
 }
 ```
 
-`link` is a thin wrapper around `set-context`: both write to the same `.neon` file via a shared `applyContext` helper, so anything `link` can write, `set-context` can write too (including the newly-supported `--branch-id` flag).
+**Offline writes (`--no-checks`)** — write the `.neon` with no API calls at all: no org inference, no existence/access verification, no env pull. Because nothing can be resolved offline, it requires both `--org-id` and `--project-id` (`--branch` optional, stored verbatim). Handy for scripted/CI setups or re-creating a `.neon` from values you already trust:
+
+```bash
+neonctl link --no-checks --org-id org-abc123 --project-id polished-snowflake-12345678 --branch main
+```
+
+#### `set-context` is deprecated
+
+`set-context` is **deprecated** in favor of `link` and prints a deprecation warning (to stderr, so it never pollutes stdout or scripts). For backward compatibility its behavior is **unchanged**: it's still a raw, offline write of exactly the fields you pass (no org inference, no verification, no env pull), and bare `set-context` still clears the file. Nothing breaks today — but new work should use `link`, and `set-context` will be removed in a future major release.
+
+How today's `set-context` uses map onto `link`:
+
+| `set-context` (deprecated)              | Recommended `link` equivalent                                                 |
+| --------------------------------------- | ----------------------------------------------------------------------------- |
+| `neonctl set-context --project-id <id>` | `neonctl link --project-id <id>` (infers org + verifies; branch via checkout) |
+| `neonctl set-context --org-id <id>`     | `neonctl link --org-id <id>`                                                  |
+| `neonctl set-context --branch-id <id>`  | `neonctl link --branch <name\|id>`                                            |
+| `neonctl set-context` (clear)           | `neonctl link --clear`                                                        |
+| a raw local write (no network)          | `neonctl link --no-checks --org-id <id> --project-id <id>`                    |
+
+The key difference: `link` resolves and **verifies** before writing (so you never get a half-written or stale `.neon`), whereas `set-context` writes whatever you give it verbatim. The closest like-for-like replacement for the old raw write is `link --no-checks`.
 
 ### checkout
 
-`checkout [id|name]` pins a branch in the local context so subsequent commands target it — it's a focused helper over `set-context` for the common "switch the branch I'm working on" case. It resolves the branch (by name or id) against the project, then **heals** the `.neon` file: it always (re)writes `projectId`, `branchId`, and `orgId` (when the project has one), so a `.neon` that was missing fields or drifted ends up complete and consistent. When `orgId` isn't already known (from `--org-id` or the existing `.neon`), it's looked up from the project itself.
+`checkout [id|name]` pins a branch in the local context so subsequent commands target it — it's the focused companion to `link` for the common "switch the branch I'm working on" case (`link` resolves org + project; `checkout` pins the branch). It resolves the branch (by name or id) against the project, then **heals** the `.neon` file: it always (re)writes `projectId`, `branch`, and `orgId` (when the project has one), so a `.neon` that was missing fields or drifted ends up complete and consistent. The branch is stored as its **name** when known (matching `link`). When `orgId` isn't already known (from `--org-id` or the existing `.neon`), it's looked up from the project itself.
 
 The branch argument is **optional**: run `neonctl checkout` with no branch in an interactive terminal to fetch the project's branches and pick one from a list. In a non-interactive context (CI or no TTY), a branch must be passed explicitly.
 
@@ -263,7 +331,7 @@ The project is resolved through the standard neonctl chain, each entry winning o
 
 If none of those resolve a project, `checkout` prints a telling error explaining the chain above. In an interactive terminal it then offers to run `neonctl link` in the current folder so you can pick (or create) a project on the spot; once linked, it continues and pins the requested branch. In non-interactive contexts (CI or no TTY) it exits with a non-zero code and the same guidance instead of prompting.
 
-The resolved branch id is then written to the same `.neon` file that `link` and `set-context` use:
+The resolved branch is then written (by name) to the same `.neon` file `link` uses:
 
 ```bash
 $ neonctl checkout main --project-id polished-snowflake-12345678
@@ -273,7 +341,7 @@ $ cat .neon
 {
   "orgId": "org-abc123",
   "projectId": "polished-snowflake-12345678",
-  "branchId": "br-main-branch-87654321"
+  "branch": "main"
 }
 ```
 
@@ -295,23 +363,28 @@ neonctl env pull --branch preview --file .env.preview
 
 If you'd rather not keep env vars on disk, inject them at runtime instead with `neon-env run -- <your dev command>` (from `@neondatabase/env`) or `neonctl dev`, and pass `--no-env-pull` to `link` / `checkout`.
 
-**Where `.neon` lives**: `link` (and `set-context`) write `.neon` into the **current working directory** by default. If an existing `.neon` is found in any parent directory, that file is reused — so commands run from a sub-directory of a linked project still pick up the project's context. To pin the location explicitly, pass `--context-file <path>`.
+**Where `.neon` lives**: `link` writes `.neon` into the **current working directory** by default. If an existing `.neon` is found in any parent directory, that file is reused — so commands run from a sub-directory of a linked project still pick up the project's context. To pin the location explicitly, pass `--context-file <path>`.
 
 **`.gitignore` scaffolding**: when `.neon` is **created** for the first time, the CLI also makes sure a `.gitignore` sits alongside it listing `.neon`. If `.gitignore` doesn't exist it's created with a single `.neon` line; if it does exist, `.neon` is appended only when missing (no duplicates, your other entries are left alone). On subsequent updates to an existing `.neon`, `.gitignore` is left untouched — so if you deliberately un-ignore `.neon` (e.g. to commit shared context), the entry is not re-added on every command.
 
 ## Config as code (`config` / `deploy`)
 
-Describe a branch's desired state in a `neon.ts` policy and reconcile it from the CLI — the Neon equivalent of `terraform status` / `plan` / `apply`. The policy is a function of the branch it's being evaluated for; you switch on the branch (`name`, `isDefault`, …) and return the config you want (auth, Data API, compute settings, TTL, protection, and Preview features like Functions and buckets):
+Describe a branch's desired state in a `neon.ts` policy and reconcile it from the CLI — the Neon equivalent of `terraform status` / `plan` / `apply`. A policy splits into a **static** existential set — top-level `auth` / `dataApi` toggles and the beta `preview` block (Functions, buckets, AI Gateway) that decide what _exists_ — and a **dynamic** `branch` closure that tunes each branch (compute settings, TTL, protection, `parent`) based on the branch it's evaluated for (`name`, `isDefault`, …):
 
 ```ts
 // neon.ts
 import { defineConfig } from '@neondatabase/config/v1';
 
-export default defineConfig((branch) => {
-  if (branch.isDefault) {
-    return { protected: true, auth: {} };
-  }
-  return { parent: 'main', ttl: '7d' };
+export default defineConfig({
+  // Static: what exists on every branch (drives the typed env).
+  auth: true,
+  // Dynamic: per-branch tuning only — cannot add/remove services.
+  branch: (branch) => {
+    if (branch.isDefault) {
+      return { protected: true };
+    }
+    return { parent: 'main', ttl: '7d' };
+  },
 });
 ```
 
@@ -374,28 +447,28 @@ The target directory must be empty unless you pass `--force` (a lone `.git` is i
 
 ## Commands
 
-| Command                                                                    | Subcommands                                                                                    | Description                        |
-| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------- |
-| [auth](https://neon.com/docs/reference/cli-auth)                           |                                                                                                | Authenticate                       |
-| [projects](https://neon.com/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                                                    | Manage projects                    |
-| [ip-allow](https://neon.com/docs/reference/cli-ip-allow)                   | `list`, `add`, `remove`, `reset`                                                               | Manage IP Allow                    |
-| [me](https://neon.com/docs/reference/cli-me)                               |                                                                                                | Show current user                  |
-| [branches](https://neon.com/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-default`, `set-expiration`, `delete`, `get`    | Manage branches                    |
-| [databases](https://neon.com/docs/reference/cli-databases)                 | `list`, `create`, `delete`                                                                     | Manage databases                   |
-| functions                                                                  | `deploy`, `list`, `get`, `delete`                                                              | Manage Neon Functions              |
-| [roles](https://neon.com/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                                     | Manage roles                       |
-| [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                         | Manage operations                  |
-| [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                                | Get connection string              |
-| psql                                                                       |                                                                                                | Connect to a database via psql     |
-| [set-context](https://neon.com/docs/reference/cli-set-context)             |                                                                                                | Set context for session            |
-| env                                                                        | `pull`                                                                                         | Manage a branch's env vars         |
-| checkout                                                                   |                                                                                                | Pin a branch in `.neon`            |
-| [link](https://neon.com/docs/reference/cli-link)                           |                                                                                                | Link a directory to a project      |
-| config                                                                     | `status`, `plan`, `apply`                                                                      | Drive a branch from `neon.ts`      |
-| deploy                                                                     |                                                                                                | Alias for `config apply`           |
-| bootstrap                                                                  |                                                                                                | Scaffold a project from a template |
-| bucket                                                                     | `create`, `list`, `delete`, `object list`, `object get`, `object delete` (incl. `--recursive`) | Manage buckets and their objects   |
-| [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                                | Generate a completion script       |
+| Command                                                                    | Subcommands                                                                                                  | Description                        |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| [auth](https://neon.com/docs/reference/cli-auth)                           |                                                                                                              | Authenticate                       |
+| [projects](https://neon.com/docs/reference/cli-projects)                   | `list`, `create`, `update`, `delete`, `get`                                                                  | Manage projects                    |
+| [ip-allow](https://neon.com/docs/reference/cli-ip-allow)                   | `list`, `add`, `remove`, `reset`                                                                             | Manage IP Allow                    |
+| [me](https://neon.com/docs/reference/cli-me)                               |                                                                                                              | Show current user                  |
+| [branches](https://neon.com/docs/reference/cli-branches)                   | `list`, `create`, `rename`, `add-compute`, `set-default`, `set-expiration`, `delete`, `get`                  | Manage branches                    |
+| [databases](https://neon.com/docs/reference/cli-databases)                 | `list`, `create`, `delete`                                                                                   | Manage databases                   |
+| functions                                                                  | `deploy`, `list`, `get`, `delete`                                                                            | Manage Neon Functions              |
+| [roles](https://neon.com/docs/reference/cli-roles)                         | `list`, `create`, `delete`                                                                                   | Manage roles                       |
+| [operations](https://neon.com/docs/reference/cli-operations)               | `list`                                                                                                       | Manage operations                  |
+| [connection-string](https://neon.com/docs/reference/cli-connection-string) |                                                                                                              | Get connection string              |
+| [psql](https://neon.com/docs/reference/cli-psql)                           |                                                                                                              | Connect to a database via psql     |
+| set-context                                                                |                                                                                                              | Deprecated; use `link`             |
+| env                                                                        | `pull`                                                                                                       | Manage a branch's env vars         |
+| checkout                                                                   |                                                                                                              | Pin a branch in `.neon`            |
+| [link](https://neon.com/docs/reference/cli-link)                           |                                                                                                              | Link a directory to a project      |
+| config                                                                     | `status`, `plan`, `apply`                                                                                    | Drive a branch from `neon.ts`      |
+| deploy                                                                     |                                                                                                              | Alias for `config apply`           |
+| bootstrap                                                                  |                                                                                                              | Scaffold a project from a template |
+| bucket                                                                     | `create`, `list`, `delete`, `object list`, `object get`, `object put`, `object delete` (incl. `--recursive`) | Manage buckets and their objects   |
+| [completion](https://neon.com/docs/reference/cli-completion)               |                                                                                                              | Generate a completion script       |
 
 ## Global options
 

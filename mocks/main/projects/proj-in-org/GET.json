@@ -1,0 +1,9 @@
+{
+  "project": {
+    "id": "proj-in-org",
+    "name": "Org Project",
+    "org_id": "org-7",
+    "region_id": "aws-us-east-2",
+    "created_at": "2019-01-01T00:00:00Z"
+  }
+}

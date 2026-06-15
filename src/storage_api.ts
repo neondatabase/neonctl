@@ -101,6 +101,34 @@ export type BucketObjectsDeletePrefixResponse = {
   deleted: number;
 };
 
+/** Request body of the unified presign endpoint. */
+export type PresignRequest = {
+  /**
+   * The operation to presign. neonctl only ever uploads, so this is always
+   * `upload`; the backend also supports `download`, which is API-only.
+   */
+  operation: 'upload';
+  /** The Content-Type to sign into the upload (echoed back in `headers`). */
+  content_type?: string;
+  /** How long the presigned URL stays valid. Server default applies when omitted. */
+  expires_in_seconds?: number;
+};
+
+/**
+ * Response body of the unified presign endpoint. Mirrors B's `PresignResponse`
+ * schema.
+ */
+export type PresignResponse = {
+  /** The presigned URL to PUT the object bytes to. */
+  url: string;
+  /** Always `PUT` for the single-PUT upload path. */
+  method: 'PUT';
+  /** Headers that must be sent verbatim with the PUT for the signature to verify. */
+  headers: Record<string, string>;
+  /** When the presigned URL expires (RFC 3339). */
+  expires_at: string;
+};
+
 export type ListObjectsParams = {
   projectId: string;
   branchId: string;
@@ -305,3 +333,57 @@ export const deleteProjectBranchBucketObjectsByPrefix = (
     format: 'json',
     secure: true,
   });
+
+/**
+ * Request a presigned PUT URL for uploading an object to a bucket on a branch.
+ *
+ * Returns the URL, the headers that must accompany the PUT for the signature to
+ * verify, and the expiry. The actual upload (a `PUT` to the returned `url` with
+ * the returned `headers` and the file stream) is performed by the caller, NOT
+ * through this api-client, since it targets the branch S3 data-plane endpoint
+ * rather than the console API. No SigV4 or credential handling happens here.
+ *
+ * The object key may contain `/`; it is percent-encoded into a single path
+ * segment so nested keys are routed to the `{object_key}` parameter.
+ *
+ * This targets the unified presign endpoint, passing `operation: "upload"` to
+ * request a presigned PUT. (The same endpoint also serves `download`, but that
+ * path is API-only and has no neonctl command.)
+ *
+ * @request POST /projects/{project_id}/branches/{branch_id}/buckets/{bucket_name}/objects/{object_key}/presign
+ */
+export const presignUpload = (
+  apiClient: ApiClient,
+  {
+    projectId,
+    branchId,
+    bucketName,
+    objectKey,
+    contentType,
+    expiresInSeconds,
+  }: {
+    projectId: string;
+    branchId: string;
+    bucketName: string;
+    objectKey: string;
+    contentType?: string;
+    expiresInSeconds?: number;
+  },
+): Promise<ApiResponse<PresignResponse>> => {
+  const body: PresignRequest = { operation: 'upload' };
+  if (contentType !== undefined) {
+    body.content_type = contentType;
+  }
+  if (expiresInSeconds !== undefined) {
+    body.expires_in_seconds = expiresInSeconds;
+  }
+  return apiClient.request<PresignResponse>({
+    path: `${bucketPath(projectId, branchId, bucketName)}/objects/${encodeURIComponent(
+      objectKey,
+    )}/presign`,
+    method: 'POST',
+    body,
+    format: 'json',
+    secure: true,
+  });
+};

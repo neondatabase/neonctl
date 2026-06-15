@@ -10,7 +10,6 @@ let fnDir: string;
 beforeAll(() => {
   fnDir = mkdtempSync(join(tmpdir(), 'neonctl-fn-'));
   writeFileSync(join(fnDir, 'index.ts'), 'export default {};\n');
-  writeFileSync(join(fnDir, 'custom.ts'), 'export default { custom: true };\n');
 });
 afterAll(() => {
   rmSync(fnDir, { recursive: true, force: true });
@@ -23,7 +22,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'nowaitfunc',
-        '--path',
+        '--src',
         fnDir,
         '--no-wait',
         '--project-id',
@@ -122,13 +121,166 @@ describe('functions', () => {
     );
   });
 
+  test('get (table) with only an active deployment (old server)', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'activeonly',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get (table) shows the build failure reason', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'brokenfunc',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get (yaml) includes the build failure reason', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'brokenfunc',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
+
+  test('get (table) shows plain failed status when there is no error', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'failednoerr',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get --list-env-variables lists env variable names', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'envnames',
+        '--list-env-variables',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get -E with no env variables prints an empty message', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'my-func',
+        '-E',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get --list-env-variables with no active deployment prints an empty message', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'other-func',
+        '--list-env-variables',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org', outputTable: true },
+    );
+  });
+
+  test('get (yaml) includes environment names', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'envnames',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
+
+  test('get (yaml) -E is a no-op', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'get',
+        'envnames',
+        '-E',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      { mockDir: 'single_org' },
+    );
+  });
+
   test('deploy --wait until completed', async ({ testCliCommand }) => {
     await testCliCommand(
       [
         'functions',
         'deploy',
         'redeploy',
-        '--path',
+        '--src',
         fnDir,
         '--project-id',
         'test-project-123456',
@@ -156,7 +308,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'newfunc',
-        '--path',
+        '--src',
         fnDir,
         '--project-id',
         'test-project-123456',
@@ -184,7 +336,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'failfunc',
-        '--path',
+        '--src',
         fnDir,
         '--project-id',
         'test-project-123456',
@@ -194,6 +346,7 @@ describe('functions', () => {
       {
         mockDir: 'single_org',
         code: 1,
+        outputTable: true,
         env: {
           NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
           NEON_ESBUILD_PATH: esbuildBin,
@@ -213,7 +366,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'stuckstart',
-        '--path',
+        '--src',
         fnDir,
         '--project-id',
         'test-project-123456',
@@ -246,7 +399,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'stuckbuild',
-        '--path',
+        '--src',
         fnDir,
         '--project-id',
         'test-project-123456',
@@ -279,7 +432,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'envfunc',
-        '--path',
+        '--src',
         fnDir,
         '--no-wait',
         '--env',
@@ -311,7 +464,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'myfunc',
-        '--path',
+        '--src',
         fnDir,
         '--no-wait',
         '--env',
@@ -335,7 +488,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'Bad_Slug',
-        '--path',
+        '--src',
         fnDir,
         '--no-wait',
         '--project-id',
@@ -358,7 +511,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'my-func',
-        '--path',
+        '--src',
         fnDir,
         '--no-wait',
         '--project-id',
@@ -425,7 +578,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'myfunc',
-        '--path',
+        '--src',
         emptyDir,
         '--no-wait',
         '--project-id',
@@ -436,10 +589,7 @@ describe('functions', () => {
       {
         mockDir: 'single_org',
         code: 1,
-        stderr: `ERROR: Entry file not found: ${join(
-          emptyDir,
-          'index.ts',
-        )}. Pass --entry to point at your function's entry file (defaults to index.ts).`,
+        stderr: `ERROR: No entry file found in ${emptyDir}. Expected one of: index.ts, index.mjs, index.js.`,
       },
     );
     rmSync(emptyDir, { recursive: true, force: true });
@@ -460,24 +610,27 @@ describe('functions', () => {
         mockDir: 'single_org',
         code: 1,
         stderr:
-          'ERROR: Provide at least one option to deploy, e.g. --path, --entry, ' +
-          'or --env. See: neonctl functions deploy --help.',
+          'ERROR: Provide at least one option to deploy, e.g. --src or --env. ' +
+          'See: neonctl functions deploy --help.',
       },
     );
   });
 
-  test('deploy --entry selects a custom entry file', async ({
+  test('deploy picks index.ts over index.mjs and index.js', async ({
     testCliCommand,
   }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'neonctl-tsjs-'));
+    writeFileSync(join(dir, 'index.ts'), 'export default {};\n');
+    // Broken decoys: if discovery picks either, bundling fails and so does the test.
+    writeFileSync(join(dir, 'index.mjs'), 'export default {\n');
+    writeFileSync(join(dir, 'index.js'), 'export default {\n');
     await testCliCommand(
       [
         'functions',
         'deploy',
-        'entryfunc',
-        '--path',
-        fnDir,
-        '--entry',
-        'custom.ts',
+        'tsoverjs',
+        '--src',
+        dir,
         '--no-wait',
         '--project-id',
         'test-project-123456',
@@ -491,9 +644,191 @@ describe('functions', () => {
           NEON_ESBUILD_PATH: esbuildBin,
         },
         stderr:
-          'INFO: Function deployment triggered for function entryfunc. ' +
-          'INFO: Check status with: neonctl functions get entryfunc ' +
+          'INFO: Function deployment triggered for function tsoverjs. ' +
+          'INFO: Check status with: neonctl functions get tsoverjs ' +
           '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('deploy picks index.mjs over index.js', async ({ testCliCommand }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'neonctl-mjsjs-'));
+    writeFileSync(join(dir, 'index.mjs'), 'export default {};\n');
+    // Broken decoy: if discovery picks index.js, bundling fails and so does the test.
+    writeFileSync(join(dir, 'index.js'), 'export default {\n');
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'mjsoverjs',
+        '--src',
+        dir,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Function deployment triggered for function mjsoverjs. ' +
+          'INFO: Check status with: neonctl functions get mjsoverjs ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('deploy bundles index.js when it is the only entry', async ({
+    testCliCommand,
+  }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'neonctl-jsonly-'));
+    writeFileSync(join(dir, 'index.js'), 'export default {};\n');
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'jsonly',
+        '--src',
+        dir,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Function deployment triggered for function jsonly. ' +
+          'INFO: Check status with: neonctl functions get jsonly ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('deploy --src pointing at a file uses it as the entry', async ({
+    testCliCommand,
+  }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'neonctl-srcfile-'));
+    writeFileSync(join(dir, 'custom.ts'), 'export default {};\n');
+    // Broken decoy: if --src=<file> still ran directory discovery, index.ts
+    // would win, bundling would fail, and so would the test.
+    writeFileSync(join(dir, 'index.ts'), 'export default {\n');
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'srcfile',
+        '--src',
+        join(dir, 'custom.ts'),
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        env: {
+          NEON_FUNCTIONS_POLL_INTERVAL_MS: '1',
+          NEON_ESBUILD_PATH: esbuildBin,
+        },
+        stderr:
+          'INFO: Function deployment triggered for function srcfile. ' +
+          'INFO: Check status with: neonctl functions get srcfile ' +
+          '--project-id test-project-123456 --branch br-main-branch-123456',
+      },
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('deploy errors when the --src path does not exist', async ({
+    testCliCommand,
+  }) => {
+    const missing = join(tmpdir(), 'neonctl-no-such-path');
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'myfunc',
+        '--src',
+        missing,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr: `ERROR: --src path not found: ${missing}.`,
+      },
+    );
+  });
+
+  // Passes ONLY --path (no --src/--env): also pins that the removal error fires
+  // before the at-least-one-option guard.
+  test('deploy rejects the removed --path flag', async ({ testCliCommand }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'myfunc',
+        '--path',
+        fnDir,
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: --path and --entry were removed. Use --src <dir>; the entry point ' +
+          'is discovered as index.ts, index.mjs, or index.js in that directory.',
+      },
+    );
+  });
+
+  test('deploy rejects the removed --entry flag', async ({
+    testCliCommand,
+  }) => {
+    await testCliCommand(
+      [
+        'functions',
+        'deploy',
+        'myfunc',
+        '--src',
+        fnDir,
+        '--entry',
+        'custom.ts',
+        '--no-wait',
+        '--project-id',
+        'test-project-123456',
+        '--branch',
+        'main',
+      ],
+      {
+        mockDir: 'single_org',
+        code: 1,
+        stderr:
+          'ERROR: --path and --entry were removed. Use --src <dir>; the entry point ' +
+          'is discovered as index.ts, index.mjs, or index.js in that directory.',
       },
     );
   });
@@ -506,7 +841,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'flaky',
-        '--path',
+        '--src',
         fnDir,
         '--project-id',
         'test-project-123456',
@@ -534,7 +869,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'denied',
-        '--path',
+        '--src',
         fnDir,
         '--project-id',
         'test-project-123456',
@@ -567,7 +902,7 @@ describe('functions', () => {
         'functions',
         'deploy',
         'myfunc',
-        '--path',
+        '--src',
         badDir,
         '--no-wait',
         '--project-id',

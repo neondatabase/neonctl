@@ -36,6 +36,10 @@ const test = originalTest.extend<{
 });
 
 describe('set_context', () => {
+  // `set-context` is deprecated but intentionally unchanged: a raw, offline write
+  // of exactly the fields passed (no org inference / verification / env pull).
+  // The deprecation warning goes to stderr, so these stdout/file snapshots are
+  // identical to the pre-deprecation behavior.
   describe('should set the context to project', () => {
     test('set-context', async ({ testCliCommand, readFile }) => {
       await testCliCommand([
@@ -198,6 +202,23 @@ describe('set_context', () => {
         '--context-file',
         CONTEXT_FILE,
       ]);
+      expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
+    });
+  });
+
+  describe('deprecation', () => {
+    test('warns (to stderr) and still performs the raw write', async ({
+      testCliCommand,
+      readFile,
+    }) => {
+      await testCliCommand(
+        ['set-context', '--project-id', 'test', '--context-file', CONTEXT_FILE],
+        {
+          stderr: expect.stringContaining(
+            '`neonctl set-context` is deprecated',
+          ),
+        },
+      );
       expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
     });
   });

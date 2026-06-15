@@ -4,11 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
+  CreateCredentialInput,
   GetConnectionUriInput,
   NeonApi,
   NeonAuthSnapshot,
   NeonBranchSnapshot,
+  NeonBranchStorageSnapshot,
   NeonBucketSnapshot,
+  NeonCredentialMeta,
+  NeonCredentialSecret,
   NeonDataApiSnapshot,
   NeonDatabaseSnapshot,
   NeonEndpointSnapshot,
@@ -18,7 +22,11 @@ import type {
   NeonRoleSnapshot,
 } from '@neondatabase/config';
 
-import { DevEnvMismatchError, resolveDevEnv } from './env.js';
+import {
+  DevEnvMismatchError,
+  resolveDevEnv,
+  resolveNeonEnvVars,
+} from './env.js';
 
 const PROJECT_ID = 'patient-art-12345';
 const BRANCH_ID = 'br-main-00000001';
@@ -168,6 +176,10 @@ class FakeNeonApi implements NeonApi {
     throw new Error('not implemented');
   }
 
+  async updateProjectBranchDataApi(): Promise<NeonDataApiSnapshot> {
+    throw new Error('not implemented');
+  }
+
   async listBranchBuckets(): Promise<NeonBucketSnapshot[]> {
     return [];
   }
@@ -194,10 +206,6 @@ class FakeNeonApi implements NeonApi {
     return [];
   }
 
-  async createBranchFunction(): Promise<NeonFunctionSnapshot> {
-    throw new Error('not implemented');
-  }
-
   async deleteBranchFunction(): Promise<void> {
     throw new Error('not implemented');
   }
@@ -216,6 +224,38 @@ class FakeNeonApi implements NeonApi {
 
   async disableAiGateway(): Promise<void> {
     throw new Error('not implemented');
+  }
+
+  async createCredential(
+    _projectId: string,
+    branchId: string,
+    input: CreateCredentialInput,
+  ): Promise<NeonCredentialSecret> {
+    return {
+      tokenId: 'cred-fake-0000',
+      tokenIdShort: 'credfake0000',
+      apiToken: 'nt_live_credfake0000_secret',
+      s3SecretAccessKey: 's3secret'.padEnd(64, '0'),
+      scopes: input.scopes,
+      branchId,
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+  }
+
+  async listCredentials(): Promise<NeonCredentialMeta[]> {
+    return [];
+  }
+
+  async revokeCredential(): Promise<void> {
+    return;
+  }
+
+  async getProjectBranchStorage(): Promise<NeonBranchStorageSnapshot | null> {
+    return {
+      s3Endpoint: 'https://fake.storage.neon.tech',
+      region: 'us-east-1',
+      forcePathStyle: true,
+    };
   }
 }
 
@@ -422,6 +462,26 @@ describe('resolveDevEnv', () => {
     expect(result.vars.DATABASE_URL).toBeDefined();
     expect(api.listBranchFunctionsCalled).toBe(false);
   });
+
+  it('neon.ts importing an uninstalled package -> a clear "did you run npm install" error', async () => {
+    // A neon.ts that imports a package which isn't installed (no node_modules in
+    // the temp dir) fails to load with a cryptic "Cannot find module". We expect
+    // that turned into an actionable "did you run npm install" message — this is
+    // exactly what `neon link`'s env pull hits in a freshly-scaffolded project.
+    writeFileSync(
+      join(cwd, 'neon.ts'),
+      "import 'neon-bootstrap-missing-dependency-xyz';\nexport default { auth: {} };\n",
+    );
+
+    await expect(
+      resolveNeonEnvVars({
+        cwd,
+        projectId: PROJECT_ID,
+        branchId: BRANCH_ID,
+        api: new FakeNeonApi(),
+      }),
+    ).rejects.toThrow(/npm install/i);
+  }, 30_000);
 
   it('tier 1 functions + auth mismatch: a missing secret-bearing service still hard-stops', async () => {
     // Stripping functions must NOT weaken the guard for services that DO carry secrets: a

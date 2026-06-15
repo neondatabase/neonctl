@@ -92,7 +92,7 @@ describe('portSelectionFromEnv', () => {
     );
   });
 
-  it('binds an injected PORT (e.g. from portless) when NEON_DEV_PORT is unset', () => {
+  it('binds an injected PORT (e.g. PORT=3000) when NEON_DEV_PORT is unset', () => {
     expect(portSelectionFromEnv({ PORT: '4123' })).toEqual({
       mode: 'explicit',
       port: 4123,

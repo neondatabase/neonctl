@@ -1,7 +1,13 @@
 import yargs from 'yargs';
 
 import { fillSingleProject } from '../utils/enrichers.js';
-import { applyCmd, applyFlags, envFlag, type ConfigProps } from './config.js';
+import {
+  applyCmd,
+  applyFlags,
+  envFlag,
+  envPullFlag,
+  type ConfigProps,
+} from './config.js';
 
 export const command = 'deploy';
 export const describe =
@@ -24,6 +30,7 @@ export const builder = (argv: yargs.Argv) =>
       },
       ...envFlag,
       ...applyFlags,
+      ...envPullFlag,
     })
     .middleware(fillSingleProject as any)
     .strict();

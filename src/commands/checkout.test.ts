@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { describe, expect } from 'vitest';
 
 import { test as originalTest } from '../test_utils/fixtures';
+import { ENV_PULL_SKIPPED_HINT } from './env';
 
 // All tests in this file share a single temporary directory whose path is
 // normalized in snapshots to `<TMP>` so absolute paths in command output stay
@@ -55,7 +56,7 @@ const parseContext = (raw: string) =>
   JSON.parse(raw) as Record<string, unknown>;
 
 describe('checkout', () => {
-  test('resolves a branch by name and writes branchId to a fresh .neon', async ({
+  test('resolves a branch by name and writes the branch name to a fresh .neon', async ({
     testCliCommand,
     readFile,
     tmpContext,
@@ -72,11 +73,35 @@ describe('checkout', () => {
     ]);
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test',
-      branchId: 'br-main-branch-123456',
+      branch: 'main',
     });
   });
 
-  test('resolves a branch by id and writes branchId to a fresh .neon', async ({
+  test('announces the branch currently pinned before switching to a new one', async ({
+    testCliCommand,
+    removeFile,
+    tmpContext,
+  }) => {
+    // A `.neon` already pinned to `main`: checkout should report where we are
+    // ("Currently on branch main") before it pins the new branch, so the switch
+    // is visible and a wrong checkout is easy to spot.
+    const ctx = tmpContext('announce_current', {
+      projectId: 'test',
+      branch: 'main',
+    });
+    await testCliCommand(
+      ['checkout', 'test_branch', '--no-env-pull', '--context-file', ctx],
+      {
+        stderr:
+          `INFO: → Currently on branch main ` +
+          `INFO: Checked out branch br-sunny-branch-123456 on project test. Updated ${ctx}. ` +
+          `INFO: ${ENV_PULL_SKIPPED_HINT}`,
+      },
+    );
+    removeFile(ctx);
+  });
+
+  test('resolves a branch by id and writes the branch name to a fresh .neon', async ({
     testCliCommand,
     readFile,
     tmpContext,
@@ -93,7 +118,7 @@ describe('checkout', () => {
     ]);
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test',
-      branchId: 'br-sunny-branch-123456',
+      branch: 'test_branch',
     });
   });
 
@@ -116,7 +141,7 @@ describe('checkout', () => {
     expect(parseContext(readFile(ctx))).toEqual({
       orgId: 'org-keep',
       projectId: 'test',
-      branchId: 'br-sunny-branch-123456',
+      branch: 'test_branch',
     });
   });
 
@@ -137,7 +162,7 @@ describe('checkout', () => {
     expect(parseContext(readFile(ctx))).toEqual({
       orgId: 'org-healed-123',
       projectId: 'test',
-      branchId: 'br-main-branch-123456',
+      branch: 'main',
     });
   });
 
@@ -156,7 +181,7 @@ describe('checkout', () => {
     ]);
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test',
-      branchId: 'br-main-branch-123456',
+      branch: 'main',
     });
   });
 
@@ -176,7 +201,7 @@ describe('checkout', () => {
     );
     expect(parseContext(readFile(ctx))).toEqual({
       projectId: 'test-project-123456',
-      branchId: 'br-main-branch-123456',
+      branch: 'main',
     });
   });
 

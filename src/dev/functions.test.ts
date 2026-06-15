@@ -53,12 +53,11 @@ describe('resolveFunctionsFromConfig', () => {
         preview: {
           functions: {
             hello: { name: 'Hello', source: './hello.ts', dev: { port: 8788 } },
-            api: { name: 'Api', source: './api.ts', dev: { portless: true } },
             bare: { name: 'Bare', source: './bare.ts' },
           },
         },
       };\n`,
-      ['hello.ts', 'api.ts', 'bare.ts'],
+      ['hello.ts', 'bare.ts'],
     );
 
     const resolved = await resolveFunctionsFromConfig(cwd);
@@ -67,22 +66,14 @@ describe('resolveFunctionsFromConfig', () => {
     const fns = resolved?.functions;
     const bySlug = Object.fromEntries((fns ?? []).map((f) => [f.slug, f]));
 
+    // Explicit `dev.port` is carried through.
     expect(bySlug.hello).toMatchObject({
       slug: 'hello',
       name: 'Hello',
       source: join(cwd, 'hello.ts'),
       port: 8788,
-      portless: false,
     });
-    expect(bySlug.api).toMatchObject({
-      slug: 'api',
-      source: join(cwd, 'api.ts'),
-      portless: true,
-    });
-    // portless function gets no port (portless assigns it).
-    expect(bySlug.api.port).toBeUndefined();
-    // bare function: no port, not portless.
-    expect(bySlug.bare.portless).toBe(false);
+    // No `dev.port`: the supervisor searches for a free port, so none is set here.
     expect(bySlug.bare.port).toBeUndefined();
   });
 

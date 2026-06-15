@@ -2,12 +2,12 @@ let calls = 0;
 
 const fn = () => ({
   function: {
-    id: 'fn-entryfunc',
-    slug: 'entryfunc',
-    name: 'Entryfunc',
-    invocation_url: 'https://entryfunc.functions.neon.tech',
+    id: 'fn-mjsoverjs',
+    slug: 'mjsoverjs',
+    name: 'Mjsoverjs',
+    invocation_url: 'https://mjsoverjs.functions.neon.tech',
     created_at: '2026-06-03T00:00:00Z',
-    active_deployment: {
+    current_deployment: {
       id: 1,
       status: 'building',
       memory_mib: 256,

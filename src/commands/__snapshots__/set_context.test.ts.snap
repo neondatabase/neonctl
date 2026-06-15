@@ -9,6 +9,14 @@ exports[`set_context > can set the context to project and organization at the sa
 }"
 `;
 
+exports[`set_context > deprecation > warns (to stderr) and still performs the raw write 1`] = `""`;
+
+exports[`set_context > deprecation > warns (to stderr) and still performs the raw write 2`] = `
+"{
+  "projectId": "test"
+}"
+`;
+
 exports[`set_context > should set the context to organization > create projects selecting organization from the context 1`] = `
 "project:
   id: new-project-789012

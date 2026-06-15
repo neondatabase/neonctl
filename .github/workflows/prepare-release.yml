@@ -77,17 +77,6 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Check actor has admin/maintain role
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          role=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" --jq '.role_name')
-          if [[ "$role" != "admin" && "$role" != "maintain" ]]; then
-            echo "ERROR: Actor '${GITHUB_ACTOR}' has role '${role}', but 'admin' or 'maintain' is required to dispatch a release."
-            exit 1
-          fi
-          echo "Actor ${GITHUB_ACTOR} passes gate (role: ${role})."
-
       - name: Validate ref input
         env:
           REF_INPUT: ${{ inputs.ref }}

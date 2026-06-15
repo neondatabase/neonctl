@@ -7,12 +7,13 @@ const fn = () => ({
     name: 'Failfunc',
     invocation_url: 'https://failfunc.functions.neon.tech',
     created_at: '2026-06-03T00:00:00Z',
-    active_deployment: {
+    current_deployment: {
       id: 1,
       status: 'failed',
       memory_mib: 256,
       runtime: 'nodejs24',
       created_at: '2026-06-03T00:00:00Z',
+      error: 'Build failed: cannot resolve module left-pad',
     },
   },
 });

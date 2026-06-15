@@ -1,17 +1,28 @@
 /* eslint-disable @typescript-eslint/require-await */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import stripAnsi from 'strip-ansi';
 import type { NeonApi } from '@neondatabase/config-runtime';
 import type {
   CreateBucketInput,
+  CreateCredentialInput,
   DeployFunctionInput,
   GetConnectionUriInput,
   NeonAuthSnapshot,
   NeonBranchSnapshot,
+  NeonBranchStorageSnapshot,
   NeonBucketSnapshot,
+  NeonCredentialMeta,
+  NeonCredentialSecret,
   NeonDataApiSnapshot,
   NeonDatabaseSnapshot,
   NeonEndpointSnapshot,
@@ -43,6 +54,8 @@ class FakeNeonApi implements NeonApi {
     slug: string;
     input: DeployFunctionInput;
   }[] = [];
+  /** Functions materialized by a deploy, keyed by slug (Neon creates on first deploy). */
+  private readonly functions = new Map<string, NeonFunctionSnapshot>();
 
   async listProjects(): Promise<NeonProjectSnapshot[]> {
     throw new Error('not implemented');
@@ -154,6 +167,10 @@ class FakeNeonApi implements NeonApi {
     throw new Error('not implemented');
   }
 
+  async updateProjectBranchDataApi(): Promise<NeonDataApiSnapshot> {
+    throw new Error('not implemented');
+  }
+
   async listBranchBuckets(): Promise<NeonBucketSnapshot[]> {
     return [];
   }
@@ -173,22 +190,7 @@ class FakeNeonApi implements NeonApi {
   }
 
   async listBranchFunctions(): Promise<NeonFunctionSnapshot[]> {
-    return [];
-  }
-
-  async createBranchFunction(
-    projectId: string,
-    branchId: string,
-    input: { slug: string; name: string },
-  ): Promise<NeonFunctionSnapshot> {
-    void projectId;
-    void branchId;
-    return {
-      id: `fn-${input.slug}`,
-      slug: input.slug,
-      name: input.name,
-      invocationUrl: `https://${input.slug}.${BRANCH_ID}.fake.neon.tech`,
-    };
+    return [...this.functions.values()];
   }
 
   async deleteBranchFunction(): Promise<void> {
@@ -202,6 +204,16 @@ class FakeNeonApi implements NeonApi {
     input: DeployFunctionInput,
   ): Promise<NeonFunctionDeploymentSnapshot> {
     this.deployBranchFunctionCalls.push({ projectId, branchId, slug, input });
+    // Neon creates the function on its first deployment — mirror that so a later
+    // `listBranchFunctions` (used to resolve the invocation URL) sees it.
+    if (!this.functions.has(slug)) {
+      this.functions.set(slug, {
+        id: `fn-${slug}`,
+        slug,
+        name: slug,
+        invocationUrl: `https://${branchId}.fake.neon.tech/functions/${slug}`,
+      });
+    }
     return { id: 1, status: 'completed' };
   }
 
@@ -215,6 +227,38 @@ class FakeNeonApi implements NeonApi {
 
   async disableAiGateway(): Promise<void> {
     throw new Error('not implemented');
+  }
+
+  async createCredential(
+    _projectId: string,
+    branchId: string,
+    input: CreateCredentialInput,
+  ): Promise<NeonCredentialSecret> {
+    return {
+      tokenId: 'cred-fake-0000',
+      tokenIdShort: 'credfake0000',
+      apiToken: 'nt_live_credfake0000_secret',
+      s3SecretAccessKey: 's3secret'.padEnd(64, '0'),
+      scopes: input.scopes,
+      branchId,
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+  }
+
+  async listCredentials(): Promise<NeonCredentialMeta[]> {
+    return [];
+  }
+
+  async revokeCredential(): Promise<void> {
+    return;
+  }
+
+  async getProjectBranchStorage(): Promise<NeonBranchStorageSnapshot | null> {
+    return {
+      s3Endpoint: 'https://fake.storage.neon.tech',
+      region: 'us-east-1',
+      forcePathStyle: true,
+    };
   }
 }
 
@@ -259,6 +303,9 @@ const baseProps = (
   projectId: PROJECT_ID,
   branch: BRANCH_NAME,
   runtimeApi: api,
+  // Off by default in tests so the apply/plan assertions don't trigger the bundled env
+  // pull (which writes a .env to cwd). The dedicated env-pull tests opt back in.
+  envPull: false,
   out,
 });
 
@@ -427,6 +474,158 @@ describe('config commands', () => {
     expect(api.deployBranchFunctionCalls[0].input.environment).toEqual({
       resendApiKey: 're_from_file',
     });
+  });
+
+  it('apply surfaces each deployed function invocation URL in the output', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+
+    const source = join(cwd, 'hello.ts');
+    writeFileSync(
+      source,
+      "export default { fetch() { return new Response('ok'); } };\n",
+    );
+    const config = writeConfig(
+      `export default { preview: { functions: { hello: { name: 'Hello', source: ${JSON.stringify(
+        source,
+      )} } } } };\n`,
+    );
+
+    // Human-readable (table) output so we exercise the dedicated Function URLs table; the
+    // JSON path already carries the URL inside the raw applied-change details.
+    await applyCmd({ ...baseProps(api, stream), output: 'table', config });
+
+    const out = read();
+    expect(out).toContain('Function URLs');
+    expect(out).toContain(
+      `https://${BRANCH_ID}.fake.neon.tech/functions/hello`,
+    );
+  });
+
+  it('keeps the changes table minimal and lists function URLs out of the table (regression)', async () => {
+    // Regression: a deployed function's change details carry a long `invocationUrl`. We used
+    // to JSON.stringify the whole details object into a "Details" table column, which blew the
+    // ASCII table out to ~190 columns so its borders wrapped and misaligned in a normal
+    // terminal. The changes table is now minimal (action/kind/identifier only) and the URLs
+    // are printed as a plain list below it, so nothing long ever lands in a table cell.
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+
+    const source = join(cwd, 'hello.ts');
+    writeFileSync(
+      source,
+      "export default { fetch() { return new Response('ok'); } };\n",
+    );
+    const config = writeConfig(
+      `export default { preview: { functions: { hello: { name: 'Hello', source: ${JSON.stringify(
+        source,
+      )} } } } };\n`,
+    );
+
+    await applyCmd({ ...baseProps(api, stream), output: 'table', config });
+
+    const out = stripAnsi(read());
+    const invocationUrl = `https://${BRANCH_ID}.fake.neon.tech/functions/hello`;
+
+    // The changes table never carries a Details column or the raw details blob.
+    const [appliedSection, functionSection = ''] = out.split('Function URLs');
+    expect(appliedSection).toContain('Applied changes');
+    expect(appliedSection).not.toContain('Details');
+    expect(appliedSection).not.toContain('{"slug"');
+    expect(appliedSection).not.toContain(invocationUrl);
+
+    // The URL is listed (not tabulated) below, as a copy-pasteable bullet.
+    expect(functionSection).toContain(`• hello: ${invocationUrl}`);
+
+    // No rendered line is absurdly wide. Pre-fix the function detail row was ~190 cols;
+    // a 120-col ceiling fails loudly if a long value ever leaks back into a table cell.
+    const widest = Math.max(...out.split('\n').map((line) => line.length));
+    expect(widest).toBeLessThan(120);
+  });
+
+  it('reports the services a policy utilizes (Postgres always on) in the plan output', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+    const config = writeConfig(
+      'export default { auth: {}, dataApi: true, preview: { aiGateway: true, buckets: { uploads: {} } } };\n',
+    );
+
+    await planCmd({ ...baseProps(api, stream), config });
+
+    const result = JSON.parse(read());
+    // Postgres is always first; each declared service follows in a stable order. The AI
+    // Gateway is listed even though it never produces a plan step (it's credential-gated).
+    expect(result.services).toEqual([
+      'Postgres',
+      'Neon Auth',
+      'Data API',
+      'Object Storage',
+      'AI Gateway',
+    ]);
+  });
+
+  it('prints a "Utilized services" summary below the plan table (human output)', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+    const config = writeConfig(
+      'export default { auth: {}, preview: { aiGateway: true } };\n',
+    );
+
+    await planCmd({ ...baseProps(api, stream), output: 'table', config });
+
+    const out = read();
+    expect(out).toContain('Planned changes');
+    expect(out).toContain('Utilized services: Postgres, Neon Auth, AI Gateway');
+  });
+
+  it('still lists utilized services when the branch already matches (no changes)', async () => {
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+    // Empty policy: nothing to apply, so the plan table is empty — but the summary still
+    // shows Postgres so the command never looks like it did nothing meaningful.
+    const config = writeConfig('export default {};\n');
+
+    await applyCmd({ ...baseProps(api, stream), output: 'table', config });
+
+    expect(read()).toContain('Utilized services: Postgres');
+  });
+
+  it('pulls the branch env into a local .env after a successful apply (like link/checkout)', async () => {
+    const api = new FakeNeonApi();
+    const { stream } = captureOut();
+    // Empty policy: apply provisions nothing, but the bundled env pull still writes the
+    // branch's connection strings to a local .env so the branch is usable for local dev.
+    const config = writeConfig('export default {};\n');
+
+    await applyCmd({
+      ...baseProps(api, stream),
+      output: 'table',
+      config,
+      cwd,
+      envPull: true,
+    });
+
+    const envPath = join(cwd, '.env.local');
+    expect(existsSync(envPath)).toBe(true);
+    expect(readFileSync(envPath, 'utf8')).toContain('DATABASE_URL=');
+  });
+
+  it('skips the env pull after apply when --no-env-pull is set', async () => {
+    const api = new FakeNeonApi();
+    const { stream } = captureOut();
+    const config = writeConfig('export default {};\n');
+
+    await applyCmd({
+      ...baseProps(api, stream),
+      output: 'table',
+      config,
+      cwd,
+      envPull: false,
+    });
+
+    // Nothing written: --no-env-pull leaves the working tree untouched.
+    expect(existsSync(join(cwd, '.env.local'))).toBe(false);
+    expect(existsSync(join(cwd, '.env'))).toBe(false);
   });
 });
 

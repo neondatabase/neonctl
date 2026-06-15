@@ -84,7 +84,6 @@ const bundleViaModule = async (
       // output as a module without needing a `package.json` type marker alongside it.
       outfile: 'index.mjs',
       write: false,
-      sourcemap: true,
       minify: true,
       format: 'esm',
       platform: 'node',
@@ -100,8 +99,8 @@ const bundleViaModule = async (
       );
     });
   const files = result.outputFiles ?? [];
-  // write:false with one entry always yields index.mjs + index.mjs.map; an empty set
-  // means the API contract changed under us — fail loud rather than ship an
+  // write:false with one entry always yields index.mjs (no source map — we don't emit one);
+  // an empty set means the API contract changed under us — fail loud rather than ship an
   // empty archive.
   if (files.length === 0) {
     throw new Error(
@@ -158,7 +157,6 @@ const bundleViaBinary = async (
       source,
       '--bundle',
       `--outfile=${outfile}`,
-      '--sourcemap',
       '--minify',
       '--format=esm',
       '--platform=node',
@@ -170,9 +168,10 @@ const bundleViaBinary = async (
         `Failed to bundle function from ${source}. ${stderr.trim()}`.trim(),
       );
     }
+    // No `--sourcemap`: the Functions runtime has no source-map support, so an uploaded
+    // `index.mjs.map` is never consumed — emitting it only inflated the archive.
     return {
       'index.mjs': new Uint8Array(readFileSync(outfile)),
-      'index.mjs.map': new Uint8Array(readFileSync(`${outfile}.map`)),
     };
   } finally {
     rmSync(outDir, { recursive: true, force: true });

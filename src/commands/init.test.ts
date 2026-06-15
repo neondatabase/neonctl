@@ -13,66 +13,77 @@ vi.mock('../log.js', () => ({
 
 // Mock neon-init
 vi.mock('neon-init', () => ({
-  init: vi.fn().mockResolvedValue(undefined),
+  detectAgent: vi.fn().mockReturnValue(null),
+  enrichResponse: vi.fn().mockImplementation((v) => v),
+  interactiveInit: vi.fn().mockResolvedValue(undefined),
+  orchestrate: vi.fn().mockResolvedValue({ phase: 'complete', status: 'ok' }),
+  routeDataStep: vi.fn().mockResolvedValue({ phase: 'complete', status: 'ok' }),
 }));
 
 describe('init', () => {
-  const exitSpy = vi
-    .spyOn(process, 'exit')
-    .mockImplementation((() => undefined) as never);
-
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  test('should call neon-init with no options when agent is omitted', async () => {
+  test('should call interactiveInit when --agent is omitted', async () => {
     const { handler } = await import('./init.js');
-    const { init } = await import('neon-init');
+    const { interactiveInit, orchestrate } = await import('neon-init');
 
     await handler({});
 
-    expect(init).toHaveBeenCalledTimes(1);
-    expect(init).toHaveBeenCalledWith(undefined);
+    expect(interactiveInit).toHaveBeenCalledTimes(1);
+    expect(orchestrate).not.toHaveBeenCalled();
   });
 
-  test('should call neon-init with { agent: "Cursor" } when --agent cursor', async () => {
+  test('should fall through to interactiveInit when --agent is empty and detectAgent returns null', async () => {
     const { handler } = await import('./init.js');
-    const { init } = await import('neon-init');
+    const { interactiveInit, orchestrate } = await import('neon-init');
+
+    await handler({ agent: '' });
+
+    expect(interactiveInit).toHaveBeenCalledTimes(1);
+    expect(orchestrate).not.toHaveBeenCalled();
+  });
+
+  test('should call orchestrate with agent "cursor"', async () => {
+    const { handler } = await import('./init.js');
+    const { interactiveInit, orchestrate } = await import('neon-init');
 
     await handler({ agent: 'cursor' });
 
-    expect(init).toHaveBeenCalledWith({ agent: 'Cursor' });
+    expect(orchestrate).toHaveBeenCalledWith({
+      agent: 'cursor',
+      skipNeonAuth: undefined,
+      skipMigrations: undefined,
+      preview: undefined,
+    });
+    expect(interactiveInit).not.toHaveBeenCalled();
   });
 
-  test('should call neon-init with { agent: "VS Code" } when --agent copilot', async () => {
+  test('should pass skipNeonAuth and skipMigrations to orchestrate', async () => {
     const { handler } = await import('./init.js');
-    const { init } = await import('neon-init');
+    const { orchestrate } = await import('neon-init');
 
-    await handler({ agent: 'copilot' });
+    await handler({
+      agent: 'claude',
+      skipNeonAuth: true,
+      skipMigrations: true,
+    });
 
-    expect(init).toHaveBeenCalledWith({ agent: 'VS Code' });
+    expect(orchestrate).toHaveBeenCalledWith({
+      agent: 'claude',
+      skipNeonAuth: true,
+      skipMigrations: true,
+      preview: undefined,
+    });
   });
 
-  test('should call neon-init with { agent: "Claude CLI" } when --agent claude', async () => {
+  test('should pass preview to interactiveInit', async () => {
     const { handler } = await import('./init.js');
-    const { init } = await import('neon-init');
+    const { interactiveInit } = await import('neon-init');
 
-    await handler({ agent: 'claude' });
+    await handler({ preview: true });
 
-    expect(init).toHaveBeenCalledWith({ agent: 'Claude CLI' });
-  });
-
-  test('should log error and exit 1 when --agent is invalid', async () => {
-    const { handler } = await import('./init.js');
-    const { init } = await import('neon-init');
-    const { log } = await import('../log.js');
-
-    await handler({ agent: 'invalid-agent' });
-
-    expect(init).not.toHaveBeenCalled();
-    expect(log.error).toHaveBeenCalledWith(
-      'Invalid --agent value: "invalid-agent". Supported: cursor, copilot, claude',
-    );
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(interactiveInit).toHaveBeenCalledWith({ preview: true });
   });
 });
