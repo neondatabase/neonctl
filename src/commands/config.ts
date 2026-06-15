@@ -1,4 +1,5 @@
 import yargs from 'yargs';
+import chalk from 'chalk';
 import { resolveConfig } from '@neondatabase/config';
 import {
   apply,
@@ -15,6 +16,7 @@ import {
 import { toNeonConfigView } from '../config_format.js';
 
 import { log } from '../log.js';
+import { isCi } from '../env.js';
 import { BranchScopeProps } from '../types.js';
 import { loadEnvFileIntoProcess } from '../env_file.js';
 import { fillSingleProject, resolveBranchRef } from '../utils/enrichers.js';
@@ -34,8 +36,12 @@ const neonctlBundler: FunctionBundler = async (fn) =>
   zipBundle(await bundleEntry(fn.source));
 
 const INSPECT_FIELDS = ['project', 'branch', 'config'] as const;
-const APPLIED_FIELDS = ['action', 'kind', 'identifier', 'details'] as const;
-const FUNCTION_FIELDS = ['slug', 'invocation_url'] as const;
+// Deliberately minimal: action/kind/identifier are short and fixed-ish, so the table can
+// never overflow. Per-change `details` (a function's long invocationUrl in particular) are
+// intentionally NOT a column — they used to be JSON-stringified into a cell and blew the
+// table past 190 cols. Function URLs are printed below as a plain list (see reportPushResult),
+// and the full details are still available via `--output json`.
+const APPLIED_FIELDS = ['action', 'kind', 'identifier'] as const;
 const CONFLICT_FIELDS = [
   'identifier',
   'field',
@@ -353,7 +359,6 @@ const reportPushResult = (
       action: change.action,
       kind: change.kind,
       identifier: change.identifier,
-      details: change.details ? JSON.stringify(change.details) : '',
     }));
   const conflicts = result.conflicts.map((conflict: ConflictReport) => ({
     identifier: conflict.identifier,
@@ -363,9 +368,9 @@ const reportPushResult = (
     reason: conflict.reason,
   }));
 
-  // Deployed functions carry their invocation URL in the change details — pull them into a
-  // dedicated table so users can see where to call each function without digging through the
-  // raw details blob. Keyed by slug so a function never shows twice.
+  // Deployed functions carry their invocation URL in the change details — collect them so
+  // we can list where to call each function without digging through the raw details blob.
+  // Keyed by slug so a function never shows twice.
   const functionUrlBySlug = new Map<string, string>();
   for (const change of result.applied) {
     if (change.action === 'noop') continue;
@@ -375,10 +380,6 @@ const reportPushResult = (
       functionUrlBySlug.set(slug, invocationUrl);
     }
   }
-  const functions = [...functionUrlBySlug].map(([slug, invocation_url]) => ({
-    slug,
-    invocation_url,
-  }));
 
   const out = writer(props);
   const noChanges = changes.length === 0 && conflicts.length === 0;
@@ -388,17 +389,23 @@ const reportPushResult = (
       title: mode === 'plan' ? 'Planned changes' : 'Applied changes',
     });
   }
-  if (functions.length > 0) {
-    out.write(functions, {
-      fields: FUNCTION_FIELDS,
-      title: mode === 'plan' ? 'Function URLs (after apply)' : 'Function URLs',
-    });
-  }
   if (conflicts.length > 0) {
     out.write(conflicts, { fields: CONFLICT_FIELDS, title: 'Conflicts' });
   }
-  // Flush any tables, then append the summary so it reads directly below them.
+  // Flush any tables, then append the lists/summary so they read directly below them.
   out.end();
+
+  // Function URLs are a plain list rather than a table: an invocation URL can be 70+ chars,
+  // which makes any bordered table overflow and wrap awkwardly in a normal terminal. A list
+  // lets each URL reflow on its own line, and stays copy-pasteable.
+  if (functionUrlBySlug.size > 0) {
+    const heading =
+      mode === 'plan' ? 'Function URLs (after apply)' : 'Function URLs';
+    out.text(`\n${isCi() ? heading : chalk.bold(heading)}\n`);
+    for (const [slug, invocationUrl] of functionUrlBySlug) {
+      out.text(`  • ${slug}: ${invocationUrl}\n`);
+    }
+  }
 
   if (noChanges) {
     log.info(

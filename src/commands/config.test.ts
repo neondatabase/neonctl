@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import stripAnsi from 'strip-ansi';
 import type { NeonApi } from '@neondatabase/config-runtime';
 import type {
   CreateBucketInput,
@@ -499,6 +500,47 @@ describe('config commands', () => {
     expect(out).toContain(
       `https://${BRANCH_ID}.fake.neon.tech/functions/hello`,
     );
+  });
+
+  it('keeps the changes table minimal and lists function URLs out of the table (regression)', async () => {
+    // Regression: a deployed function's change details carry a long `invocationUrl`. We used
+    // to JSON.stringify the whole details object into a "Details" table column, which blew the
+    // ASCII table out to ~190 columns so its borders wrapped and misaligned in a normal
+    // terminal. The changes table is now minimal (action/kind/identifier only) and the URLs
+    // are printed as a plain list below it, so nothing long ever lands in a table cell.
+    const api = new FakeNeonApi();
+    const { stream, read } = captureOut();
+
+    const source = join(cwd, 'hello.ts');
+    writeFileSync(
+      source,
+      "export default { fetch() { return new Response('ok'); } };\n",
+    );
+    const config = writeConfig(
+      `export default { preview: { functions: { hello: { name: 'Hello', source: ${JSON.stringify(
+        source,
+      )} } } } };\n`,
+    );
+
+    await applyCmd({ ...baseProps(api, stream), output: 'table', config });
+
+    const out = stripAnsi(read());
+    const invocationUrl = `https://${BRANCH_ID}.fake.neon.tech/functions/hello`;
+
+    // The changes table never carries a Details column or the raw details blob.
+    const [appliedSection, functionSection = ''] = out.split('Function URLs');
+    expect(appliedSection).toContain('Applied changes');
+    expect(appliedSection).not.toContain('Details');
+    expect(appliedSection).not.toContain('{"slug"');
+    expect(appliedSection).not.toContain(invocationUrl);
+
+    // The URL is listed (not tabulated) below, as a copy-pasteable bullet.
+    expect(functionSection).toContain(`• hello: ${invocationUrl}`);
+
+    // No rendered line is absurdly wide. Pre-fix the function detail row was ~190 cols;
+    // a 120-col ceiling fails loudly if a long value ever leaks back into a table cell.
+    const widest = Math.max(...out.split('\n').map((line) => line.length));
+    expect(widest).toBeLessThan(120);
   });
 
   it('reports the services a policy utilizes (Postgres always on) in the plan output', async () => {
