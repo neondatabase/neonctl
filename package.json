@@ -5,7 +5,7 @@
     "url": "git+ssh://git@github.com/neondatabase/neonctl.git"
   },
   "type": "module",
-  "version": "2.26.4",
+  "version": "2.26.5",
   "description": "CLI tool for NeonDB Cloud management",
   "main": "index.js",
   "author": "NeonDB",
@@ -71,7 +71,7 @@
     "cliui": "8.0.1",
     "diff": "5.2.0",
     "fflate": "^0.8.3",
-    "neon-init": "0.17.0",
+    "neon-init": "0.17.1",
     "open": "10.1.0",
     "openid-client": "6.8.1",
     "pg-protocol": "^1.14.0",
