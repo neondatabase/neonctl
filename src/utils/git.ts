@@ -61,6 +61,19 @@ export const currentGitBranch = (cwd: string): string | undefined => {
   return branch && branch.length > 0 ? branch : undefined;
 };
 
+/** All local branch names (`refs/heads`). Empty outside a repo or with no branches. */
+export const localGitBranches = (cwd: string): string[] => {
+  const out = git(
+    ['for-each-ref', '--format=%(refname:short)', 'refs/heads'],
+    cwd,
+  );
+  if (!out) return [];
+  return out
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+};
+
 /** Whether the current branch has a configured upstream (`@{u}`) to pull from. */
 export const hasUpstream = (cwd: string): boolean =>
   git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], cwd) !==

@@ -17,6 +17,7 @@ import {
   installPostCheckoutHook,
   isGitRepo,
   isManagedHook,
+  localGitBranches,
   postCheckoutHookPath,
   readGitContext,
   removePostCheckoutHook,
@@ -89,6 +90,18 @@ describe('git facts', () => {
     const ctx = readGitContext(repo);
     expect(ctx.isDetached).toBe(true);
     expect(ctx.branch).toBeUndefined();
+  });
+
+  test('localGitBranches lists local branches (empty outside a repo)', () => {
+    expect(localGitBranches(repo)).toEqual([]); // not initialized yet
+    initRepo(repo);
+    run(['branch', 'feature/x'], repo);
+    run(['branch', 'preview/y'], repo);
+    expect(localGitBranches(repo).sort()).toEqual([
+      'feature/x',
+      'main',
+      'preview/y',
+    ]);
   });
 
   test('gitPull no-ops with no upstream configured', () => {

@@ -13,8 +13,10 @@ import {
   applyContext,
   currentContextFile,
   ensureGitignored,
+  gitBranchMap,
   gitBranchMapping,
   readContextFile,
+  setGitBranchMap,
   setGitBranchMapping,
   setGitFollow,
 } from './context.js';
@@ -216,6 +218,24 @@ describe('git mapping helpers', () => {
 
   test('gitBranchMapping returns undefined for an unmapped branch', () => {
     expect(gitBranchMapping({}, 'whatever')).toBeUndefined();
+  });
+
+  test('gitBranchMap returns a copy of the map; setGitBranchMap replaces it (preserving follow)', () => {
+    const file = join(workspace, '.neon');
+    applyContext(file, {
+      projectId: 'p',
+      git: { follow: true, map: { main: 'main', 'feature/x': 'preview/x' } },
+    });
+    expect(gitBranchMap(readContextFile(file))).toEqual({
+      main: 'main',
+      'feature/x': 'preview/x',
+    });
+
+    // Prune `feature/x` (its git branch is gone) — keep only `main`.
+    setGitBranchMap(file, { main: 'main' });
+    const ctx = readContextFile(file);
+    expect(ctx.git).toEqual({ follow: true, map: { main: 'main' } });
+    expect(ctx.projectId).toBe('p');
   });
 
   test('setGitFollow toggles follow without dropping the map', () => {

@@ -6,8 +6,10 @@ import { toNeonBranchName } from '@neondatabase/config';
 
 import {
   contextBranch,
+  gitBranchMap,
   gitBranchMapping,
   readContextFile,
+  setGitBranchMap,
   setGitBranchMapping,
   setGitFollow,
 } from '../context.js';
@@ -23,6 +25,7 @@ import {
   installPostCheckoutHook,
   isGitRepo,
   isManagedHook,
+  localGitBranches,
   postCheckoutHookPath,
   readGitContext,
   removePostCheckoutHook,
@@ -36,6 +39,10 @@ type GitProps = CommonProps & {
   quiet?: boolean;
   /** Tri-state: `--pull` (true), `--no-pull` (false), or unset (prompt in a manual TTY). */
   pull?: boolean;
+  /** `git cleanup`: also delete the orphaned Neon branches (never default/protected). */
+  pruneNeonBranches?: boolean;
+  /** `git cleanup`: skip the deletion confirmation prompt. */
+  yes?: boolean;
 };
 
 export const command = 'git';
@@ -95,6 +102,26 @@ export const builder = (argv: yargs.Argv) =>
       (args) => {
         status(args as unknown as GitProps);
       },
+    )
+    .command(
+      'cleanup',
+      'Prune git → Neon mappings whose local git branch is gone; optionally delete the orphaned Neon branches',
+      (yargs) =>
+        yargs.options({
+          'prune-neon-branches': {
+            describe:
+              'Also delete the orphaned Neon branches (never the default or a protected branch).',
+            type: 'boolean',
+            default: false,
+          },
+          yes: {
+            describe:
+              'Skip the confirmation prompt before deleting Neon branches.',
+            type: 'boolean',
+            default: false,
+          },
+        }),
+      (args) => cleanup(args as unknown as GitProps),
     )
     .demandCommand(1);
 
@@ -288,4 +315,152 @@ export const status = (props: GitProps): void => {
       log.info('  %s → %s', g, n);
     }
   }
+};
+
+/** A Neon branch as far as pruning cares (the live list returns more). */
+type PrunableBranch = {
+  id: string;
+  name: string;
+  default?: boolean;
+  protected?: boolean;
+};
+
+/**
+ * Split the orphaned Neon branches (those mapped from now-deleted git branches) into the ones
+ * safe to delete and the ones to skip. Default and protected branches are **never** deleted.
+ * Pure (no I/O) so it's unit-testable.
+ */
+export const partitionBranchesToPrune = <B extends PrunableBranch>(
+  branches: B[],
+  orphanNeonNames: ReadonlySet<string>,
+): { toDelete: B[]; skipped: { name: string; reason: string }[] } => {
+  const toDelete: B[] = [];
+  const skipped: { name: string; reason: string }[] = [];
+  for (const branch of branches) {
+    if (!orphanNeonNames.has(branch.name)) continue;
+    if (branch.default) {
+      skipped.push({ name: branch.name, reason: 'default branch' });
+    } else if (branch.protected) {
+      skipped.push({ name: branch.name, reason: 'protected' });
+    } else {
+      toDelete.push(branch);
+    }
+  }
+  return { toDelete, skipped };
+};
+
+/**
+ * Prune the git → Neon workflow state. By default this only cleans `.neon`: mapping entries
+ * whose git branch no longer exists locally are dropped. With `--prune-neon-branches` it also
+ * deletes the orphaned Neon branches — never the default branch and never a protected one.
+ */
+export const cleanup = async (props: GitProps): Promise<void> => {
+  const cwd = process.cwd();
+  if (!isGitRepo(cwd)) {
+    log.error('Not inside a git repository.');
+    return;
+  }
+
+  const context = readContextFile(props.contextFile);
+  const map = gitBranchMap(context);
+  const entries = Object.entries(map);
+  if (entries.length === 0) {
+    log.info('No git → Neon mappings to clean up.');
+    return;
+  }
+
+  const local = new Set(localGitBranches(cwd));
+  const stale = entries.filter(([gitBranch]) => !local.has(gitBranch));
+  if (stale.length === 0) {
+    log.info(
+      'All %d mapping(s) still have a local git branch — nothing to prune.',
+      entries.length,
+    );
+    return;
+  }
+
+  // 1) Always prune the stale mappings from .neon (non-destructive to Neon).
+  const kept = Object.fromEntries(
+    entries.filter(([gitBranch]) => local.has(gitBranch)),
+  );
+  setGitBranchMap(props.contextFile, kept);
+  log.info('Pruned %d stale mapping(s) from .neon:', stale.length);
+  for (const [gitBranch, neonBranch] of stale) {
+    log.info('  %s → %s', gitBranch, neonBranch);
+  }
+
+  // 2) Optionally delete the orphaned Neon branches.
+  if (!props.pruneNeonBranches) {
+    log.info(
+      'Re-run with --prune-neon-branches to also delete the orphaned Neon branch(es).',
+    );
+    return;
+  }
+
+  if (!props.projectId) {
+    log.error(
+      'Cannot delete Neon branches: no project in context. Run `neonctl link` first.',
+    );
+    return;
+  }
+
+  const orphanNeonNames = new Set(stale.map(([, neonBranch]) => neonBranch));
+  const branches = (
+    await props.apiClient.listProjectBranches({ projectId: props.projectId })
+  ).data.branches;
+  const { toDelete, skipped } = partitionBranchesToPrune(
+    branches,
+    orphanNeonNames,
+  );
+
+  for (const { name, reason } of skipped) {
+    log.warning(
+      'Keeping Neon branch %s (%s) — never auto-deleted.',
+      name,
+      reason,
+    );
+  }
+
+  if (toDelete.length === 0) {
+    log.info('No orphaned Neon branches to delete.');
+    return;
+  }
+
+  if (!(await confirmPrune(props, toDelete))) {
+    log.info('Aborted — no Neon branches were deleted.');
+    return;
+  }
+
+  for (const branch of toDelete) {
+    await props.apiClient.deleteProjectBranch(props.projectId, branch.id);
+    log.info('Deleted Neon branch %s (%s).', branch.name, branch.id);
+  }
+};
+
+/**
+ * Confirm deleting the orphaned Neon branches. Deletion is destructive, so an explicit
+ * `--yes` wins; otherwise prompt in an interactive terminal, and refuse (with a warning) in
+ * CI / non-interactive contexts rather than deleting without consent.
+ */
+const confirmPrune = async (
+  props: GitProps,
+  toDelete: PrunableBranch[],
+): Promise<boolean> => {
+  if (props.yes) return true;
+  if (isCi() || !process.stdout.isTTY) {
+    log.warning(
+      'Refusing to delete %d Neon branch(es) non-interactively. Re-run with --yes to confirm.',
+      toDelete.length,
+    );
+    return false;
+  }
+  const { ok } = await prompts({
+    type: 'confirm',
+    name: 'ok',
+    message: `Delete ${toDelete.length} orphaned Neon branch(es): ${toDelete
+      .map((branch) => branch.name)
+      .join(', ')}?`,
+    initial: false,
+  });
+  return Boolean(ok);
 };

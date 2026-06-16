@@ -165,6 +165,20 @@ export const gitBranchMapping = (
   gitBranch: string,
 ): string | undefined => context.git?.map?.[gitBranch];
 
+/** The full git → Neon mapping from the context (a copy; empty when unset). */
+export const gitBranchMap = (context: Context): Record<string, string> => ({
+  ...context.git?.map,
+});
+
+/** Replace the git → Neon mapping in `.neon`, preserving `git.follow` and the rest. */
+export const setGitBranchMap = (
+  file: string,
+  map: Record<string, string>,
+): void => {
+  const context = readContextFile(file);
+  applyContext(file, { ...context, git: { ...context.git, map } });
+};
+
 /**
  * Record a git branch -> Neon branch mapping in `.neon`, merging into any existing map and
  * preserving the rest of the context. Passes an explicit `git` so {@link applyContext}
