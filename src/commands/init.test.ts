@@ -22,10 +22,11 @@ vi.mock('neon-init', () => ({
 
 describe('init', () => {
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    vi.resetModules();
   });
 
-  test('should call interactiveInit when --agent is omitted', async () => {
+  test('should call interactiveInit when no --agent flag', async () => {
     const { handler } = await import('./init.js');
     const { interactiveInit, orchestrate } = await import('neon-init');
 
@@ -35,21 +36,24 @@ describe('init', () => {
     expect(orchestrate).not.toHaveBeenCalled();
   });
 
-  test('should fall through to interactiveInit when --agent is empty and detectAgent returns null', async () => {
+  test('should fall through to interactiveInit when --agent is false and detectAgent returns null', async () => {
     const { handler } = await import('./init.js');
     const { interactiveInit, orchestrate } = await import('neon-init');
 
-    await handler({ agent: '' });
+    await handler({ agent: false });
 
     expect(interactiveInit).toHaveBeenCalledTimes(1);
     expect(orchestrate).not.toHaveBeenCalled();
   });
 
-  test('should call orchestrate with agent "cursor"', async () => {
+  test('should call orchestrate when --agent is true', async () => {
     const { handler } = await import('./init.js');
-    const { interactiveInit, orchestrate } = await import('neon-init');
+    const { interactiveInit, orchestrate, detectAgent } = await import(
+      'neon-init'
+    );
+    (detectAgent as ReturnType<typeof vi.fn>).mockReturnValue('cursor');
 
-    await handler({ agent: 'cursor' });
+    await handler({ agent: true });
 
     expect(orchestrate).toHaveBeenCalledWith({
       agent: 'cursor',
@@ -61,10 +65,11 @@ describe('init', () => {
 
   test('should pass skipMigrations to orchestrate', async () => {
     const { handler } = await import('./init.js');
-    const { orchestrate } = await import('neon-init');
+    const { orchestrate, detectAgent } = await import('neon-init');
+    (detectAgent as ReturnType<typeof vi.fn>).mockReturnValue('claude');
 
     await handler({
-      agent: 'claude',
+      agent: true,
       skipMigrations: true,
     });
 
@@ -82,5 +87,19 @@ describe('init', () => {
     await handler({ preview: true });
 
     expect(interactiveInit).toHaveBeenCalledWith({ preview: true });
+  });
+
+  test('should pass preview to orchestrate in agent mode', async () => {
+    const { handler } = await import('./init.js');
+    const { orchestrate, detectAgent } = await import('neon-init');
+    (detectAgent as ReturnType<typeof vi.fn>).mockReturnValue('cursor');
+
+    await handler({ agent: true, preview: true });
+
+    expect(orchestrate).toHaveBeenCalledWith({
+      agent: 'cursor',
+      skipMigrations: undefined,
+      preview: true,
+    });
   });
 });
