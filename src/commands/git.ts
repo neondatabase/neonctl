@@ -1,5 +1,6 @@
 import yargs from 'yargs';
 import chalk from 'chalk';
+import prompts from 'prompts';
 
 import {
   contextBranch,
@@ -8,11 +9,15 @@ import {
   setGitBranchMapping,
   setGitFollow,
 } from '../context.js';
+import { isCi } from '../env.js';
 import { log } from '../log.js';
 import { CommonProps } from '../types.js';
 import {
   currentGitBranch,
+  GIT_HOOK_ENV_FLAG,
+  gitPull,
   gitRepoRoot,
+  hasUpstream,
   installPostCheckoutHook,
   isGitRepo,
   isManagedHook,
@@ -27,6 +32,8 @@ type GitProps = CommonProps & {
   orgId?: string;
   envPull?: boolean;
   quiet?: boolean;
+  /** Tri-state: `--pull` (true), `--no-pull` (false), or unset (prompt in a manual TTY). */
+  pull?: boolean;
 };
 
 export const command = 'git';
@@ -63,6 +70,13 @@ export const builder = (argv: yargs.Argv) =>
               "Pull the branch's Neon env vars into a local .env after sync. On by default.",
             type: 'boolean',
             default: true,
+          },
+          pull: {
+            describe:
+              'Run `git pull --ff-only` before syncing so local files (incl. migration ' +
+              'files) match the branch before any checkout.after migration runs. Without ' +
+              'the flag, prompts when run manually in a TTY and skips in the hook / CI.',
+            type: 'boolean',
           },
           quiet: {
             describe: 'Reduce output (used by the git hook).',
@@ -162,6 +176,27 @@ export const sync = async (props: GitProps): Promise<void> => {
     return;
   }
 
+  // Optionally fast-forward local files (incl. committed migration files) before checkout, so
+  // a shared branch that is ahead of your local tree doesn't leave code↔schema skewed when the
+  // `checkout.after` migration runs. Opt-in (network + can diverge); see resolveShouldPull.
+  if (await resolveShouldPull(props, cwd, gitBranch)) {
+    const outcome = gitPull(cwd);
+    switch (outcome.status) {
+      case 'pulled':
+        log.info('%s git pull --ff-only (%s)', chalk.dim('→'), gitBranch);
+        break;
+      case 'no-upstream':
+        log.info('No upstream for %s — skipping git pull.', gitBranch);
+        break;
+      case 'failed':
+        log.warning(
+          'git pull --ff-only failed (continuing with sync): %s',
+          outcome.detail,
+        );
+        break;
+    }
+  }
+
   const context = readContextFile(props.contextFile);
   // A previously-resolved mapping wins (sticky); otherwise pass the git branch through and
   // let the policy's `checkout.before` hook (or the default derivation) name the Neon branch.
@@ -179,6 +214,31 @@ export const sync = async (props: GitProps): Promise<void> => {
   if (resolved) {
     setGitBranchMapping(props.contextFile, gitBranch, resolved);
   }
+};
+
+/**
+ * Decide whether `git sync` should `git pull` first. Mirrors the rest of the CLI's
+ * auto-vs-interactive philosophy (cf. `checkout` / `link`): an explicit flag always wins;
+ * otherwise we only *prompt* in a real manual TTY, and never auto-pull in the post-checkout
+ * hook or CI (no network surprises in automation). Skips when there's nothing upstream.
+ */
+const resolveShouldPull = async (
+  props: GitProps,
+  cwd: string,
+  gitBranch: string,
+): Promise<boolean> => {
+  if (props.pull === true) return true;
+  if (props.pull === false) return false;
+  if (!hasUpstream(cwd)) return false;
+  const triggeredByGitHook = process.env[GIT_HOOK_ENV_FLAG] === '1';
+  if (triggeredByGitHook || isCi() || !process.stdout.isTTY) return false;
+  const { pull } = await prompts({
+    type: 'confirm',
+    name: 'pull',
+    message: `Pull latest for "${gitBranch}" (git pull --ff-only) before syncing?`,
+    initial: false,
+  });
+  return Boolean(pull);
 };
 
 export const status = (props: GitProps): void => {

@@ -61,6 +61,55 @@ export const currentGitBranch = (cwd: string): string | undefined => {
   return branch && branch.length > 0 ? branch : undefined;
 };
 
+/** Whether the current branch has a configured upstream (`@{u}`) to pull from. */
+export const hasUpstream = (cwd: string): boolean =>
+  git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], cwd) !==
+  undefined;
+
+export type GitPullOutcome =
+  | { status: 'pulled' }
+  | { status: 'no-upstream' }
+  | { status: 'failed'; detail: string };
+
+/**
+ * Fast-forward the current branch from its upstream (`git pull --ff-only`). Used by
+ * `git sync` to bring local files — crucially, committed migration files — up to date with a
+ * shared branch *before* a `checkout.after` migration runs, so a branch that is ahead of your
+ * local tree doesn't leave code↔schema skewed.
+ *
+ * `--ff-only` is deliberate: it never creates a merge commit or leaves conflict markers in
+ * your tree. If the branch has diverged it fails cleanly (reported, non-fatal) instead of
+ * mutating the working tree mid-sync. No-ops (returns `no-upstream`) when there's nothing to
+ * pull from.
+ */
+export const gitPull = (cwd: string): GitPullOutcome => {
+  if (!hasUpstream(cwd)) return { status: 'no-upstream' };
+  try {
+    execFileSync('git', ['pull', '--ff-only'], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { status: 'pulled' };
+  } catch (err) {
+    // `git pull` failures (e.g. a diverged branch that can't fast-forward) carry the reason
+    // on `stderr` (a string, since we set `encoding`). Narrow without casting.
+    let detail: string;
+    if (
+      err !== null &&
+      typeof err === 'object' &&
+      'stderr' in err &&
+      typeof err.stderr === 'string' &&
+      err.stderr.trim().length > 0
+    ) {
+      detail = err.stderr.trim();
+    } else {
+      detail = err instanceof Error ? err.message : 'unknown error';
+    }
+    return { status: 'failed', detail };
+  }
+};
+
 /**
  * Read the read-only git facts the hooks receive. Never throws: outside a repo (or with git
  * uninstalled) it returns `{ available: false, … }` with the optional fields absent.

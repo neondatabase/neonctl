@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import {
   currentGitBranch,
+  gitPull,
+  hasUpstream,
   installPostCheckoutHook,
   isGitRepo,
   isManagedHook,
@@ -87,6 +89,34 @@ describe('git facts', () => {
     const ctx = readGitContext(repo);
     expect(ctx.isDetached).toBe(true);
     expect(ctx.branch).toBeUndefined();
+  });
+
+  test('gitPull no-ops with no upstream configured', () => {
+    initRepo(repo);
+    expect(hasUpstream(repo)).toBe(false);
+    expect(gitPull(repo)).toEqual({ status: 'no-upstream' });
+  });
+
+  test('gitPull fast-forwards from a configured upstream', () => {
+    // Set up an "upstream" (a bare-ish clone) so the current branch has @{u} to pull.
+    const upstream = mkdtempSync(join(tmpdir(), 'neonctl-upstream-'));
+    initRepo(upstream);
+    run(['clone', upstream, repo + '-clone'], tmpdir());
+    const clone = repo + '-clone';
+    run(['config', 'user.email', 'test@example.com'], clone);
+    run(['config', 'user.name', 'Test'], clone);
+    try {
+      expect(hasUpstream(clone)).toBe(true);
+      // Advance the upstream, then pull it into the clone.
+      writeFileSync(join(upstream, 'feature.txt'), 'new\n');
+      run(['add', '.'], upstream);
+      run(['commit', '-m', 'advance'], upstream);
+      expect(gitPull(clone)).toEqual({ status: 'pulled' });
+      expect(existsSync(join(clone, 'feature.txt'))).toBe(true);
+    } finally {
+      rmSync(upstream, { recursive: true, force: true });
+      rmSync(clone, { recursive: true, force: true });
+    }
   });
 });
 
