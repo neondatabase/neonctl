@@ -23,6 +23,7 @@ import * as deploy from './deploy.js';
 import * as env from './env.js';
 import * as bucket from './bucket.js';
 import * as bootstrap from './bootstrap.js';
+import * as git from './git.js';
 
 export default [
   auth,
@@ -50,4 +51,5 @@ export default [
   env,
   bucket,
   bootstrap,
+  git,
 ];

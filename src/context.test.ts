@@ -13,6 +13,10 @@ import {
   applyContext,
   currentContextFile,
   ensureGitignored,
+  gitBranchMapping,
+  readContextFile,
+  setGitBranchMapping,
+  setGitFollow,
 } from './context.js';
 
 describe('currentContextFile', () => {
@@ -155,5 +159,75 @@ describe('applyContext', () => {
     expect(readFileSync(join(workspace, '.gitignore'), 'utf-8')).toBe(
       'node_modules\n',
     );
+  });
+
+  test('preserves an existing git mapping when a write omits `git`', () => {
+    const file = join(workspace, '.neon');
+    applyContext(file, {
+      projectId: 'proj-y',
+      branch: 'main',
+      git: { follow: true, map: { main: 'main' } },
+    });
+    // A later write (e.g. set-context / checkout) carrying no `git` must not wipe it.
+    applyContext(file, { projectId: 'proj-z', branch: 'feature' });
+    expect(readContextFile(file)).toEqual({
+      projectId: 'proj-z',
+      branch: 'feature',
+      git: { follow: true, map: { main: 'main' } },
+    });
+  });
+
+  test('replaces the git block when a write provides an explicit `git`', () => {
+    const file = join(workspace, '.neon');
+    applyContext(file, { projectId: 'p', git: { map: { main: 'main' } } });
+    applyContext(file, {
+      projectId: 'p',
+      git: { map: { dev: 'preview/dev' } },
+    });
+    expect(readContextFile(file).git).toEqual({ map: { dev: 'preview/dev' } });
+  });
+});
+
+describe('git mapping helpers', () => {
+  let workspace: string;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'neonctl-gitmap-'));
+  });
+
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  test('setGitBranchMapping merges entries and preserves the rest of the context', () => {
+    const file = join(workspace, '.neon');
+    applyContext(file, { projectId: 'p', orgId: 'o', branch: 'main' });
+    setGitBranchMapping(file, 'feature/billing-ui', 'preview/feature-billing');
+    setGitBranchMapping(file, 'main', 'main');
+
+    const ctx = readContextFile(file);
+    expect(ctx.projectId).toBe('p');
+    expect(ctx.orgId).toBe('o');
+    expect(gitBranchMapping(ctx, 'feature/billing-ui')).toBe(
+      'preview/feature-billing',
+    );
+    expect(gitBranchMapping(ctx, 'main')).toBe('main');
+  });
+
+  test('gitBranchMapping returns undefined for an unmapped branch', () => {
+    expect(gitBranchMapping({}, 'whatever')).toBeUndefined();
+  });
+
+  test('setGitFollow toggles follow without dropping the map', () => {
+    const file = join(workspace, '.neon');
+    setGitBranchMapping(file, 'main', 'main');
+    setGitFollow(file, true);
+    expect(readContextFile(file).git).toEqual({
+      follow: true,
+      map: { main: 'main' },
+    });
+    setGitFollow(file, false);
+    expect(readContextFile(file).git?.follow).toBe(false);
+    expect(readContextFile(file).git?.map).toEqual({ main: 'main' });
   });
 });

@@ -222,4 +222,34 @@ describe('set_context', () => {
       expect(readFile(CONTEXT_FILE)).toMatchSnapshot();
     });
   });
+
+  describe('non-destructive to git workflow state', () => {
+    // set-context still does a raw write of project/org/branch, but must NOT wipe the
+    // git → Neon mapping a user (or `neonctl git`) built up. This is the backward-compatible
+    // guarantee that lets `set-context` coexist with the git-sync workflow.
+    test('preserves an existing git block', async ({ testCliCommand }) => {
+      const file = join(tmpdir(), `neon_git_preserve_${Date.now()}`);
+      writeFileSync(
+        file,
+        JSON.stringify({
+          projectId: 'old',
+          git: { follow: true, map: { main: 'main' } },
+        }),
+      );
+      try {
+        await testCliCommand([
+          'set-context',
+          '--project-id',
+          'test',
+          '--context-file',
+          file,
+        ]);
+        const ctx = JSON.parse(readFileSync(file, 'utf-8'));
+        expect(ctx.projectId).toBe('test');
+        expect(ctx.git).toEqual({ follow: true, map: { main: 'main' } });
+      } finally {
+        rmSync(file, { force: true });
+      }
+    });
+  });
 });

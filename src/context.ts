@@ -5,6 +5,19 @@ import yargs from 'yargs';
 
 import { log } from './log.js';
 
+/**
+ * Git → Neon mapping persisted in `.neon` so `git checkout` can drive `neonctl checkout`.
+ * The keys are git branch names; the **values are real Neon branch names** (valid slugs, the
+ * same form stored in {@link Context.branch}). The map is built up as branches are resolved,
+ * so a git branch always resolves to the same Neon branch on subsequent checkouts.
+ */
+export type GitContextConfig = {
+  /** When true, the installed git `post-checkout` hook drives `neonctl git sync`. */
+  follow?: boolean;
+  /** git branch name -> Neon branch name (a valid Neon slug). */
+  map?: Record<string, string>;
+};
+
 export type Context = {
   orgId?: string;
   projectId?: string;
@@ -20,6 +33,13 @@ export type Context = {
    * dropped the next time the context is written.
    */
   branchId?: string;
+  /**
+   * Git → Neon workflow state (the branch mapping and `follow` flag). Preserved across
+   * writes by {@link applyContext} unless a caller explicitly provides a new `git` block,
+   * so project/org/branch updates (e.g. the deprecated `set-context`, or a plain `checkout`)
+   * never wipe the mapping.
+   */
+  git?: GitContextConfig;
 };
 
 /**
@@ -110,9 +130,13 @@ export const updateContextFile = (file: string, context: Context) => {
 
 /**
  * Shared primitive used by `link`, the deprecated `set-context`, and `checkout`
- * to persist context. Mirrors the destructive write semantics of
- * `updateContextFile` — any field not present in `context` is dropped from the
- * file.
+ * to persist context. The project/org/branch trio keeps its destructive write
+ * semantics — any of those not present in `context` is dropped from the file, so
+ * existing scripts behave unchanged — but the {@link Context.git} block is
+ * **preserved** when the caller doesn't provide one. That makes a plain
+ * `set-context` / `checkout` non-destructive to the git → Neon mapping: you can
+ * re-pin project/org/branch without wiping the branch map a user (or
+ * `neonctl git sync`) built up. Pass an explicit `git` to replace it.
  *
  * `.gitignore` scaffolding only happens when the context file is being
  * *created* (it didn't exist before this write). On updates to an existing
@@ -122,10 +146,50 @@ export const updateContextFile = (file: string, context: Context) => {
  */
 export const applyContext = (file: string, context: Context) => {
   const isNewFile = !existsSync(file);
-  updateContextFile(file, context);
+  // Preserve the git mapping unless the caller explicitly replaces it. This is what makes
+  // `set-context` / `checkout` non-destructive to the git → Neon workflow state.
+  const existing = isNewFile ? {} : readContextFile(file);
+  const merged: Context =
+    context.git === undefined && existing.git !== undefined
+      ? { ...context, git: existing.git }
+      : context;
+  updateContextFile(file, merged);
   if (isNewFile) {
     ensureGitignored(file);
   }
+};
+
+/** Look up the Neon branch a git branch maps to in the persisted `.neon` context. */
+export const gitBranchMapping = (
+  context: Context,
+  gitBranch: string,
+): string | undefined => context.git?.map?.[gitBranch];
+
+/**
+ * Record a git branch -> Neon branch mapping in `.neon`, merging into any existing map and
+ * preserving the rest of the context. Passes an explicit `git` so {@link applyContext}
+ * replaces (rather than just preserves) the block with the new entry folded in.
+ */
+export const setGitBranchMapping = (
+  file: string,
+  gitBranch: string,
+  neonBranch: string,
+): void => {
+  const context = readContextFile(file);
+  const git: GitContextConfig = {
+    ...context.git,
+    map: { ...context.git?.map, [gitBranch]: neonBranch },
+  };
+  applyContext(file, { ...context, git });
+};
+
+/** Set the `git.follow` flag (whether the post-checkout hook drives `neonctl git sync`). */
+export const setGitFollow = (file: string, follow: boolean): void => {
+  const context = readContextFile(file);
+  applyContext(file, {
+    ...context,
+    git: { ...context.git, follow },
+  });
 };
 
 /**
