@@ -2,6 +2,8 @@ import yargs from 'yargs';
 import chalk from 'chalk';
 import prompts from 'prompts';
 
+import { toNeonBranchName } from '@neondatabase/config';
+
 import {
   contextBranch,
   gitBranchMapping,
@@ -198,9 +200,15 @@ export const sync = async (props: GitProps): Promise<void> => {
   }
 
   const context = readContextFile(props.contextFile);
-  // A previously-resolved mapping wins (sticky); otherwise pass the git branch through and
-  // let the policy's `checkout.before` hook (or the default derivation) name the Neon branch.
-  const inputName = gitBranchMapping(context, gitBranch) ?? gitBranch;
+  // Resolve the Neon branch name to check out:
+  //   1. a previously-recorded mapping wins (sticky — no duplicate branches), else
+  //   2. a Neon-safe name derived from the git branch via `toNeonBranchName`.
+  // (2) means a brand-new branch is always valid by default — no `checkout.before` hook
+  // required. A `checkout.before` hook can still override: it receives this name as
+  // `inputName` *and* the raw git branch on `git.branch`, so it can re-derive with custom
+  // options (e.g. a `preview/` prefix) and stay stable.
+  const inputName =
+    gitBranchMapping(context, gitBranch) ?? toNeonBranchName(gitBranch);
 
   await checkoutHandler({
     ...props,
