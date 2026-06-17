@@ -17,7 +17,7 @@ import {
   looksLikeTimestamp,
 } from '../utils/formats.js';
 import { psql } from '../utils/psql.js';
-import { parsePointInTime } from '../utils/point_in_time.js';
+import { parsePointInTime, parsePITBranch } from '../utils/point_in_time.js';
 import { log } from '../log.js';
 import { parseSchemaDiffParams, schemaDiff } from './schema_diff.js';
 import { getComputeUnits } from '../utils/compute_units.js';
@@ -70,7 +70,7 @@ export const builder = (argv: yargs.Argv) =>
           name: branchCreateRequest['branch.name'],
           parent: {
             describe:
-              'Parent branch name or id or timestamp or LSN. Defaults to the default branch',
+              'Branch to create from. Pass a branch name or ID to fork at its head. Use <name>@<timestamp|lsn> to fork a named branch at a specific point in time. Pass a standalone ISO 8601 timestamp or LSN to fork the default branch at that point. Omit to fork the default branch at head.',
             type: 'string',
           },
           compute: {
@@ -122,7 +122,6 @@ export const builder = (argv: yargs.Argv) =>
             type: 'boolean',
             default: false,
           },
-
           'expires-at': {
             describe:
               'Set an expiration date for the branch. Accepts a date string (e.g., 2024-12-31T23:59:59Z).',
@@ -372,6 +371,28 @@ const create = async (
       return { parent_id: branch.id };
     }
 
+    // @ syntax: <branch>@<timestamp|lsn> — consistent with connection_string, restore, schema_diff.
+    if (props.parent.includes('@')) {
+      const parsed = parsePITBranch(props.parent);
+      const parentId = looksLikeBranchId(parsed.branch)
+        ? parsed.branch
+        : (() => {
+            const found = branches.find(
+              (b: Branch) => b.name === parsed.branch,
+            );
+            if (!found) throw new Error(`Branch ${parsed.branch} not found`);
+            return found.id;
+          })();
+      if (parsed.tag === 'lsn')
+        return { parent_id: parentId, parent_lsn: parsed.lsn };
+      if (parsed.tag === 'timestamp')
+        return { parent_id: parentId, parent_timestamp: parsed.timestamp };
+      return { parent_id: parentId };
+    }
+
+    // Backward-compatible: standalone LSN/timestamp implicitly use the default branch.
+    // Other commands pass raw input directly to parsePITBranch without this guard
+    // because they have no legacy standalone-timestamp/LSN behavior to preserve.
     if (looksLikeLSN(props.parent)) {
       return { parent_lsn: props.parent };
     }
