@@ -99,7 +99,6 @@ const NEON_OWNED_ENV_KEYS: readonly string[] = [
   ...Object.values(NEON_ENV_VAR_KEYS.auth),
   ...Object.values(NEON_ENV_VAR_KEYS.dataApi),
   NEON_ENV_VAR_KEYS.storage.regionNeon,
-  NEON_ENV_VAR_KEYS.storage.forcePathStyle,
   NEON_ENV_VAR_KEYS.aiGateway.neonToken,
   NEON_ENV_VAR_KEYS.aiGateway.neonBaseUrl,
 ];
