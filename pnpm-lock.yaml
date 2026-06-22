@@ -21,8 +21,8 @@ importers:
         specifier: 0.8.0
         version: 0.8.0
       '@neondatabase/env':
-        specifier: 0.6.0
-        version: 0.6.0
+        specifier: 0.7.0
+        version: 0.7.0
       '@segment/analytics-node':
         specifier: 1.3.0
         version: 1.3.0
@@ -892,8 +892,8 @@ packages:
     resolution: {integrity: sha512-ReOBVC+9j7X81C6DKtT94wimyHHjPv/LRpGPI2VAcSWSHyT/yGrNSwvT9WwNW1GsUXQNYBJh/3gzUCGhQrTazg==}
     engines: {node: '>=22'}
 
-  '@neondatabase/env@0.6.0':
-    resolution: {integrity: sha512-2/tz3LhyHC72PwJoE0TMLQ6Ynl9TSVSc7js8n/gt2mt7G/A7FPWRtcrfSwX8rSRWuORZZ26Qk4hHRv9AAikrpw==}
+  '@neondatabase/env@0.7.0':
+    resolution: {integrity: sha512-A5GsnHZm0e6mf9MTB3+Q1TWuNhiAsluOqCsG2M/u9WKMvk9pzRMzN38kZMQ1EKh05UJa7CNNA7bXTr9wtEWwog==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -3887,7 +3887,7 @@ snapshots:
       '@types/node': 20.5.1
       chalk: 4.1.2
       cosmiconfig: 8.3.6(typescript@5.8.3)
-      cosmiconfig-typescript-loader: 4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@18.19.41)(typescript@5.8.3))(typescript@5.8.3)
+      cosmiconfig-typescript-loader: 4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@20.5.1)(typescript@5.8.3))(typescript@5.8.3)
       lodash.isplainobject: 4.0.6
       lodash.merge: 4.6.2
       lodash.uniq: 4.5.0
@@ -4334,7 +4334,7 @@ snapshots:
       - debug
       - supports-color
 
-  '@neondatabase/env@0.6.0':
+  '@neondatabase/env@0.7.0':
     dependencies:
       '@neondatabase/config': 0.8.0
       yargs: 18.0.0
@@ -5230,7 +5230,7 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  cosmiconfig-typescript-loader@4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@18.19.41)(typescript@5.8.3))(typescript@5.8.3):
+  cosmiconfig-typescript-loader@4.4.0(@types/node@20.5.1)(cosmiconfig@8.3.6(typescript@5.8.3))(ts-node@10.9.2(@types/node@20.5.1)(typescript@5.8.3))(typescript@5.8.3):
     dependencies:
       '@types/node': 20.5.1
       cosmiconfig: 8.3.6(typescript@5.8.3)
