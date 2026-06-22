@@ -1,18 +1,18 @@
 import { spawn } from 'node:child_process';
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 
 import chalk from 'chalk';
+import {
+  BootstrapInputError,
+  BootstrapTemplate,
+  FALLBACK_TEMPLATES,
+  ensureTargetUsable,
+  fetchTemplates,
+  findTemplate,
+  scaffoldTemplate,
+  templateIds,
+} from 'neon-init/bootstrap';
 import prompts, { InitialReturnValue } from 'prompts';
 import which from 'which';
 import yargs from 'yargs';
@@ -20,14 +20,6 @@ import yargs from 'yargs';
 import { isCi } from '../env.js';
 import { log } from '../log.js';
 import { CommonProps } from '../types.js';
-import {
-  BootstrapTemplate,
-  FALLBACK_TEMPLATES,
-  downloadTemplate,
-  fetchTemplates,
-  findTemplate,
-  templateIds,
-} from '../utils/bootstrap.js';
 
 type BootstrapProps = CommonProps & {
   directory?: string;
@@ -312,87 +304,23 @@ const defaultDirName = (template: BootstrapTemplate): string =>
   template.source.subdir.split('/').pop() || template.id;
 
 /**
- * A bad user-supplied input that an agent (or human) can correct: an unknown
- * template id or a non-empty target directory. Carries an `agentCode` so
- * `--agent` mode reports a precise `status: error` code instead of a generic
- * INTERNAL_ERROR, while the human path just surfaces the clear `message`.
+ * Download and materialize the template into `targetDir`. The actual
+ * download/extract/write lives in the shared `neon-init/bootstrap` core
+ * (exec-bit and symlink fidelity, graceful symlink fallback); here we just
+ * frame it with progress logging. Returns the number of files written.
  */
-class BootstrapInputError extends Error {
-  readonly agentCode: string;
-  constructor(message: string, agentCode: string) {
-    super(message);
-    this.name = 'BootstrapInputError';
-    this.agentCode = agentCode;
-  }
-}
-
-const ensureTargetUsable = (dir: string, force: boolean): void => {
-  if (!existsSync(dir)) {
-    return;
-  }
-  if (!statSync(dir).isDirectory()) {
-    throw new BootstrapInputError(
-      `Target ${dir} already exists and is not a directory.`,
-      'TARGET_NOT_DIRECTORY',
-    );
-  }
-  // A lone `.git` is ignored so you can scaffold into a freshly `git init`ed
-  // (otherwise empty) directory without reaching for --force.
-  const contents = readdirSync(dir).filter((name) => name !== '.git');
-  if (contents.length > 0 && !force) {
-    throw new BootstrapInputError(
-      `Target directory ${dir} is not empty. Use --force to scaffold into it anyway (colliding files will be overwritten), or choose an empty directory.`,
-      'TARGET_NOT_EMPTY',
-    );
-  }
-};
-
 const scaffold = async (
   template: BootstrapTemplate,
   targetDir: string,
 ): Promise<number> => {
   log.info('Fetching template "%s" from GitHub…', template.id);
-  const files = await downloadTemplate(template);
-
-  mkdirSync(targetDir, { recursive: true });
-  log.info('Scaffolding %d files into %s…', files.length, targetDir);
-
-  for (const file of files) {
-    const dest = join(targetDir, file.path);
-    mkdirSync(dirname(dest), { recursive: true });
-    if (file.kind === 'symlink') {
-      writeSymlink(dest, file.target);
-    } else {
-      writeFileSync(dest, file.bytes);
-      if (file.executable) {
-        chmodSync(dest, 0o755);
-      }
-    }
-  }
-  return files.length;
-};
-
-const writeSymlink = (dest: string, target: string): void => {
-  if (isSymlink(dest)) {
-    rmSync(dest, { force: true });
-  }
-  try {
-    symlinkSync(target, dest);
-  } catch (err) {
-    // Windows refuses symlinks without elevated rights / developer mode. The
-    // template still works for most tooling if we drop a regular file holding
-    // the link target, so we degrade gracefully instead of failing the copy.
-    if (errnoCode(err) === 'EPERM' || process.platform === 'win32') {
-      log.warning(
-        'Could not create symlink %s -> %s; wrote it as a regular file instead.',
-        dest,
-        target,
-      );
-      writeFileSync(dest, target);
-      return;
-    }
-    throw err;
-  }
+  const filesWritten = await scaffoldTemplate(template, targetDir, {
+    onWarn: (message) => {
+      log.warning(message);
+    },
+  });
+  log.info('Scaffolded %d files into %s.', filesWritten, targetDir);
+  return filesWritten;
 };
 
 // ----------------------------------------------------------------------------
@@ -798,26 +726,6 @@ const displayDir = (targetDir: string): string => {
     return '.';
   }
   return rel.startsWith('..') ? targetDir : rel;
-};
-
-const isSymlink = (path: string): boolean => {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
-};
-
-const errnoCode = (err: unknown): string | undefined => {
-  if (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    typeof err.code === 'string'
-  ) {
-    return err.code;
-  }
-  return undefined;
 };
 
 const shellArg = (value: string): string => {
