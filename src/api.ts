@@ -1,6 +1,6 @@
 import { createApiClient } from '@neondatabase/api-client';
-import { isAxiosError } from 'axios';
 
+import { isApiError } from './utils/http.js';
 import { log } from './log.js';
 import pkg from './pkg.js';
 
@@ -29,7 +29,7 @@ export const retryOnLock = async <T>(fn: () => Promise<T>): Promise<T> => {
       return await fn();
     } catch (err) {
       errOut = err;
-      if (isAxiosError(err) && err.response?.status === 423) {
+      if (isApiError(err) && err.response?.status === 423) {
         attempt++;
         log.info(
           `Resource is locked. Waiting ${RETRY_DELAY}ms before retrying...`,

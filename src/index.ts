@@ -1,18 +1,6 @@
 import { basename } from 'node:path';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import axiosDebug from 'axios-debug-log';
-axiosDebug({
-  request(debug, config) {
-    debug(`${config.method?.toUpperCase()} ${config.url}`);
-  },
-  response(debug, response) {
-    debug(`${response.status} ${response.statusText}`);
-  },
-  error(debug, error) {
-    debug(error);
-  },
-});
 import { Api } from '@neondatabase/api-client';
 
 import { ensureAuth, deleteCredentials } from './commands/auth.js';
@@ -30,7 +18,7 @@ import {
   sendError,
   trackEvent,
 } from './analytics.js';
-import { isAxiosError } from 'axios';
+import { apiErrorMessage, isApiError } from './utils/http.js';
 import { matchErrorCode } from './errors.js';
 import { showHelp } from './help.js';
 import { currentContextFile, enrichFromContext } from './context.js';
@@ -189,7 +177,7 @@ async function handleError(msg: string, err: unknown): Promise<boolean> {
     log.debug('Stack: %s', err.stack);
   }
 
-  if (isAxiosError(err)) {
+  if (isApiError(err)) {
     if (err.code === 'ECONNABORTED') {
       log.error('Request timed out');
       sendError(err, 'REQUEST_TIMEOUT');
@@ -208,8 +196,9 @@ async function handleError(msg: string, err: unknown): Promise<boolean> {
         return false;
       }
     } else {
-      if (err.response?.data?.message) {
-        log.error(err.response?.data?.message);
+      const serverMessage = apiErrorMessage(err);
+      if (serverMessage) {
+        log.error(serverMessage);
       }
       log.debug(
         'status: %d %s | path: %s',

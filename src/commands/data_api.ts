@@ -1,7 +1,7 @@
 import yargs from 'yargs';
-import { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../api.js';
+import { isApiError } from '../utils/http.js';
 import { BranchScopeProps } from '../types.js';
 import {
   branchIdFromProps,
@@ -305,7 +305,7 @@ const update = async (
       );
       current = data.settings ?? undefined;
     } catch (err: unknown) {
-      if (isAxiosError(err) && err.response?.status === 404) {
+      if (isApiError(err) && err.response?.status === 404) {
         throw new Error(
           `Data API is not provisioned for ${database} on branch ${branchId}. Run \`neonctl data-api create\` first.`,
         );
@@ -333,7 +333,7 @@ const update = async (
       ),
     );
   } catch (err: unknown) {
-    if (isAxiosError(err) && err.response?.status === 404) {
+    if (isApiError(err) && err.response?.status === 404) {
       throw new Error(
         `Data API is not provisioned for ${database} on branch ${branchId}. Run \`neonctl data-api create\` first.`,
       );
@@ -361,7 +361,7 @@ const refreshSchema = async (props: DataApiProps): Promise<void> => {
       ),
     );
   } catch (err: unknown) {
-    if (isAxiosError(err) && err.response?.status === 404) {
+    if (isApiError(err) && err.response?.status === 404) {
       throw new Error(
         `Data API is not provisioned for ${database} on branch ${branchId}. Run \`neonctl data-api create\` first.`,
       );
@@ -390,7 +390,7 @@ const deleteDataApi = async (props: DataApiProps): Promise<void> => {
       ),
     );
   } catch (err: unknown) {
-    if (isAxiosError(err) && err.response?.status === 404) {
+    if (isApiError(err) && err.response?.status === 404) {
       throw new Error(
         `Data API is not provisioned for ${database} on branch ${branchId}.`,
       );

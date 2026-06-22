@@ -1,8 +1,8 @@
-import axios, { isAxiosError } from 'axios';
 import { gunzipSync } from 'fflate';
 import YAML from 'yaml';
 
 import { log } from '../log.js';
+import { httpFetch, isApiError } from './http.js';
 
 /**
  * A scaffold template that lives in a subdirectory of a public GitHub repo we
@@ -218,12 +218,11 @@ export const parseManifest = (text: string): BootstrapTemplate[] => {
 export const fetchTemplates = async (): Promise<BootstrapTemplate[]> => {
   for (const url of manifestUrls()) {
     try {
-      const res = await axios.get<string>(url, {
-        responseType: 'text',
+      const res = await httpFetch(url, {
         headers: downloadHeaders(),
-        timeout: 10_000,
+        timeoutMs: 10_000,
       });
-      const templates = parseManifest(res.data);
+      const templates = parseManifest(await res.text());
       if (templates.length > 0) {
         return templates;
       }
@@ -444,7 +443,7 @@ const tarballUrl = (template: BootstrapTemplate): string => {
 };
 
 const friendlyGithubError = (err: unknown, url: string): Error => {
-  if (isAxiosError(err)) {
+  if (isApiError(err)) {
     const status = err.response?.status;
     if (status === 404) {
       return new Error(
@@ -473,12 +472,11 @@ export const downloadTemplate = async (
 
   let gzipped: Buffer;
   try {
-    const res = await axios.get<ArrayBuffer>(url, {
-      responseType: 'arraybuffer',
+    const res = await httpFetch(url, {
       headers: downloadHeaders(),
-      timeout: 30_000,
+      timeoutMs: 30_000,
     });
-    gzipped = Buffer.from(res.data);
+    gzipped = Buffer.from(await res.arrayBuffer());
   } catch (err) {
     throw friendlyGithubError(err, url);
   }

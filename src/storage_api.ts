@@ -16,10 +16,10 @@ import { type Api } from '@neondatabase/api-client';
 
 export type ApiClient = Api<unknown>;
 
-// The api-client bundles its own axios version, whose `AxiosResponse` type is
-// not assignable to the one neonctl depends on directly. Callers only ever read
-// `.data` (and, for the download helper, `.headers`), so we expose that minimal
-// shape and let the helpers return the client's native promise unchanged.
+// The api-client returns its own (axios-based) response type. neonctl no longer
+// depends on axios directly, and callers only ever read `.data` (and, for the
+// download helper, `.headers`), so we expose that minimal shape and let the
+// helpers return the client's native promise unchanged.
 type ApiResponse<T> = { data: T };
 type ApiResponseWithHeaders<T> = {
   data: T;
@@ -339,9 +339,10 @@ export const deleteProjectBranchBucketObjectsByPrefix = (
  *
  * Returns the URL, the headers that must accompany the PUT for the signature to
  * verify, and the expiry. The actual upload (a `PUT` to the returned `url` with
- * the returned `headers` and the file stream) is performed by the caller, NOT
- * through this api-client, since it targets the branch S3 data-plane endpoint
- * rather than the console API. No SigV4 or credential handling happens here.
+ * the returned `headers` and the file stream) is performed by the caller via a
+ * direct `fetch`, NOT through this api-client, since it targets the branch S3
+ * data-plane endpoint rather than the console API. No SigV4 or credential
+ * handling happens here.
  *
  * The object key may contain `/`; it is percent-encoded into a single path
  * segment so nested keys are routed to the `{object_key}` parameter.

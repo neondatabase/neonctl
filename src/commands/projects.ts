@@ -16,7 +16,7 @@ import { writer } from '../writer.js';
 import { psql } from '../utils/psql.js';
 import { updateContextFile } from '../context.js';
 import { getComputeUnits } from '../utils/compute_units.js';
-import { isAxiosError } from 'axios';
+import { apiErrorMessage, isApiError } from '../utils/http.js';
 import prompts, { InitialReturnValue } from 'prompts';
 import { isCi } from '../env.js';
 
@@ -431,11 +431,11 @@ const handleMissingOrgId = async (
   }
 };
 
-const isOrgIdError = (err: any) => {
+const isOrgIdError = (err: unknown) => {
   return (
-    isAxiosError(err) &&
+    isApiError(err) &&
     err.response?.status == 400 &&
-    err.response?.data?.message?.includes('org_id is required')
+    apiErrorMessage(err)?.includes('org_id is required')
   );
 };
 

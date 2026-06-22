@@ -5,7 +5,6 @@ import {
   ProjectListItem,
   RegionResponse,
 } from '@neondatabase/api-client';
-import { isAxiosError } from 'axios';
 import prompts, { InitialReturnValue } from 'prompts';
 import yargs from 'yargs';
 
@@ -24,6 +23,7 @@ import {
   createBranch,
   pickBranchInteractively,
 } from '../utils/branch_picker.js';
+import { apiErrorMessage, isApiError } from '../utils/http.js';
 import { autoPullEnvAfterPin, renderAgentPullNote } from './env.js';
 import { REGIONS } from './projects.js';
 
@@ -386,7 +386,7 @@ class LinkInputError extends Error {
 }
 
 const httpStatus = (err: unknown): number | undefined =>
-  isAxiosError(err) ? err.response?.status : undefined;
+  isApiError(err) ? err.response?.status : undefined;
 
 /**
  * Fetch a project, turning the common failure modes into clear, actionable
@@ -1053,15 +1053,8 @@ const emitAgent = (response: AgentResponse) => {
 const ORG_KEY_LIMITED_FRAGMENT = 'not allowed for organization API keys';
 
 const isOrgKeyLimitedError = (err: unknown): boolean => {
-  if (!isAxiosError(err)) return false;
-  const data = err.response?.data;
-  if (data === undefined || data === null || typeof data !== 'object') {
-    return false;
-  }
-  const message = (data as { message?: unknown }).message;
-  return (
-    typeof message === 'string' && message.includes(ORG_KEY_LIMITED_FRAGMENT)
-  );
+  if (!isApiError(err)) return false;
+  return apiErrorMessage(err)?.includes(ORG_KEY_LIMITED_FRAGMENT) ?? false;
 };
 
 const fetchOrganizations = async (
@@ -1156,17 +1149,9 @@ const toAgentError = (
   if (err instanceof LinkInputError) {
     return { status: 'error', code: err.agentCode, message: err.message };
   }
-  if (isAxiosError(err)) {
+  if (isApiError(err)) {
     const status = err.response?.status;
-    const data = err.response?.data;
-    const apiMessage =
-      typeof data === 'object' && data !== null
-        ? (data as { message?: unknown }).message
-        : undefined;
-    const message =
-      typeof apiMessage === 'string' && apiMessage.length > 0
-        ? apiMessage
-        : err.message;
+    const message = apiErrorMessage(err) ?? err.message;
     let code = 'API_ERROR';
     if (status === 401 || status === 403) {
       code = 'AUTH_ERROR';
@@ -1255,7 +1240,7 @@ const fetchRegions = async (props: CommonProps): Promise<RegionResponse[]> => {
       return data.regions;
     }
   } catch (err) {
-    if (isAxiosError(err)) {
+    if (isApiError(err)) {
       log.debug(
         'getActiveRegions failed (%s), falling back to the static region list.',
         err.response?.status ?? err.code ?? err.message,

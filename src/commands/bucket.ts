@@ -3,9 +3,9 @@ import { stat, unlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import yargs from 'yargs';
-import axios, { isAxiosError } from 'axios';
 
 import { retryOnLock } from '../api.js';
+import { httpFetch, isApiError, streamToWeb } from '../utils/http.js';
 import { BranchScopeProps } from '../types.js';
 import { branchIdFromProps, fillSingleProject } from '../utils/enrichers.js';
 import { log } from '../log.js';
@@ -295,7 +295,7 @@ const deleteBucket = async (
       }),
     );
   } catch (err: unknown) {
-    if (isAxiosError(err) && err.response?.status === 404) {
+    if (isApiError(err) && err.response?.status === 404) {
       throw new Error(
         `Bucket "${props.name}" not found on branch ${branchId}.`,
       );
@@ -452,7 +452,7 @@ const objectNotFoundMessage = (
   bucket: string,
   branchId: string,
 ): string => {
-  if (isAxiosError(err)) {
+  if (isApiError(err)) {
     const serverMessage = serverErrorMessage(err.response?.data);
     if (serverMessage !== undefined) {
       return serverMessage;
@@ -479,7 +479,7 @@ const getObject = async (
       objectKey: key,
     });
   } catch (err: unknown) {
-    if (isAxiosError(err) && err.response?.status === 404) {
+    if (isApiError(err) && err.response?.status === 404) {
       // The download response is a stream, so a 404 body arrives as a stream
       // too; drain and parse it to recover the server's message (which
       // distinguishes a missing bucket from a missing object).
@@ -558,7 +558,7 @@ const putObject = async (
       contentType: props.contentType,
     }));
   } catch (err: unknown) {
-    if (isAxiosError(err)) {
+    if (isApiError(err)) {
       const status = err.response?.status;
       if (status === 404) {
         throw new Error(objectNotFoundMessage(err, key, bucket, branchId));
@@ -580,30 +580,32 @@ const putObject = async (
 
   // Stream the file straight into the PUT body; never buffer the whole file.
   // The presigned URL targets the branch S3 data-plane endpoint directly, so
-  // this PUT goes through a plain axios call rather than the console api-client.
+  // this PUT goes through a plain `fetch` rather than the console api-client.
   //
   // `presign.headers` carries the signature-relevant headers (e.g. host,
   // content-type); the server does not sign Content-Length, so we set it
   // ourselves from the stat'd size to keep the upload streamed, not chunked.
-  // `maxRedirects: 0` ensures we never resend the file bytes and signed headers
-  // to a different host if the data-plane endpoint were to answer with a
-  // redirect.
+  // `redirect: 'error'` ensures we never resend the file bytes and signed
+  // headers to a different host if the data-plane endpoint were to answer with a
+  // redirect. The file stream is adapted to a web stream so it can be a `fetch`
+  // body; `duplex: 'half'` is required by the runtime when streaming a request.
   try {
-    await axios.put(presign.url, createReadStream(props.file), {
+    await httpFetch(presign.url, {
+      method: 'PUT',
       headers: {
         ...presign.headers,
-        'Content-Length': fileSize,
+        'Content-Length': String(fileSize),
       },
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-      maxRedirects: 0,
+      body: streamToWeb(createReadStream(props.file)),
+      duplex: 'half',
+      redirect: 'error',
     });
   } catch (err: unknown) {
     // The upload targets the S3 data plane, whose error bodies are XML rather
     // than the JSON `{ message }` the console returns, so surface the status
-    // (and axios message) rather than leaking a raw error. Never include the
+    // (and the error message) rather than leaking a raw error. Never include the
     // presigned URL, which carries the signature.
-    if (isAxiosError(err)) {
+    if (isApiError(err)) {
       const status = err.response?.status;
       throw new Error(
         `Failed to upload "${props.file}" to "${key}" in bucket "${bucket}" on branch ${branchId}${
@@ -664,7 +666,7 @@ const deleteObject = async (
       }),
     );
   } catch (err: unknown) {
-    if (isAxiosError(err) && err.response?.status === 404) {
+    if (isApiError(err) && err.response?.status === 404) {
       throw new Error(objectNotFoundMessage(err, rest, bucket, branchId));
     }
     throw err;

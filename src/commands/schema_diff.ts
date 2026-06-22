@@ -9,7 +9,7 @@ import {
   PointInTime,
   PointInTimeBranchId,
 } from '../utils/point_in_time.js';
-import { isAxiosError } from 'axios';
+import { apiErrorMessage, isApiError } from '../utils/http.js';
 import { sendError } from '../analytics.js';
 import { log } from '../log.js';
 
@@ -124,11 +124,10 @@ const fetchSchema = async (
     });
     return response.data.sql ?? '';
   } catch (error) {
-    if (isAxiosError(error)) {
-      const data = error.response?.data;
+    if (isApiError(error)) {
       sendError(error, 'API_ERROR');
       throw new Error(
-        data.message ??
+        apiErrorMessage(error) ??
           `Error while fetching schema for branch ${pointInTime.branchId}`,
       );
     }

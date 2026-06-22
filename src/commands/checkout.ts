@@ -1,5 +1,4 @@
 import { Branch } from '@neondatabase/api-client';
-import { isAxiosError } from 'axios';
 import chalk from 'chalk';
 import prompts from 'prompts';
 import yargs from 'yargs';
@@ -14,6 +13,7 @@ import {
 } from '../utils/branch_picker.js';
 import { fillSingleProject } from '../utils/enrichers.js';
 import { looksLikeBranchId } from '../utils/formats.js';
+import { isApiError } from '../utils/http.js';
 import { autoPullEnvAfterPin } from './env.js';
 import {
   applyPolicyOnCreate,
@@ -296,7 +296,7 @@ const resolveOrgId = async (
     const { data } = await props.apiClient.getProject(projectId);
     return data.project.org_id ?? undefined;
   } catch (err) {
-    if (isAxiosError(err) && err.response?.status === 401) {
+    if (isApiError(err) && err.response?.status === 401) {
       throw err;
     }
     log.debug(
@@ -390,7 +390,7 @@ const tryAutoDetectProject = async (
     // `fillSingleProject` throws on "No projects found" / "Multiple projects
     // found" — both mean we can't pick a project automatically. Network/auth
     // errors are real and should surface to the user.
-    if (isAxiosError(err)) {
+    if (isApiError(err)) {
       throw err;
     }
     log.debug(

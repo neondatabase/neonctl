@@ -1,7 +1,8 @@
 import { BranchScopeProps, CommonProps, OrgScopeProps } from '../types.js';
 import { looksLikeBranchId } from './formats.js';
 import { Branch, Database } from '@neondatabase/api-client';
-import { isAxiosError } from 'axios';
+
+import { apiErrorMessage, isApiError } from './http.js';
 
 export const branchIdResolve = async ({
   branch,
@@ -200,9 +201,9 @@ export const fillSingleProject = async (
   } catch (error) {
     // If the API error is about missing org_id, provide a user-friendly message
     if (
-      isAxiosError(error) &&
+      isApiError(error) &&
       error.response?.status === 400 &&
-      error.response?.data?.message?.includes('org_id is required')
+      apiErrorMessage(error)?.includes('org_id is required')
     ) {
       throw new Error(
         'Multiple projects found, please provide one with the --project-id option',
