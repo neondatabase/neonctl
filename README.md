@@ -1,4 +1,3 @@
-> [!IMPORTANT]
 > **The Neon CLI source has moved.** Development now happens in the [`neondatabase/neon-pkgs`](https://github.com/neondatabase/neon-pkgs) monorepo, under [`packages/cli`](https://github.com/neondatabase/neon-pkgs/tree/main/packages/cli). Please open new issues and pull requests there.
 
 The Neon CLI is a command-line interface that lets you manage [Neon Serverless Postgres](https://neon.tech/) directly from the terminal. For the complete documentation, see [Neon CLI](https://neon.tech/docs/reference/neon-cli).
