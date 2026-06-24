@@ -25,6 +25,13 @@ import { bundleEntry } from '../utils/esbuild.js';
 import { zipBundle } from '../utils/zip.js';
 import { writer } from '../writer.js';
 import { autoPullEnvAfterPin } from './env.js';
+import { GIT_HOOK_ENV_FLAG, readGitContext } from '../utils/git.js';
+import {
+  buildHookBranch,
+  resolveHookEnv,
+  runDeployAfterHook,
+  runDeployBeforeHook,
+} from '../utils/hooks.js';
 
 /**
  * Bundle a function with neonctl's OWN bundler (the shared esbuild helper) so the
@@ -276,6 +283,24 @@ export const applyCmd = async (props: ConfigProps): Promise<void> => {
   const branch = await resolveBranchRef(props);
   announceTargetBranch(props, branch, 'Applying to branch');
   const branchId = branch.branchId;
+
+  // Lifecycle hooks (Preview): the `deploy` phase brackets the apply. `before` can validate
+  // or abort (a throw propagates); `after` observes the resolved env + PushResult.
+  const cwd = props.cwd ?? process.cwd();
+  const hooks = config.hooks;
+  const git = readGitContext(cwd, {
+    triggeredByGitHook: process.env[GIT_HOOK_ENV_FLAG] === '1',
+  });
+  if (hooks?.deploy?.before) {
+    const hookBranch = await buildHookBranch({
+      apiClient: props.apiClient,
+      projectId: props.projectId,
+      branchId,
+      created: false,
+    });
+    await runDeployBeforeHook({ hooks, branch: hookBranch, git, cwd });
+  }
+
   const result = await apply(config, {
     projectId: props.projectId,
     branchId,
@@ -293,6 +318,35 @@ export const applyCmd = async (props: ConfigProps): Promise<void> => {
   // usable for local dev. `--no-env-pull` opts out; a pull failure degrades to a warning
   // (the apply already succeeded). See autoPullEnvAfterPin.
   await autoPullEnvAfterPin({ ...props, envPull: props.envPull !== false });
+
+  // `deploy.after` hook (Preview): runs after a successful apply. Env is resolved in-memory
+  // regardless of `--env-pull`; a hook failure degrades to a warning (the apply stands).
+  if (hooks?.deploy?.after) {
+    const env = await resolveHookEnv({
+      cwd,
+      projectId: props.projectId,
+      branchId,
+      ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+      ...(props.apiHost ? { apiHost: props.apiHost } : {}),
+      ...(props.runtimeApi ? { api: props.runtimeApi } : {}),
+    });
+    if (env) {
+      const hookBranch = await buildHookBranch({
+        apiClient: props.apiClient,
+        projectId: props.projectId,
+        branchId,
+        created: false,
+      });
+      await runDeployAfterHook({
+        hooks,
+        branch: hookBranch,
+        env,
+        result,
+        git,
+        cwd,
+      });
+    }
+  }
 };
 
 type ReportMode = 'plan' | 'apply';

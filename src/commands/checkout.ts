@@ -20,6 +20,14 @@ import {
   createBranchFromPolicyOnCheckout,
 } from './config.js';
 import { handler as linkHandler } from './link.js';
+import { GIT_HOOK_ENV_FLAG, readGitContext } from '../utils/git.js';
+import {
+  buildHookBranch,
+  loadHooks,
+  resolveHookEnv,
+  runCheckoutAfterHook,
+  runCheckoutBeforeHook,
+} from '../utils/hooks.js';
 
 type CheckoutProps = CommonProps & {
   projectId?: string;
@@ -90,6 +98,32 @@ export const handler = async (props: CheckoutProps) => {
   // nothing resolves, fall back to an interactive `neonctl link`.
   const projectId = await resolveProjectId(props);
 
+  // Lifecycle hooks (Preview): read git facts + load the neon.ts `hooks` block once. The
+  // `checkout.before` hook may rewrite the branch name (e.g. map a git branch to a Neon
+  // slug) before we resolve it; it runs before resolution because the name isn't pinned yet.
+  const cwd = process.cwd();
+  const git = readGitContext(cwd, {
+    triggeredByGitHook: process.env[GIT_HOOK_ENV_FLAG] === '1',
+  });
+  const hooks = await loadHooks(cwd);
+  if (props.id) {
+    const renamed = await runCheckoutBeforeHook({
+      hooks,
+      inputName: props.id,
+      git,
+      cwd,
+    });
+    if (renamed && renamed !== props.id) {
+      log.info(
+        '%s checkout.before hook mapped %s → %s',
+        chalk.dim('→'),
+        chalk.cyan(props.id),
+        chalk.cyan.bold(renamed),
+      );
+      props.id = renamed;
+    }
+  }
+
   const { branchId, branchName, created, policyApplied } =
     await resolveBranchId(props, projectId);
 
@@ -136,6 +170,28 @@ export const handler = async (props: CheckoutProps) => {
     branch: branchId,
     envPull: props.envPull,
   });
+
+  // `checkout.after` hook (Preview): runs once the branch is pinned and env is resolved.
+  // Env is resolved in-memory here even under `--no-env-pull`, so a migration hook always
+  // has a connection string. A hook failure degrades to a warning (the checkout stands).
+  if (hooks?.checkout?.after) {
+    const env = await resolveHookEnv({
+      cwd,
+      projectId,
+      branchId,
+      ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+      ...(props.apiHost ? { apiHost: props.apiHost } : {}),
+    });
+    if (env) {
+      const branch = await buildHookBranch({
+        apiClient: props.apiClient,
+        projectId,
+        branchId,
+        created,
+      });
+      await runCheckoutAfterHook({ hooks, branch, env, git, cwd });
+    }
+  }
 };
 
 /**
