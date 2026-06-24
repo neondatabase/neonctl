@@ -51,7 +51,7 @@
     "tsx": "4.22.3",
     "typescript": "5.8.3",
     "typescript-eslint": "8.28.0",
-    "vitest": "1.6.1"
+    "vitest": "3.2.6"
   },
   "optionalDependencies": {
     "esbuild": "0.28.0"
