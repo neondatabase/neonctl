@@ -152,31 +152,24 @@ jobs:
         env:
           TAG: ${{ steps.parse.outputs.tag }}
         run: |
-          # TODO(once Stage 2 is live): confirm exact workflow filename + input names
-          # in databricks/secure-public-registry-releases-eng — assumed
-          # `release-neondatabase-neonctl.yml` with inputs `ref` and `dry-run`.
-          # The filename must also match the workflow npm Trusted Publishing is
-          # configured to trust (npmjs.com/package/neonctl?activeTab=code).
           {
             echo "body<<HANDOFF_EOF"
             echo ":rocket: **Tagged \`${TAG}\` on the merge commit.**"
             echo ""
             echo "### Stage 2 — publish (npm + GitHub release)"
             echo ""
-            echo "> :warning: **Provisional:** the workflow filename and input names below are assumed to match the central repo's setup. If Stage 2 uses different names, the dispatch commands need updating in \`.github/workflows/post-release.yml\`."
-            echo ""
             echo "Stage 2 builds + scans the artifacts and publishes the npm package and the GitHub release (with the CLI binaries). Trigger it in \`databricks/secure-public-registry-releases-eng\`:"
             echo ""
             echo "\`\`\`bash"
             echo "# Dry run (recommended first):"
-            echo "gh workflow run release-neondatabase-neonctl.yml \\"
+            echo "gh workflow run neonctl.yml \\"
             echo "  --repo databricks/secure-public-registry-releases-eng \\"
             echo "  --ref main \\"
             echo "  -f ref=${TAG} \\"
             echo "  -f dry-run=true"
             echo ""
             echo "# Real publish:"
-            echo "gh workflow run release-neondatabase-neonctl.yml \\"
+            echo "gh workflow run neonctl.yml \\"
             echo "  --repo databricks/secure-public-registry-releases-eng \\"
             echo "  --ref main \\"
             echo "  -f ref=${TAG} \\"
