@@ -1,0 +1,80 @@
+name: Update Nix hashes
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-nix-hashes-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Refresh pnpm dependency hash
+        id: refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          log="$(mktemp)"
+          set +e
+          nix build .#pnpmDeps --print-build-logs 2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          got_hash="$(
+            sed -n 's/.*got:[[:space:]]*\(sha256-[A-Za-z0-9+\/=]*\).*/\1/p' "$log" | tail -n 1
+          )"
+
+          if [ -z "$got_hash" ]; then
+            echo "nix build failed, but no replacement hash was found in the log" >&2
+            exit "$status"
+          fi
+
+          perl -0pi -e 's/(pnpmDepsHash = ")[^"]+(";\n)/${1}'"$got_hash"'${2}/' flake.nix
+          nix build .#pnpmDeps --print-build-logs
+
+          if git diff --quiet -- flake.nix; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify package
+        shell: bash
+        run: nix flake check --print-build-logs
+
+      - name: Commit refreshed hashes
+        if: steps.refresh.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add flake.nix flake.lock
+          git commit -m "chore: update Nix hashes"
+          git push
