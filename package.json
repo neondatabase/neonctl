@@ -63,7 +63,7 @@
     "@neondatabase/config-runtime": "0.8.0",
     "@neondatabase/env": "0.7.0",
     "@segment/analytics-node": "1.3.0",
-    "axios": "1.7.2",
+    "axios": "1.18.0",
     "axios-debug-log": "1.0.0",
     "chalk": "5.3.0",
     "chokidar": "5.0.0",
