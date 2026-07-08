@@ -46,6 +46,54 @@ export default function (req, res) {
         created_at: '2021-01-01T00:00:00.000Z',
       },
     });
+  } else if (req.body.branch?.name === 'test_branch_name_at_timestamp') {
+    expect(req.body).toMatchObject({
+      branch: {
+        name: 'test_branch_name_at_timestamp',
+        parent_id: 'br-main-branch-123456',
+        parent_timestamp: '2021-01-01T00:00:00.000Z',
+      },
+    });
+    res.send({
+      branch: {
+        id: 'br-new-branch-123456',
+        name: 'test_branch_name_at_timestamp',
+        parent_id: 'br-main-branch-123456',
+        created_at: '2021-01-01T00:00:00.000Z',
+      },
+    });
+  } else if (req.body.branch?.name === 'test_branch_name_at_lsn') {
+    expect(req.body).toMatchObject({
+      branch: {
+        name: 'test_branch_name_at_lsn',
+        parent_id: 'br-main-branch-123456',
+        parent_lsn: '0/123ABC',
+      },
+    });
+    res.send({
+      branch: {
+        id: 'br-new-branch-123456',
+        name: 'test_branch_name_at_lsn',
+        parent_id: 'br-main-branch-123456',
+        created_at: '2021-01-01T00:00:00.000Z',
+      },
+    });
+  } else if (req.body.branch?.name === 'test_branch_id_at_timestamp') {
+    expect(req.body).toMatchObject({
+      branch: {
+        name: 'test_branch_id_at_timestamp',
+        parent_id: 'br-main-branch-123456',
+        parent_timestamp: '2021-01-01T00:00:00.000Z',
+      },
+    });
+    res.send({
+      branch: {
+        id: 'br-new-branch-123456',
+        name: 'test_branch_id_at_timestamp',
+        parent_id: 'br-main-branch-123456',
+        created_at: '2021-01-01T00:00:00.000Z',
+      },
+    });
   } else if (req.body.branch?.name === 'test_branch_with_fixed_cu') {
     expect(req.body).toMatchObject({
       branch: {
